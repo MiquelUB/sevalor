@@ -1,0 +1,41 @@
+{
+  "name": "SEVALOR - Terminal de Camp",
+  "short_name": "SEVALOR",
+  "description": "PWA de camp per a operaris de Sevalor Suite: fitxatge, ordres, picking, tiquets i càmera.",
+  "start_url": "/operari/feines",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "theme_color": "#15803d",
+  "background_color": "#ffffff",
+  "icons": [
+    {
+      "src": "/icons/icon-192x192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "/icons/icon-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    },
+    {
+      "src": "/icons/maskable-icon-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "screenshots": [],
+  "shortcuts": [
+    {
+      "name": "Les meves feines",
+      "url": "/operari/feines",
+      "description": "Veure ordres de treball pendents"
+    },
+    {
+      "name": "Reportar incidencia",
+      "url": "/operari/incidencies",
+      "description": "Comunicar una incidencia urgent"
+    }
+  ]
+}

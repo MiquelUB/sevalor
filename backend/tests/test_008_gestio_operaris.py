@@ -1,0 +1,101 @@
+import pytest
+from httpx import AsyncClient, ASGITransport
+from app.main import app
+from app.core.config import settings
+import jwt
+from datetime import datetime, timedelta, timezone
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import text
+import uuid
+
+@pytest.fixture
+def boss_token(admin_session):
+    # Generem un UUID per a l'empresa
+    empresa_id = str(uuid.uuid4())
+    
+    payload = {
+        "sub": str(uuid.uuid4()),
+        "rol": "BOSS",
+        "empresa_id": empresa_id,
+        "exp": datetime.now(timezone.utc) + timedelta(minutes=15)
+    }
+    token = jwt.encode(payload, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
+    return token, empresa_id
+
+@pytest.fixture
+def headers(boss_token):
+    token, _ = boss_token
+    return {"Authorization": f"Bearer {token}"}
+
+@pytest.mark.asyncio
+async def test_alta_operari_nou(admin_session, headers, boss_token):
+    _, empresa_id = boss_token
+    
+    # Inserim l'empresa de prova via BD manual per poder complir amb les Foreign Keys
+    await admin_session.execute(
+        text("INSERT INTO empreses (id, nom, nif, pla_subscripcio, estat_pagament) VALUES (:id, 'Test Company', 'NIF" + str(uuid.uuid4())[:8] + "', 'STARTER', 'ACTIU')"),
+        {"id": empresa_id}
+    )
+    await admin_session.commit()
+
+    payload = {
+        "nif": "12345678Z",
+        "nom": "Joan",
+        "cognoms": "Pérez",
+        "telefon": "+34600100200",
+        "especialitat": "SISTEMES_REG",
+        "cost_hora_eur": 25.50
+    }
+    
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        res = await ac.post("/api/v1/gestio/operaris", json=payload, headers=headers)
+        
+        assert res.status_code == 201, f"Error: {res.text}"
+        data = res.json()
+        assert data["nif"] == payload["nif"]
+        assert data["nom"] == payload["nom"]
+        assert data["estat"] == "ACTIU"
+        assert data["rol"] == "OPERARI"
+        assert "pin_hash" not in data # Seguretat: no retornar el PIN
+        
+        # Validem que s'ha desat a la DB
+        result = await admin_session.execute(text("SELECT nif, pin_hash, telefon FROM usuaris WHERE id = :id"), {"id": data["id"]})
+        row = result.fetchone()
+        assert row is not None
+        assert row.nif == "12345678Z"
+        assert row.pin_hash is not None # El PIN s'ha de generar i hashear
+        assert row.telefon == "+34600100200"
+
+@pytest.mark.asyncio
+async def test_reset_pin_operari(admin_session, headers, boss_token):
+    _, empresa_id = boss_token
+    
+    # 1. Crear empresa
+    await admin_session.execute(
+        text("INSERT INTO empreses (id, nom, nif, pla_subscripcio, estat_pagament) VALUES (:id, 'Test Reset', 'RES" + str(uuid.uuid4())[:8] + "', 'STARTER', 'ACTIU')"),
+        {"id": empresa_id}
+    )
+    
+    # 2. Crear operari bloquejat
+    operari_id = str(uuid.uuid4())
+    await admin_session.execute(
+        text("""INSERT INTO usuaris (id, empresa_id, nif, nom, rol, pin_bloquejat, intents_pin_fallits) 
+                VALUES (:id, :emp, 'RESET123', 'Maria', 'OPERARI', true, 4)"""),
+        {"id": operari_id, "emp": empresa_id}
+    )
+    await admin_session.commit()
+    
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        res = await ac.post(f"/api/v1/gestio/operaris/{operari_id}/reset-pin", headers=headers)
+        assert res.status_code == 200, res.text
+        data = res.json()
+        assert data["missatge"] == "Nou PIN generat i tramès per SMS"
+        assert data["pin_bloquejat"] is False
+        assert data["intents_pin_fallits"] == 0
+
+        # Validem a BD que els intents s'han posat a 0
+        result = await admin_session.execute(text("SELECT pin_bloquejat, intents_pin_fallits FROM usuaris WHERE id = :id"), {"id": operari_id})
+        row = result.fetchone()
+        assert row.pin_bloquejat is False
+        assert row.intents_pin_fallits == 0
+

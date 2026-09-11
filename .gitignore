@@ -1,0 +1,77 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Entorn virtual
+venv/
+.venv/
+env/
+ENV/
+
+# Secrets — MAI versionats (AGENTS.md §3.2)
+.env
+*.env
+!.env.example
+infra/letsencrypt/
+backend/secrets/
+
+# Logs
+*.log
+logs/
+backend/logs/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# Caches específics
+.pnp.*
+
+# Backups i dades
+backups/
+data/
+*.sql
+!db/migrations/*.sql
+*.dump
+*.sqlite3
+
+# Outputs de build
+*.pyc
+build/
+dist/
+*.whl
+node_modules/
+.next/
+out/
+
+# Fitxers generats
+.coverage
+coverage.xml
+*.lcov
+.pytest_cache/
+backend/.pytest_cache/
+
+# Alembic versions generades específicament per a baseline local
+# (no versionar-ne cap fins que hi hagi una política)
+backend/alembic/versions/__pycache__/
+backend/alembic/__pycache__/
+
+# Configuració local del bot
+bot/config.local.yaml
+
+# Volums Docker (no pujar dades reals)
+volumes/

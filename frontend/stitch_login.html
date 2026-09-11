@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Serif:ital,wght@0,400;0,700;1,400&amp;family=Noto+Sans:wght@400;700&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<script id="tailwind-config">
+        tailwind.config = {
+          darkMode: "class",
+          theme: {
+            extend: {
+              colors: {
+                "primary": "#11d411",
+                "background-light": "#f6f8f6",
+                "background-dark": "#102210",
+                "vintage-paper": "#f5f5dc",
+                "forest-deep": "#0d1a0d",
+                "slate-accent": "#2f3e2f"
+              },
+              fontFamily: {
+                "display": ["Noto Serif", "serif"]
+              },
+              borderRadius: {"DEFAULT": "0.5rem", "lg": "1rem", "xl": "1.5rem", "full": "9999px"},
+            },
+          },
+        }
+    </script>
+<style>body {
+    font-family: "Noto Serif", serif
+    }
+.vintage-border {
+    border-style: double;
+    border-width: 3px;
+    border-color: #326732
+    }
+.ledger-line {
+    border-bottom: 1px solid #326732
+    }
+.texture-overlay {
+    background-image: url(https://lh3.googleusercontent.com/aida-public/AB6AXuDhTi5zkGgq31cC-nkuI-iBk82imE_Mt4rHtU7pSPSd6h52epzLq-z2O_fnkdLUzMUAiQtND3dWFNpaoqPEDd9193rd1wW8HQUo7LIT37pQxlZpIondF7eqcbDFBXSiFvW98WQETyukYVh-haSuAZ-j7sO1WQmr20-6MfPpFQyKeGfb7KI64w6_ob96lBfmUM4GsNUvBqiBZRQSG3ILpQ34dn7exvxquDAHyyQC5ysdywyiHqwLIu3Htyujyx4GXbT6_3eqCg-D_a4I);
+    opacity: 0.05;
+    pointer-events: none
+    }</style>
+<style>
+    body {
+      min-height: max(884px, 100dvh);
+    }
+  </style>
+  </head>
+<body class="bg-background-light dark:bg-background-dark text-white min-h-screen relative font-display">
+<div class="fixed inset-0 texture-overlay z-0"></div>
+<div class="relative z-10 flex flex-col min-h-screen max-w-[480px] mx-auto overflow-x-hidden">
+<!-- TopAppBar -->
+<div class="flex items-center bg-background-dark p-4 pb-2 justify-between">
+<span class="material-symbols-outlined text-primary">menu</span>
+<h2 class="text-white text-lg font-bold leading-tight tracking-[-0.015em] flex-1 text-center italic">Valls d'Àneu Registry</h2>
+<span class="material-symbols-outlined text-primary">account_balance</span>
+</div>
+<!-- HeaderImage -->
+<div class="@container">
+<div class="@[480px]:px-4 @[480px]:py-3">
+<div class="w-full bg-center bg-no-repeat bg-cover flex flex-col justify-end overflow-hidden bg-forest-deep @[480px]:rounded-xl min-h-[218px] border-b-2 border-primary/30" data-alt="An atmospheric forest landscape in deep greens and grays" style='background-image: linear-gradient(to bottom, transparent, rgba(16,34,16,0.9)), url("https://lh3.googleusercontent.com/aida-public/AB6AXuDX4Zcud1ZfLGaHoslPb_nvEbFfI2OcOe2uWbEhSAdr37mOm_KDmaIeqBH2uIRb_cnETW1fEvhh_zcREnqsh8hBD1Yvo7CX21rDKPwof3oiJ5nzlAu3Gv9jGIMNgESTyP-1Fj4SzBeRVYM0PHeWTNm0MVK8g9xOJR1ruLAotSagFIYbTMrol9NE18FXSf-uOFjSl82FQCgpQsNo9D0K2SVL7gY2cRPm_Nkwa8uG5-SHPRbCIBeIQfQ4zYLfIa-NPTt0gHLwBtIORYhx");'>
+<div class="p-4">
+<div class="flex items-center gap-2 text-primary">
+<span class="material-symbols-outlined text-sm">location_on</span>
+<p class="text-xs uppercase tracking-widest font-bold">Pyrenees Highlands</p>
+</div>
+</div>
+</div>
+</div>
+</div>
+<!-- HeadlineText -->
+<div class="relative px-6 py-4 mt-4">
+<div class="absolute inset-x-6 top-0 border-t border-primary/20"></div>
+<h1 class="text-white tracking-tight text-[36px] font-bold leading-tight text-center pt-4">Registry Office</h1>
+<div class="flex justify-center items-center gap-4 py-2">
+<div class="h-[1px] w-12 bg-primary/40"></div>
+<span class="material-symbols-outlined text-primary/60 text-lg">history_edu</span>
+<div class="h-[1px] w-12 bg-primary/40"></div>
+</div>
+</div>
+<!-- BodyText -->
+<p class="text-primary/80 text-sm font-normal leading-normal pb-6 pt-1 px-8 text-center italic">
+            Established 1910 — Official Geographic Ledger for the Alpine District
+        </p>
+<!-- Form Section -->
+<div class="px-6 space-y-2">
+<!-- TextField: Username -->
+<div class="flex flex-col gap-1 py-3 group">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-primary/60 text-sm">person_edit</span>
+<p class="text-primary/90 text-xs font-bold uppercase tracking-widest">Subscriber Name</p>
+</div>
+<div class="relative">
+<input class="form-input flex w-full border-0 border-b-2 border-slate-accent bg-transparent focus:ring-0 focus:border-primary h-12 text-white placeholder:text-white/20 p-0 text-lg font-normal italic" placeholder="Enter name recorded in ledger" type="text"/>
+</div>
+</div>
+<!-- TextField: Email -->
+<div class="flex flex-col gap-1 py-3 group">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-primary/60 text-sm">mail</span>
+<p class="text-primary/90 text-xs font-bold uppercase tracking-widest">Correspondence Address</p>
+</div>
+<div class="relative">
+<input class="form-input flex w-full border-0 border-b-2 border-slate-accent bg-transparent focus:ring-0 focus:border-primary h-12 text-white placeholder:text-white/20 p-0 text-lg font-normal italic" placeholder="your.name@ledger.com" type="email"/>
+</div>
+</div>
+<!-- Login Action -->
+<div class="pt-8 pb-4">
+<button class="w-full bg-primary/10 border-2 border-primary text-primary hover:bg-primary hover:text-background-dark transition-all duration-300 rounded-lg py-4 flex items-center justify-center gap-3 group">
+<span class="text-lg font-bold uppercase tracking-[0.2em]">Authenticate Entry</span>
+<span class="material-symbols-outlined group-hover:translate-x-1 transition-transform">stylus_note</span>
+</button>
+</div>
+</div>
+<!-- Footer / Secondary Actions -->
+<div class="mt-auto px-6 py-10 flex flex-col items-center gap-4">
+<div class="h-[1px] w-full bg-gradient-to-r from-transparent via-primary/20 to-transparent"></div>
+<div class="flex justify-between w-full text-xs font-medium text-primary/60 uppercase tracking-widest">
+<a class="hover:text-primary transition-colors flex items-center gap-1" href="#">
+<span class="material-symbols-outlined text-[14px]">key_off</span>
+                    Lost Key?
+                </a>
+<a class="hover:text-primary transition-colors flex items-center gap-1" href="#">
+                    New Ledger
+                    <span class="material-symbols-outlined text-[14px]">app_registration</span>
+</a>
+</div>
+<p class="text-[10px] text-primary/40 text-center mt-4">
+                © 1910 VALLS D'ÀNEU SURVEYING DEPT.<br/>
+                AUTHORIZED PERSONNEL ONLY
+            </p>
+</div>
+<!-- Decorative Corners -->
+<div class="fixed top-2 left-2 pointer-events-none opacity-20 text-primary">
+<span class="material-symbols-outlined text-4xl" style="transform: rotate(0deg);">filter_vintage</span>
+</div>
+<div class="fixed top-2 right-2 pointer-events-none opacity-20 text-primary">
+<span class="material-symbols-outlined text-4xl" style="transform: rotate(90deg);">filter_vintage</span>
+</div>
+<div class="fixed bottom-2 left-2 pointer-events-none opacity-20 text-primary">
+<span class="material-symbols-outlined text-4xl" style="transform: rotate(270deg);">filter_vintage</span>
+</div>
+<div class="fixed bottom-2 right-2 pointer-events-none opacity-20 text-primary">
+<span class="material-symbols-outlined text-4xl" style="transform: rotate(180deg);">filter_vintage</span>
+</div>
+</div>
+</body></html>

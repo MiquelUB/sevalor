@@ -1,0 +1,44 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  /* Sevalor Chameleon UI HSL Tokens */
+  --color-primary: 142 71% 35%; /* Verd corporatiu camp / tècnic */
+  --color-primary-foreground: 0 0% 100%;
+  --color-secondary: 215 25% 27%;
+  --color-secondary-foreground: 0 0% 100%;
+  --color-accent: 38 92% 50%; /* Taronja alerta / maquinària */
+  --color-accent-foreground: 0 0% 100%;
+  --color-background: 210 20% 98%;
+  --color-foreground: 222 47% 11%;
+  --color-card: 0 0% 100%;
+  --color-border: 214 32% 91%;
+  --color-destructive: 0 84% 60%;
+  --color-success: 142 76% 36%;
+  --color-warning: 38 92% 50%;
+}
+
+.dark {
+  --color-primary: 142 71% 45%;
+  --color-primary-foreground: 0 0% 100%;
+  --color-secondary: 215 20% 65%;
+  --color-secondary-foreground: 222 47% 11%;
+  --color-accent: 38 92% 50%;
+  --color-accent-foreground: 0 0% 100%;
+  --color-background: 222 47% 7%;
+  --color-foreground: 210 20% 98%;
+  --color-card: 222 47% 10%;
+  --color-border: 215 25% 20%;
+  --color-destructive: 0 84% 60%;
+  --color-success: 142 76% 36%;
+  --color-warning: 38 92% 50%;
+}
+
+@layer base {
+  body {
+    @apply bg-background text-foreground antialiased selection:bg-primary selection:text-white;
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+  }
+}

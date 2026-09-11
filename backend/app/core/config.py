@@ -1,0 +1,76 @@
+"""Configuració de l'aplicació Sevalor Suite."""
+
+from typing import List
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    """Paràmetres globals de configuració del servei."""
+
+    PROJECT_NAME: str = "Sevalor Suite API"
+    VERSION: str = "1.0.0"
+    API_V1_STR: str = "/api/v1"
+
+    # Base de Dades PostgreSQL (Asyncpg)
+    POSTGRES_USER: str = "postgres"
+    POSTGRES_PASSWORD: str = "postgres"
+    POSTGRES_SERVER: str = "localhost"
+    POSTGRES_PORT: int = 5433
+    POSTGRES_DB: str = "sevalor"
+    DATABASE_URL: str | None = None
+
+    # Redis Cache & Broker
+    REDIS_HOST: str = "localhost"
+    REDIS_PORT: int = 6380
+    REDIS_URL: str | None = None
+
+    # Servei d'Intel·ligència Artificial Local Whisper (CPU-only INT8 Hetzner CPX21)
+    WHISPER_URL: str = "http://localhost:8008"
+
+    # Criptografia i Tokens
+    SECRET_KEY: str | None = None
+    ALGORITHM: str = "HS256"
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 15
+    REFRESH_TOKEN_EXPIRE_DAYS: int = 7
+
+    # CORS
+    BACKEND_CORS_ORIGINS: List[str] = ["http://localhost:3000", "http://localhost:4000", "http://127.0.0.1:4000", "http://localhost:8000"]
+
+    # Bot de Telegram
+    TELEGRAM_BOT_TOKEN: str | None = None
+
+    # Domini de desplegament (nginx + PWA)
+    DOMAIN: str = "sevalor.app"
+
+    # Entorn
+    ENVIRONMENT: str = "development"
+
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=True,
+        extra="allow",
+    )
+
+    def get_database_url(self) -> str:
+        """Retorna la URL asíncrona de connexió a PostgreSQL."""
+        if self.DATABASE_URL:
+            if self.DATABASE_URL.startswith("postgresql://"):
+                return self.DATABASE_URL.replace("postgresql://", "postgresql+asyncpg://", 1)
+            return self.DATABASE_URL
+        return (
+            f"postgresql+asyncpg://{self.POSTGRES_USER}:{self.POSTGRES_PASSWORD}@"
+            f"{self.POSTGRES_SERVER}:{self.POSTGRES_PORT}/{self.POSTGRES_DB}"
+        )
+
+
+settings = Settings()
+
+import secrets
+
+if not settings.SECRET_KEY:
+    import os
+    if os.getenv("TESTING") == "1" or os.getenv("ENVIRONMENT") == "development":
+        settings.SECRET_KEY = secrets.token_urlsafe(32)
+    else:
+        raise ValueError("CRITICAL: SECRET_KEY no està definida a les variables d'entorn en producció.")

@@ -1,0 +1,41 @@
+# Dependències de Node.js
+node_modules/
+.next/
+dist/
+
+# Dependències de Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+env/
+
+# Entorns i secrets
+.env
+.env.local
+.env.*.local
+.env.example
+
+# Tests i cobertura
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# VSCode / editor
+.vscode/
+.idea/
+
+# Sistema operatiu
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+
+# Builds temporals
+coverage
+tsconfig.tsbuildinfo

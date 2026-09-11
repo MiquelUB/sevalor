@@ -1,0 +1,1 @@
+"""Paquet del microservei del Bot de Telegram per a clients finals (Spec 023)."""

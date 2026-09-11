@@ -1,0 +1,160 @@
+# ============================================================
+# SEVALOR SUITE — Stack Completa de Microserveis (7 serveis)
+# Topologia segons AGENTS.md §1.2:
+#   pwa · backend · db · redis · celery_worker · celery_beat · bot · nginx
+# ============================================================
+services:
+  # 1. Base de Dades: PostgreSQL 16 amb PostGIS + RLS
+  db:
+    image: postgis/postgis:16-3.4
+    container_name: sevalor_db
+    restart: always
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-sevalor}
+    volumes:
+      - sevalor_pgdata:/var/lib/postgresql/data
+      - ./db/migrations:/docker-entrypoint-initdb.d
+    ports:
+      - "127.0.0.1:5433:5432"
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /var/run/postgresql
+      - /tmp
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-sevalor}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # 2. Broker de Tasques i Caché: Redis 7
+  redis:
+    image: redis:7-alpine
+    container_name: sevalor_redis
+    restart: always
+    command: redis-server --requirepass ${REDIS_PASSWORD:-}
+    ports:
+      - "127.0.0.1:6380:6379"
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # 3. Backend FastAPI
+  backend:
+    build:
+      context: ./backend
+    container_name: sevalor_backend
+    restart: always
+    environment:
+      - POSTGRES_SERVER=db
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-sevalor}
+      - REDIS_URL=redis://:${REDIS_PASSWORD:-}@redis:6379/0
+      - WHISPER_URL=http://whisper:8000
+      - SECRET_KEY=${SECRET_KEY:-sevalor-dev-secret-key-32-chars-long-abc}
+    ports:
+      - "127.0.0.1:8001:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
+    user: "1000:1000"
+    tmpfs:
+      - /tmp
+
+  # 4. Worker de Celery (processament asíncron)
+  celery_worker:
+    build:
+      context: ./backend
+    container_name: sevalor_celery_worker
+    restart: always
+    command: celery -A app.workers.celery_app worker --loglevel=INFO --concurrency=4
+    environment:
+      - POSTGRES_SERVER=db
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-sevalor}
+      - REDIS_URL=redis://:${REDIS_PASSWORD:-}@redis:6379/0
+      - SECRET_KEY=${SECRET_KEY:-sevalor-dev-secret-key-32-chars-long-abc}
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
+    user: "1000:1000"
+
+  # 5. Planificador de Celery Beat (cron diari + backups setmanals)
+  celery_beat:
+    build:
+      context: ./backend
+    container_name: sevalor_celery_beat
+    restart: always
+    command: celery -A app.workers.celery_app beat --loglevel=INFO
+    environment:
+      - REDIS_URL=redis://:${REDIS_PASSWORD:-}@redis:6379/0
+    depends_on:
+      redis:
+        condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
+    user: "1000:1000"
+
+  # 6. Bot de Telegram (canal amb el client final)
+  bot:
+    build:
+      context: ./bot
+    container_name: sevalor_bot
+    restart: always
+    environment:
+      - REDIS_URL=redis://:${REDIS_PASSWORD:-}@redis:6379/0
+      - API_BASE_URL=http://backend:8000/api/v1
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+    depends_on:
+      redis:
+        condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
+
+  # 7. PWA Next.js (frontend instal·lable i offline-first)
+  pwa:
+    build:
+      context: ./pwa
+    container_name: sevalor_pwa
+    restart: always
+    environment:
+      - NEXT_PUBLIC_API_URL=http://backend:8000/api/v1
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      - backend
+    security_opt:
+      - no-new-privileges:true
+
+  # 8. Reverse Proxy Nginx amb SSL i CSP
+  nginx:
+    image: nginx:1.25-alpine
+    container_name: sevalor_nginx
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./infra/nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./infra/letsencrypt:/etc/letsencrypt:ro
+    depends_on:
+      - backend
+      - pwa
+      - bot
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  sevalor_pgdata:
