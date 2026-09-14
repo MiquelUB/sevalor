@@ -6,11 +6,18 @@ import uuid
 # Inject backend path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from app.core.db import AsyncSessionLocal
+from app.core.db import AsyncSessionLocal, engine
+from app.core.db import Base
+from app.models import models  # Ensure all models are registered
 from app.models.models import Empresa, Usuari
 from app.api.v1.gestio.operaris import hash_pin
 
 async def seed():
+    print("⏳ Creant taules de la base de dades...")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    print("✅ Taules creades correctament!")
+
     async with AsyncSessionLocal() as session:
         # Create Empresa
         empresa_id = uuid.uuid4()
