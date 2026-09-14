@@ -6,12 +6,12 @@ import uuid
 # Inject backend path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from app.core.db import async_session_maker
+from app.core.db import AsyncSessionLocal
 from app.models.models import Empresa, Usuari
-from app.core.security import get_password_hash
+from app.api.v1.gestio.operaris import hash_pin
 
 async def seed():
-    async with async_session_maker() as session:
+    async with AsyncSessionLocal() as session:
         # Create Empresa
         empresa_id = uuid.uuid4()
         empresa = Empresa(
@@ -30,7 +30,7 @@ async def seed():
             nom="Admin",
             cognoms="Principal",
             email="admin@sevalor.com",
-            pin_hash=get_password_hash("1234"),
+            pin_hash=hash_pin("1234"),
             rol="SUPERADMIN",
             estat="ACTIU"
         )
@@ -39,7 +39,7 @@ async def seed():
         await session.commit()
         print("✅ Superadmin creat!")
         print(f"🏢 Empresa ID: {empresa_id}")
-        print("👤 Usuari NIF: admin")
+        print("👤 Usuari: admin")
         print("🔑 PIN: 1234")
 
 if __name__ == "__main__":
