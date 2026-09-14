@@ -3,7 +3,8 @@ import { NextRequest, NextResponse } from 'next/server';
 async function handleRequest(req: NextRequest, { params }: { params: { path: string[] } }) {
   try {
     const url = new URL(req.url);
-    const backendUrl = `http://127.0.0.1:8001/api/v1/${params.path.join('/')}${url.search}`;
+    const baseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8001/api/v1';
+    const backendUrl = `${baseUrl}/${params.path.join('/')}${url.search}`;
     
     const headers = new Headers();
     req.headers.forEach((value, key) => {
