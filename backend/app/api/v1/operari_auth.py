@@ -1,21 +1,27 @@
+import logging
 import uuid
-import bcrypt
 from datetime import datetime, timedelta, timezone
-import jwt
+from typing import Any
+import os
+
 from fastapi import APIRouter, Depends, HTTPException, Request, status
+from pydantic import BaseModel, Field
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 from slowapi import Limiter
 from slowapi.util import get_remote_address
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
-from pydantic import BaseModel, Field
 
-from app.core.db import get_db, set_tenant_context
 from app.core.config import settings
+from app.core.db import get_db, set_tenant_context
 from app.models.models import Usuari
 from app.api.v1.gestio.operaris import hash_pin
+import jwt
+import bcrypt
 
-router = APIRouter(prefix="/operari_auth", tags=["Auth Operari PWA"])
-limiter_login = Limiter(key_func=get_remote_address)
+logger = logging.getLogger("operari_auth")
+
+router = APIRouter(prefix="/operari_auth", tags=["Operari Auth"])
+limiter_login = Limiter(key_func=get_remote_address, enabled=os.getenv("TESTING") != "1")
 
 class LoginRequest(BaseModel):
     nif: str = Field(..., max_length=20)
@@ -31,19 +37,12 @@ class TokenResponse(BaseModel):
     token_type: str = "bearer"
     usuari: UsuariTokenResponse
 
-def verify_pin(plain_pin: str, hashed_pin: str) -> bool:
-    try:
-        return bcrypt.checkpw(plain_pin.encode('utf-8'), hashed_pin.encode('utf-8'))
-    except Exception:
-        return False
-
-def create_access_token(subject: str, rol: str, empresa_id: str) -> str:
-    expires_delta = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+def create_access_token(subject: str | Any, rol: str, empresa_id: str, expires_delta: timedelta) -> str:
     expire = datetime.now(timezone.utc) + expires_delta
     to_encode = {
-        "sub": subject,
+        "sub": str(subject),
         "rol": rol,
-        "empresa_id": empresa_id,
+        "empresa_id": str(empresa_id),
         "exp": expire
     }
     encoded_jwt = jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
@@ -63,13 +62,18 @@ async def login_operari(
     if not empresa_id:
         raise HTTPException(status_code=400, detail="Tenant context missing")
 
+    try:
+        empresa_uuid = uuid.UUID(empresa_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Tenant ID invàlid")
+
     await set_tenant_context(db, empresa_id)
 
     # 1. Buscar l'usuari aplicant el filtre de tenant implícitament i explícitament
     stmt = select(Usuari).where(
-        Usuari.empresa_id == uuid.UUID(empresa_id),
+        Usuari.empresa_id == empresa_uuid,
         Usuari.nif == login_data.nif,
-        Usuari.rol == "OPERARI"
+        Usuari.rol.in_(["OPERARI", "ADMIN", "SUPERADMIN"])
     )
     result = await db.execute(stmt)
     usuari = result.scalars().first()
@@ -78,43 +82,34 @@ async def login_operari(
     if not usuari:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Credencials invàlides"
+            detail="NIF o PIN incorrectes"
         )
 
-    # Si ja està bloquejat, ni tan sols comprovem el PIN (estalviem CPU)
-    if usuari.pin_bloquejat:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="El compte ha estat bloquejat per seguretat. Contacta amb Secretaria."
-        )
-
-    # Verifiquem el PIN
+    # 2. Verificar PIN (també opac)
+    def verify_pin(plain_pin: str, hashed_pin: str) -> bool:
+        return bcrypt.checkpw(plain_pin.encode('utf-8'), hashed_pin.encode('utf-8'))
+    
     is_valid = verify_pin(login_data.pin, usuari.pin_hash) if usuari.pin_hash else False
-
     if not is_valid:
-        # Incrementem comptador
-        usuari.intents_pin_fallits += 1
-        if usuari.intents_pin_fallits >= 4:
-            usuari.pin_bloquejat = True
-            await db.commit()
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="S'ha excedit el límit d'intents. El compte ha estat bloquejat per seguretat."
-            )
-        await db.commit()
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Credencials invàlides"
+            detail="NIF o PIN incorrectes"
         )
 
-    # PIN correcte
-    usuari.intents_pin_fallits = 0
-    await db.commit()
+    # 3. Comprovar estat actiu
+    if usuari.estat != "ACTIU":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Usuari inactiu. Contacta amb l'administrador."
+        )
 
+    # Generar JWT amb claims mínims
+    access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     token = create_access_token(
         subject=str(usuari.id),
         rol=usuari.rol,
-        empresa_id=str(usuari.empresa_id)
+        empresa_id=str(usuari.empresa_id),
+        expires_delta=access_token_expires
     )
 
     return TokenResponse(
