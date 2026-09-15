@@ -26,6 +26,9 @@ if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
 # Permet que la URL provingui de l'entorn si està definida
+if os.getenv("DATABASE_URL"):
+    config.set_main_option("sqlalchemy.url", os.getenv("DATABASE_URL"))
+
 if os.getenv("TEST_DATABASE_URL"):
     config.set_main_option("sqlalchemy.url", os.getenv("TEST_DATABASE_URL"))
 
