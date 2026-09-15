@@ -33,7 +33,7 @@ async def seed():
         admin = Usuari(
             id=uuid.uuid4(),
             empresa_id=empresa_id,
-            nif="admin",
+            nif="ADMIN",
             nom="Admin",
             cognoms="Principal",
             email="admin@sevalor.com",
@@ -46,7 +46,7 @@ async def seed():
         await session.commit()
         print("✅ Superadmin creat!")
         print(f"🏢 Empresa ID: {empresa_id}")
-        print("👤 Usuari: admin")
+        print("👤 Usuari: ADMIN")
         print("🔑 PIN: 1234")
 
 if __name__ == "__main__":
