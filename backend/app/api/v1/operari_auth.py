@@ -6,7 +6,7 @@ import os
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from slowapi import Limiter
 from slowapi.util import get_remote_address
@@ -69,12 +69,14 @@ async def login_operari(
 
     await set_tenant_context(db, empresa_id)
 
+
     # 1. Buscar l'usuari aplicant el filtre de tenant implícitament i explícitament
     stmt = select(Usuari).where(
         Usuari.empresa_id == empresa_uuid,
-        Usuari.nif == login_data.nif,
+        func.upper(Usuari.nif) == login_data.nif.upper(),
         Usuari.rol.in_(["OPERARI", "ADMIN", "SUPERADMIN"])
     )
+
     result = await db.execute(stmt)
     usuari = result.scalars().first()
 
