@@ -21,6 +21,7 @@ from app.api.v1.gestio.planols import router as planols_router
 from app.api.v1.gestio.comptabilitat import router as comptabilitat_router
 from app.api.v1.gestio.notificacions import router as notificacions_router
 from app.api.v1.operari_auth import router as operari_auth_router
+from app.api.v1.auth import router as auth_router
 from app.api.v1.operari_pwa.jornada import router as jornada_router
 from app.api.v1.operari_pwa.picking import router as picking_router
 from app.api.v1.operari_pwa.incidencies import router as incidencies_router
@@ -69,6 +70,7 @@ app.include_router(planols_router, prefix=settings.API_V1_STR)
 app.include_router(comptabilitat_router, prefix=settings.API_V1_STR)
 app.include_router(notificacions_router, prefix=settings.API_V1_STR)
 app.include_router(operari_auth_router, prefix=settings.API_V1_STR)
+app.include_router(auth_router, prefix=settings.API_V1_STR + "/auth", tags=["Autenticació Oficina"])
 app.include_router(jornada_router, prefix=settings.API_V1_STR)
 app.include_router(feines_pwa_router, prefix=settings.API_V1_STR)
 app.include_router(picking_router, prefix=settings.API_V1_STR)
