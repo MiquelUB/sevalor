@@ -23,16 +23,12 @@ import {
   Moon,
   Shield,
   Bell,
-  Radio,
-  Building2,
-  ExternalLink,
-  ChevronDown,
-  Layers,
-  CheckCircle2,
-  AlertTriangle,
   Settings,
-  Sparkles,
   X,
+  ExternalLink,
+  Layers,
+  Building2,
+  Sparkles,
 } from "lucide-react";
 
 function GestioLayoutContent({ children }: { children: React.ReactNode }) {
@@ -68,10 +64,11 @@ function GestioLayoutContent({ children }: { children: React.ReactNode }) {
       .catch(() => setEmpresa(null));
   }, []);
 
+  if (pathname === "/gestio/login") return <div className="min-h-screen bg-slate-50 dark:bg-slate-950">{children}</div>;
+
   const resultatsFiltrats = itemsSpotlight.filter((item) => {
     // Spec 001 RF-03: Veto d'Enginyer (ocultar resultats financers)
     if (rolActiu === "ENGINYER" && item.esFinancera) return false;
-    if (!cercaSpotlight) return true;
     return (
       item.titol.toLowerCase().includes(cercaSpotlight.toLowerCase()) ||
       item.desc.toLowerCase().includes(cercaSpotlight.toLowerCase())
@@ -79,75 +76,58 @@ function GestioLayoutContent({ children }: { children: React.ReactNode }) {
   });
 
   return (
-    <div className="min-h-screen bg-slate-100 dark:bg-slate-950 text-slate-900 dark:text-slate-100 flex flex-col font-sans transition-colors duration-200">
-      {/* CAPÇALERA SUPERIOR D'ALTA DENSITAT */}
-      <header className="h-14 bg-slate-900 text-white border-b border-slate-800 flex items-center justify-between px-4 z-40 sticky top-0 shadow-md">
-        {/* Esquerra: Logotip i Telemetria RTK */}
+    <div className="min-h-screen bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-100 font-sans transition-colors duration-200 flex flex-col">
+      {/* CAPÇALERA SUPERIOR */}
+      <header className="h-14 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between px-4 z-40 sticky top-0 shadow-sm transition-colors">
         <div className="flex items-center gap-4">
           <Link href="/gestio/mapa" className="flex items-center gap-2">
-            <div className="w-8 h-8 rounded-lg bg-emerald-600 flex items-center justify-center font-black text-white text-sm tracking-wider shadow">
-              SE
+            <div className="w-8 h-8 rounded-xl bg-emerald-600 flex items-center justify-center font-bold text-white shadow-lg shadow-emerald-600/20">
+              <MapPin className="w-5 h-5" />
             </div>
-            <div>
-              <div className="flex items-center gap-1.5">
-                <span className="font-extrabold text-sm tracking-tight text-white">SEVALOR GIS</span>
-                <span className="text-[9px] font-mono uppercase bg-emerald-950 text-emerald-300 px-1 py-0.5 rounded border border-emerald-700">Suite v4.0</span>
-              </div>
-              <p className="text-[10px] text-slate-400 font-mono hidden sm:block">Oficina Tècnica & Control</p>
-            </div>
+            <span className="font-extrabold text-lg tracking-tight hidden sm:block text-slate-800 dark:text-white">
+              SEVALOR
+            </span>
+            <span className="text-[10px] font-mono uppercase bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400 px-1.5 py-0.5 rounded font-bold border border-slate-200 dark:border-slate-700">
+              Oficina Tècnica
+            </span>
           </Link>
-
-          {/* Indicador RTK FIX (Spec 001) */}
-          <div className="hidden md:flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-slate-800 border border-slate-700 text-emerald-400 text-xs font-mono">
-            <Radio className="w-3.5 h-3.5 animate-pulse text-emerald-400" />
-            <span className="text-[11px] font-bold">RTK FIX: 0.02m</span>
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
-          </div>
         </div>
 
-        {/* Centre: Barra Spotlight Meta-Search (Spec 001 RF-02) */}
-        <div className="flex-1 max-w-md mx-4">
+        {/* Eines capçalera */}
+        <div className="flex items-center gap-3">
+          {/* Cerca Ràpida (Spotlight) */}
           <button
             onClick={() => setSpotlightObert(true)}
-            className="w-full h-8 px-3 rounded-lg bg-slate-800 hover:bg-slate-750 border border-slate-700 text-slate-400 text-xs flex items-center justify-between transition-colors shadow-inner"
+            className="hidden md:flex items-center gap-2 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 rounded-lg text-sm text-slate-500 dark:text-slate-400 transition-colors border border-slate-200 dark:border-slate-700 shadow-inner"
           >
-            <div className="flex items-center gap-2">
-              <Search className="w-3.5 h-3.5" />
-              <span className="truncate">Cercar ordres, clients, parcel·les...</span>
-            </div>
-            <kbd className="hidden sm:inline-block px-1.5 py-0.5 text-[10px] font-mono font-semibold text-slate-400 bg-slate-700 rounded border border-slate-600">
-              Ctrl K
-            </kbd>
+            <Search className="w-4 h-4" />
+            <span>Cerca global...</span>
+            <span className="text-[10px] font-mono bg-white dark:bg-slate-900 px-1 rounded shadow-sm">
+              Ctrl+K
+            </span>
           </button>
-        </div>
 
-        {/* Dreta: Selector de Rol (Veto Testing), Mode Clar/Fosc, Perfil */}
-        <div className="flex items-center gap-3">
-          {/* Selector de Rol Actiu per a validar Veto d'Enginyer */}
-          <div className="flex items-center gap-1.5 bg-slate-800 px-2 py-1 rounded-lg border border-slate-700">
-            <Shield className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-            <span className="text-[10px] font-mono text-slate-400 uppercase hidden lg:inline">Rol:</span>
+          {/* Veto d'Enginyer (Simulador de Rols per Testing) */}
+          <div className="flex items-center gap-1.5 px-2 py-1 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg">
+            <Shield className="w-3.5 h-3.5 text-amber-600 dark:text-amber-500" />
             <select
               value={rolActiu}
               onChange={(e) => setRolActiu(e.target.value as RolGestio)}
-              className="bg-transparent text-xs font-bold text-slate-200 focus:outline-none cursor-pointer"
+              className="bg-transparent text-xs font-bold text-amber-700 dark:text-amber-400 outline-none cursor-pointer"
             >
-              <option value="BOSS" className="bg-slate-900 text-white">Boss / Administrador</option>
-              <option value="ENGINYER" className="bg-slate-900 text-white">Enginyer de Camp (Veto 403)</option>
-              <option value="SECRETARIA" className="bg-slate-900 text-white">Secretaria / Comptabilitat</option>
+              <option value="BOSS">Rol: Administrador (SaaS)</option>
+              <option value="ENGINYER">Rol: Enginyer (Veto Financer)</option>
             </select>
           </div>
 
-          {/* Commutador Mode Clar / Fosc */}
           <button
             onClick={toggleTheme}
-            className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 transition-colors"
-            title="Commutar Tema Clar / Fosc"
+            className="p-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 dark:bg-slate-800 dark:hover:bg-slate-700 dark:text-slate-300 transition-colors"
           >
-            {isDark ? <Sun className="w-4 h-4 text-amber-400" /> : <Moon className="w-4 h-4 text-blue-400" />}
+            {isDark ? <Sun className="w-4 h-4 text-amber-500" /> : <Moon className="w-4 h-4 text-blue-500" />}
           </button>
 
-          {/* Perfil d'usuari */}
+          {/* Perfil */}
           <div className="flex items-center gap-2 pl-2 border-l border-slate-800">
             <div className="w-7 h-7 rounded-full bg-emerald-700 text-white font-bold flex items-center justify-center text-xs">
               J
@@ -215,15 +195,6 @@ function GestioLayoutContent({ children }: { children: React.ReactNode }) {
                   <span className="flex items-center gap-2">
                     <ExternalLink className="w-3.5 h-3.5 text-blue-500" />
                     PWA Operaris (Camp)
-                  </span>
-                </Link>
-                <Link
-                  href="/superadmin/tenants/onboarding"
-                  className="flex items-center justify-between px-3 py-1.5 rounded-xl text-xs text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"
-                >
-                  <span className="flex items-center gap-2">
-                    <ExternalLink className="w-3.5 h-3.5 text-amber-500" />
-                    Superadmin SaaS
                   </span>
                 </Link>
               </div>
