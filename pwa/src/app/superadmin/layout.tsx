@@ -23,6 +23,7 @@ export default function SuperadminLayout({
 }) {
   const pathname = usePathname();
   const [isDark, setIsDark] = useState<boolean>(true);
+  if (pathname === "/superadmin/login") return <div className="min-h-screen bg-slate-50 dark:bg-slate-950">{children}</div>;
 
   useEffect(() => {
     const saved = localStorage.getItem("sevalor_theme");
