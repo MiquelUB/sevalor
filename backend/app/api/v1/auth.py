@@ -98,7 +98,6 @@ async def login_oficina(
             detail="Error intern del servidor"
         )
 
-
 class UserMeResponse(BaseModel):
     id: str
     empresa_id: str | None = None
@@ -138,4 +137,5 @@ async def get_me(
         nom=usuari.nom,
         email=usuari.email
     )
+
 

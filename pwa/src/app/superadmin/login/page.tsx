@@ -42,7 +42,6 @@ export default function SuperadminLogin() {
       
       // Guardar token al localStorage per a apiFetch
       setAuthToken(data.access_token);
-
       localStorage.setItem("sevalor_user", JSON.stringify(data));
       router.push("/superadmin/telemetria");
     } catch (err: any) {

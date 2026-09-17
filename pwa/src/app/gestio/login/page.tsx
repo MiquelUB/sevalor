@@ -38,7 +38,6 @@ export default function GestioLogin() {
       
       // Guardar token al localStorage per a apiFetch
       setAuthToken(data.access_token);
-
       // Guardar dades d'usuari
       localStorage.setItem("sevalor_user", JSON.stringify(data));
 
