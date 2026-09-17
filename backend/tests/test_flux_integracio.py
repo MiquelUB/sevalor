@@ -47,7 +47,7 @@ async def crear_empresa(session) -> str:
     eid = str(uuid.uuid4())
     await session.execute(
         text("""INSERT INTO empreses (id, nom, nif, subdomini, pla_subscripcio, estat_pagament, vertical)
-                VALUES (:id, :nom, :nif, :sub, 'STARTER', 'ACTIU', 'CAMPOPRO')"""),
+                VALUES (:id, :nom, :nif, :sub, 'STARTER', 'ACTIU', 'SEVALOR')"""),
         {"id": eid, "nom": "Test SA", "nif": _nif(), "sub": _sub()},
     )
     return eid
@@ -548,7 +548,7 @@ class TestFluxOperari:
         async with AsyncSessionLocal() as s:
             await s.execute(text("SET LOCAL app.is_superadmin='true'"))
             eid = str(uuid.uuid4())
-            await s.execute(text("INSERT INTO empreses (id, nom, nif, subdomini, pla_subscripcio, estat_pagament, vertical) VALUES (:id, 'T', :nif, :sub, 'STARTER', 'ACTIU', 'CAMPOPRO')"), {"id": eid, "nif": f"T{uuid.uuid4().int % 100000000:08d}", "sub": f"sub-{uuid.uuid4().int % 10000000}"})
+            await s.execute(text("INSERT INTO empreses (id, nom, nif, subdomini, pla_subscripcio, estat_pagament, vertical) VALUES (:id, 'T', :nif, :sub, 'STARTER', 'ACTIU', 'SEVALOR')"), {"id": eid, "nif": f"T{uuid.uuid4().int % 100000000:08d}", "sub": f"sub-{uuid.uuid4().int % 10000000}"})
             onif = f"O{uuid.uuid4().int % 100000000:08d}"
             ph = _bcrypt.hashpw(b"4826", _bcrypt.gensalt()).decode()
             await s.execute(text("INSERT INTO usuaris (id, empresa_id, nif, nom, cognoms, rol, pin_hash, estat, telefon) VALUES (:id, :eid, :nif, 'Op', 'Test', 'OPERARI', :ph, 'ACTIU', '+34600000000')"), {"id": str(uuid.uuid4()), "eid": eid, "nif": onif, "ph": ph})
@@ -571,7 +571,7 @@ class TestFluxOperari:
         async with AsyncSessionLocal() as s:
             await s.execute(text("SET LOCAL app.is_superadmin='true'"))
             eid = str(uuid.uuid4())
-            await s.execute(text("INSERT INTO empreses (id, nom, nif, subdomini, pla_subscripcio, estat_pagament, vertical) VALUES (:id, 'T', :nif, :sub, 'STARTER', 'ACTIU', 'CAMPOPRO')"), {"id": eid, "nif": f"T{uuid.uuid4().int % 100000000:08d}", "sub": f"sub-{uuid.uuid4().int % 10000000}"})
+            await s.execute(text("INSERT INTO empreses (id, nom, nif, subdomini, pla_subscripcio, estat_pagament, vertical) VALUES (:id, 'T', :nif, :sub, 'STARTER', 'ACTIU', 'SEVALOR')"), {"id": eid, "nif": f"T{uuid.uuid4().int % 100000000:08d}", "sub": f"sub-{uuid.uuid4().int % 10000000}"})
             onif = f"O{uuid.uuid4().int % 100000000:08d}"
             ph = _bcrypt.hashpw(b"4826", _bcrypt.gensalt()).decode()
             await s.execute(text("INSERT INTO usuaris (id, empresa_id, nif, nom, cognoms, rol, pin_hash, estat, telefon) VALUES (:id, :eid, :nif, 'Op', 'Test', 'OPERARI', :ph, 'ACTIU', '+34600000000')"), {"id": str(uuid.uuid4()), "eid": eid, "nif": onif, "ph": ph})

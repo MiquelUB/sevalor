@@ -43,7 +43,7 @@ async def empresa_i_admin(admin_session: AsyncSession):
     nif = _nif()
     await admin_session.execute(
         text("""INSERT INTO empreses (id, nom, nif, subdomini, pla_subscripcio, estat_pagament, vertical)
-                VALUES (:id, :nom, :nif, :sub, 'STARTER', 'ACTIU', 'CAMPOPRO')"""),
+                VALUES (:id, :nom, :nif, :sub, 'STARTER', 'ACTIU', 'SEVALOR')"""),
         {"id": eid, "nom": "Test SA", "nif": nif, "sub": _sub()},
     )
     # Boss

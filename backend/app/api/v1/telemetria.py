@@ -111,7 +111,7 @@ async def get_system_kpis(db: AsyncSession = Depends(get_db_with_tenant_context)
                     }
 
                 # Verticalització
-                vertical = "CAMPOPRO"
+                vertical = "SEVALOR"
                 nom_upper = emp.nom.upper()
                 if "ELECTRIC" in nom_upper:
                     vertical = "ELECTRICPRO"

@@ -33,7 +33,7 @@ async def test_superadmin_onboarding_nou_tenant(superadmin_headers, admin_sessio
         "rao_social": "Serveis Agrícoles del Segrià S.L.",
         "nif": nif_test,
         "subdomini": subdomini_test,
-        "vertical": "CAMPOPRO",
+        "vertical": "SEVALOR",
         "pla_subscripcio": "PRO",
         "quota_disc_gb": 50,
         "boss_nif": "47123456Z",
@@ -66,7 +66,7 @@ async def test_superadmin_onboarding_nou_tenant(superadmin_headers, admin_sessio
         assert empresa is not None
         assert empresa.nom == "Serveis Agrícoles del Segrià S.L."
         assert empresa.estat_pagament == "TRIAL"
-        assert empresa.vertical == "CAMPOPRO"
+        assert empresa.vertical == "SEVALOR"
 
         # Verificar creació de l'usuari Boss
         boss_res = await admin_session.execute(select(Usuari).where(Usuari.email == boss_email))

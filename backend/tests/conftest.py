@@ -41,6 +41,35 @@ def event_loop():
     loop.close()
 
 
+@pytest_asyncio.fixture(scope="session", autouse=True)
+async def setup_test_database():
+    """Initializes the database schema and RLS policies for testing before any tests run."""
+    engine = create_async_engine(TEST_DB_URL, echo=False)
+    
+    from app.core.db import Base
+    from app.models import models
+    
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+        
+        await conn.execute(text("""
+        DO $$
+        BEGIN
+            IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'sevalor_app') THEN
+                CREATE ROLE sevalor_app;
+            END IF;
+        END
+        $$;
+        """))
+        await conn.execute(text("GRANT USAGE ON SCHEMA public TO sevalor_app;"))
+        await conn.execute(text("GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO sevalor_app;"))
+        await conn.execute(text("ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO sevalor_app;"))
+        await conn.execute(text("GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO sevalor_app;"))
+        await conn.execute(text("ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO sevalor_app;"))
+    
+    await engine.dispose()
+
+
 @pytest_asyncio.fixture(scope="function")
 async def db_session() -> AsyncGenerator[AsyncSession, None]:
     """Fixture de sessió de BD amb SAVEPOINT: cada test veu un entorn aïllat i fa rollback al final."""

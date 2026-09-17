@@ -32,7 +32,7 @@ class OnboardingTenantRequest(BaseModel):
     rao_social: str = Field(..., min_length=2, max_length=100)
     nif: str = Field(..., min_length=9, max_length=20)
     subdomini: str = Field(..., min_length=3, max_length=63, pattern="^[a-z0-9-]+$")
-    vertical: str = Field("CAMPOPRO", pattern="^(CAMPOPRO|ELECTRICPRO|HYDROPRO|BUILDINGPRO)$")
+    vertical: str = Field("SEVALOR", pattern="^(SEVALOR|ELECTRICPRO|HYDROPRO|BUILDINGPRO)$")
     pla_subscripcio: str = Field("STARTER", pattern="^(STARTER|PRO|ENTERPRISE)$")
     quota_disc_gb: int = Field(10, ge=5, le=1000)
     boss_nif: str

@@ -142,7 +142,7 @@ async def obtenir_estat_node_ia(
 
     res = await db.execute(select(Empresa).where(Empresa.id == empresa_id))
     empresa = res.scalar_one_or_none()
-    vertical = empresa.vertical if empresa else "CAMPOPRO"
+    vertical = empresa.vertical if empresa else "SEVALOR"
 
     return {
         "node_actiu": True,
@@ -735,7 +735,7 @@ async def consultar_xat_tecnic(
                 usuari_id=usuari_id,
                 pregunta=dades.pregunta,
                 resposta="Consulta no autoritzada per política de rols de seguretat.",
-                vertical="CAMPOPRO",
+                vertical="SEVALOR",
                 denegat_per_rol=True,
             )
             db.add(log_denegat)
@@ -750,12 +750,12 @@ async def consultar_xat_tecnic(
     q_emp = select(Empresa).where(Empresa.id == empresa_id)
     res_emp = await db.execute(q_emp)
     empresa = res_emp.scalar_one_or_none()
-    vertical = empresa.vertical if empresa else "CAMPOPRO"
+    vertical = empresa.vertical if empresa else "SEVALOR"
 
     termes_electrics = ["rebt", "caiguda de tensio", "caiguda de tensió", "magnetotermic", "magnetotèrmic", "seccio de cable", "curva c"]
     termes_hidraulics = ["curva de bomba", "cabal m3/h", "fertirrigacio", "fertirrigació", "recomanacio agronomica", "diposit de purins"]
 
-    if vertical in ["CAMPOPRO", "HYDROPRO"]:
+    if vertical in ["SEVALOR", "HYDROPRO"]:
         if any(terme in pregunta_net for terme in termes_electrics):
             resposta_vertical = f"La base de coneixement i context del Copilot s'acota exclusivament al sector d'enginyeria civil i regadíos ({vertical}). La consulta de REBT elèctric ha estat declinada per aïllament estricte de vertical (EDGE-10)."
             return {
