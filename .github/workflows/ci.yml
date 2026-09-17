@@ -58,6 +58,8 @@ jobs:
           SECRET_KEY: "ci_cd_secret_key_for_testing_purposes_only_minimum_length"
         run: |
           alembic upgrade head
+          python scripts/seed.py
+          python scripts/fix_rls.py
 
       - name: Run Pytest Test Suite
         working-directory: ./backend
