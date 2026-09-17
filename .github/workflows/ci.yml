@@ -54,6 +54,8 @@ jobs:
           POSTGRES_PASSWORD: postgrespassword
           POSTGRES_DB: sevalor
           DATABASE_URL: postgresql+asyncpg://postgres:postgrespassword@localhost:5432/sevalor
+          TESTING: "1"
+          SECRET_KEY: "ci_cd_secret_key_for_testing_purposes_only_minimum_length"
         run: |
           alembic upgrade head
 
@@ -94,7 +96,7 @@ jobs:
         run: |
           node test_crypto.mjs
           node test_phase0_auth.mjs
-          node test_phase0_apifetch.mjs
+          npx --yes tsx test_phase0_apifetch.mjs
           node test_pwa_logic.mjs
 
       - name: Next.js Production Build (Strict TypeScript & ESLint)
