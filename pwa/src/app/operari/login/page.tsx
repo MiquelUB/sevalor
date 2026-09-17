@@ -121,6 +121,9 @@ export default function OperariLoginPage() {
         // Desar token al localStorage (serà xifrat pel crypto.service en futures iteracions)
         setAuthToken(response.access_token);
 
+        // Desar cookie per al Middleware
+        document.cookie = `sevalor_access_token=${response.access_token}; path=/; max-age=86400; SameSite=Strict`;
+
         // Crear o verificar bloc sentinel per validació offline futura
         const saltHex = localStorage.getItem(SENTINEL_SALT_KEY);
         if (saltHex) {

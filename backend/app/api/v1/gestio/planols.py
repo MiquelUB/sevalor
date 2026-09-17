@@ -20,8 +20,8 @@ class PlanolCreate(BaseModel):
     codi_referencia: str = Field(..., max_length=50)
     carpeta_id: uuid.UUID
     tipus_fitxer: str = Field(..., max_length=20)
-    fitxer_path: str = Field(..., max_length=500)
-    mida_bytes: int
+    fitxer_path: str = Field("/docs/planols/default.dxf", max_length=500)
+    mida_bytes: int = Field(0)
     es_georeferenciat: bool = Field(False)
 
 class PlanolResponse(PlanolCreate):

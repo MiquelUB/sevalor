@@ -34,6 +34,7 @@ import {
   KeyRound,
   FileText,
 } from "lucide-react";
+import { apiFetch } from "@/lib/api";
 
 export default function SuperadminTenantOnboardingPage() {
   // Mode Clar / Mode Fosc
@@ -67,25 +68,25 @@ export default function SuperadminTenantOnboardingPage() {
   };
 
   // Estat del formulari de l'Assistent (Wizard)
-  const [pasActual, setPasActual] = useState<number>(2); // Pas 2 actiu per defecte com al disseny
+  const [pasActual, setPasActual] = useState<number>(1);
   const [dryRunRunning, setDryRunRunning] = useState<boolean>(false);
   const [dryRunSuccess, setDryRunSuccess] = useState<boolean | null>(null);
 
   // Pas 1: Dades Fiscals
-  const [raoSocial, setRaoSocial] = useState<string>("AgroGirona Tecnològica S.L.");
-  const [nif, setNif] = useState<string>("B-65829104");
+  const [raoSocial, setRaoSocial] = useState<string>("");
+  const [nif, setNif] = useState<string>("");
   const [vertical, setVertical] = useState<"CAMPOPRO" | "ELECTRICPRO" | "HYDROPRO" | "BUILDINGPRO">("CAMPOPRO");
-  const [responsable, setResponsable] = useState<string>("Marc Vila");
-  const [emailGerent, setEmailGerent] = useState<string>("marc@agrogirona.cat");
-  const [telefon, setTelefon] = useState<string>("+34 972 84 92 10");
+  const [responsable, setResponsable] = useState<string>("");
+  const [emailGerent, setEmailGerent] = useState<string>("");
+  const [telefon, setTelefon] = useState<string>("");
 
   // Pas 2: Subdomini & SSL
-  const [subdomini, setSubdomini] = useState<string>("agrogirona");
+  const [subdomini, setSubdomini] = useState<string>("");
   const [dominiPersonalitzat, setDominiPersonalitzat] = useState<string>("");
-  const [sslStatus, setSslStatus] = useState<"IDLE" | "PROCESSING" | "ACTIVE">("PROCESSING");
+  const [sslStatus, setSslStatus] = useState<"IDLE" | "PROCESSING" | "ACTIVE">("ACTIVE");
 
   // Pas 3: Postgres Schema & RLS
-  const [schemaNom, setSchemaNom] = useState<string>("tenant_agrogirona_prod");
+  const [schemaNom, setSchemaNom] = useState<string>("");
 
   // Pas 4: Quotes & Recursos
   const [tierPla, setTierPla] = useState<"STARTER" | "PRO" | "ENTERPRISE">("PRO");
@@ -100,27 +101,57 @@ export default function SuperadminTenantOnboardingPage() {
   const [provisioning, setProvisioning] = useState<boolean>(false);
   const [provisionedSuccess, setProvisionedSuccess] = useState<boolean>(false);
   const [invitationUrl, setInvitationUrl] = useState<string | null>(null);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   // Executar Dry-Run
   const handleExecuteDryRun = () => {
     setDryRunRunning(true);
     setDryRunSuccess(null);
-    setTimeout(() => {
+    setErrorMessage(null);
+    if (!raoSocial.trim() || !nif.trim() || !subdomini.trim() || !emailGerent.trim()) {
       setDryRunRunning(false);
-      setDryRunSuccess(true);
-    }, 1200);
+      setDryRunSuccess(false);
+      setErrorMessage("Cal indicar Raó Social, NIF, Subdomini i Email abans de verificar.");
+      return;
+    }
+    setDryRunRunning(false);
+    setDryRunSuccess(true);
   };
 
-  // Finalitzar Provisionament Tenant
-  const handleProvisionTenant = () => {
+  // Finalitzar Provisionament Tenant Real
+  const handleProvisionTenant = async () => {
     setProvisioning(true);
-    setTimeout(() => {
-      setProvisioning(false);
+    setErrorMessage(null);
+    try {
+      const nomParts = responsable.trim().split(" ");
+      const nom = nomParts[0] || "Gerent";
+      const cognoms = nomParts.slice(1).join(" ") || "General";
+
+      const data = await apiFetch<any>("/superadmin/tenants/onboarding", {
+        method: "POST",
+        body: JSON.stringify({
+          rao_social: raoSocial.trim(),
+          nif: nif.trim().toUpperCase(),
+          subdomini: subdomini.trim().toLowerCase(),
+          vertical: vertical,
+          pla_subscripcio: tierPla,
+          quota_disc_gb: tierPla === "ENTERPRISE" ? 100 : tierPla === "PRO" ? 50 : 10,
+          boss_nif: nif.trim().toUpperCase(),
+          boss_nom: nom,
+          boss_cognoms: cognoms,
+          boss_email: emailGerent.trim().toLowerCase(),
+          boss_telefon: telefon.trim() || "+34600000000",
+          feature_flags: featureFlags,
+        }),
+      });
+
       setProvisionedSuccess(true);
-      setInvitationUrl(
-        `https://${subdomini}.sevalor.app/activate?token=sec_one_time_${Math.random().toString(36).substring(2, 15)}`
-      );
-    }, 1500);
+      setInvitationUrl(data?.tenant?.enllac_activacio_2fa || `https://${subdomini.trim().toLowerCase()}.campopro.cat/activacio`);
+    } catch (err: any) {
+      setErrorMessage(err.message || "Error durant el provisionament del tenant.");
+    } finally {
+      setProvisioning(false);
+    }
   };
 
   return (
@@ -190,11 +221,11 @@ export default function SuperadminTenantOnboardingPage() {
           {/* Usuari SRE Connectat */}
           <div className="flex items-center gap-2 pl-3 border-l border-slate-800 text-xs font-mono">
             <div className="hidden sm:flex flex-col text-right">
-              <span className="font-bold text-slate-200">Jordi Soler</span>
+              <span className="font-bold text-slate-200">SuperAdmin</span>
               <span className="text-[10px] text-slate-400">DevOps / SRE (HQ)</span>
             </div>
             <div className="w-8 h-8 rounded-full bg-emerald-700/60 border border-emerald-500 text-white font-bold flex items-center justify-center text-xs">
-              JS
+              SA
             </div>
           </div>
         </div>
@@ -781,6 +812,14 @@ export default function SuperadminTenantOnboardingPage() {
                 </div>
               </div>
 
+              {/* Missatge d'Error si falla el provisionament */}
+              {errorMessage && (
+                <div className="p-4 rounded-xl bg-rose-50 dark:bg-rose-950/50 border border-rose-200 dark:border-rose-900 text-rose-800 dark:text-rose-200 text-xs font-semibold flex items-center gap-2">
+                  <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
+                  <span>{errorMessage}</span>
+                </div>
+              )}
+
               {/* Modal / Enllaç d'Activació Inicial Generat (Spec 021 RF-10, RF-11) */}
               {provisionedSuccess && invitationUrl && (
                 <div className="p-6 rounded-xl bg-emerald-50 dark:bg-emerald-950/60 border-2 border-emerald-500 text-emerald-950 dark:text-emerald-100 shadow-xl space-y-3">
@@ -916,7 +955,7 @@ export default function SuperadminTenantOnboardingPage() {
                       <span>7a8f...92d1</span>
                     </div>
                     <span className="text-slate-700 dark:text-slate-300 block mt-0.5">
-                      tenant_id='org_agrogirona' registered. RLS policy enabled.
+                      tenant_id='{subdomini || "tenant"}' registered. RLS policy enabled.
                     </span>
                   </div>
 
@@ -936,7 +975,7 @@ export default function SuperadminTenantOnboardingPage() {
                       <span>33b1...81fe</span>
                     </div>
                     <span className="text-slate-700 dark:text-slate-300 block mt-0.5">
-                      Superadmin Jordi Soler initiated onboarding.
+                      Superadmin session authenticated. Onboarding wizard ready.
                     </span>
                   </div>
                 </div>

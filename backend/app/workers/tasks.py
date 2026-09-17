@@ -21,7 +21,7 @@ from app.services.whisper_service import transcriure_audio
 logger = logging.getLogger("workers.tasks")
 
 
-def crear_directoris_sobirans(empresa_id: str) -> List[str]:
+def crear_directoris_sobirans(empresa_id: str, base_data_dir: str = None, base_docs_dir: str = None) -> List[str]:
     """Crea l'arbre de directoris sobirans per a una empresa (Spec 021 RF-08).
 
     Rutes creades (sobirania de dades a Hetzner, UE):
@@ -32,13 +32,23 @@ def crear_directoris_sobirans(empresa_id: str) -> List[str]:
       /docs/<empresa_id>/factures/
       /docs/<empresa_id>/backups/
     """
+    data_prefix = base_data_dir or os.getenv("SOVEREIGN_DATA_PATH", "/data")
+    docs_prefix = base_docs_dir or os.getenv("SOVEREIGN_DOCS_PATH", "/docs")
+
+    # Si no es pot escriure a l'arrel (ex. entorn no root), utilitzar fallback segur
+    try:
+        os.makedirs(data_prefix, exist_ok=True)
+    except OSError:
+        data_prefix = "/tmp/data"
+        docs_prefix = "/tmp/docs"
+
     dirs = [
-        f"/data/{empresa_id}/incidencies",
-        f"/data/{empresa_id}/vehicles",
-        f"/data/{empresa_id}/comptabilitat",
-        f"/docs/{empresa_id}/planols",
-        f"/docs/{empresa_id}/factures",
-        f"/docs/{empresa_id}/backups",
+        f"{data_prefix}/{empresa_id}/incidencies",
+        f"{data_prefix}/{empresa_id}/vehicles",
+        f"{data_prefix}/{empresa_id}/comptabilitat",
+        f"{docs_prefix}/{empresa_id}/planols",
+        f"{docs_prefix}/{empresa_id}/factures",
+        f"{docs_prefix}/{empresa_id}/backups",
     ]
     creades = []
     for d in dirs:

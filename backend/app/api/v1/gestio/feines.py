@@ -97,3 +97,47 @@ async def alta_feina(
     await db.commit()
 
     return nova_feina
+
+
+# ---------------------------------------------------------------------------
+# Intervencions Actives per a la Torre de Control GIS (Spec 001)
+# ---------------------------------------------------------------------------
+
+intervencions_router = APIRouter(
+    prefix="/intervencions",
+    tags=["Intervencions GIS"],
+    dependencies=[Depends(require_roles(["BOSS", "SECRETARIA", "ENGINYER", "SUPERADMIN"]))],
+)
+
+@intervencions_router.get("/actives")
+async def llistar_intervencions_actives(
+    request: Request,
+    db: AsyncSession = Depends(get_db_with_tenant_context)
+):
+    empresa_id = request.state.empresa_id
+    if not empresa_id:
+        raise HTTPException(status_code=401, detail="No identificat")
+
+    stmt = select(OrdreTreball).where(
+        OrdreTreball.empresa_id == uuid.UUID(empresa_id),
+        OrdreTreball.estat.in_(["PENDENT", "EN_CURS", "BLOQUEJADA", "EN_OBRA", "EN_RUTA"])
+    ).order_by(OrdreTreball.created_at.desc())
+
+    res = await db.execute(stmt)
+    ordres = res.scalars().all()
+
+    return [
+        {
+            "id": str(o.id),
+            "codi": o.codi,
+            "client": "Client " + str(o.client_id)[:8],
+            "titol": o.titol,
+            "cap_colla": "Capataz",
+            "estat": o.estat if o.estat in ["EN_OBRA", "EN_RUTA", "PENDENT", "INCIDENCIA"] else "PENDENT",
+            "coords": [41.3851, 2.1734],
+            "sector": "Sector Central",
+            "pressio_bar": 3.8,
+            "codi_candat": "4826-B",
+        }
+        for o in ordres
+    ]

@@ -12,12 +12,16 @@ from pydantic import BaseModel, Field, EmailStr
 from sqlalchemy import func, select, update, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 import httpx
+import bcrypt
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 
 from app.core.db import get_db, set_tenant_context
 from app.core.security import get_current_user_claims
 from app.models.models import Empresa, SlotJornada, Usuari
 
 router = APIRouter(prefix="/gestio/configuracio", tags=["Configuració & Marca"])
+limiter = Limiter(key_func=get_remote_address, enabled=os.getenv("TESTING") != "1")
 
 # Directori sobirà d'emmagatzematge Hetzner Falkenstein
 HETZNER_BASE_DOCS = os.environ.get("HETZNER_DOCS_PATH", "/docs")
@@ -320,6 +324,30 @@ async def actualitzar_dades_empresa(
 # 2. MOTOR CAMALEÒNIC, CONTRAST WCAG & ADN DE MARCA (RF-12 a RF-15, EDGE-02)
 # ---------------------------------------------------------------------------
 
+@router.get("/marca")
+async def obtenir_marca_camaleonica(
+    claims: Dict[str, Any] = Depends(get_current_user_claims),
+    db: AsyncSession = Depends(get_db),
+):
+    """Retorna la configuració cromàtica i visual de la marca de l'empresa."""
+    empresa_id = claims.get("empresa_id")
+    if not empresa_id:
+        raise HTTPException(status_code=401, detail="No identificat")
+
+    res = await db.execute(select(Empresa).where(Empresa.id == uuid.UUID(empresa_id)))
+    empresa = res.scalar_one_or_none()
+    if not empresa:
+        raise HTTPException(status_code=404, detail="Empresa no trobada")
+
+    return {
+        "primari_hsl": empresa.primari_hsl or "210 100% 15%",
+        "secundari_hsl": empresa.secundari_hsl or "210 20% 98%",
+        "accent_hsl": empresa.accent_hsl or "142 76% 36%",
+        "logotip_path": empresa.logotip_path,
+        "favicon_path": empresa.favicon_path,
+        "monograma": empresa.monograma or "SE",
+    }
+
 @router.put("/marca")
 async def actualitzar_marca_camaleonica(
     payload: MarcaUpdateRequest,
@@ -608,7 +636,7 @@ async def crear_usuari_administratiu(
         cognoms=payload.cognoms.strip(),
         email=payload.email.strip().lower(),
         telefon=payload.telefon.strip() if payload.telefon else None,
-        password_hash=f"bcrypt_simulated_{contrasenya_generada}",
+        password_hash=bcrypt.hashpw(contrasenya_generada.encode('utf-8'), bcrypt.gensalt()).decode('utf-8'),
         rol=rol_upper,
         estat="ACTIU",
         secret_2fa=secret_2fa_provisional,
@@ -781,7 +809,9 @@ async def reiniciar_2fa_usuari(
 
 
 @router.post("/emergencia-2fa-boss")
+@limiter.limit("3/minute")
 async def acces_emergencia_2fa_boss(
+    request: Request,
     payload: Emergencia2faBossRequest,
     db: AsyncSession = Depends(get_db),
 ):

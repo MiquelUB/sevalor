@@ -78,7 +78,7 @@ async def operari_token(empresa_i_admin, async_client: AsyncClient, admin_sessio
     await admin_session.commit()
 
     # Login
-    resp = await async_client.post("/operari_auth/login", json={"nif": op_nif, "pin": pin_clear})
+    resp = await async_client.post("/operari_auth/login", json={"nif": op_nif, "pin": pin_clear}, headers={"X-Empresa-ID": eid})
     assert resp.status_code == 200, f"Login fallit: {resp.status_code} {resp.text}"
     data = resp.json()
     assert "access_token" in data
@@ -181,6 +181,13 @@ class TestFluxOperari:
         import jwt as pyjwt
 
         eid_a = empresa_i_admin
+        # Client a Tenant A
+        client_a = str(uuid.uuid4())
+        await admin_session.execute(
+            text("""INSERT INTO clients (id, empresa_id, codi, rao_social, nif)
+                    VALUES (:id, :eid, 'CLI-A', 'Client A', :nif)"""),
+            {"id": client_a, "eid": eid_a, "nif": _nif()},
+        )
         # Crear Tenant B
         eid_b = str(uuid.uuid4())
         await admin_session.execute(

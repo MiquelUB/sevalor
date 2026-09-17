@@ -65,31 +65,31 @@ export default function SuperadminTelemetriaPage() {
   const [darreraActualitzacio, setDarreraActualitzacio] = useState<string>("Ara mateix");
 
   // Telemetria del sistema (Spec 022 RF-01)
-  const [uptimePercent, setUptimePercent] = useState<number>(99.98);
-  const [p50Latency, setP50Latency] = useState<number>(38.2);
-  const [p95Latency, setP95Latency] = useState<number>(142.5);
-  const [p99Latency, setP99Latency] = useState<number>(289.1);
+  const [uptimePercent, setUptimePercent] = useState<number>(100.0);
+  const [p50Latency, setP50Latency] = useState<number>(0);
+  const [p95Latency, setP95Latency] = useState<number>(0);
+  const [p99Latency, setP99Latency] = useState<number>(0);
 
   // Microserveis (carregats del backend — Spec 022 RF-04)
   const [microserveis, setMicroserveis] = useState<any[]>([]);
 
   // Concurrència i Pool asyncpg (Spec 022 RF-06 & RF-07)
-  const [sessionsActives, setSessionsActives] = useState<number>(60);
-  const [operarisCamp, setOperarisCamp] = useState<number>(48);
-  const [oficinaTecnica, setOficinaTecnica] = useState<number>(12);
-  const [poolOcupacioPercent, setPoolOcupacioPercent] = useState<number>(30.0);
-  const [poolConnexionsActives, setPoolConnexionsActives] = useState<number>(18);
+  const [sessionsActives, setSessionsActives] = useState<number>(0);
+  const [operarisCamp, setOperarisCamp] = useState<number>(0);
+  const [oficinaTecnica, setOficinaTecnica] = useState<number>(0);
+  const [poolOcupacioPercent, setPoolOcupacioPercent] = useState<number>(0);
+  const [poolConnexionsActives, setPoolConnexionsActives] = useState<number>(0);
   const [poolConnexionsMax, setPoolConnexionsMax] = useState<number>(60);
 
   // Cues Celery / Redis (Spec 022 RF-08 & RF-09)
-  const [tasquesPerMinut, setTasquesPerMinut] = useState<number>(184);
-  const [queueWaitMs, setQueueWaitMs] = useState<number>(120);
-  const [tasquesPendents, setTasquesPendents] = useState<number>(7);
+  const [tasquesPerMinut, setTasquesPerMinut] = useState<number>(0);
+  const [queueWaitMs, setQueueWaitMs] = useState<number>(0);
+  const [tasquesPendents, setTasquesPendents] = useState<number>(0);
 
   // IA Local CPU-Only Hetzner CPX21 (Spec 022 RF-10 & RF-11)
-  const [whisperAvgInferenceSec, setWhisperAvgInferenceSec] = useState<number>(2.4);
-  const [cpuUsagePercent, setCpuUsagePercent] = useState<number>(42.0);
-  const [ramUsageMb, setRamUsageMb] = useState<number>(1840);
+  const [whisperAvgInferenceSec, setWhisperAvgInferenceSec] = useState<number>(0);
+  const [cpuUsagePercent, setCpuUsagePercent] = useState<number>(0);
+  const [ramUsageMb, setRamUsageMb] = useState<number>(0);
 
   // Llicències de Tenants (Spec 022 RF-12 & RF-15)
   const [tenants, setTenants] = useState<TenantLlicencia[]>([]);
@@ -103,33 +103,33 @@ export default function SuperadminTelemetriaPage() {
     setCarregant(true);
     try {
       const data = await apiFetch<any>("/superadmin/telemetria/kpis");
-      setUptimePercent(data.uptime_percent ?? 99.98);
+      setUptimePercent(data.uptime_percent ?? 100.0);
       if (data.latencies_ms) {
-        setP50Latency(data.latencies_ms.p50 ?? 38.2);
-        setP95Latency(data.latencies_ms.p95 ?? 142.5);
-        setP99Latency(data.latencies_ms.p99 ?? 289.1);
+        setP50Latency(data.latencies_ms.p50 ?? 0);
+        setP95Latency(data.latencies_ms.p95 ?? 0);
+        setP99Latency(data.latencies_ms.p99 ?? 0);
       }
       if (data.concurrency) {
-        setSessionsActives(data.concurrency.active_sessions ?? 2);
+        setSessionsActives(data.concurrency.active_sessions ?? 0);
         setOperarisCamp(data.concurrency.operaris_camp ?? 0);
-        setOficinaTecnica(data.concurrency.oficina_tecnica ?? 2);
-        setPoolOcupacioPercent(data.concurrency.db_pool_occupancy_percent ?? 30.0);
-        setPoolConnexionsActives(data.concurrency.db_pool_active ?? 18);
+        setOficinaTecnica(data.concurrency.oficina_tecnica ?? 0);
+        setPoolOcupacioPercent(data.concurrency.db_pool_occupancy_percent ?? 0);
+        setPoolConnexionsActives(data.concurrency.db_pool_active ?? 0);
         setPoolConnexionsMax(data.concurrency.db_pool_max ?? 60);
       }
       if (data.celery_queues) {
-        setTasquesPerMinut(data.celery_queues.tasks_per_minute ?? 184);
-        setQueueWaitMs(data.celery_queues.queue_wait_ms ?? 120);
+        setTasquesPerMinut(data.celery_queues.tasks_per_minute ?? 0);
+        setQueueWaitMs(data.celery_queues.queue_wait_ms ?? 0);
         const totalPendents = Object.values(data.celery_queues.queues || {}).reduce(
           (acc: number, val: any) => acc + (typeof val === "number" ? val : 0),
           0
         );
-        setTasquesPendents(Number(totalPendents) || 7);
+        setTasquesPendents(Number(totalPendents) || 0);
       }
       if (data.cpu_ia_telemetry) {
-        setWhisperAvgInferenceSec(data.cpu_ia_telemetry.whisper_avg_inference_sec ?? 2.4);
-        setCpuUsagePercent(data.cpu_ia_telemetry.cpu_utilization_percent ?? 42.0);
-        setRamUsageMb(data.cpu_ia_telemetry.ram_utilization_mb ?? 1840);
+        setWhisperAvgInferenceSec(data.cpu_ia_telemetry.whisper_avg_inference_sec ?? 0);
+        setCpuUsagePercent(data.cpu_ia_telemetry.cpu_utilization_percent ?? 0);
+        setRamUsageMb(data.cpu_ia_telemetry.ram_utilization_mb ?? 0);
       }
       if (Array.isArray(data.microserveis)) {
         setMicroserveis(data.microserveis);

@@ -19,6 +19,7 @@ ENV/
 
 # Secrets — MAI versionats (AGENTS.md §3.2)
 .env
+.env*
 *.env
 !.env.example
 infra/letsencrypt/

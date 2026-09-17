@@ -1,100 +1,109 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import {
   Users,
   Search,
   Plus,
   MapPin,
-  Key,
-  ShieldCheck,
+  Lock,
   Send,
   Building,
   CheckCircle2,
-  ExternalLink,
-  ChevronRight,
-  Lock,
+  AlertTriangle,
+  X,
+  Phone,
+  Mail,
+  RefreshCw,
 } from "lucide-react";
+import { apiFetch } from "@/lib/api";
 import { useGestio } from "@/lib/gestio-context";
 
-interface Finca {
-  id: string;
-  nom: string;
-  coords: [number, number];
-  adreca: string;
-  codi_candat: string;
-  sigpac: string;
-}
-
-interface ClientEmpresa {
+interface Client {
   id: string;
   codi: string;
   rao_social: string;
   nif: string;
-  telefon: string;
-  email: string;
-  telegram_vinculat: boolean;
-  iban_emmascarat: string;
-  finques: Finca[];
+  telefon?: string;
+  email?: string;
+  adreca_fiscal?: string;
+  iban?: string;
+  estat_canal_telegram?: string;
+  actiu?: boolean;
 }
 
 export default function GestioClientsPage() {
   const { rolActiu } = useGestio();
+  const [clients, setClients] = useState<Client[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [filtreCerca, setFiltreCerca] = useState("");
+  const [clientSeleccionat, setClientSeleccionat] = useState<Client | null>(null);
+  const [modalNouClient, setModalNouClient] = useState(false);
+  const [guardant, setGuardant] = useState(false);
 
-  // Dades de clients (Zero Mock Data per defecte)
-  const [clients, setClients] = useState<ClientEmpresa[]>([
-    {
-      id: "cli-1",
-      codi: "CLI-0142",
-      rao_social: "Agropecuària del Penedès SL",
-      nif: "B-65123984",
-      telefon: "+34 938 123 456",
-      email: "administracio@agropenedes.cat",
-      telegram_vinculat: true,
-      iban_emmascarat: "ES82 •••• •••• •••• 4819",
-      finques: [
-        {
-          id: "f-1",
-          nom: "Finca Els Arcs (Sector B-04)",
-          coords: [41.3461, 1.6975],
-          adreca: "Camí de Sant Sadurní s/n, 08770",
-          codi_candat: "4826-B",
-          sigpac: "08-234-0-0-12-104",
-        },
-        {
-          id: "f-2",
-          nom: "Vinya El Pujol",
-          coords: [41.3582, 1.7104],
-          adreca: "Carretera de Vilafranca km 4",
-          codi_candat: "1094-A",
-          sigpac: "08-234-0-0-14-88",
-        },
-      ],
-    },
-    {
-      id: "cli-2",
-      codi: "CLI-0143",
-      rao_social: "Caves & Vinyars Montnegre SAT",
-      nif: "F-08492019",
-      telefon: "+34 938 789 012",
-      email: "info@cavesmontnegre.com",
-      telegram_vinculat: false,
-      iban_emmascarat: "ES44 •••• •••• •••• 9901",
-      finques: [
-        {
-          id: "f-3",
-          nom: "Finca La Solana",
-          coords: [41.4012, 1.7451],
-          adreca: "Polígon 3, Parcela 45",
-          codi_candat: "9912",
-          sigpac: "08-112-0-0-3-45",
-        },
-      ],
-    },
-  ]);
+  // Formulari nou client
+  const [nouClient, setNouClient] = useState({
+    codi: "",
+    rao_social: "",
+    nif: "",
+    telefon: "",
+    email: "",
+    adreca_fiscal: "",
+    iban: "",
+  });
 
-  const [clientSeleccionat, setClientSeleccionat] = useState<ClientEmpresa | null>(clients[0] || null);
+  const carregarClients = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const data = await apiFetch<Client[]>("/gestio/clients");
+      setClients(data || []);
+      if (data && data.length > 0) {
+        setClientSeleccionat((prev) => (prev ? data.find((c) => c.id === prev.id) || data[0] : data[0]));
+      } else {
+        setClientSeleccionat(null);
+      }
+    } catch (err: any) {
+      setError(err.message || "Error al carregar la llista de clients");
+      setClients([]);
+      setClientSeleccionat(null);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    carregarClients();
+  }, []);
+
+  const handleCrearClient = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setGuardant(true);
+    setError(null);
+    try {
+      const creat = await apiFetch<Client>("/gestio/clients", {
+        method: "POST",
+        body: JSON.stringify(nouClient),
+      });
+      setModalNouClient(false);
+      setNouClient({
+        codi: "",
+        rao_social: "",
+        nif: "",
+        telefon: "",
+        email: "",
+        adreca_fiscal: "",
+        iban: "",
+      });
+      await carregarClients();
+      if (creat) setClientSeleccionat(creat);
+    } catch (err: any) {
+      setError(err.message || "Error al crear el client");
+    } finally {
+      setGuardant(false);
+    }
+  };
 
   const clientsFiltrats = clients.filter(
     (c) =>
@@ -105,32 +114,41 @@ export default function GestioClientsPage() {
 
   return (
     <div className="flex-1 flex flex-col h-[calc(100vh-3.5rem)] overflow-hidden bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 transition-colors">
-      {/* Barra superior del mòdul de clients */}
+      {/* Barra superior del directori */}
       <div className="p-4 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between shadow-sm">
         <div>
-          <h1 className="text-base font-bold text-slate-800 dark:text-slate-100">
-            Directori de Clients i Finques (Spec 002)
+          <h1 className="text-base font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2">
+            <Users className="w-5 h-5 text-emerald-600" />
+            Directori de Clients (Spec 002)
           </h1>
           <p className="text-xs text-slate-500">
-            Expedients fiscals CLI-XXXX, georeferenciació WGS84 i claus d'accés segur
+            Dades fiscals, codis d'expedient i canals de comunicació en temps real
           </p>
         </div>
 
         <div className="flex items-center gap-2">
-          {/* Cercador de clients */}
           <div className="relative">
             <Search className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
             <input
               type="text"
               value={filtreCerca}
               onChange={(e) => setFiltreCerca(e.target.value)}
-              placeholder="Cercar raó social, CLI o NIF..."
+              placeholder="Cercar per raó social, CLI o NIF..."
               className="pl-9 pr-3 py-1.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs font-medium focus:outline-none focus:border-emerald-600 w-64"
             />
           </div>
 
           <button
-            onClick={() => alert("Formulari d'alta de nou client CLI.")}
+            onClick={carregarClients}
+            disabled={loading}
+            className="p-2 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 text-slate-600 dark:text-slate-300 transition-colors"
+            title="Refrescar llista"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${loading ? "animate-spin" : ""}`} />
+          </button>
+
+          <button
+            onClick={() => setModalNouClient(true)}
             className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold flex items-center gap-1 shadow transition-all"
           >
             <Plus className="w-3.5 h-3.5" />
@@ -139,44 +157,43 @@ export default function GestioClientsPage() {
         </div>
       </div>
 
-      {/* Cos principal: Columna de Llista + Panell 360º del Client */}
+      {error && (
+        <div className="mx-4 mt-3 p-3 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-900 text-rose-700 dark:text-rose-300 text-xs flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <AlertTriangle className="w-4 h-4 text-rose-600" />
+            <span>{error}</span>
+          </div>
+          <button onClick={() => setError(null)} className="p-1 hover:text-rose-900">
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
+
+      {/* Cos principal: Columna de Llista + Panell 360º */}
       <div className="flex-1 flex overflow-hidden">
-        {/* Llista lateral de clients */}
+        {/* Llista lateral */}
         <div className="w-80 border-r border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 overflow-y-auto p-3 space-y-2">
-          {clients.length === 0 ? (
-            <div className="p-8 text-center text-slate-400 text-xs">
-              {/* TEXT EXACTE EXIGIT PER LA SPEC 002 */}
-              <p className="font-bold text-slate-600 dark:text-slate-300">
-                No hi ha clients registrats al directori
+          {loading && clients.length === 0 ? (
+            <div className="p-8 text-center text-slate-400 text-xs flex flex-col items-center gap-2">
+              <RefreshCw className="w-5 h-5 animate-spin text-emerald-600" />
+              <span>Carregant directori de clients...</span>
+            </div>
+          ) : clients.length === 0 ? (
+            <div className="p-8 text-center text-slate-400 text-xs space-y-3">
+              <div className="w-10 h-10 rounded-2xl bg-slate-100 dark:bg-slate-800 flex items-center justify-center mx-auto text-slate-400">
+                <Users className="w-5 h-5" />
+              </div>
+              <p className="font-bold text-slate-700 dark:text-slate-300">
+                No hi ha clients registrats
+              </p>
+              <p className="text-[11px] text-slate-500">
+                Estat Dia-0: Registra el primer client fiscal per començar a emetre feines i factures.
               </p>
               <button
-                onClick={() =>
-                  setClients([
-                    {
-                      id: "cli-1",
-                      codi: "CLI-0142",
-                      rao_social: "Agropecuària del Penedès SL",
-                      nif: "B-65123984",
-                      telefon: "+34 938 123 456",
-                      email: "administracio@agropenedes.cat",
-                      telegram_vinculat: true,
-                      iban_emmascarat: "ES82 •••• •••• •••• 4819",
-                      finques: [
-                        {
-                          id: "f-1",
-                          nom: "Finca Els Arcs (Sector B-04)",
-                          coords: [41.3461, 1.6975],
-                          adreca: "Camí de Sant Sadurní s/n, 08770",
-                          codi_candat: "4826-B",
-                          sigpac: "08-234-0-0-12-104",
-                        },
-                      ],
-                    },
-                  ])
-                }
-                className="mt-3 px-3 py-1 bg-emerald-600 text-white rounded text-xs font-bold"
+                onClick={() => setModalNouClient(true)}
+                className="mt-2 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold"
               >
-                Carregar Dades Reals
+                + Afegir Client
               </button>
             </div>
           ) : (
@@ -196,30 +213,26 @@ export default function GestioClientsPage() {
                   </span>
                   <span
                     className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full ${
-                      c.telegram_vinculat
+                      c.estat_canal_telegram === "VINCULAT"
                         ? "bg-blue-100 dark:bg-blue-950 text-blue-700 dark:text-blue-300"
                         : "bg-slate-200 dark:bg-slate-800 text-slate-500"
                     }`}
                   >
-                    {c.telegram_vinculat ? "Telegram OK" : "Sense Bot"}
+                    {c.estat_canal_telegram === "VINCULAT" ? "Telegram OK" : "Sense Bot"}
                   </span>
                 </div>
                 <h4 className="text-xs font-bold text-slate-800 dark:text-slate-100 mt-1 truncate">
                   {c.rao_social}
                 </h4>
-                <p className="text-[11px] text-slate-500 mt-0.5">NIF: {c.nif}</p>
-                <p className="text-[10px] text-emerald-600 dark:text-emerald-400 mt-1 font-semibold">
-                  {c.finques.length} finques cadastrades
-                </p>
+                <p className="text-[11px] text-slate-500 mt-0.5 font-mono">NIF: {c.nif}</p>
               </div>
             ))
           )}
         </div>
 
-        {/* Panell 360º del Client Seleccionat */}
+        {/* Panell 360º de Detalls */}
         {clientSeleccionat ? (
           <div className="flex-1 p-6 overflow-y-auto space-y-6">
-            {/* Targeta Principal de Dades Fiscals */}
             <div className="p-5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm space-y-4">
               <div className="flex items-start justify-between">
                 <div>
@@ -231,104 +244,191 @@ export default function GestioClientsPage() {
                       {clientSeleccionat.rao_social}
                     </h2>
                   </div>
-                  <p className="text-xs text-slate-500 mt-1">
-                    NIF: <span className="font-mono font-bold text-slate-700 dark:text-slate-300">{clientSeleccionat.nif}</span> • Email: {clientSeleccionat.email} • Tel: {clientSeleccionat.telefon}
-                  </p>
-                </div>
-
-                <div className="flex items-center gap-2">
-                  <div className="px-3 py-1 rounded-xl bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs flex items-center gap-2">
-                    <Lock className="w-3.5 h-3.5 text-emerald-600" />
-                    <span className="font-mono text-slate-700 dark:text-slate-300">{clientSeleccionat.iban_emmascarat}</span>
+                  <div className="flex items-center gap-4 text-xs text-slate-500 mt-2">
+                    <span className="flex items-center gap-1">
+                      <Building className="w-3.5 h-3.5" />
+                      NIF: <strong className="font-mono text-slate-700 dark:text-slate-300">{clientSeleccionat.nif}</strong>
+                    </span>
+                    {clientSeleccionat.email && (
+                      <span className="flex items-center gap-1">
+                        <Mail className="w-3.5 h-3.5" />
+                        {clientSeleccionat.email}
+                      </span>
+                    )}
+                    {clientSeleccionat.telefon && (
+                      <span className="flex items-center gap-1">
+                        <Phone className="w-3.5 h-3.5" />
+                        {clientSeleccionat.telefon}
+                      </span>
+                    )}
                   </div>
                 </div>
-              </div>
 
-              {/* Estat del canal Telegram (Spec 009 / Spec 023) */}
-              <div className="p-3 rounded-xl bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-900 flex items-center justify-between text-xs">
-                <div className="flex items-center gap-2 text-blue-900 dark:text-blue-300">
-                  <Send className="w-4 h-4 text-blue-600" />
-                  <span>
-                    Canal Telegram Automatitzat:{" "}
-                    <strong>{clientSeleccionat.telegram_vinculat ? "Actiu i Notificant" : "Pendent d'invitació (48h caducitat)"}</strong>
-                  </span>
-                </div>
-                {!clientSeleccionat.telegram_vinculat && (
-                  <button
-                    onClick={() => alert("Invitació enviada per correu.")}
-                    className="px-2.5 py-1 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg text-[11px]"
-                  >
-                    Enviar Invitació
-                  </button>
+                {clientSeleccionat.iban && (
+                  <div className="px-3 py-1.5 rounded-xl bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs flex items-center gap-2">
+                    <Lock className="w-3.5 h-3.5 text-emerald-600" />
+                    <span className="font-mono text-slate-700 dark:text-slate-300">
+                      {clientSeleccionat.iban}
+                    </span>
+                  </div>
                 )}
               </div>
-            </div>
 
-            {/* Finques i Parcel·les Cadastrades (WGS84 + Candats) */}
-            <div className="space-y-3">
-              <div className="flex items-center justify-between">
-                <h3 className="text-sm font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400 flex items-center gap-2">
-                  <MapPin className="w-4 h-4 text-emerald-600" />
-                  <span>Finques Rústiques i Claus d'Accés</span>
-                </h3>
-                <span className="text-xs font-mono text-slate-500">
-                  {clientSeleccionat.finques.length} ubicacions
-                </span>
-              </div>
-
-              <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-                {clientSeleccionat.finques.map((finca) => (
-                  <div
-                    key={finca.id}
-                    className="p-4 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm space-y-3"
-                  >
-                    <div className="flex items-start justify-between">
-                      <div>
-                        <h4 className="text-sm font-bold text-slate-800 dark:text-slate-100">
-                          {finca.nom}
-                        </h4>
-                        <p className="text-xs text-slate-500 mt-0.5">{finca.adreca}</p>
-                      </div>
-                      <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300">
-                        SIGPAC: {finca.sigpac}
-                      </span>
-                    </div>
-
-                    <div className="p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 grid grid-cols-2 gap-2 text-xs">
-                      <div>
-                        <span className="text-[10px] text-slate-400 block">Coordenades GPS WGS84:</span>
-                        <span className="font-mono font-bold text-slate-700 dark:text-slate-300">
-                          {finca.coords[0]}, {finca.coords[1]}
-                        </span>
-                      </div>
-                      <div>
-                        <span className="text-[10px] text-slate-400 block">Codi Candat / Porta:</span>
-                        <span className="font-mono font-bold text-amber-600 dark:text-amber-400 flex items-center gap-1">
-                          <Key className="w-3 h-3" /> {finca.codi_candat}
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            {/* Veto d'Enginyer: Botó de buidat de prova */}
-            <div className="pt-4 flex justify-end">
-              <button
-                onClick={() => setClients([])}
-                className="px-3 py-1.5 rounded-xl bg-slate-200 dark:bg-slate-800 text-slate-600 dark:text-slate-400 text-xs font-semibold hover:bg-slate-300 dark:hover:bg-slate-700 transition-colors"
-              >
-                Provar Estat Buit (Zero Mock Data)
-              </button>
+              {clientSeleccionat.adreca_fiscal && (
+                <div className="pt-3 border-t border-slate-100 dark:border-slate-800 flex items-center gap-2 text-xs text-slate-600 dark:text-slate-400">
+                  <MapPin className="w-4 h-4 text-slate-400 shrink-0" />
+                  <span>{clientSeleccionat.adreca_fiscal}</span>
+                </div>
+              )}
             </div>
           </div>
         ) : (
-          <div className="flex-1 flex items-center justify-center text-slate-400 text-xs">
-            Selecciona un client de la llista lateral per consultar l'expedient.
+          <div className="flex-1 flex flex-col items-center justify-center p-8 text-center text-slate-400">
+            <Users className="w-12 h-12 stroke-[1.5] text-slate-300 dark:text-slate-700 mb-3" />
+            <p className="font-medium text-sm text-slate-600 dark:text-slate-400">
+              Selecciona un client de la llista lateral
+            </p>
+            <p className="text-xs text-slate-400 mt-1">
+              Visualitza dades fiscals, finques i estat de comunicacions en temps real
+            </p>
           </div>
         )}
       </div>
+
+      {/* Modal Alta Nou Client */}
+      {modalNouClient && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="w-full max-w-lg bg-white dark:bg-slate-900 rounded-3xl shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden">
+            <div className="p-5 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between">
+              <h3 className="font-bold text-sm text-slate-800 dark:text-slate-100 flex items-center gap-2">
+                <Plus className="w-4 h-4 text-emerald-600" />
+                Alta de Client Fiscal (Spec 002)
+              </h3>
+              <button
+                onClick={() => setModalNouClient(false)}
+                className="p-1 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleCrearClient} className="p-5 space-y-4">
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-400 mb-1">
+                    Codi Client *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="CLI-0001"
+                    value={nouClient.codi}
+                    onChange={(e) => setNouClient({ ...nouClient, codi: e.target.value })}
+                    className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-400 mb-1">
+                    NIF / CIF *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="B12345678"
+                    value={nouClient.nif}
+                    onChange={(e) => setNouClient({ ...nouClient, nif: e.target.value.toUpperCase() })}
+                    className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-mono"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-400 mb-1">
+                  Raó Social *
+                </label>
+                <input
+                  type="text"
+                  required
+                  placeholder="Ex: Aigües del Territori S.L."
+                  value={nouClient.rao_social}
+                  onChange={(e) => setNouClient({ ...nouClient, rao_social: e.target.value })}
+                  className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-medium"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-400 mb-1">
+                    Telèfon
+                  </label>
+                  <input
+                    type="tel"
+                    placeholder="+34 600 000 000"
+                    value={nouClient.telefon}
+                    onChange={(e) => setNouClient({ ...nouClient, telefon: e.target.value })}
+                    className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-400 mb-1">
+                    Correu Electrònic
+                  </label>
+                  <input
+                    type="email"
+                    placeholder="facturacio@empresa.com"
+                    value={nouClient.email}
+                    onChange={(e) => setNouClient({ ...nouClient, email: e.target.value })}
+                    className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-400 mb-1">
+                  Adreça Fiscal
+                </label>
+                <input
+                  type="text"
+                  placeholder="Carrer Major, 12, 08001 Barcelona"
+                  value={nouClient.adreca_fiscal}
+                  onChange={(e) => setNouClient({ ...nouClient, adreca_fiscal: e.target.value })}
+                  className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-400 mb-1">
+                  IBAN Bancari (opcional, xifrat al backend)
+                </label>
+                <input
+                  type="text"
+                  placeholder="ES00 0000 0000 0000 0000 0000"
+                  value={nouClient.iban}
+                  onChange={(e) => setNouClient({ ...nouClient, iban: e.target.value })}
+                  className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-mono"
+                />
+              </div>
+
+              <div className="pt-3 border-t border-slate-200 dark:border-slate-800 flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setModalNouClient(false)}
+                  className="px-4 py-2 rounded-xl border border-slate-300 dark:border-slate-700 text-slate-600 dark:text-slate-300 text-xs font-medium hover:bg-slate-100 dark:hover:bg-slate-800"
+                >
+                  Cancel·lar
+                </button>
+                <button
+                  type="submit"
+                  disabled={guardant}
+                  className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow disabled:opacity-50"
+                >
+                  {guardant ? "Desant..." : "Desar Client"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -168,3 +168,31 @@ async def cerca_spotlight(
             )
 
     return resultats
+
+
+# ---------------------------------------------------------------------------
+# Shortcut per a Spotlight Items inicials (pwa/layout.tsx)
+# ---------------------------------------------------------------------------
+
+spotlight_router = APIRouter(prefix="/spotlight", tags=["Spotlight"])
+
+@spotlight_router.get("/items")
+async def llistar_spotlight_items_inicials(request: Request, db: AsyncSession = Depends(get_db)):
+    """Retorna els elements principals per a cerca ràpida."""
+    empresa_id = getattr(request.state, "empresa_id", None)
+    if not empresa_id:
+        return []
+    await set_tenant_context(db, empresa_id)
+
+    res_cli = await db.execute(select(Client).limit(10))
+    clients = res_cli.scalars().all()
+
+    items = []
+    for c in clients:
+        items.append({
+            "id": str(c.id),
+            "titol": f"{c.codi}: {c.rao_social}",
+            "desc": f"NIF: {c.nif}",
+            "esFinancera": False,
+        })
+    return items

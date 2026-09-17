@@ -13,7 +13,7 @@ from app.models.models import RegistreJornadaLaboral
 router = APIRouter(
     prefix="/operari",
     tags=["Operari Jornada"],
-    dependencies=[Depends(require_roles(["OPERARI", "CAPATAZ"]))],
+    dependencies=[Depends(require_roles(["OPERARI", "CAPATAZ", "CAP_DE_COLLA"]))],
 )
 
 class JornadaInici(BaseModel):
@@ -25,6 +25,7 @@ class JornadaResponse(BaseModel):
     geolocalitzacio_inici: Optional[str]
 
 @router.post("/inici", response_model=JornadaResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/jornada/inici", response_model=JornadaResponse, status_code=status.HTTP_201_CREATED)
 async def iniciar_jornada(
     request: Request,
     payload: JornadaInici,
@@ -66,6 +67,7 @@ async def iniciar_jornada(
     return jornada
 
 @router.get("/activa", response_model=JornadaResponse)
+@router.get("/jornada/activa", response_model=JornadaResponse)
 async def get_jornada_activa(
     request: Request,
     db: AsyncSession = Depends(get_db_with_tenant_context)
@@ -96,6 +98,7 @@ async def get_jornada_activa(
     return jornada
 
 @router.post("/{jornada_id}/fi", response_model=JornadaResponse)
+@router.post("/jornada/{jornada_id}/fi", response_model=JornadaResponse)
 async def finalitzar_jornada(
     jornada_id: uuid.UUID,
     request: Request,

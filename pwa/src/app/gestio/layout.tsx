@@ -8,7 +8,7 @@ import {
   useGestio,
   RolGestio,
 } from "@/lib/gestio-context";
-import { apiFetch } from "@/lib/api";
+import { clearAuthToken, apiFetch } from "@/lib/api";
 import {
   Compass,
   MapPin,
@@ -33,6 +33,7 @@ import {
   Settings,
   Sparkles,
   X,
+  LogOut,
 } from "lucide-react";
 
 function GestioLayoutContent({ children }: { children: React.ReactNode }) {
@@ -40,6 +41,12 @@ function GestioLayoutContent({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const { rolActiu, setRolActiu, spotlightObert, setSpotlightObert, isDark, toggleTheme } = useGestio();
   const [cercaSpotlight, setCercaSpotlight] = useState("");
+  const [usuari, setUsuari] = useState<{ nom?: string; rol?: string } | null>(null);
+
+  const handleLogout = () => {
+    clearAuthToken();
+    router.push("/gestio/login");
+  };
 
   const navLinks = [
     { label: "Torre de Control GIS", href: "/gestio/mapa", icon: Compass, badge: "GIS" },
@@ -60,6 +67,22 @@ function GestioLayoutContent({ children }: { children: React.ReactNode }) {
   const [empresa, setEmpresa] = useState<{ nom?: string; nif?: string } | null>(null);
 
   useEffect(() => {
+    try {
+      const stored = localStorage.getItem("sevalor_user");
+      if (stored) {
+        setUsuari(JSON.parse(stored));
+      }
+    } catch {}
+
+    apiFetch("/auth/me")
+      .then((me: any) => {
+        if (me) {
+          setUsuari(me);
+          if (me.rol) setRolActiu(me.rol);
+        }
+      })
+      .catch(() => {});
+
     apiFetch("/spotlight/items")
       .then((data: any[]) => setItemsSpotlight(data))
       .catch(() => setItemsSpotlight([]));
@@ -67,6 +90,8 @@ function GestioLayoutContent({ children }: { children: React.ReactNode }) {
       .then((data: any) => setEmpresa(data))
       .catch(() => setEmpresa(null));
   }, []);
+
+  if (pathname === "/gestio/login") return <div className="min-h-screen bg-slate-50 dark:bg-slate-950">{children}</div>;
 
   const resultatsFiltrats = itemsSpotlight.filter((item) => {
     // Spec 001 RF-03: Veto d'Enginyer (ocultar resultats financers)
@@ -147,15 +172,22 @@ function GestioLayoutContent({ children }: { children: React.ReactNode }) {
             {isDark ? <Sun className="w-4 h-4 text-amber-400" /> : <Moon className="w-4 h-4 text-blue-400" />}
           </button>
 
-          {/* Perfil d'usuari */}
+          {/* Perfil d'usuari i Logout */}
           <div className="flex items-center gap-2 pl-2 border-l border-slate-800">
             <div className="w-7 h-7 rounded-full bg-emerald-700 text-white font-bold flex items-center justify-center text-xs">
-              J
+              {(usuari?.nom || "U").charAt(0).toUpperCase()}
             </div>
             <div className="hidden xl:block text-left">
-              <p className="text-xs font-bold text-white leading-tight">Jordi Soler</p>
+              <p className="text-xs font-bold text-white leading-tight">{usuari?.nom || "Usuari Oficina"}</p>
               <p className="text-[10px] text-slate-400">{rolActiu}</p>
             </div>
+            <button
+              onClick={handleLogout}
+              className="p-1.5 rounded-lg bg-slate-800 hover:bg-rose-900/50 text-slate-400 hover:text-rose-300 transition-colors ml-1"
+              title="Tancar Sessió"
+            >
+              <LogOut className="w-4 h-4" />
+            </button>
           </div>
         </div>
       </header>
@@ -215,15 +247,6 @@ function GestioLayoutContent({ children }: { children: React.ReactNode }) {
                   <span className="flex items-center gap-2">
                     <ExternalLink className="w-3.5 h-3.5 text-blue-500" />
                     PWA Operaris (Camp)
-                  </span>
-                </Link>
-                <Link
-                  href="/superadmin/tenants/onboarding"
-                  className="flex items-center justify-between px-3 py-1.5 rounded-xl text-xs text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"
-                >
-                  <span className="flex items-center gap-2">
-                    <ExternalLink className="w-3.5 h-3.5 text-amber-500" />
-                    Superadmin SaaS
                   </span>
                 </Link>
               </div>

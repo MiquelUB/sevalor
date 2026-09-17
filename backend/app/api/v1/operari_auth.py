@@ -74,7 +74,7 @@ async def login_operari(
     stmt = select(Usuari).where(
         Usuari.empresa_id == empresa_uuid,
         func.upper(Usuari.nif) == login_data.nif.upper(),
-        Usuari.rol.in_(["OPERARI", "ADMIN", "SUPERADMIN"])
+        Usuari.rol.in_(["OPERARI", "CAP_DE_COLLA", "ADMIN", "SUPERADMIN"])
     )
 
     result = await db.execute(stmt)
@@ -84,18 +84,14 @@ async def login_operari(
     if not usuari:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="NIF o PIN incorrectes"
+            detail="Credencials invàlides"
         )
 
-    # 2. Verificar PIN (també opac)
-    def verify_pin(plain_pin: str, hashed_pin: str) -> bool:
-        return bcrypt.checkpw(plain_pin.encode('utf-8'), hashed_pin.encode('utf-8'))
-    
-    is_valid = verify_pin(login_data.pin, usuari.pin_hash) if usuari.pin_hash else False
-    if not is_valid:
+    # 2. Comprovar si el compte ja està bloquejat per intents fallits
+    if usuari.pin_bloquejat or (usuari.intents_pin_fallits is not None and usuari.intents_pin_fallits >= 4):
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="NIF o PIN incorrectes"
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="El compte ha estat bloquejat per massa intents fallits. Contacteu amb el supervisor."
         )
 
     # 3. Comprovar estat actiu
@@ -104,6 +100,37 @@ async def login_operari(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Usuari inactiu. Contacta amb l'administrador."
         )
+
+    # 4. Verificar PIN (amb bcrypt)
+    def verify_pin(plain_pin: str, hashed_pin: str) -> bool:
+        if not hashed_pin:
+            return False
+        try:
+            return bcrypt.checkpw(plain_pin.encode('utf-8'), hashed_pin.encode('utf-8'))
+        except Exception:
+            return False
+
+    is_valid = verify_pin(login_data.pin, usuari.pin_hash) if usuari.pin_hash else False
+
+    if not is_valid:
+        usuari.intents_pin_fallits = (usuari.intents_pin_fallits or 0) + 1
+        if usuari.intents_pin_fallits >= 4:
+            usuari.pin_bloquejat = True
+            await db.commit()
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="El compte ha estat bloquejat per massa intents fallits. Contacteu amb el supervisor."
+            )
+        await db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Credencials invàlides"
+        )
+
+    # 5. Login correcte: reiniciar comptador d'intents i bloqueig
+    usuari.intents_pin_fallits = 0
+    usuari.pin_bloquejat = False
+    await db.commit()
 
     # Generar JWT amb claims mínims
     access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)

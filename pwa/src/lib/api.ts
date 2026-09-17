@@ -33,32 +33,44 @@ function extractTenantId(): string | null {
  */
 export function getAuthToken(): string | null {
   if (typeof window === "undefined") return null;
-  // El token es guarda xifrat a localStorage per crypto.service.ts
   const raw = localStorage.getItem("sevalor_auth_token");
-  if (!raw) return null;
-
-  try {
-    const data = JSON.parse(raw);
-    return data.token || null;
-  } catch {
-    return null;
+  if (raw) {
+    try {
+      const data = JSON.parse(raw);
+      if (data.token) return data.token;
+    } catch {
+      // Ignorar error de parseig
+    }
   }
+
+  // Fallback resilient: comprovar cookie de sessió
+  if (typeof document !== "undefined") {
+    const match = document.cookie.match(new RegExp('(^| )sevalor_access_token=([^;]+)'));
+    if (match) return decodeURIComponent(match[2]);
+  }
+
+  return null;
 }
 
 /**
- * Emmagatzema el token JWT en clar al localStorage.
- * ATENCIÓ: En producció, el token ha d'estar xifrat amb AES-GCM.
- * Vegeu crypto.service.ts per al flux complet.
+ * Emmagatzema el token JWT al localStorage i assegura la cookie.
  */
 export function setAuthToken(token: string): void {
   if (typeof window === "undefined") return;
   const data = { token, timestamp: Date.now() };
   localStorage.setItem("sevalor_auth_token", JSON.stringify(data));
+  if (typeof document !== "undefined") {
+    document.cookie = `sevalor_access_token=${token}; path=/; max-age=86400; SameSite=Strict`;
+  }
 }
 
 export function clearAuthToken(): void {
   if (typeof window === "undefined") return;
   localStorage.removeItem("sevalor_auth_token");
+  localStorage.removeItem("sevalor_user");
+  if (typeof document !== "undefined") {
+    document.cookie = "sevalor_access_token=; path=/; max-age=0; SameSite=Strict";
+  }
 }
 
 /**

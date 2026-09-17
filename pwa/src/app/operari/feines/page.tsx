@@ -35,12 +35,36 @@ export default function OperariFeinesPage() {
   const [geovallaAlerta, setGeovallaAlerta] = useState<string | null>(null);
   const [ordreDesviacio, setOrdreDesviacio] = useState<string | null>(null);
 
+  const [nomOperari, setNomOperari] = useState("Operari de Camp");
+
   // Carregar feines reals des del backend
   const carregarFeines = async () => {
     setLoading(true);
     try {
-      const data = await apiFetch("/ordres-camp/operari");
-      setFeines(Array.isArray(data) ? data : []);
+      const userRaw = typeof window !== "undefined" ? localStorage.getItem("sevalor_user") : null;
+      if (userRaw) {
+        const u = JSON.parse(userRaw);
+        if (u.nom) setNomOperari(u.nom);
+      }
+    } catch {}
+
+    try {
+      const data = await apiFetch<any[]>("/operari/feines");
+      if (Array.isArray(data)) {
+        setFeines(
+          data.map((item: any) => ({
+            id: String(item.id),
+            codi: item.codi || "OT-00",
+            titol: item.titol || "Ordre de treball",
+            client: item.client?.rao_social || "Client",
+            estat: item.estat || "PENDENT",
+            coords_gps: [41.3851, 2.1734],
+            hora_inici: item.data_planificacio || "08:00",
+          }))
+        );
+      } else {
+        setFeines([]);
+      }
     } catch {
       setFeines([]);
     } finally {
@@ -123,7 +147,7 @@ export default function OperariFeinesPage() {
       <header className="bg-emerald-700 dark:bg-emerald-900 text-white p-4 shadow-md flex items-center justify-between">
         <div>
           <h1 className="text-base font-bold leading-tight">SEVALOR</h1>
-          <p className="text-xs text-emerald-200">Colla 01 — Jordi Soler</p>
+          <p className="text-xs text-emerald-200">{nomOperari}</p>
         </div>
         <div className="flex items-center gap-2">
           <Link

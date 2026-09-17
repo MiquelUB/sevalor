@@ -12,7 +12,7 @@ from app.models.models import Incidencia
 router = APIRouter(
     prefix="/operari",
     tags=["Operari Incidències"],
-    dependencies=[Depends(require_roles(["OPERARI", "CAPATAZ"]))],
+    dependencies=[Depends(require_roles(["OPERARI", "CAPATAZ", "CAP_DE_COLLA"]))],
 )
 
 class IncidenciaCreate(BaseModel):

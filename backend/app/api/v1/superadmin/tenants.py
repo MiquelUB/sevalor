@@ -38,7 +38,7 @@ class OnboardingTenantRequest(BaseModel):
     boss_nif: str
     boss_nom: str
     boss_cognoms: str
-    boss_email: str = Field(..., pattern="^[\w\.-]+@[\w\.-]+\.\w+$")
+    boss_email: str = Field(..., pattern=r"^[\w\.-]+@[\w\.-]+\.\w+$")
     boss_telefon: Optional[str] = None
     feature_flags: Optional[Dict[str, bool]] = None
 

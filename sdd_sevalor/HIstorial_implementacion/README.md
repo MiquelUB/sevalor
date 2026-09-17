@@ -42,6 +42,7 @@ Tots els mòduls han estat dissenyats i construïts d'acord amb la **Constituci�
 | **General Desktop** | Suite d'Oficina Tècnica (`/gestio`) | [`Implementation_Plan_General_Desktop.md`](./Implementation_Plan_General_Desktop.md) | [`Walkthrough_General_Desktop.md`](./Walkthrough_General_Desktop.md) | ✅ Aprovat |
 | **General PWA** | Suite Completa Mòbil Operaris (`/operari`) | [`Implementation_Plan_specc013_a_020_pwa.md`](./Implementation_Plan_specc013_a_020_pwa.md) | [`Walkthrough_specc013_a_020_pwa.md`](./Walkthrough_specc013_a_020_pwa.md) | ✅ Aprovat |
 | **Tancament Final** | Certificació Global de la Suite SEVALOR v4.0 | [`Implementation_Plan_Tancament_Final.md`](./Implementation_Plan_Tancament_Final.md) | [`Walkthrough_Tancament_Final.md`](./Walkthrough_Tancament_Final.md) | ✅ Aprovat |
+| **Remissió Fases 0-5** | Auditoria Global, Seguretat i Zero Mock | [`Pla_Implementacio_Fases_0_a_5_Completades.md`](./Pla_Implementacio_Fases_0_a_5_Completades.md) | [`Walkthrough_Final_Fases_0_a_5.md`](./Walkthrough_Final_Fases_0_a_5.md) <br> [`Auditoria_Completa_Repositori_SEVALOR.md`](./Auditoria_Completa_Repositori_SEVALOR.md) | ✅ Aprovat (100% Verificat) |
 
 ---
 

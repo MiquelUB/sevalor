@@ -21,6 +21,7 @@ from app.api.v1.gestio.planols import router as planols_router
 from app.api.v1.gestio.comptabilitat import router as comptabilitat_router
 from app.api.v1.gestio.notificacions import router as notificacions_router
 from app.api.v1.operari_auth import router as operari_auth_router
+from app.api.v1.auth import router as auth_router
 from app.api.v1.operari_pwa.jornada import router as jornada_router
 from app.api.v1.operari_pwa.picking import router as picking_router
 from app.api.v1.operari_pwa.incidencies import router as incidencies_router
@@ -28,6 +29,9 @@ from app.api.v1.gestio.configuracio import router as configuracio_router
 from app.api.v1.gestio.copilot import router as copilot_router
 from app.api.v1.telemetria import router as telemetria_router
 from app.api.v1.operari_pwa.feines import router as feines_pwa_router
+from app.api.v1.operari_pwa.tiquets import router as tiquets_router
+from app.api.v1.gestio.feines import intervencions_router
+from app.api.v1.gestio.cerca import router as cerca_router, spotlight_router
 from app.core.config import settings
 from app.middleware.tenant import TenantMiddleware
 
@@ -69,10 +73,15 @@ app.include_router(planols_router, prefix=settings.API_V1_STR)
 app.include_router(comptabilitat_router, prefix=settings.API_V1_STR)
 app.include_router(notificacions_router, prefix=settings.API_V1_STR)
 app.include_router(operari_auth_router, prefix=settings.API_V1_STR)
+app.include_router(auth_router, prefix=settings.API_V1_STR + "/auth", tags=["Autenticació Oficina"])
 app.include_router(jornada_router, prefix=settings.API_V1_STR)
 app.include_router(feines_pwa_router, prefix=settings.API_V1_STR)
 app.include_router(picking_router, prefix=settings.API_V1_STR)
 app.include_router(incidencies_router, prefix=settings.API_V1_STR)
+app.include_router(tiquets_router, prefix=settings.API_V1_STR)
+app.include_router(intervencions_router, prefix=settings.API_V1_STR)
+app.include_router(cerca_router, prefix=settings.API_V1_STR)
+app.include_router(spotlight_router, prefix=settings.API_V1_STR)
 app.include_router(configuracio_router, prefix=settings.API_V1_STR)
 app.include_router(copilot_router, prefix=settings.API_V1_STR)
 app.include_router(telemetria_router, prefix=settings.API_V1_STR)

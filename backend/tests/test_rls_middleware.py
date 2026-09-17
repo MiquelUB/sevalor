@@ -32,14 +32,28 @@ async def test_middleware_blocks_tenant_spoofing(fake_secret):
         "X-Empresa-ID": forged_tenant
     }
     
-    # Podem comprovar-ho amb qualsevol endpoint que retorni o validi dades
-    # Utilitzarem l'objecte app directament per inspeccionar el Request state a través d'un endpoint dummy
-    # Per simplificar, crearem un endpoint de test dinàmic o assecarem l'estat.
-    # En lloc de canviar l'app, demanem la llista de notificacions, i si dóna error de base de dades
-    # ja veurem quin RLS ha intentat aplicar, o millor: validem l'HTTP code.
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        res = await ac.get("/api/v1/auth/me", headers=headers)
+        assert res.status_code == 200
+        data = res.json()
+        # El middleware ha d'ignorar la capçalera X-Empresa-ID spoofejada i utilitzar el JWT signat
+        assert data["empresa_id"] == real_tenant
+        assert data["empresa_id"] != forged_tenant
+
+@pytest.mark.asyncio
+async def test_superadmin_can_impersonate_tenant(fake_secret):
+    superadmin_token = create_token("SUPERADMIN", "00000000-0000-0000-0000-000000000000", fake_secret)
+    target_tenant = "33333333-3333-3333-3333-333333333333"
+    headers = {
+        "Authorization": f"Bearer {superadmin_token}",
+        "X-Empresa-ID": target_tenant
+    }
     
-    # Com que no volem modificar codi només per test, usem el endpoint /api/v1/health, que potser no exposa això.
-    # Utilitzem un endpoint que requereixi auth d'operari:
-    # /api/v1/gestio/operaris/me ? (probablement només admin)
-    pass
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        res = await ac.get("/api/v1/auth/me", headers=headers)
+        assert res.status_code == 200
+        data = res.json()
+        assert data["rol"] == "SUPERADMIN"
 

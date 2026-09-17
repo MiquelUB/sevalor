@@ -881,7 +881,7 @@ export default function GestioOperarisPage() {
                   </span>
                   <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 space-y-2">
                     <p className="font-bold text-slate-900 dark:text-white">Sense ordre activa</p>
-                    <p className="text-[11px] text-slate-500">Client: Agropecuària del Penedès SL • Finca Els Arcs</p>
+                    <p className="text-[11px] text-slate-500">Sense assignació d'obra en aquest moment</p>
                     <div className="grid grid-cols-3 gap-2 pt-2">
                       <div className="p-2 rounded bg-slate-100 dark:bg-slate-800 text-center">
                         <Camera className="w-4 h-4 mx-auto text-slate-400 mb-1" />

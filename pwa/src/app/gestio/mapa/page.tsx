@@ -157,12 +157,16 @@ export default function GestioMapaPage() {
         {/* MARCADORS D'ACTIUS EN DIRECTE (Colles de Camp i Sensors IoT) */}
         {intervencions.length > 0 && (
           <div className="absolute inset-0 pointer-events-none z-20">
-            {/* Marcador Colla 01 en obra */}
-            {capaColles && (
+            {/* Marcador Colles en obra */}
+            {capaColles && intervencions.map((item, idx) => (
               <div
-                style={{ left: "54%", top: "42%" }}
+                key={item.id || idx}
+                style={{
+                  left: `${(item.coords && item.coords[0]) ? (Math.abs(item.coords[0] * 100) % 60 + 20) : 54}%`,
+                  top: `${(item.coords && item.coords[1]) ? (Math.abs(item.coords[1] * 100) % 60 + 20) : 42}%`,
+                }}
                 onClick={() => {
-                  setIntervencioSeleccionada(intervencions[0]);
+                  setIntervencioSeleccionada(item);
                   setDrawerObert(true);
                 }}
                 className="absolute -translate-x-1/2 -translate-y-1/2 pointer-events-auto cursor-pointer flex flex-col items-center group"
@@ -172,12 +176,12 @@ export default function GestioMapaPage() {
                   <MapPin className="w-5 h-5 fill-emerald-500 text-white" />
                 </div>
                 <div className="mt-1 px-2 py-0.5 rounded bg-slate-900/90 border border-slate-700 text-[10px] font-mono font-bold text-white shadow">
-                  Colla 01 • En Obra
+                  {item.cap_colla || "Colla en Camp"} • {item.estat}
                 </div>
               </div>
-            )}
+            ))}
 
-            {/* Marcador Sensor IoT de Pressió (Normal) */}
+            {/* Marcador Sensor IoT de Pressió */}
             {capaSensors && (
               <div
                 style={{ left: "38%", top: "48%" }}
@@ -187,22 +191,7 @@ export default function GestioMapaPage() {
                   <Activity className="w-4 h-4" />
                 </div>
                 <span className="text-[9px] font-mono bg-slate-900/80 px-1 rounded text-blue-300 mt-0.5 border border-slate-700">
-                  P-04: 14.2 bar
-                </span>
-              </div>
-            )}
-
-            {/* Marcador Sensor IoT de Pressió (Alerta Baixa) */}
-            {capaSensors && (
-              <div
-                style={{ left: "68%", top: "37%" }}
-                className="absolute -translate-x-1/2 -translate-y-1/2 pointer-events-auto flex flex-col items-center animate-bounce"
-              >
-                <div className="w-7 h-7 rounded-lg bg-rose-500/20 border border-rose-500 flex items-center justify-center text-rose-400 shadow shadow-rose-500/30">
-                  <AlertTriangle className="w-4 h-4" />
-                </div>
-                <span className="text-[9px] font-mono bg-rose-950 px-1 rounded text-rose-300 mt-0.5 border border-rose-800 font-bold">
-                  P-07: 2.1 bar
+                  Sensor Xarxa Actiu
                 </span>
               </div>
             )}
@@ -431,12 +420,12 @@ export default function GestioMapaPage() {
                   Dades Administratives (Visibles per Boss/Secretaria)
                 </p>
                 <div className="flex justify-between text-xs">
-                  <span className="text-slate-500">Pressupost Aprovat:</span>
-                  <span className="font-bold text-slate-800 dark:text-slate-100">1.840,00 €</span>
+                  <span className="text-slate-500">Codi Intervenció:</span>
+                  <span className="font-bold text-slate-800 dark:text-slate-100">{intervencioSeleccionada.codi}</span>
                 </div>
                 <div className="flex justify-between text-xs">
-                  <span className="text-slate-500">Marge Estimat:</span>
-                  <span className="font-bold text-emerald-600">32.4%</span>
+                  <span className="text-slate-500">Estat Operatiu:</span>
+                  <span className="font-bold text-emerald-600">{intervencioSeleccionada.estat}</span>
                 </div>
               </div>
             )}
@@ -444,7 +433,7 @@ export default function GestioMapaPage() {
 
           <div className="pt-3 border-t border-slate-200 dark:border-slate-800 space-y-2">
             <button
-              onClick={() => alert("S'ha emès l'avís d'inspecció a la PWA de la Colla 01.")}
+              onClick={() => alert(`S'ha emès l'avís d'inspecció a la PWA de ${intervencioSeleccionada.cap_colla || "la Colla de camp"}.`)}
               className="w-full py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow transition-all"
             >
               Emetre Ordre d'Inspecció a Camp
