@@ -356,7 +356,7 @@ export default function ConfiguracioPage() {
                 </span>
               </div>
               <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-                {nomEmpresa} • NIF: {nifEmpresa} • Subdomini: <span className="font-mono text-emerald-600 dark:text-emerald-400">penedes.campopro.cat</span>
+                {nomEmpresa} • NIF: {nifEmpresa} • Subdomini: <span className="font-mono text-emerald-600 dark:text-emerald-400">penedes.sevalor.cat</span>
               </p>
             </div>
           </div>

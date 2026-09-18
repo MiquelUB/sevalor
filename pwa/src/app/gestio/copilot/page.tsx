@@ -649,7 +649,7 @@ export default function CopilotIAPage() {
               <div className="rounded-2xl p-6 bg-blue-50 dark:bg-blue-950/30 border border-blue-300 dark:border-blue-800 text-blue-900 dark:text-blue-100 space-y-3">
                 <div className="flex items-center gap-2 font-bold text-sm">
                   <Clock className="w-5 h-5 text-blue-600" />
-                  <span>Estat Conciliació: Pendent de Campo (EDGE-04)</span>
+                  <span>Estat Conciliació: Pendent de Camp (EDGE-04)</span>
                 </div>
                 <p className="text-xs leading-relaxed">
                   L'operari ha tancat l'obra offline en zona blanca. La generació de la factura de liquidació final a Comptabilitat (Spec 007) queda bloquejada preventivament fins que el capataz realitzi la sincronització completa a nau central.

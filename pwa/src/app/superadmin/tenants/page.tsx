@@ -91,7 +91,7 @@ export default function SuperadminTenantsPage() {
               {tenants.map((t) => (
                 <tr key={t.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/30 transition-colors">
                   <td className="p-3.5 font-bold text-slate-900 dark:text-white">{t.rao_social}</td>
-                  <td className="p-3.5 font-mono text-emerald-600 dark:text-emerald-400">{t.subdomini}.campopro.cat</td>
+                  <td className="p-3.5 font-mono text-emerald-600 dark:text-emerald-400">{t.subdomini}.sevalor.cat</td>
                   <td className="p-3.5"><span className="px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-[10px] font-mono">{t.vertical}</span></td>
                   <td className="p-3.5"><span className="px-2 py-0.5 rounded bg-blue-50 dark:bg-blue-950/40 text-blue-600 dark:text-blue-400 text-[10px] font-bold">{t.pla}</span></td>
                   <td className="p-3.5"><span className="px-2 py-0.5 rounded bg-emerald-50 dark:bg-emerald-950 text-emerald-600 dark:text-emerald-400 text-[10px] font-bold">{t.estat}</span></td>
