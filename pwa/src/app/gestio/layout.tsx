@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect } from "react";
 import Link from "next/link";
+import CopilotWidget from "@/components/CopilotWidget";
 import { usePathname, useRouter } from "next/navigation";
 import {
   GestioProvider,
@@ -253,6 +254,8 @@ function GestioLayoutContent({ children }: { children: React.ReactNode }) {
           {children}
         </main>
       </div>
+
+      <CopilotWidget />
 
       {/* MODAL SPOTLIGHT META-SEARCH (<200 ms) */}
       {spotlightObert && (
