@@ -130,3 +130,48 @@ async def finalitzar_jornada(
     await db.commit()
 
     return jornada
+
+class AssignarVehicleRequest(BaseModel):
+    vehicle_id: uuid.UUID
+    km_actuals: int
+
+@router.post("/{jornada_id}/vehicle")
+@router.post("/jornada/{jornada_id}/vehicle")
+async def assignar_vehicle_a_jornada(
+    jornada_id: uuid.UUID,
+    payload: AssignarVehicleRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db_with_tenant_context)
+):
+    """Assigna un vehicle a l'operari per a la jornada actual i comprova odòmetre."""
+    empresa_id = request.state.empresa_id
+    if not empresa_id:
+        raise HTTPException(status_code=401)
+        
+    auth_header = request.headers.get("Authorization")
+    token = auth_header.split(" ")[1]
+    import jwt
+    from app.core.config import settings
+    decoded = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM], options={"verify_aud": False})
+    usuari_id = decoded.get("sub")
+
+    # Obtenir vehicle
+    from app.models.models import Vehicle, Usuari
+    v_res = await db.execute(select(Vehicle).where(Vehicle.id == payload.vehicle_id, Vehicle.empresa_id == uuid.UUID(empresa_id)))
+    vehicle = v_res.scalars().first()
+    if not vehicle:
+        raise HTTPException(status_code=404, detail="Vehicle no trobat")
+
+    if vehicle.odometre_acumulat and payload.km_actuals < vehicle.odometre_acumulat:
+        raise HTTPException(status_code=422, detail="Els km reportats són inferiors als últims registrats")
+
+    # Actualitzar Vehicle i Usuari
+    vehicle.odometre_acumulat = payload.km_actuals
+    u_res = await db.execute(select(Usuari).where(Usuari.id == uuid.UUID(usuari_id)))
+    usuari = u_res.scalars().first()
+    usuari.vehicle_assignat_id = vehicle.id
+    
+    await db.commit()
+    
+    return {"status": "OK", "vehicle_assignat_id": str(vehicle.id), "km_actuals": payload.km_actuals}
+

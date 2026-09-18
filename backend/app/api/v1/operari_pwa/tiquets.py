@@ -143,3 +143,94 @@ async def registrar_tiquet_carburant(
         estat_ocr=nou_tiquet.estat_ocr,
         created_at=nou_tiquet.created_at,
     )
+
+from fastapi import UploadFile, File, Form
+import os
+import secrets
+
+@router.post("/tiquets/ocr", response_model=dict, status_code=status.HTTP_200_OK)
+async def pujar_tiquet_ocr(
+    request: Request,
+    file: UploadFile = File(...),
+    vehicle_id: Optional[str] = Form(None),
+    db: AsyncSession = Depends(get_db_with_tenant_context)
+):
+    """(Spec 018) Rep una imatge de tiquet, simula extracció OCR i ho desa a DB."""
+    empresa_id = request.state.empresa_id
+    if not empresa_id:
+        raise HTTPException(status_code=401, detail="Tenant context missing")
+
+    auth_header = request.headers.get("Authorization")
+    if not auth_header:
+        raise HTTPException(status_code=401, detail="Authorization missing")
+    token = auth_header.split(" ")[1]
+    try:
+        decoded = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM], options={"verify_aud": False})
+        usuari_id = decoded.get("sub")
+    except Exception:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+    v_id = None
+    if vehicle_id:
+        try:
+            v_id = uuid.UUID(vehicle_id)
+        except ValueError:
+            pass
+            
+    if not v_id:
+        v_res = await db.execute(select(Vehicle).where(Vehicle.empresa_id == uuid.UUID(empresa_id)))
+        v = v_res.scalars().first()
+        if v:
+            v_id = v.id
+        else:
+            nou_v = Vehicle(
+                empresa_id=uuid.UUID(empresa_id),
+                matricula="SENSE-VEHICLE",
+                marca="Flota",
+                model="Defecte",
+                estat="OPERATIU"
+            )
+            db.add(nou_v)
+            await db.flush()
+            v_id = nou_v.id
+
+    # Desa el fitxer (Simulació guardat sobiran)
+    base_dir = os.getenv("SOVEREIGN_DATA_PATH", "/tmp/data")
+    save_dir = f"{base_dir}/{empresa_id}/docs/tiquets"
+    os.makedirs(save_dir, exist_ok=True)
+    
+    file_ext = file.filename.split(".")[-1] if file.filename else "jpg"
+    safe_name = f"ocr_{secrets.token_hex(8)}.{file_ext}"
+    file_path = f"{save_dir}/{safe_name}"
+    
+    with open(file_path, "wb") as f:
+        f.write(await file.read())
+
+    # Simulació extracció OCR (Mock de visió artificial)
+    litres_mock = 50.5
+    import_mock = 75.25
+    odometre_mock = 125000
+
+    nou_tiquet = TiquetCarburant(
+        empresa_id=uuid.UUID(empresa_id),
+        operari_id=uuid.UUID(usuari_id),
+        vehicle_id=v_id,
+        tiquet_foto_path=file_path,
+        odometre_foto_path="/docs/tiquets/default_odometre.webp", # Fake pendent de càmera dual
+        litres=litres_mock,
+        import_=import_mock,
+        odometre_valor=odometre_mock,
+        estat_ocr="EXTRET_AUTOMATIC",
+    )
+
+    db.add(nou_tiquet)
+    await db.commit()
+    await db.refresh(nou_tiquet)
+
+    return {
+        "status": "OK",
+        "id": str(nou_tiquet.id),
+        "litres_extrets": litres_mock,
+        "import_extret": import_mock,
+        "missatge": "Extracció OCR simulada amb èxit i tiquet registrat."
+    }

@@ -30,6 +30,7 @@ from app.api.v1.gestio.copilot import router as copilot_router
 from app.api.v1.telemetria import router as telemetria_router
 from app.api.v1.operari_pwa.feines import router as feines_pwa_router
 from app.api.v1.operari_pwa.tiquets import router as tiquets_router
+from app.api.v1.operari_pwa.vehicles import router as vehicles_pwa_router
 from app.api.v1.gestio.feines import intervencions_router
 from app.api.v1.gestio.cerca import router as cerca_router, spotlight_router
 from app.core.config import settings
@@ -79,6 +80,7 @@ app.include_router(feines_pwa_router, prefix=settings.API_V1_STR)
 app.include_router(picking_router, prefix=settings.API_V1_STR)
 app.include_router(incidencies_router, prefix=settings.API_V1_STR)
 app.include_router(tiquets_router, prefix=settings.API_V1_STR)
+app.include_router(vehicles_pwa_router, prefix=settings.API_V1_STR)
 app.include_router(intervencions_router, prefix=settings.API_V1_STR)
 app.include_router(cerca_router, prefix=settings.API_V1_STR)
 app.include_router(spotlight_router, prefix=settings.API_V1_STR)
