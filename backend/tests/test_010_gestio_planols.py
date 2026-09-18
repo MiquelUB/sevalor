@@ -14,13 +14,15 @@ async def test_alta_planol(admin_session, headers, boss_token):
     admin_session.add(Empresa(
         id=uuid.UUID(empresa_id), nom='Test Planols', nif=boss_nif, subdomini='testplan-' + str(uuid.uuid4())[:5], pla_subscripcio='STARTER', estat_pagament='ACTIU'
     ))
+    await admin_session.flush()
     
     # 2. Crear carpeta per al planol
     carpeta_id = str(uuid.uuid4())
-    from app.models.models import CarpetaPlanols
-    admin_session.add(CarpetaPlanols(
+    from app.models.models import CarpetaPlanol
+    admin_session.add(CarpetaPlanol(
         id=uuid.UUID(carpeta_id), empresa_id=uuid.UUID(empresa_id), nom='Carpeta Principal', categoria='CLIENTS'
     ))
+    await admin_session.flush()
     await admin_session.flush()
     
     payload = {

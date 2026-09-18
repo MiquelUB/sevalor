@@ -59,6 +59,7 @@ async def crear_client(admin_session: AsyncSession, empresa_id: str) -> str:
     admin_session.add(Client(
         id=uuid.UUID(cid), empresa_id=uuid.UUID(empresa_id), codi=_codi(), rao_social='Client SA', nif=_nif()
     ))
+    await admin_session.flush()
     return cid
 
 async def crear_operari(admin_session: AsyncSession, empresa_id: str, pin_clear: str = "4826") -> tuple[str, str]:
@@ -70,6 +71,7 @@ async def crear_operari(admin_session: AsyncSession, empresa_id: str, pin_clear:
     admin_session.add(Usuari(
         id=uuid.UUID(oid), empresa_id=uuid.UUID(empresa_id), nif=onif, nom='Operari', cognoms='Test', rol='OPERARI', pin_hash=ph, estat='ACTIU', telefon=f'+346{uuid.uuid4().int % 100000000:08d}'
     ))
+    await admin_session.flush()
     return oid, onif
 
 

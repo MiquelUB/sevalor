@@ -36,3 +36,15 @@ USING (
     empresa_id::text = current_setting('app.current_empresa_id', true)
     OR (empresa_id IS NULL AND current_setting('app.is_superadmin', true) = 'true')
 );
+
+-- RLS sobre taula clients
+ALTER TABLE clients ENABLE ROW LEVEL SECURITY;
+ALTER TABLE clients FORCE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS rls_clients_tenant_isolation ON clients;
+CREATE POLICY rls_clients_tenant_isolation ON clients
+FOR ALL
+USING (
+    empresa_id::text = current_setting('app.current_empresa_id', true)
+    OR current_setting('app.is_superadmin', true) = 'true'
+);
