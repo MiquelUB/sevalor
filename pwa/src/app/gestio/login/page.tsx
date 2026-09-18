@@ -50,14 +50,16 @@ export default function GestioLogin() {
       const data = await resp.json();
       
       // Guardar cookie per al Middleware
-      document.cookie = `sevalor_access_token=${data.access_token}; path=/; max-age=86400; SameSite=Strict`;
+      const isHttps = typeof window !== "undefined" && window.location.protocol === "https:";
+      const secureFlag = isHttps ? "; Secure" : "";
+      document.cookie = `sevalor_access_token=${data.access_token}; path=/; max-age=86400; SameSite=Lax${secureFlag}`;
       
       // Guardar token al localStorage per a apiFetch
       setAuthToken(data.access_token);
       // Guardar dades d'usuari
       localStorage.setItem("sevalor_user", JSON.stringify(data));
 
-      router.push("/gestio/mapa");
+      window.location.href = "/gestio/mapa";
     } catch (err: any) {
       setError(err.message || "Error al connectar amb el servidor. Comprova la URL de l'API.");
     } finally {

@@ -121,7 +121,9 @@ export default function OperariLoginPage() {
 
       if (response && response.access_token) {
         setAuthToken(response.access_token);
-        document.cookie = `sevalor_access_token=${response.access_token}; path=/; max-age=86400; SameSite=Strict`;
+        const isHttps = typeof window !== "undefined" && window.location.protocol === "https:";
+        const secureFlag = isHttps ? "; Secure" : "";
+        document.cookie = `sevalor_access_token=${response.access_token}; path=/; max-age=86400; SameSite=Lax${secureFlag}`;
 
         // Sentinel offline handling
         const saltHex = localStorage.getItem(SENTINEL_SALT_KEY);
@@ -153,7 +155,7 @@ export default function OperariLoginPage() {
           localStorage.setItem(SENTINEL_IV_KEY, ivHex);
         }
 
-        router.push("/operari/feines");
+        window.location.href = "/operari/feines";
       } else {
         setError("PIN incorrecte. Torna a intentar-ho.");
         setPin("");
@@ -169,7 +171,7 @@ export default function OperariLoginPage() {
             const saltBytes = new Uint8Array(saltHex.split(",").map(Number));
             const valid = await verifySentinelBlock(codiPin, saltBytes, cipher, iv);
             if (valid) {
-              router.push("/operari/feines");
+              window.location.href = "/operari/feines";
               setLoading(false);
               return;
             }

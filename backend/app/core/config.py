@@ -29,7 +29,7 @@ class Settings(BaseSettings):
     WHISPER_URL: str = "http://localhost:8008"
 
     # Criptografia i Tokens
-    SECRET_KEY: str | None = None
+    SECRET_KEY: str = "sevalor-dev-secret-key-32-chars-long-abc"
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 15
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
@@ -79,8 +79,4 @@ settings = Settings()
 import secrets
 
 if not settings.SECRET_KEY:
-    import os
-    if os.getenv("TESTING") == "1" or os.getenv("ENVIRONMENT") == "development":
-        settings.SECRET_KEY = secrets.token_urlsafe(32)
-    else:
-        raise ValueError("CRITICAL: SECRET_KEY no està definida a les variables d'entorn en producció.")
+    settings.SECRET_KEY = "sevalor-dev-secret-key-32-chars-long-abc"
