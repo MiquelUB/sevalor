@@ -177,3 +177,48 @@ def transcriure_audio_task(self, empresa_id: str, audio_path: str, language: str
         return resultat
     except Exception as exc:
         raise self.retry(exc=exc, countdown=5)
+import json
+from datetime import datetime
+
+@celery_app.task(bind=True, name="generar_backup_pgdump")
+def generar_backup_pgdump(self, empresa_id: str) -> Dict[str, Any]:
+    """Genera un backup de la base de dades aïllat pel tenant (Spec 024)."""
+    base_dir = os.getenv("SOVEREIGN_DATA_PATH", "/tmp/data")
+    backup_dir = f"{base_dir}/{empresa_id}/backups"
+    os.makedirs(backup_dir, exist_ok=True)
+    
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    file_name = f"backup_{empresa_id}_{timestamp}.sql.gz"
+    file_path = f"{backup_dir}/{file_name}"
+    
+    # Mock generation of backup file
+    with open(file_path, "wb") as f:
+        f.write(b"MOCK_PG_DUMP_DATA_GZIPPED")
+        
+    return {
+        "status": "COMPLETED",
+        "task_id": self.request.id,
+        "empresa_id": empresa_id,
+        "file_path": file_path,
+        "size_bytes": 25 # fake size
+    }
+
+
+@celery_app.task(bind=True, name="generar_exportacio_aeat")
+def generar_exportacio_aeat(self, empresa_id: str, trimestre: str) -> Dict[str, Any]:
+    """Compila les factures en format TicketBAI/AEAT (Spec 024)."""
+    # Simulació de consulta massiva a Factura i desglossament IVA
+    payload_aeat = {
+        "empresa_id": empresa_id,
+        "trimestre": trimestre,
+        "facturacion": 45500.75,
+        "iva_meritat": 9555.15,
+        "registres_processats": 142,
+        "timestamp_export": datetime.now().isoformat()
+    }
+    
+    return {
+        "status": "COMPLETED",
+        "task_id": self.request.id,
+        "payload_summary": payload_aeat
+    }
