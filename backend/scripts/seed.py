@@ -18,6 +18,13 @@ async def seed():
         await conn.run_sync(Base.metadata.create_all)
     print("✅ Taules creades correctament!")
 
+    # Sincronitzar alembic_version perquè Alembic sàpiga que l'esquema ja és a head
+    from alembic.config import Config
+    from alembic import command
+    alembic_cfg = Config(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "alembic.ini"))
+    command.stamp(alembic_cfg, "head")
+    print("✅ alembic_version sincronitzat a head")
+
     async with AsyncSessionLocal() as session:
         # Create Empresa
         empresa_id = uuid.uuid4()
