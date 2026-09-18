@@ -31,11 +31,11 @@ export default function CopilotEntrenament() {
 
         <form onSubmit={async (e) => {
           e.preventDefault();
-          const form = e.target;
+          const form = e.target as HTMLFormElement;
           const dades = {
-            titol: form.elements.namedItem("titol").value,
-            contingut: form.elements.namedItem("contingut").value,
-            tags: form.elements.namedItem("tags").value
+            titol: (form.elements.namedItem("titol") as HTMLInputElement).value,
+            contingut: (form.elements.namedItem("contingut") as HTMLTextAreaElement).value,
+            tags: (form.elements.namedItem("tags") as HTMLInputElement).value
           };
           try {
             const res = await apiFetch("/gestio/copilot/rag", {
