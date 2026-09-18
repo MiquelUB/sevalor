@@ -26,17 +26,16 @@ async def setup_picking_test(admin_session):
         id=uuid.UUID(client_id), empresa_id=uuid.UUID(empresa_id), codi='CLI-1', rao_social='C', nif='NIFC'
     ))
     ordre_id = str(uuid.uuid4())
-    await admin_session.execute(
-        text("INSERT INTO ordres_treball (id, empresa_id, codi, client_id, titol, estat, adreca) VALUES (:id, :emp, 'OT-1', :cli, 'OT picking', 'PENDENT', 'Adreça de prova')"),
-        {"id": ordre_id, "emp": empresa_id, "cli": client_id}
-    )
+    from app.models.models import OrdreTreball, Article
+    admin_session.add(OrdreTreball(
+        id=uuid.UUID(ordre_id), empresa_id=uuid.UUID(empresa_id), codi='OT-1', client_id=uuid.UUID(client_id), titol='OT picking', estat='PENDENT', adreca='Adreça de prova', data_planificacio=None
+    ))
     
     # Article
     article_id = str(uuid.uuid4())
-    await admin_session.execute(
-        text("INSERT INTO articles (id, empresa_id, referencia_inventari, nom) VALUES (:id, :emp, 'REF-1', 'Article Picking')"),
-        {"id": article_id, "emp": empresa_id}
-    )
+    admin_session.add(Article(
+        id=uuid.UUID(article_id), empresa_id=uuid.UUID(empresa_id), referencia_inventari='REF-1', nom='Article Picking'
+    ))
     await admin_session.flush()
     
     return {"empresa_id": empresa_id, "operari_id": operari_id, "ordre_id": ordre_id, "article_id": article_id}

@@ -33,10 +33,10 @@ async def test_alta_operari_nou(admin_session, headers, boss_token):
     _, empresa_id = boss_token
     
     # Inserim l'empresa de prova via BD manual per poder complir amb les Foreign Keys
-    await admin_session.execute(
-        text("INSERT INTO empreses (id, nom, nif, pla_subscripcio, estat_pagament) VALUES (:id, 'Test Company', 'NIF" + str(uuid.uuid4())[:8] + "', 'STARTER', 'ACTIU')"),
-        {"id": empresa_id}
-    )
+    from app.models.models import Empresa
+    admin_session.add(Empresa(
+        id=uuid.UUID(empresa_id), nom='Test Company', nif='NIF' + str(uuid.uuid4())[:8], subdomini='sub' + str(uuid.uuid4())[:6], pla_subscripcio='STARTER', estat_pagament='ACTIU'
+    ))
     await admin_session.flush()
 
     payload = {
@@ -72,10 +72,10 @@ async def test_reset_pin_operari(admin_session, headers, boss_token):
     _, empresa_id = boss_token
     
     # 1. Crear empresa
-    await admin_session.execute(
-        text("INSERT INTO empreses (id, nom, nif, pla_subscripcio, estat_pagament) VALUES (:id, 'Test Reset', 'RES" + str(uuid.uuid4())[:8] + "', 'STARTER', 'ACTIU')"),
-        {"id": empresa_id}
-    )
+    from app.models.models import Empresa
+    admin_session.add(Empresa(
+        id=uuid.UUID(empresa_id), nom='Test Reset', nif='RES' + str(uuid.uuid4())[:8], subdomini='sub' + str(uuid.uuid4())[:6], pla_subscripcio='STARTER', estat_pagament='ACTIU'
+    ))
     
     # 2. Crear operari bloquejat
     operari_id = str(uuid.uuid4())

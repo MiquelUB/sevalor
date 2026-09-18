@@ -17,10 +17,10 @@ async def test_alta_planol(admin_session, headers, boss_token):
     
     # 2. Crear carpeta per al planol
     carpeta_id = str(uuid.uuid4())
-    await admin_session.execute(
-        text("INSERT INTO carpetes_planols (id, empresa_id, nom, categoria) VALUES (:id, :emp, 'Carpeta Principal', 'CLIENTS')"),
-        {"id": carpeta_id, "emp": empresa_id}
-    )
+    from app.models.models import CarpetaPlanols
+    admin_session.add(CarpetaPlanols(
+        id=uuid.UUID(carpeta_id), empresa_id=uuid.UUID(empresa_id), nom='Carpeta Principal', categoria='CLIENTS'
+    ))
     await admin_session.flush()
     
     payload = {
