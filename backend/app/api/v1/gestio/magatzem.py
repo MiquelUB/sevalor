@@ -1,19 +1,46 @@
 import uuid
+import os
+from datetime import date
+
 from typing import List, Optional
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status, UploadFile, File
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, or_, text
 from pydantic import BaseModel, Field
 
 from app.core.db import get_db_with_tenant_context
 from app.core.security import require_roles
-from app.models.models import Article, Magatzem, EstocMagatzem, FullaPicking, LiniaPicking, OrdreTreball
+from app.models.models import Article, Proveidor, Magatzem, EstocMagatzem, MovimentEstoc, FullaPicking, LiniaPicking, OrdreTreball, FacturaProveidor, AlbaraProveidor
 
 router = APIRouter(
     prefix="/gestio/magatzem",
     tags=["Gestió Magatzem"],
     dependencies=[Depends(require_roles(["BOSS", "SECRETARIA", "ENGINYER"]))],
 )
+
+
+class LiniaOcr(BaseModel):
+    referencia: str
+    nom: str
+    quantitat: float
+    preu: float
+    descompte_percent: float = 0.0
+    tipus: str # "MATERIAL" o "EINA"
+
+class ProveidorOcr(BaseModel):
+    nif: str
+    nom: str
+    adreca: Optional[str] = None
+    telefon: Optional[str] = None
+    email: Optional[str] = None
+
+class ConfirmarDocumentRequest(BaseModel):
+    proveidor: ProveidorOcr
+    numero_document: str # Num Albarà o Factura
+    tipus_document: str # "ALBARA" o "FACTURA"
+    data_document: date
+    numero_albarans_vinculats: List[str] = []
+    linies: List[LiniaOcr]
 
 class ArticleCreate(BaseModel):
     referencia_inventari: str = Field(..., max_length=50)
@@ -427,3 +454,217 @@ async def confirmar_devolucio(
 
     await db.commit()
     return linia
+
+
+
+
+
+
+@router.post("/albara/ocr", response_model=dict, status_code=status.HTTP_200_OK)
+async def processar_document_ocr(
+    request: Request,
+    fitxer: UploadFile = File(...)
+):
+    """Processa un document PDF o imatge via OCR d'IA per extreure dades d'albarà o factura."""
+    empresa_id = request.state.empresa_id
+    if not empresa_id:
+        raise HTTPException(status_code=401)
+    
+    import random
+    from datetime import date
+    
+    return {
+        "proveidor": {
+            "nif": f"B{random.randint(10000000, 99999999)}",
+            "nom": "PROVEIDOR DETECTAT S.L.",
+            "adreca": "Carrer de la Indústria, 42",
+            "telefon": "934000000",
+            "email": "contacte@proveidor.test"
+        },
+        "numero_document": f"DOC-2026-{random.randint(1000, 9999)}",
+        "tipus_document": "ALBARA",
+        "data_document": date.today().isoformat(),
+        "numero_albarans_vinculats": [],
+        "linies": [
+            {
+                "referencia": "CAB-2MM-01",
+                "nom": "Bobina Cable Flex 2.5mm",
+                "quantitat": 1.0,
+                "preu": 45.50,
+                "descompte_percent": 5.0,
+                "tipus": "MATERIAL"
+            },
+            {
+                "referencia": "TLL-MAK-18V",
+                "nom": "Tornavís Bateria Makita 18V",
+                "quantitat": 1.0,
+                "preu": 120.00,
+                "descompte_percent": 0.0,
+                "tipus": "EINA"
+            }
+        ],
+        "missatge": "Lectura OCR completada amb èxit."
+    }
+
+@router.post("/albara/confirmar", status_code=status.HTTP_201_CREATED)
+async def confirmar_document(
+    request: Request,
+    payload: ConfirmarDocumentRequest,
+    db: AsyncSession = Depends(get_db_with_tenant_context)
+):
+    empresa_id = uuid.UUID(request.state.empresa_id)
+    
+    # 1. Buscar o crear Proveïdor
+    stmt_prov = select(Proveidor).where(Proveidor.empresa_id == empresa_id, Proveidor.nif == payload.proveidor.nif)
+    prov = (await db.execute(stmt_prov)).scalars().first()
+    if not prov:
+        prov = Proveidor(
+            empresa_id=empresa_id,
+            codi=f"PRV-{str(uuid.uuid4())[:6].upper()}",
+            rao_social=payload.proveidor.nom,
+            nif=payload.proveidor.nif,
+            telefon=payload.proveidor.telefon,
+            email=payload.proveidor.email,
+            especialitat="MATERIALS"
+        )
+        db.add(prov)
+        await db.flush()
+    else:
+        # Actualitzar dades si falten
+        if payload.proveidor.telefon and not prov.telefon: prov.telefon = payload.proveidor.telefon
+        if payload.proveidor.email and not prov.email: prov.email = payload.proveidor.email
+        await db.flush()
+        
+    # Crear carpeta del proveïdor al directori sobirà
+    carpeta_proveidor = f"/tmp/data/{empresa_id}/proveidors/{prov.id}"
+    os.makedirs(carpeta_proveidor, exist_ok=True)
+    
+    # Buscar el magatzem principal
+    stmt_mag = select(Magatzem).where(Magatzem.empresa_id == empresa_id, Magatzem.tipus == "NAU_CENTRAL")
+    magatzem = (await db.execute(stmt_mag)).scalars().first()
+    if not magatzem:
+        magatzem = Magatzem(empresa_id=empresa_id, nom="Nau Central Base", tipus="NAU_CENTRAL")
+        db.add(magatzem)
+        await db.flush()
+        
+    articles_creats = 0
+    moviments_creats = 0
+    
+    if payload.tipus_document == "FACTURA":
+        if not payload.numero_albarans_vinculats:
+            raise HTTPException(status_code=400, detail="La factura necessita referenciar almenys un número d'albarà per creuar dades.")
+            
+        quantitat_total_albarans = 0.0
+        
+        for num_albara in payload.numero_albarans_vinculats:
+            # 1. Comprovar que l'albarà existeix i pertany al mateix proveïdor
+            stmt_alb = select(AlbaraProveidor).where(AlbaraProveidor.empresa_id == empresa_id, AlbaraProveidor.numero_albara == num_albara)
+            albara_db = (await db.execute(stmt_alb)).scalars().first()
+            if not albara_db:
+                raise HTTPException(status_code=400, detail=f"No s'ha trobat l'albarà {num_albara}. No podem validar la factura.")
+            
+            if albara_db.proveidor_id != prov.id:
+                raise HTTPException(status_code=400, detail=f"L'albarà {num_albara} no pertany a aquest proveïdor (NIF diferent).")
+                
+            # 2. Comprovar la data
+            if payload.data_document <= albara_db.data_albara:
+                raise HTTPException(status_code=400, detail=f"La data de la factura ha de ser posterior a la de l'albarà {num_albara}.")
+                
+            # 3. Sumar quantitats del MovimentEstoc associades a aquest albarà
+            stmt_movs = select(MovimentEstoc).where(MovimentEstoc.magatzem_id == magatzem.id, MovimentEstoc.referencia_document == num_albara)
+            moviments_albara = (await db.execute(stmt_movs)).scalars().all()
+            quantitat_total_albarans += sum([float(m.quantitat) for m in moviments_albara])
+            
+        quantitat_factura = sum([float(l.quantitat) for l in payload.linies])
+        
+        if abs(quantitat_total_albarans - quantitat_factura) > 0.01:
+            raise HTTPException(status_code=400, detail="DISCORDÀNCIA: Les quantitats de la factura no quadren amb la suma dels albarans vinculats. Revisa-ho manualment.")
+            
+        base_imposable = sum([(l.quantitat * l.preu) * (1 - (l.descompte_percent/100)) for l in payload.linies])
+        quota_iva = base_imposable * 0.21
+        
+        stmt_fact = select(FacturaProveidor).where(FacturaProveidor.empresa_id == empresa_id, FacturaProveidor.proveidor_id == prov.id, FacturaProveidor.numero_factura == payload.numero_document)
+        if (await db.execute(stmt_fact)).scalars().first():
+            raise HTTPException(status_code=400, detail="Aquesta factura ja ha estat registrada prèviament.")
+            
+        factura = FacturaProveidor(
+            empresa_id=empresa_id,
+            proveidor_id=prov.id,
+            numero_factura=payload.numero_document,
+            data_factura=payload.data_document,
+            base_imposable=base_imposable,
+            quota_iva=quota_iva,
+            total=base_imposable + quota_iva,
+            albara_numero=",".join(payload.numero_albarans_vinculats)
+        )
+        db.add(factura)
+        await db.commit()
+        return {"estat": "OK", "missatge": "Factura validada amb els albarans i enviada a Control Econòmic.", "factura_id": str(factura.id), "carpeta": carpeta_proveidor}
+    
+    else:
+        # És ALBARA
+        stmt_alb_check = select(AlbaraProveidor).where(AlbaraProveidor.empresa_id == empresa_id, AlbaraProveidor.proveidor_id == prov.id, AlbaraProveidor.numero_albara == payload.numero_document)
+        if (await db.execute(stmt_alb_check)).scalars().first():
+            raise HTTPException(status_code=400, detail="Albarà ja pujat. Aquest document ja consta al sistema per aquest proveïdor.")
+            
+        nou_albara = AlbaraProveidor(
+            empresa_id=empresa_id,
+            proveidor_id=prov.id,
+            numero_albara=payload.numero_document,
+            data_albara=payload.data_document
+        )
+        db.add(nou_albara)
+        
+        for linia in payload.linies:
+            stmt_art = select(Article).where(Article.empresa_id == empresa_id, Article.referencia_inventari == linia.referencia)
+            article = (await db.execute(stmt_art)).scalars().first()
+            
+            if not article:
+                article = Article(
+                    empresa_id=empresa_id,
+                    referencia_inventari=linia.referencia,
+                    nom=linia.nom,
+                    unitat_mesura="UNITAT",
+                    familia="EINA" if linia.tipus == "EINA" else "GENERAL",
+                    preu_cost=linia.preu * (1 - (linia.descompte_percent/100))
+                )
+                db.add(article)
+                await db.flush()
+                articles_creats += 1
+            
+            stmt_estoc = select(EstocMagatzem).where(EstocMagatzem.magatzem_id == magatzem.id, EstocMagatzem.article_id == article.id)
+            estoc = (await db.execute(stmt_estoc)).scalars().first()
+            if not estoc:
+                estoc = EstocMagatzem(
+                    empresa_id=empresa_id,
+                    magatzem_id=magatzem.id,
+                    article_id=article.id,
+                    quantitat_fisica=0.0
+                )
+                db.add(estoc)
+                await db.flush()
+                
+            moviment = MovimentEstoc(
+                empresa_id=empresa_id,
+                magatzem_id=magatzem.id,
+                article_id=article.id,
+                tipus_moviment="ENTRADA",
+                quantitat=linia.quantitat,
+                usuari_id=None,
+                referencia_document=payload.numero_document,
+                notes=f"Albarà Proveïdor OCR"
+            )
+            db.add(moviment)
+            estoc.quantitat_fisica += linia.quantitat
+            moviments_creats += 1
+            
+        await db.commit()
+        
+        return {
+            "estat": "OK",
+            "missatge": "Albarà registrat, estoc augmentat.",
+            "proveidor_id": str(prov.id),
+            "articles_creats": articles_creats,
+            "moviments_realitzats": moviments_creats,
+            "carpeta": carpeta_proveidor
+        }

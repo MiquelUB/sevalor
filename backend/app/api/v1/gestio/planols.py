@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 from app.core.db import get_db_with_tenant_context
 from app.core.security import require_roles
 from app.models.models import PlanolBase, CarpetaPlanol, CapaVectorial
+from app.workers.tasks import generar_informe_planol_pdf
 
 router = APIRouter(
     prefix="/gestio/planols",
@@ -323,3 +324,21 @@ async def eliminar_capa_planol(
     await db.delete(capa)
     await db.commit()
     return None
+
+
+@router.post("/{planol_id}/exportar-pdf", status_code=status.HTTP_202_ACCEPTED)
+async def exportar_planol_pdf(
+    planol_id: uuid.UUID,
+    request: Request,
+    db: AsyncSession = Depends(get_db_with_tenant_context)
+):
+    empresa_id = request.state.empresa_id
+    stmt = select(PlanolBase).where(PlanolBase.id == planol_id, PlanolBase.empresa_id == uuid.UUID(empresa_id))
+    planol = (await db.execute(stmt)).scalars().first()
+    if not planol:
+        raise HTTPException(status_code=404)
+        
+    # Llençar a Celery
+    generar_informe_planol_pdf.delay(str(planol_id), str(empresa_id))
+    
+    return {"estat": "EN_PROCES", "missatge": "El PDF s'està generant a Celery"}

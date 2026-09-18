@@ -5,12 +5,14 @@ import {
   Package,
   Search,
   Plus,
+  Sparkles,
   Truck,
   Wrench,
   AlertTriangle,
   Building,
   RefreshCw,
   X,
+  CheckCircle2,
   Layers,
 } from "lucide-react";
 import { apiFetch } from "@/lib/api";
@@ -38,6 +40,11 @@ export default function GestioMagatzemPage() {
   const [filtreFamilia, setFiltreFamilia] = useState<string>("TOTS");
   const [modalNouArticle, setModalNouArticle] = useState(false);
   const [guardant, setGuardant] = useState(false);
+  const [modalOcr, setModalOcr] = useState(false);
+  const [fitxerOcr, setFitxerOcr] = useState<File | null>(null);
+  const [processantOcr, setProcessantOcr] = useState(false);
+  const [resultatOcr, setResultatOcr] = useState<any>(null);
+
 
   // Formulari nou article
   const [nouArticle, setNouArticle] = useState({
@@ -69,6 +76,62 @@ export default function GestioMagatzemPage() {
   useEffect(() => {
     carregarArticles();
   }, []);
+
+  
+  const handlePujarOcr = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!fitxerOcr) return;
+    
+    setProcessantOcr(true);
+    setError(null);
+    try {
+      const formData = new FormData();
+      formData.append("fitxer", fitxerOcr);
+      
+      const token = localStorage.getItem("token");
+      const urlBase = typeof window !== 'undefined' ? (window as any).API_BASE_URL || "/api/v1" : "/api/v1";
+      const res = await fetch(`${urlBase}/gestio/magatzem/albara/ocr`, {
+        method: "POST",
+        headers: { "Authorization": `Bearer ${token}` },
+        body: formData
+      });
+      
+      if (!res.ok) throw new Error("Error processant l'albarà");
+      const data = await res.json();
+      setResultatOcr(data);
+    } catch (err: any) {
+      setError(err.message || "Error al processar l'albarà OCR");
+    } finally {
+      setProcessantOcr(false);
+    }
+  };
+
+  const handleConfirmarOcr = async () => {
+    if (!resultatOcr) return;
+    setProcessantOcr(true);
+    setError(null);
+    try {
+      await apiFetch("/gestio/magatzem/albara/confirmar", {
+        method: "POST",
+        body: JSON.stringify({
+          proveidor: resultatOcr.proveidor,
+          numero_document: resultatOcr.numero_document,
+          tipus_document: resultatOcr.tipus_document,
+          data_document: resultatOcr.data_document,
+          numero_albarans_vinculats: resultatOcr.numero_albarans_vinculats || [],
+          linies: resultatOcr.linies
+        })
+      });
+      setModalOcr(false);
+      setResultatOcr(null);
+      setFitxerOcr(null);
+      await carregarArticles();
+    } catch (err: any) {
+      setError(err.message || "Error al confirmar l'albarà");
+    } finally {
+      setProcessantOcr(false);
+    }
+  };
 
   const handleCrearArticle = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -159,6 +222,15 @@ export default function GestioMagatzemPage() {
             title="Refrescar llista"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${loading ? "animate-spin" : ""}`} />
+          </button>
+
+          
+          <button
+            onClick={() => setModalOcr(true)}
+            className="px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold flex items-center gap-1 shadow transition-all"
+          >
+            <Sparkles className="w-3.5 h-3.5" />
+            <span>Entrada Assistida IA</span>
           </button>
 
           <button

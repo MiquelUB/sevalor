@@ -30,7 +30,7 @@ import {
   AlertOctagon,
 } from "lucide-react";
 
-type PestanyaCopilot = "GARANTIES" | "INCIDENCIES" | "RECONCILIACIO" | "XAT";
+type PestanyaCopilot = "GARANTIES" | "INCIDENCIES" | "RECONCILIACIO" | "XAT" | "RAG";
 
 export default function CopilotIAPage() {
   const { rolActiu } = useGestio();

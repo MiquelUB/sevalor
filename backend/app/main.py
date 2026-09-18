@@ -16,6 +16,7 @@ from app.api.v1.gestio.clients import router as clients_router
 from app.api.v1.gestio.proveidors import router as proveidors_router
 from app.api.v1.gestio.flota import router as flota_router
 from app.api.v1.gestio.magatzem import router as magatzem_router
+from app.api.v1.webhooks.telegram import router as telegram_webhook_router
 from app.api.v1.gestio.feines import router as feines_router
 from app.api.v1.gestio.planols import router as planols_router
 from app.api.v1.gestio.comptabilitat import router as comptabilitat_router
@@ -69,6 +70,7 @@ app.include_router(clients_router, prefix=settings.API_V1_STR)
 app.include_router(proveidors_router, prefix=settings.API_V1_STR)
 app.include_router(flota_router, prefix=settings.API_V1_STR)
 app.include_router(magatzem_router, prefix=settings.API_V1_STR)
+app.include_router(telegram_webhook_router, prefix=settings.API_V1_STR)
 app.include_router(feines_router, prefix=settings.API_V1_STR)
 app.include_router(planols_router, prefix=settings.API_V1_STR)
 app.include_router(comptabilitat_router, prefix=settings.API_V1_STR)

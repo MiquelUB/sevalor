@@ -768,3 +768,33 @@ class ConsultaXatCopilot(Base):
 
 
 
+
+
+class MovimentEstoc(Base):
+    __tablename__ = "moviments_estoc"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, server_default=text("gen_random_uuid()"))
+    empresa_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("empreses.id", ondelete="CASCADE"), nullable=False)
+    magatzem_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("magatzems.id", ondelete="CASCADE"), nullable=False)
+    article_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("articles.id", ondelete="CASCADE"), nullable=False)
+    tipus_moviment: Mapped[str] = mapped_column(String(20), nullable=False)
+    quantitat: Mapped[float] = mapped_column(Numeric(12, 3), nullable=False)
+    referencia_document: Mapped[Optional[str]] = mapped_column(String(100))
+    notes: Mapped[Optional[str]] = mapped_column(String(200))
+    usuari_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), server_default=text('now()'))
+
+
+class AlbaraProveidor(Base):
+    __tablename__ = "albarans_proveidor"
+    __table_args__ = (
+        UniqueConstraint("empresa_id", "proveidor_id", "numero_albara", name="uq_albarans_prov_empresa_num"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, server_default=text("gen_random_uuid()"))
+    empresa_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("empreses.id", ondelete="CASCADE"), nullable=False)
+    proveidor_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("proveidors.id", ondelete="CASCADE"), nullable=False)
+    numero_albara: Mapped[str] = mapped_column(String(100), nullable=False)
+    data_albara: Mapped[date] = mapped_column(Date, nullable=False)
+    fitxer_path: Mapped[Optional[str]] = mapped_column(String(500))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), server_default=text('now()'))

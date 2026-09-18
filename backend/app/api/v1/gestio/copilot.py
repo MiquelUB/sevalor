@@ -177,6 +177,12 @@ class VerificacioStockIn(BaseModel):
     materials: List[Dict[str, Any]] = Field(default_factory=list)  # {article_id, quantitat_necessaria}
 
 
+
+class DocumentRagIn(BaseModel):
+    pregunta: str
+    resposta: str
+    paraules_clau: Optional[str] = None
+
 class ConsultaXatIn(BaseModel):
     pregunta: str
 
@@ -805,48 +811,59 @@ async def consultar_xat_tecnic(
     empresa = res_emp.scalar_one_or_none()
     vertical = empresa.vertical if empresa else "SEVALOR"
 
-    termes_electrics = ["rebt", "caiguda de tensio", "caiguda de tensió", "magnetotermic", "magnetotèrmic", "seccio de cable", "curva c"]
-    termes_hidraulics = ["curva de bomba", "cabal m3/h", "fertirrigacio", "fertirrigació", "recomanacio agronomica", "diposit de purins"]
 
-    if vertical in ["SEVALOR", "HYDROPRO"]:
-        if any(terme in pregunta_net for terme in termes_electrics):
-            resposta_vertical = f"La base de coneixement i context del Copilot s'acota exclusivament al sector d'enginyeria civil i regadíos ({vertical}). La consulta de REBT elèctric ha estat declinada per aïllament estricte de vertical (EDGE-10)."
-            return {
-                "resposta": resposta_vertical,
-                "vertical": vertical,
-                "enllacos": [],
-                "declinat_per_vertical": True,
-            }
-    elif vertical == "ELECTRICPRO":
-        if any(terme in pregunta_net for terme in termes_hidraulics):
-            resposta_vertical = "La base de coneixement s'acota exclusivament al sector elèctric i normativa REBT (ELECTRICPRO). Les consultes hidràuliques han estat declinades per aïllament de vertical."
-            return {
-                "resposta": resposta_vertical,
-                "vertical": vertical,
-                "enllacos": [],
-                "declinat_per_vertical": True,
-            }
-
-    # 3. RAG Local: Consultes operatives de flota, ITV, stock o protocols corporatius (RF-20)
+    # 3. RAG REAL: Cerca dinàmica a la base de dades
     enllacos = []
-    if "itv" in pregunta_net or "furgoneta" in pregunta_net or "assegurança" in pregunta_net or "seguro" in pregunta_net:
-        resposta = "La furgoneta Renault Master (7482-LDK) disposa d'assegurança a tot risc comercial amb assistència en carretera 24h. La propera ITV venç el 15/10/2026."
-        enllacos.append({"titol": "Fitxa del Vehicle (7482-LDK)", "url": "/gestio/flota"})
-    elif "cable" in pregunta_net or "tub" in pregunta_net or "stock" in pregunta_net:
-        resposta = "A Nau Central disposem actualment de 140 m de Tub Polietilè 32mm PE-100. Stock suficient per a les ordres de treball planificades per avui."
-        enllacos.append({"titol": "Inventari de Magatzem", "url": "/gestio/magatzem"})
-    elif "protocol" in pregunta_net or "seguretat" in pregunta_net:
-        resposta = "Protocol PRL de camp: Davant l'aparició d'un cable soterrat no senyalitzat, és obligatori aturar l'excavació mecànica de forma immediata, senyalitzar la zona i notificar a la Torre de Control."
-        enllacos.append({"titol": "Manual de Bones Pràctiques i Prevenció", "url": "/gestio/notificacions"})
+    context_rag = ""
+    
+    # a) Estoc dinàmic
+    if any(k in pregunta_net for k in ["estoc", "stock", "quantitat", "queden", "disposem", "tub", "cable"]):
+        q_estoc = select(Article.nom, func.sum(EstocMagatzem.quantitat_fisica).label("total")).join(EstocMagatzem).where(Article.empresa_id == empresa_id).group_by(Article.nom)
+        res_estoc = (await db.execute(q_estoc)).all()
+        if res_estoc:
+            context_rag += "Informació d'estoc actual en temps real:\n"
+            for row in res_estoc:
+                context_rag += f"- {row.nom}: {row.total} unitats\n"
+            enllacos.append({"titol": "Inventari de Magatzem", "url": "/gestio/magatzem"})
+    
+    # b) Vehicles dinàmics
+    if any(k in pregunta_net for k in ["vehicle", "furgoneta", "cotxe", "matricula", "itv", "asseguranca", "seguro"]):
+        q_veh = select(Vehicle).where(Vehicle.empresa_id == empresa_id)
+        res_veh = (await db.execute(q_veh)).scalars().all()
+        if res_veh:
+            context_rag += "Informació de la flota de vehicles:\n"
+            for v in res_veh:
+                context_rag += f"- {v.marca} {v.model} ({v.matricula}): ITV vàlida fins {v.data_proxima_itv}, Assegurança fins {v.data_venciment_asseguranca}. Estat: {v.estat}\n"
+            enllacos.append({"titol": "Flota de Vehicles", "url": "/gestio/flota"})
+    
+    # c) Base de coneixement Corporativa RAG (FaqCorporativaRag)
+    paraules = pregunta_net.split()
+    filtres_rag = []
+    for p in paraules:
+        if len(p) > 3:
+            filtres_rag.append(func.lower(FaqCorporativaRag.resposta).contains(p))
+            filtres_rag.append(func.lower(FaqCorporativaRag.pregunta).contains(p))
+            filtres_rag.append(func.lower(FaqCorporativaRag.paraules_clau).contains(p))
+    
+    if filtres_rag:
+        from sqlalchemy import or_
+        q_faq = select(FaqCorporativaRag).where(FaqCorporativaRag.empresa_id == empresa_id).where(or_(*filtres_rag))
+        res_faq = (await db.execute(q_faq)).scalars().all()
+        if res_faq:
+            context_rag += "Base de coneixement corporativa (Procediments/Protocols):\n"
+            for faq in res_faq:
+                context_rag += f"[{faq.pregunta}]: {faq.resposta}\n"
+            enllacos.append({"titol": "Base de Coneixement Corporativa", "url": "/gestio/copilot"})
+    
+    resposta_ia = await cridar_lm_studio(dades.pregunta, vertical, context_addicional=context_rag)
+    if resposta_ia:
+        resposta = resposta_ia
     else:
-        # Consulta a LM Studio si està disponible, amb fallback resilient
-        resposta_ia = await cridar_lm_studio(dades.pregunta, vertical)
-        if resposta_ia:
-            resposta = resposta_ia
+        if context_rag:
+            resposta = f"L'assistent d'IA principal no està disponible, però he trobat aquesta informació als sistemes de l'empresa:\n\n{context_rag}"
         else:
-            resposta = f"Consulta atesa satisfactòriament pel Copilot IA sota normativa del sector {vertical} i protocols interns d'empresa."
+            resposta = "L'assistent d'IA principal no està disponible i no he trobat dades específiques a la base de coneixement per aquesta consulta."
 
-    # Guardar registre
     consulta_db = ConsultaXatCopilot(
         empresa_id=empresa_id,
         usuari_id=usuari_id,
@@ -897,3 +914,39 @@ async def llistar_alertes_copilot(
         }
         for a in alertes
     ]
+
+
+@router.post("/rag", status_code=status.HTTP_201_CREATED)
+async def afegir_document_rag(
+    dades: DocumentRagIn,
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+    claims: Dict[str, Any] = Depends(get_current_user_claims)
+):
+    """Permet als administradors afegir protocols i documentació al RAG del Copilot."""
+    empresa_id = aplicar_tenant_context(claims)
+    
+    nou_doc = FaqCorporativaRag(
+        empresa_id=empresa_id,
+        pregunta=dades.pregunta,
+        resposta=dades.resposta,
+        paraules_clau=dades.paraules_clau,
+        actiu=True
+    )
+    db.add(nou_doc)
+    await db.commit()
+    
+    return {"estat": "OK", "missatge": "Document afegit a la base de coneixement de la IA."}
+
+@router.get("/rag")
+async def llistar_documents_rag(
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+    claims: Dict[str, Any] = Depends(get_current_user_claims)
+):
+    """Llista els protocols del RAG actius."""
+    empresa_id = aplicar_tenant_context(claims)
+    
+    q = select(FaqCorporativaRag).where(FaqCorporativaRag.empresa_id == empresa_id, FaqCorporativaRag.actiu == True)
+    res = await db.execute(q)
+    docs = res.scalars().all()
+    
+    return [{"id": str(d.id), "titol": d.titol, "contingut": d.contingut, "tags": d.tags} for d in docs]
