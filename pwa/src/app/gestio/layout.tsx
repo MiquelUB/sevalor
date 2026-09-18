@@ -70,6 +70,8 @@ function GestioLayoutContent({ children }: { children: React.ReactNode }) {
       }
     } catch {}
 
+    if (pathname === "/gestio/login") return;
+
     apiFetch("/auth/me")
       .then((me: any) => {
         if (me) {
@@ -82,10 +84,10 @@ function GestioLayoutContent({ children }: { children: React.ReactNode }) {
     apiFetch("/spotlight/items")
       .then((data: any[]) => setItemsSpotlight(data))
       .catch(() => setItemsSpotlight([]));
-    apiFetch("/configuracio/empresa")
+    apiFetch("/gestio/configuracio/empresa")
       .then((data: any) => setEmpresa(data))
       .catch(() => setEmpresa(null));
-  }, []);
+  }, [pathname]);
 
   if (pathname === "/gestio/login") return <div className="min-h-screen bg-slate-50 dark:bg-slate-950">{children}</div>;
 

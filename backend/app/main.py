@@ -85,6 +85,14 @@ app.include_router(intervencions_router, prefix=settings.API_V1_STR)
 app.include_router(cerca_router, prefix=settings.API_V1_STR)
 app.include_router(spotlight_router, prefix=settings.API_V1_STR)
 app.include_router(configuracio_router, prefix=settings.API_V1_STR)
+
+# Compatibilitat de rutes per a crides directes a /configuracio/empresa
+from fastapi import APIRouter
+from app.api.v1.gestio.configuracio import obtenir_dades_empresa, obtenir_marca_camaleonica
+compat_config_router = APIRouter(prefix="/configuracio", tags=["Configuració Compat"])
+compat_config_router.add_api_route("/empresa", obtenir_dades_empresa, methods=["GET"])
+compat_config_router.add_api_route("/empresa/marca", obtenir_marca_camaleonica, methods=["GET"])
+app.include_router(compat_config_router, prefix=settings.API_V1_STR)
 app.include_router(copilot_router, prefix=settings.API_V1_STR)
 app.include_router(telemetria_router, prefix=settings.API_V1_STR)
 
