@@ -130,21 +130,6 @@ async def seed():
 
         await session.commit()
 
-    print("\n========================================================")
-    print("🔑 CREDENCIALS SEED DISPONIBLES:")
-    print("--------------------------------------------------------")
-    print("1. SUPERADMIN (/superadmin/login):")
-    print("   Email:       admin@sevalor.com")
-    print("   Contrasenya: Password123!")
-    print("--------------------------------------------------------")
-    print("2. GESTIÓ (/gestio/login):")
-    print("   Email:       gestio@sevalor.com")
-    print("   Contrasenya: Password123!")
-    print("--------------------------------------------------------")
-    print("3. OPERARI (/operari/login):")
-    print("   NIF:         12345678A")
-    print("   PIN:         1234")
-    print("========================================================\n")
 
 if __name__ == "__main__":
     asyncio.run(seed())
