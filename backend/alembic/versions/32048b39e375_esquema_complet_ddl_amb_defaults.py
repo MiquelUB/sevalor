@@ -24,12 +24,13 @@ def upgrade() -> None:
     # Check if this is an existing database that already has the tables
     bind = op.get_bind()
     insp = sa.inspect(bind)
-    if 'empreses' in insp.get_table_names():
-        # Existing DB that already ran baseline. We just apply the server defaults.
-        try:
+    existing_tables = insp.get_table_names()
+    
+    if 'empreses' in existing_tables:
+        # Check if 'vertical' exists in 'empreses'
+        columns = [c['name'] for c in insp.get_columns('empreses')]
+        if 'vertical' in columns:
             op.alter_column('empreses', 'vertical', server_default='SEVALOR')
-        except Exception:
-            pass
         
         tables = [
             'empreses', 'usuaris', 'sessions_operari', 'api_keys',
@@ -45,10 +46,12 @@ def upgrade() -> None:
             'registres_jornada_laboral'
         ]
         for table in tables:
-            try:
-                op.alter_column(table, 'id', server_default=sa.text('gen_random_uuid()'))
-            except Exception:
-                pass
+            if table in existing_tables:
+                table_cols = [c['name'] for c in insp.get_columns(table)]
+                if 'id' in table_cols:
+                    # In Postgres we can use raw SQL if we want, or just let alembic do it, but we can't easily check if the server_default is already set without causing issues.
+                    # Actually, alter_column server_default on a column that already has it just overwrites it safely.
+                    op.execute(f"ALTER TABLE {table} ALTER COLUMN id SET DEFAULT gen_random_uuid();")
         return
 
     op.create_table('empreses',
