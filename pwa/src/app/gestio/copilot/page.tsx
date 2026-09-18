@@ -59,7 +59,7 @@ export default function CopilotEntrenament() {
           
           <div>
             <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">Informació o Contingut</label>
-            <textarea name="contingut" required rows="8" className="mt-1 block w-full rounded-xl border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white shadow-sm focus:border-indigo-500 focus:ring-indigo-500 p-2.5 border" placeholder="Descriu pas a pas el protocol o detalls tècnics..."></textarea>
+            <textarea name="contingut" required rows={8} className="mt-1 block w-full rounded-xl border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white shadow-sm focus:border-indigo-500 focus:ring-indigo-500 p-2.5 border" placeholder="Descriu pas a pas el protocol o detalls tècnics..."></textarea>
           </div>
           
           <div>
