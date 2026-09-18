@@ -13,7 +13,7 @@ from slowapi.util import get_remote_address
 
 from app.core.config import settings
 from app.core.db import get_db, set_tenant_context
-from app.models.models import Usuari
+from app.models.models import Usuari, Empresa
 from app.api.v1.gestio.operaris import hash_pin
 import jwt
 import bcrypt
@@ -55,19 +55,33 @@ async def login_operari(
     login_data: LoginRequest,
     db: AsyncSession = Depends(get_db)
 ):
-    # Prioritzem el header X-Empresa-ID perquè el TenantMiddleware pot haver
-    # injectat un valor cachejat d'una petició anterior en l'entorn de tests
-    # amb ASGITransport. En producció, X-Empresa-ID i el middleware coincideixen.
     empresa_id = request.headers.get("X-Empresa-ID") or getattr(request.state, "empresa_id", None)
-    if not empresa_id:
+    empresa_uuid = None
+
+    if empresa_id:
+        try:
+            empresa_uuid = uuid.UUID(empresa_id)
+        except ValueError:
+            res_sub = await db.execute(select(Empresa).where(Empresa.subdomini == empresa_id))
+            emp = res_sub.scalars().first()
+            if emp:
+                empresa_uuid = emp.id
+
+    if not empresa_uuid:
+        # Fallback de conveniència per a la PWA quan s'accedeix sense subdomini/header
+        stmt_nif = select(Usuari).where(
+            func.upper(Usuari.nif) == login_data.nif.upper(),
+            Usuari.rol.in_(["OPERARI", "CAP_DE_COLLA", "ADMIN", "SUPERADMIN"])
+        )
+        res_nif = await db.execute(stmt_nif)
+        usuari_pre = res_nif.scalars().first()
+        if usuari_pre:
+            empresa_uuid = usuari_pre.empresa_id
+
+    if not empresa_uuid:
         raise HTTPException(status_code=400, detail="Tenant context missing")
 
-    try:
-        empresa_uuid = uuid.UUID(empresa_id)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Tenant ID invàlid")
-
-    await set_tenant_context(db, empresa_id)
+    await set_tenant_context(db, str(empresa_uuid))
 
 
     # 1. Buscar l'usuari aplicant el filtre de tenant implícitament i explícitament
