@@ -1,3 +1,4 @@
+from app.models.models import Empresa, Usuari, Client
 import pytest_asyncio
 import pytest
 import uuid
@@ -12,15 +13,13 @@ async def setup_notificacions_test(admin_session):
     nif_rand = "NIF-" + str(uuid.uuid4())[:5]
     sub_rand = "notis-" + str(uuid.uuid4())[:5]
     
-    await admin_session.execute(
-        text("INSERT INTO empreses (id, nom, nif, subdomini, pla_subscripcio, estat_pagament) VALUES (:id, 'Test Notis', :nif, :sub, 'STARTER', 'ACTIU')"),
-        {"id": empresa_id, "nif": nif_rand, "sub": sub_rand}
-    )
-    await admin_session.execute(
-        text("INSERT INTO clients (id, empresa_id, codi, rao_social, nif) VALUES (:id, :emp, 'CLI-1', 'C', 'NIFC')"),
-        {"id": client_id, "emp": empresa_id}
-    )
-    await admin_session.commit()
+    admin_session.add(Empresa(
+        id=uuid.UUID(empresa_id), nom='Test Notis', nif=nif_rand, subdomini=sub_rand, pla_subscripcio='STARTER', estat_pagament='ACTIU'
+    ))
+    admin_session.add(Client(
+        id=uuid.UUID(client_id), empresa_id=uuid.UUID(empresa_id), codi='CLI-1', rao_social='C', nif='NIFC'
+    ))
+    await admin_session.flush()
     
     return {"empresa_id": empresa_id, "client_id": client_id}
 

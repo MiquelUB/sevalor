@@ -1,3 +1,4 @@
+from app.models.models import Empresa, Usuari, Client
 import pytest_asyncio
 import pytest
 import uuid
@@ -12,16 +13,13 @@ async def setup_incidencia_test(admin_session):
     nif_rand = "NIF-" + str(uuid.uuid4())[:5]
     
     # Empresa i Operari
-    await admin_session.execute(
-        text("INSERT INTO empreses (id, nom, nif, subdomini, pla_subscripcio, estat_pagament) VALUES (:id, 'Test Inc', :nif, :sub, 'STARTER', 'ACTIU')"),
-        {"id": empresa_id, "nif": nif_rand, "sub": "incpwa-" + str(uuid.uuid4())[:8]}
-    )
-    await admin_session.execute(
-        text("""INSERT INTO usuaris (id, empresa_id, nif, nom, rol, pin_hash, pin_bloquejat, intents_pin_fallits) 
-                VALUES (:id, :emp, :nif_u, 'Pere Incidencia', 'OPERARI', 'hash', false, 0)"""),
-        {"id": operari_id, "emp": empresa_id, "nif_u": nif_rand + "P"}
-    )
-    await admin_session.commit()
+    admin_session.add(Empresa(
+        id=uuid.UUID(empresa_id), nom='Test Inc', nif=nif_rand, subdomini='incpwa-' + str(uuid.uuid4())[:8], pla_subscripcio='STARTER', estat_pagament='ACTIU'
+    ))
+    admin_session.add(Usuari(
+        id=uuid.UUID(operari_id), empresa_id=uuid.UUID(empresa_id), nif=nif_rand + 'P', nom='Pere Incidencia', rol='OPERARI', pin_hash='hash', pin_bloquejat=False, intents_pin_fallits=0
+    ))
+    await admin_session.flush()
     
     return {"empresa_id": empresa_id, "operari_id": operari_id}
 

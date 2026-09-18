@@ -36,7 +36,7 @@ interface TenantLlicencia {
   id: string;
   subdomini: string;
   nom: string;
-  vertical: "CAMPOPRO" | "ELECTRICPRO" | "HYDROPRO" | "BUILDINGPRO";
+  vertical: "SEVALOR" | "ELECTRICPRO" | "HYDROPRO" | "BUILDINGPRO";
   operaris_actius: number;
   quota_operaris: number;
   disc_utilitzat_mb: number;

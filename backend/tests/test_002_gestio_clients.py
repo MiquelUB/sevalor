@@ -1,3 +1,4 @@
+from app.models.models import Empresa, Usuari, Client
 import pytest
 import uuid
 from httpx import AsyncClient, ASGITransport
@@ -10,11 +11,10 @@ async def test_alta_client_i_llistat(admin_session, headers, boss_token):
     
     # 1. Creem l'empresa
     boss_nif = "B" + str(uuid.uuid4())[:8].upper()
-    await admin_session.execute(
-        text("INSERT INTO empreses (id, nom, nif, subdomini, pla_subscripcio, estat_pagament) VALUES (:id, 'Test Clients', :nif, :sub, 'STARTER', 'ACTIU')"),
-        {"id": empresa_id, "nif": boss_nif, "sub": "testcli-" + str(uuid.uuid4())[:5]}
-    )
-    await admin_session.commit()
+    admin_session.add(Empresa(
+        id=uuid.UUID(empresa_id), nom='Test Clients', nif=boss_nif, subdomini='testcli-' + str(uuid.uuid4())[:5], pla_subscripcio='STARTER', estat_pagament='ACTIU'
+    ))
+    await admin_session.flush()
     
     # 2. Creem un client
     payload = {
@@ -50,11 +50,10 @@ async def test_llistat_clients_buit(admin_session, headers, boss_token):
     _, empresa_id = boss_token
     
     boss_nif = "B" + str(uuid.uuid4())[:8].upper()
-    await admin_session.execute(
-        text("INSERT INTO empreses (id, nom, nif, subdomini, pla_subscripcio, estat_pagament) VALUES (:id, 'Test Buits', :nif, :sub, 'STARTER', 'ACTIU')"),
-        {"id": empresa_id, "nif": boss_nif, "sub": "testbuits-" + str(uuid.uuid4())[:5]}
-    )
-    await admin_session.commit()
+    admin_session.add(Empresa(
+        id=uuid.UUID(empresa_id), nom='Test Buits', nif=boss_nif, subdomini='testbuits-' + str(uuid.uuid4())[:5], pla_subscripcio='STARTER', estat_pagament='ACTIU'
+    ))
+    await admin_session.flush()
     
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
         res = await ac.get("/api/v1/gestio/clients", headers=headers)
@@ -68,31 +67,25 @@ async def test_rls_clients(admin_session, headers, boss_token):
     
     # 1. Crear empresa 1 i client 1
     boss_nif1 = "B" + str(uuid.uuid4())[:8].upper()
-    await admin_session.execute(
-        text("INSERT INTO empreses (id, nom, nif, subdomini, pla_subscripcio, estat_pagament) VALUES (:id, 'Test 1', :nif, :sub, 'STARTER', 'ACTIU')"),
-        {"id": empresa_id_1, "nif": boss_nif1, "sub": "test1-" + str(uuid.uuid4())[:5]}
-    )
+    admin_session.add(Empresa(
+        id=uuid.UUID(empresa_id_1), nom='Test 1', nif=boss_nif1, subdomini='test1-' + str(uuid.uuid4())[:5], pla_subscripcio='STARTER', estat_pagament='ACTIU'
+    ))
     client_id_1 = str(uuid.uuid4())
-    await admin_session.execute(
-        text("""INSERT INTO clients (id, empresa_id, codi, rao_social, nif) 
-                VALUES (:id, :emp, 'CLI-1', 'Client Emp 1', 'NIF111')"""),
-        {"id": client_id_1, "emp": empresa_id_1}
-    )
+    admin_session.add(Client(
+        id=uuid.UUID(client_id_1), empresa_id=uuid.UUID(empresa_id_1), codi='CLI-1', rao_social='Client Emp 1', nif='NIF111'
+    ))
     
     # 2. Crear empresa 2 i client 2
     empresa_id_2 = str(uuid.uuid4())
     boss_nif2 = "B" + str(uuid.uuid4())[:8].upper()
-    await admin_session.execute(
-        text("INSERT INTO empreses (id, nom, nif, subdomini, pla_subscripcio, estat_pagament) VALUES (:id, 'Test 2', :nif, :sub, 'STARTER', 'ACTIU')"),
-        {"id": empresa_id_2, "nif": boss_nif2, "sub": "test2-" + str(uuid.uuid4())[:5]}
-    )
+    admin_session.add(Empresa(
+        id=uuid.UUID(empresa_id_2), nom='Test 2', nif=boss_nif2, subdomini='test2-' + str(uuid.uuid4())[:5], pla_subscripcio='STARTER', estat_pagament='ACTIU'
+    ))
     client_id_2 = str(uuid.uuid4())
-    await admin_session.execute(
-        text("""INSERT INTO clients (id, empresa_id, codi, rao_social, nif) 
-                VALUES (:id, :emp, 'CLI-2', 'Client Emp 2', 'NIF222')"""),
-        {"id": client_id_2, "emp": empresa_id_2}
-    )
-    await admin_session.commit()
+    admin_session.add(Client(
+        id=uuid.UUID(client_id_2), empresa_id=uuid.UUID(empresa_id_2), codi='CLI-2', rao_social='Client Emp 2', nif='NIF222'
+    ))
+    await admin_session.flush()
     
     # 3. Empresa 1 consulta clients (hauria de veure'n 1)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:

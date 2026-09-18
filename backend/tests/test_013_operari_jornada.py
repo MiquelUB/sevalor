@@ -1,3 +1,4 @@
+from app.models.models import Empresa, Usuari, Client
 import pytest_asyncio
 import pytest
 import uuid
@@ -13,18 +14,15 @@ async def setup_jornada_test(admin_session):
     sub_rand = "pwa-" + str(uuid.uuid4())[:5]
     
     # 1. Empresa
-    await admin_session.execute(
-        text("INSERT INTO empreses (id, nom, nif, subdomini, pla_subscripcio, estat_pagament) VALUES (:id, 'Test PWA', :nif, :sub, 'STARTER', 'ACTIU')"),
-        {"id": empresa_id, "nif": nif_rand, "sub": sub_rand}
-    )
+    admin_session.add(Empresa(
+        id=uuid.UUID(empresa_id), nom='Test PWA', nif=nif_rand, subdomini=sub_rand, pla_subscripcio='STARTER', estat_pagament='ACTIU'
+    ))
     
     # 2. Operari
-    await admin_session.execute(
-        text("""INSERT INTO usuaris (id, empresa_id, nif, nom, rol, pin_hash, pin_bloquejat, intents_pin_fallits) 
-                VALUES (:id, :emp, :nif, 'Pere PWA', 'OPERARI', 'hash', false, 0)"""),
-        {"id": operari_id, "emp": empresa_id, "nif": nif_rand + "A"}
-    )
-    await admin_session.commit()
+    admin_session.add(Usuari(
+        id=uuid.UUID(operari_id), empresa_id=uuid.UUID(empresa_id), nif=nif_rand + 'A', nom='Pere PWA', rol='OPERARI', pin_hash='hash', pin_bloquejat=False, intents_pin_fallits=0
+    ))
+    await admin_session.flush()
     
     return {"empresa_id": empresa_id, "operari_id": operari_id}
 

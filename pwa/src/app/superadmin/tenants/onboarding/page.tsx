@@ -75,7 +75,7 @@ export default function SuperadminTenantOnboardingPage() {
   // Pas 1: Dades Fiscals
   const [raoSocial, setRaoSocial] = useState<string>("");
   const [nif, setNif] = useState<string>("");
-  const [vertical, setVertical] = useState<"CAMPOPRO" | "ELECTRICPRO" | "HYDROPRO" | "BUILDINGPRO">("CAMPOPRO");
+  const [vertical, setVertical] = useState<"SEVALOR" | "ELECTRICPRO" | "HYDROPRO" | "BUILDINGPRO">("SEVALOR");
   const [responsable, setResponsable] = useState<string>("");
   const [emailGerent, setEmailGerent] = useState<string>("");
   const [telefon, setTelefon] = useState<string>("");
@@ -146,7 +146,7 @@ export default function SuperadminTenantOnboardingPage() {
       });
 
       setProvisionedSuccess(true);
-      setInvitationUrl(data?.tenant?.enllac_activacio_2fa || `https://${subdomini.trim().toLowerCase()}.campopro.cat/activacio`);
+      setInvitationUrl(data?.tenant?.enllac_activacio_2fa || `https://${subdomini.trim().toLowerCase()}.sevalor.cat/activacio`);
     } catch (err: any) {
       setErrorMessage(err.message || "Error durant el provisionament del tenant.");
     } finally {
@@ -518,7 +518,7 @@ export default function SuperadminTenantOnboardingPage() {
                     </label>
                     <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                       {[
-                        { id: "CAMPOPRO", label: "CampoPro", desc: "Agronòmic & Serveis Rurals" },
+                        { id: "SEVALOR", label: "Sevalor", desc: "Agronòmic & Serveis Rurals" },
                         { id: "ELECTRICPRO", label: "ElectricPro", desc: "Baixa Tensió i Climes" },
                         { id: "HYDROPRO", label: "HydroPro", desc: "Xarxes d'Aigua i Reg" },
                         { id: "BUILDINGPRO", label: "BuildingPro", desc: "Climatització i Obres" },

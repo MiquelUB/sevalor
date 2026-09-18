@@ -1,3 +1,4 @@
+from app.models.models import Empresa, Usuari, Client
 import pytest_asyncio
 import pytest
 import uuid
@@ -19,18 +20,15 @@ async def setup_operari_test(admin_session):
     pin_hash = hash_pin(pin_real)
     
     # 1. Crear empresa
-    await admin_session.execute(
-        text("INSERT INTO empreses (id, nom, nif, subdomini, pla_subscripcio, estat_pagament) VALUES (:id, 'Test PWA', :nif_emp, :subdomini, 'STARTER', 'ACTIU')"),
-        {"id": empresa_id, "nif_emp": "EMP" + str(uuid.uuid4())[:5], "subdomini": "testpwa-" + str(uuid.uuid4())[:5]}
-    )
+    admin_session.add(Empresa(
+        id=uuid.UUID(empresa_id), nom='Test PWA', nif='EMP' + str(uuid.uuid4())[:5], subdomini='testpwa-' + str(uuid.uuid4())[:5], pla_subscripcio='STARTER', estat_pagament='ACTIU'
+    ))
     
     # 2. Crear operari actiu
-    await admin_session.execute(
-        text("""INSERT INTO usuaris (id, empresa_id, nif, nom, rol, pin_hash, pin_bloquejat, intents_pin_fallits) 
-                VALUES (:id, :emp, :nif_op, 'Pere', 'OPERARI', :hash, false, 0)"""),
-        {"id": operari_id, "emp": empresa_id, "nif_op": nif, "hash": pin_hash}
-    )
-    await admin_session.commit()
+    admin_session.add(Usuari(
+        id=uuid.UUID(operari_id), empresa_id=uuid.UUID(empresa_id), nif=nif, nom='Pere', rol='OPERARI', pin_hash=pin_hash, pin_bloquejat=False, intents_pin_fallits=0
+    ))
+    await admin_session.flush()
     
     return {"empresa_id": empresa_id, "operari_id": operari_id, "nif": nif, "pin": pin_real}
 
@@ -97,11 +95,10 @@ async def test_login_tenant_isolation(setup_operari_test, admin_session):
     
     # Creem UNA ALTRA empresa diferent
     altre_empresa_id = str(uuid.uuid4())
-    await admin_session.execute(
-        text("INSERT INTO empreses (id, nom, nif, subdomini, pla_subscripcio, estat_pagament) VALUES (:id, 'Test RLS', :nif_emp, :subdomini, 'STARTER', 'ACTIU')"),
-        {"id": altre_empresa_id, "nif_emp": "EMP" + str(uuid.uuid4())[:5], "subdomini": "testrls-" + str(uuid.uuid4())[:5]}
-    )
-    await admin_session.commit()
+    admin_session.add(Empresa(
+        id=uuid.UUID(altre_empresa_id), nom='Test RLS', nif='EMP' + str(uuid.uuid4())[:5], subdomini='testrls-' + str(uuid.uuid4())[:5], pla_subscripcio='STARTER', estat_pagament='ACTIU'
+    ))
+    await admin_session.flush()
     
     # Intentem loguejar l'operari de la primera empresa a la segona empresa
     headers = {"X-Empresa-ID": altre_empresa_id}

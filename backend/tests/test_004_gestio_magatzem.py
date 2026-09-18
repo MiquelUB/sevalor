@@ -1,3 +1,4 @@
+from app.models.models import Empresa, Usuari, Client
 import pytest
 import uuid
 from httpx import AsyncClient, ASGITransport
@@ -9,11 +10,10 @@ async def test_alta_article_valid(admin_session, headers, boss_token):
     token, empresa_id = boss_token
     boss_nif = "B" + str(uuid.uuid4())[:8].upper()
     
-    await admin_session.execute(
-        text("INSERT INTO empreses (id, nom, nif, subdomini, pla_subscripcio, estat_pagament) VALUES (:id, 'Test Magatzem', :nif, :sub, 'STARTER', 'ACTIU')"),
-        {"id": empresa_id, "nif": boss_nif, "sub": "testmag-" + str(uuid.uuid4())[:5]}
-    )
-    await admin_session.commit()
+    admin_session.add(Empresa(
+        id=uuid.UUID(empresa_id), nom='Test Magatzem', nif=boss_nif, subdomini='testmag-' + str(uuid.uuid4())[:5], pla_subscripcio='STARTER', estat_pagament='ACTIU'
+    ))
+    await admin_session.flush()
     
     payload = {
         "referencia_inventari": "REF-ART-001",

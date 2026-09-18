@@ -51,6 +51,23 @@ async def setup_test_database():
     
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        import os
+
+        try:
+
+            with open("../db/migrations/002_rls_global.sql", "r") as f:
+
+                rls_sql = f.read()
+
+            for statement in rls_sql.split(";"):
+
+                if statement.strip():
+
+                    await conn.execute(text(statement))
+
+        except Exception as e:
+
+            print("No RLS policies loaded:", e)
         
         await conn.execute(text("""
         DO $$

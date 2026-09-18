@@ -1,3 +1,4 @@
+from app.models.models import Empresa, Usuari, Client
 """
 Test de flux complet: Operari PWA + Gestió Backend.
 
@@ -41,21 +42,17 @@ async def empresa_i_admin(admin_session: AsyncSession):
     """Crea una empresa i retorna el seu empresa_id i headers de Boss."""
     eid = str(uuid.uuid4())
     nif = _nif()
-    await admin_session.execute(
-        text("""INSERT INTO empreses (id, nom, nif, subdomini, pla_subscripcio, estat_pagament, vertical)
-                VALUES (:id, :nom, :nif, :sub, 'STARTER', 'ACTIU', 'SEVALOR')"""),
-        {"id": eid, "nom": "Test SA", "nif": nif, "sub": _sub()},
-    )
+    admin_session.add(Empresa(
+        id=uuid.UUID(eid), nom='Test SA', nif=nif, subdomini=_sub(), pla_subscripcio='STARTER', estat_pagament='ACTIU', vertical='SEVALOR'
+    ))
     # Boss
     boss_id = str(uuid.uuid4())
     boss_nif = _nif()
     boss_pw = "$2b$12$LJ3m4ys3Lk0Tm0B0e0e0eO5x5x5x5x5x5x5x5x5x5x5x5x5x5"  # dummy bcrypt
-    await admin_session.execute(
-        text("""INSERT INTO usuaris (id, empresa_id, nif, nom, cognoms, email, password_hash, rol)
-                VALUES (:id, :eid, :nif, :nom, :cog, :email, :pw, 'BOSS')"""),
-        {"id": boss_id, "eid": eid, "nif": boss_nif, "nom": "Boss", "cog": "Admin", "email": f"boss@{nif.lower()}.com", "pw": boss_pw},
-    )
-    await admin_session.commit()
+    admin_session.add(Usuari(
+        id=uuid.UUID(boss_id), empresa_id=uuid.UUID(eid), nif=boss_nif, nom='Boss', cognoms='Admin', email=f'boss@{nif.lower()}.com', password_hash=boss_pw, rol='BOSS'
+    ))
+    await admin_session.flush()
     return eid
 
 
@@ -70,12 +67,10 @@ async def operari_token(empresa_i_admin, async_client: AsyncClient, admin_sessio
     import bcrypt
     pin_hash = bcrypt.hashpw(pin_clear.encode(), bcrypt.gensalt()).decode()
 
-    await admin_session.execute(
-        text("""INSERT INTO usuaris (id, empresa_id, nif, nom, cognoms, rol, pin_hash, estat, telefon)
-                VALUES (:id, :eid, :nif, 'Operari', 'Test', 'OPERARI', :ph, 'ACTIU', :tel)"""),
-        {"id": op_id, "eid": eid, "nif": op_nif, "ph": pin_hash, "tel": f"+346{uuid.uuid4().int % 100000000:08d}"},
-    )
-    await admin_session.commit()
+    admin_session.add(Usuari(
+        id=uuid.UUID(op_id), empresa_id=uuid.UUID(eid), nif=op_nif, nom='Operari', cognoms='Test', rol='OPERARI', pin_hash=pin_hash, estat='ACTIU', telefon=f'+346{uuid.uuid4().int % 100000000:08d}'
+    ))
+    await admin_session.flush()
 
     # Login
     resp = await async_client.post("/operari_auth/login", json={"nif": op_nif, "pin": pin_clear}, headers={"X-Empresa-ID": eid})
@@ -151,12 +146,10 @@ class TestFluxOperari:
 
         # Client
         client_id = str(uuid.uuid4())
-        await admin_session.execute(
-            text("""INSERT INTO clients (id, empresa_id, codi, rao_social, nif)
-                    VALUES (:id, :eid, :codi, :rs, :nif)"""),
-            {"id": client_id, "eid": eid, "codi": f"CLI-{uuid.uuid4().hex[:4]}", "rs": "Client SA", "nif": _nif()},
-        )
-        await admin_session.commit()
+        admin_session.add(Client(
+        id=uuid.UUID(client_id), empresa_id=uuid.UUID(eid), codi=f'CLI-{uuid.uuid4().hex[:4]}', rao_social='Client SA', nif=_nif()
+    ))
+        await admin_session.flush()
 
         # Crear factura
         resp = await async_client.post(
@@ -183,26 +176,20 @@ class TestFluxOperari:
         eid_a = empresa_i_admin
         # Client a Tenant A
         client_a = str(uuid.uuid4())
-        await admin_session.execute(
-            text("""INSERT INTO clients (id, empresa_id, codi, rao_social, nif)
-                    VALUES (:id, :eid, 'CLI-A', 'Client A', :nif)"""),
-            {"id": client_a, "eid": eid_a, "nif": _nif()},
-        )
+        admin_session.add(Client(
+        id=uuid.UUID(client_a), empresa_id=uuid.UUID(eid_a), codi='CLI-A', rao_social='Client A', nif=_nif()
+    ))
         # Crear Tenant B
         eid_b = str(uuid.uuid4())
-        await admin_session.execute(
-            text("""INSERT INTO empreses (id, nom, nif, subdomini, pla_subscripcio, estat_pagament)
-                    VALUES (:id, 'EmpB', :nif, :sub, 'STARTER', 'ACTIU')"""),
-            {"id": eid_b, "nif": _nif(), "sub": _sub()},
-        )
+        admin_session.add(Empresa(
+        id=uuid.UUID(eid_b), nom='EmpB', nif=_nif(), subdomini=_sub(), pla_subscripcio='STARTER', estat_pagament='ACTIU'
+    ))
         # Client a Tenant B
         client_b = str(uuid.uuid4())
-        await admin_session.execute(
-            text("""INSERT INTO clients (id, empresa_id, codi, rao_social, nif)
-                    VALUES (:id, :eid, 'CLI-B', 'Client B', :nif)"""),
-            {"id": client_b, "eid": eid_b, "nif": _nif()},
-        )
-        await admin_session.commit()
+        admin_session.add(Client(
+        id=uuid.UUID(client_b), empresa_id=uuid.UUID(eid_b), codi='CLI-B', rao_social='Client B', nif=_nif()
+    ))
+        await admin_session.flush()
 
         # Token de BOSS A (prova accedir a client de B)
         boss_a_token = pyjwt.encode(

@@ -126,7 +126,7 @@ export default function CopilotIAPage() {
           ...prev,
           {
             sender: "copilot",
-            text: "La base de coneixement i context del Copilot s'acota exclusivament al sector d'enginyeria agronòmica i xarxes de reg (CAMPOPRO). La consulta sobre REBT elèctric ha estat declinada per aïllament estricte de vertical (EDGE-10).",
+            text: "La base de coneixement i context del Copilot s'acota exclusivament al sector d'enginyeria agronòmica i xarxes de reg (SEVALOR). La consulta sobre REBT elèctric ha estat declinada per aïllament estricte de vertical (EDGE-10).",
           },
         ]);
       }, 300);
@@ -821,7 +821,7 @@ export default function CopilotIAPage() {
                 </h4>
               </div>
               <span className="text-[10px] font-mono text-slate-400">
-                Vertical: CAMPOPRO
+                Vertical: SEVALOR
               </span>
             </div>
 

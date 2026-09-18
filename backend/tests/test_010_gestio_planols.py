@@ -1,3 +1,4 @@
+from app.models.models import Empresa, Usuari, Client
 import pytest
 import uuid
 from httpx import AsyncClient, ASGITransport
@@ -10,10 +11,9 @@ async def test_alta_planol(admin_session, headers, boss_token):
     boss_nif = "B" + str(uuid.uuid4())[:8].upper()
     
     # 1. Crear empresa
-    await admin_session.execute(
-        text("INSERT INTO empreses (id, nom, nif, subdomini, pla_subscripcio, estat_pagament) VALUES (:id, 'Test Planols', :nif, :sub, 'STARTER', 'ACTIU')"),
-        {"id": empresa_id, "nif": boss_nif, "sub": "testplan-" + str(uuid.uuid4())[:5]}
-    )
+    admin_session.add(Empresa(
+        id=uuid.UUID(empresa_id), nom='Test Planols', nif=boss_nif, subdomini='testplan-' + str(uuid.uuid4())[:5], pla_subscripcio='STARTER', estat_pagament='ACTIU'
+    ))
     
     # 2. Crear carpeta per al planol
     carpeta_id = str(uuid.uuid4())
@@ -21,7 +21,7 @@ async def test_alta_planol(admin_session, headers, boss_token):
         text("INSERT INTO carpetes_planols (id, empresa_id, nom, categoria) VALUES (:id, :emp, 'Carpeta Principal', 'CLIENTS')"),
         {"id": carpeta_id, "emp": empresa_id}
     )
-    await admin_session.commit()
+    await admin_session.flush()
     
     payload = {
         "titol": "Plànol Planta Baixa",

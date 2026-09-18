@@ -1,3 +1,4 @@
+from app.models.models import Empresa, Usuari, Client
 import pytest_asyncio
 import pytest
 import uuid
@@ -12,22 +13,18 @@ async def setup_picking_test(admin_session):
     nif_rand = "NIF-" + str(uuid.uuid4())[:5]
     
     # Empresa i Operari
-    await admin_session.execute(
-        text("INSERT INTO empreses (id, nom, nif, subdomini, pla_subscripcio, estat_pagament) VALUES (:id, 'Test Picking', :nif, :sub, 'STARTER', 'ACTIU')"),
-        {"id": empresa_id, "nif": nif_rand, "sub": "pickpwa-" + str(uuid.uuid4())[:8]}
-    )
-    await admin_session.execute(
-        text("""INSERT INTO usuaris (id, empresa_id, nif, nom, rol, pin_hash, pin_bloquejat, intents_pin_fallits) 
-                VALUES (:id, :emp, :nif_u, 'Pere Picking', 'OPERARI', 'hash', false, 0)"""),
-        {"id": operari_id, "emp": empresa_id, "nif_u": nif_rand + "P"}
-    )
+    admin_session.add(Empresa(
+        id=uuid.UUID(empresa_id), nom='Test Picking', nif=nif_rand, subdomini='pickpwa-' + str(uuid.uuid4())[:8], pla_subscripcio='STARTER', estat_pagament='ACTIU'
+    ))
+    admin_session.add(Usuari(
+        id=uuid.UUID(operari_id), empresa_id=uuid.UUID(empresa_id), nif=nif_rand + 'P', nom='Pere Picking', rol='OPERARI', pin_hash='hash', pin_bloquejat=False, intents_pin_fallits=0
+    ))
     
     # Client i Ordre
     client_id = str(uuid.uuid4())
-    await admin_session.execute(
-        text("INSERT INTO clients (id, empresa_id, codi, rao_social, nif) VALUES (:id, :emp, 'CLI-1', 'C', 'NIFC')"),
-        {"id": client_id, "emp": empresa_id}
-    )
+    admin_session.add(Client(
+        id=uuid.UUID(client_id), empresa_id=uuid.UUID(empresa_id), codi='CLI-1', rao_social='C', nif='NIFC'
+    ))
     ordre_id = str(uuid.uuid4())
     await admin_session.execute(
         text("INSERT INTO ordres_treball (id, empresa_id, codi, client_id, titol, estat, adreca) VALUES (:id, :emp, 'OT-1', :cli, 'OT picking', 'PENDENT', 'Adreça de prova')"),
@@ -40,7 +37,7 @@ async def setup_picking_test(admin_session):
         text("INSERT INTO articles (id, empresa_id, referencia_inventari, nom) VALUES (:id, :emp, 'REF-1', 'Article Picking')"),
         {"id": article_id, "emp": empresa_id}
     )
-    await admin_session.commit()
+    await admin_session.flush()
     
     return {"empresa_id": empresa_id, "operari_id": operari_id, "ordre_id": ordre_id, "article_id": article_id}
 

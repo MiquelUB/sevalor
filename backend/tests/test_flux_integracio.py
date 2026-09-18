@@ -1,3 +1,4 @@
+from app.models.models import Empresa, Usuari, Client
 """
 Tests d'integració de flux per a SEVALOR.
 Cobreixen els fluxos complets de Gestió, Operari, Superadmin i aïllament RLS.
@@ -55,11 +56,9 @@ async def crear_empresa(session) -> str:
 async def crear_client(admin_session: AsyncSession, empresa_id: str) -> str:
     """Crea un client i retorna el seu ID."""
     cid = str(uuid.uuid4())
-    await admin_session.execute(
-        text("""INSERT INTO clients (id, empresa_id, codi, rao_social, nif)
-                VALUES (:id, :eid, :codi, :rs, :nif)"""),
-        {"id": cid, "eid": empresa_id, "codi": _codi(), "rs": "Client SA", "nif": _nif()},
-    )
+    admin_session.add(Client(
+        id=uuid.UUID(cid), empresa_id=uuid.UUID(empresa_id), codi=_codi(), rao_social='Client SA', nif=_nif()
+    ))
     return cid
 
 async def crear_operari(admin_session: AsyncSession, empresa_id: str, pin_clear: str = "4826") -> tuple[str, str]:
@@ -68,11 +67,9 @@ async def crear_operari(admin_session: AsyncSession, empresa_id: str, pin_clear:
     oid = str(uuid.uuid4())
     onif = _nif("X")
     ph = bcrypt.hashpw(pin_clear.encode(), bcrypt.gensalt()).decode()
-    await admin_session.execute(
-        text("""INSERT INTO usuaris (id, empresa_id, nif, nom, cognoms, rol, pin_hash, estat, telefon)
-                VALUES (:id, :eid, :nif, 'Operari', 'Test', 'OPERARI', :ph, 'ACTIU', :tel)"""),
-        {"id": oid, "eid": empresa_id, "nif": onif, "ph": ph, "tel": f"+346{uuid.uuid4().int % 100000000:08d}"},
-    )
+    admin_session.add(Usuari(
+        id=uuid.UUID(oid), empresa_id=uuid.UUID(empresa_id), nif=onif, nom='Operari', cognoms='Test', rol='OPERARI', pin_hash=ph, estat='ACTIU', telefon=f'+346{uuid.uuid4().int % 100000000:08d}'
+    ))
     return oid, onif
 
 
@@ -134,7 +131,7 @@ class TestFluxGestio:
     async def test_01_boss_crea_client(self, admin_session, async_client, headers):
         """El Boss crea un client i el llista."""
         eid = await crear_empresa(admin_session)
-        await admin_session.commit()
+        await admin_session.flush()
         boss_tok = crear_token("BOSS", eid)
         h = {"Authorization": f"Bearer {boss_tok}", "X-Empresa-ID": eid}
         # Crear client
@@ -153,7 +150,7 @@ class TestFluxGestio:
         """El Boss crea un client i una factura Veri*factu."""
         eid = await crear_empresa(admin_session)
         cid = await crear_client(admin_session, eid)
-        await admin_session.commit()
+        await admin_session.flush()
         boss_tok = crear_token("BOSS", eid)
         h = {"Authorization": f"Bearer {boss_tok}", "X-Empresa-ID": eid}
         resp = await async_client.post("/gestio/comptabilitat/factures", headers=h, json={
@@ -166,7 +163,7 @@ class TestFluxGestio:
     async def test_03_enginyer_no_veu_comptabilitat(self, admin_session, async_client, headers):
         """L'Enginyer rep 403 a comptabilitat (veto financer)."""
         eid = await crear_empresa(admin_session)
-        await admin_session.commit()
+        await admin_session.flush()
         eng_tok = crear_token("ENGINYER", eid)
         h = {"Authorization": f"Bearer {eng_tok}", "X-Empresa-ID": eid}
         resp = await async_client.get("/gestio/comptabilitat/factures", headers=h)
@@ -176,7 +173,7 @@ class TestFluxGestio:
     async def test_04_secretaria_pot_veure_gestio(self, admin_session, async_client, headers):
         """Secretaria pot llistar clients (rol permès)."""
         eid = await crear_empresa(admin_session)
-        await admin_session.commit()
+        await admin_session.flush()
         sec_tok = crear_token("SECRETARIA", eid)
         h = {"Authorization": f"Bearer {sec_tok}", "X-Empresa-ID": eid}
         resp = await async_client.get("/gestio/clients", headers=h)
@@ -186,7 +183,7 @@ class TestFluxGestio:
     async def test_06_copilot_alertes(self, admin_session, async_client, headers):
         """Boss pot llistar alertes del Copilot (Dia 0 real: array buit)."""
         eid = await crear_empresa(admin_session)
-        await admin_session.commit()
+        await admin_session.flush()
         boss_tok = crear_token("BOSS", eid)
         h = {"Authorization": f"Bearer {boss_tok}", "X-Empresa-ID": eid}
         resp = await async_client.get("/gestio/copilot/alertes", headers=h)
@@ -200,7 +197,7 @@ class TestFluxGestio:
     async def test_07_copilot_estat_node_ia(self, admin_session, async_client, headers):
         """Boss pot consultar l'estat del Nodo IA."""
         eid = await crear_empresa(admin_session)
-        await admin_session.commit()
+        await admin_session.flush()
         boss_tok = crear_token("BOSS", eid)
         h = {"Authorization": f"Bearer {boss_tok}", "X-Empresa-ID": eid}
         resp = await async_client.get("/gestio/copilot/estat-node", headers=h)
@@ -209,7 +206,7 @@ class TestFluxGestio:
     async def test_08_boss_alta_operari(self, admin_session, async_client, headers):
         """BOSS pot donar d'alta un operari."""
         eid = await crear_empresa(admin_session)
-        await admin_session.commit()
+        await admin_session.flush()
         boss_tok = crear_token("BOSS", eid)
         h = {"Authorization": f"Bearer {boss_tok}", "X-Empresa-ID": eid}
         resp = await async_client.post("/gestio/operaris", headers=h, json={
@@ -223,7 +220,7 @@ class TestFluxGestio:
     async def test_09_enginyer_no_pot_alta_operari(self, admin_session, async_client, headers):
         """ENGINYER rep 403 a /gestio/operaris (Spec 008: alta denegada a Enginyer)."""
         eid = await crear_empresa(admin_session)
-        await admin_session.commit()
+        await admin_session.flush()
         eng_tok = crear_token("ENGINYER", eid)
         h = {"Authorization": f"Bearer {eng_tok}", "X-Empresa-ID": eid}
         resp = await async_client.post("/gestio/operaris", headers=h, json={
@@ -235,7 +232,7 @@ class TestFluxGestio:
     async def test_10_magatzem_afegir_article(self, admin_session, async_client, headers):
         """Boss pot crear un article al magatzem (Spec 004)."""
         eid = await crear_empresa(admin_session)
-        await admin_session.commit()
+        await admin_session.flush()
         boss_tok = crear_token("BOSS", eid)
         h = {"Authorization": f"Bearer {boss_tok}", "X-Empresa-ID": eid}
         ref = _codi("ART")
@@ -255,7 +252,7 @@ class TestFluxGestio:
         cid = await crear_client(admin_session, eid)
         aid, mid = await crear_article_amb_magatzem(admin_session, eid, stock=100.0)
         otid = await crear_ordre_treball(admin_session, eid, cid)
-        await admin_session.commit()
+        await admin_session.flush()
 
         boss_tok = crear_token("BOSS", eid)
         h = {"Authorization": f"Bearer {boss_tok}", "X-Empresa-ID": eid}
@@ -295,7 +292,7 @@ class TestFluxGestio:
         """Flux d'estoc: entrada, reserva, i llistat d'estoc disponible (Spec 004)."""
         eid = await crear_empresa(admin_session)
         aid, mid = await crear_article_amb_magatzem(admin_session, eid, stock=100.0)
-        await admin_session.commit()
+        await admin_session.flush()
 
         boss_tok = crear_token("BOSS", eid)
         h = {"Authorization": f"Bearer {boss_tok}", "X-Empresa-ID": eid}
@@ -322,7 +319,7 @@ class TestFluxGestio:
         """Flux de plànols: crear carpeta, plànol, i capa vectorial (Spec 010)."""
         eid = await crear_empresa(admin_session)
         cid = await crear_carpeta_planol(admin_session, eid)
-        await admin_session.commit()
+        await admin_session.flush()
 
         boss_tok = crear_token("BOSS", eid)
         h = {"Authorization": f"Bearer {boss_tok}", "X-Empresa-ID": eid}
@@ -364,7 +361,7 @@ class TestFluxGestio:
         """Llistar carpetes de plànols (Spec 010)."""
         eid = await crear_empresa(admin_session)
         cid = await crear_carpeta_planol(admin_session, eid)
-        await admin_session.commit()
+        await admin_session.flush()
 
         boss_tok = crear_token("BOSS", eid)
         h = {"Authorization": f"Bearer {boss_tok}", "X-Empresa-ID": eid}
@@ -377,7 +374,7 @@ class TestFluxGestio:
         """Flux complet de notificacions: crear conversa, enviar missatge, canviar estat, enllaç factura (Spec 009)."""
         eid = await crear_empresa(admin_session)
         cid = await crear_client(admin_session, eid)
-        await admin_session.commit()
+        await admin_session.flush()
 
         boss_tok = crear_token("BOSS", eid)
         h = {"Authorization": f"Bearer {boss_tok}", "X-Empresa-ID": eid}
@@ -423,7 +420,7 @@ class TestFluxGestio:
     async def test_16_proveidors_alta_i_iban(self, admin_session, async_client, headers):
         """Flux de proveïdors: alta, llistat amb IBAN ofuscat, canvi d'IBAN amb SIF (Spec 003)."""
         eid = await crear_empresa(admin_session)
-        await admin_session.commit()
+        await admin_session.flush()
 
         boss_tok = crear_token("BOSS", eid)
         h = {"Authorization": f"Bearer {boss_tok}", "X-Empresa-ID": eid}
@@ -458,7 +455,7 @@ class TestFluxGestio:
     async def test_17_clients_iban_veto_enginyer(self, admin_session, async_client, headers):
         """Clients: alta amb IBAN + veto d'Enginyer (Spec 002)."""
         eid = await crear_empresa(admin_session)
-        await admin_session.commit()
+        await admin_session.flush()
 
         boss_tok = crear_token("BOSS", eid)
         eng_tok = crear_token("ENGINYER", eid)
@@ -497,7 +494,7 @@ class TestFluxGestio:
         """Genera un token d'invitació per al Bot de Telegram (Spec 023 RF-05: 48h, un sol ús)."""
         eid = await crear_empresa(admin_session)
         cid = await crear_client(admin_session, eid)
-        await admin_session.commit()
+        await admin_session.flush()
 
         boss_tok = crear_token("BOSS", eid)
         h = {"Authorization": f"Bearer {boss_tok}", "X-Empresa-ID": eid}
@@ -525,7 +522,7 @@ class TestFluxGestio:
     async def test_05_operari_no_pot_crear_client(self, admin_session, async_client, headers):
         """OPERARI rep 403 a /gestio/clients (rol no permès)."""
         eid = await crear_empresa(admin_session)
-        await admin_session.commit()
+        await admin_session.flush()
         op_tok = crear_token("OPERARI", eid)
         h = {"Authorization": f"Bearer {op_tok}", "X-Empresa-ID": eid}
         resp = await async_client.post("/gestio/clients", headers=h, json={
@@ -617,7 +614,7 @@ class TestFluxSuperadminRLS:
     async def test_20_superadmin_llista_tenants(self, admin_session, async_client, headers):
         """SUPERADMIN pot llistar tenants."""
         eid = await crear_empresa(admin_session)
-        await admin_session.commit()
+        await admin_session.flush()
         sa_tok = crear_token("SUPERADMIN", eid)
         h = {"Authorization": f"Bearer {sa_tok}", "X-Empresa-ID": eid}
         resp = await async_client.get("/superadmin/tenants?skip=0&limit=50", headers=h)
@@ -626,7 +623,7 @@ class TestFluxSuperadminRLS:
     async def test_21_superadmin_onboarding(self, admin_session, async_client, headers):
         """SUPERADMIN crea un tenant nou."""
         eid = await crear_empresa(admin_session)
-        await admin_session.commit()
+        await admin_session.flush()
         sa_tok = crear_token("SUPERADMIN", eid)
         h = {"Authorization": f"Bearer {sa_tok}", "X-Empresa-ID": eid}
         resp = await async_client.post("/superadmin/tenants/onboarding", headers=h, json={
@@ -656,7 +653,7 @@ class TestFluxSuperadminRLS:
         # Tenant B
         eid_b = await crear_empresa(admin_session)
         cid_b = await crear_client(admin_session, eid_b)
-        await admin_session.commit()
+        await admin_session.flush()
 
         # Token de BOSS A
         boss_a = crear_token("BOSS", eid_a)
@@ -682,7 +679,7 @@ class TestFluxSuperadminRLS:
     async def test_40_telemetria_kpis_superadmin(self, admin_session, async_client, headers):
         """SUPERADMIN pot accedir als KPIs de telemetria."""
         eid = await crear_empresa(admin_session)
-        await admin_session.commit()
+        await admin_session.flush()
         sa_tok = crear_token("SUPERADMIN", eid)
         h = {"Authorization": f"Bearer {sa_tok}", "X-Empresa-ID": eid}
         resp = await async_client.get("/superadmin/telemetria/kpis", headers=h)
@@ -694,7 +691,7 @@ class TestFluxSuperadminRLS:
     async def test_41_telemetria_rbac(self, admin_session, async_client, headers):
         """OPERARI rep 403 a telemetria."""
         eid = await crear_empresa(admin_session)
-        await admin_session.commit()
+        await admin_session.flush()
         op_tok = crear_token("OPERARI", eid)
         h = {"Authorization": f"Bearer {op_tok}", "X-Empresa-ID": eid}
         resp = await async_client.get("/superadmin/telemetria/kpis", headers=h)

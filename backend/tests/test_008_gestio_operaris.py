@@ -1,3 +1,4 @@
+from app.models.models import Empresa, Usuari, Client
 import pytest
 from httpx import AsyncClient, ASGITransport
 from app.main import app
@@ -36,7 +37,7 @@ async def test_alta_operari_nou(admin_session, headers, boss_token):
         text("INSERT INTO empreses (id, nom, nif, pla_subscripcio, estat_pagament) VALUES (:id, 'Test Company', 'NIF" + str(uuid.uuid4())[:8] + "', 'STARTER', 'ACTIU')"),
         {"id": empresa_id}
     )
-    await admin_session.commit()
+    await admin_session.flush()
 
     payload = {
         "nif": "12345678Z",
@@ -78,12 +79,10 @@ async def test_reset_pin_operari(admin_session, headers, boss_token):
     
     # 2. Crear operari bloquejat
     operari_id = str(uuid.uuid4())
-    await admin_session.execute(
-        text("""INSERT INTO usuaris (id, empresa_id, nif, nom, rol, pin_bloquejat, intents_pin_fallits) 
-                VALUES (:id, :emp, 'RESET123', 'Maria', 'OPERARI', true, 4)"""),
-        {"id": operari_id, "emp": empresa_id}
-    )
-    await admin_session.commit()
+    admin_session.add(Usuari(
+        id=uuid.UUID(operari_id), empresa_id=uuid.UUID(empresa_id), nif='RESET123', nom='Maria', rol='OPERARI', pin_bloquejat=True, intents_pin_fallits=4
+    ))
+    await admin_session.flush()
     
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
         res = await ac.post(f"/api/v1/gestio/operaris/{operari_id}/reset-pin", headers=headers)
