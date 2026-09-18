@@ -46,11 +46,11 @@ async def crear_empresa(session) -> str:
     """Crea una empresa de test i retorna el seu ID."""
     await session.execute(text("SET LOCAL app.is_superadmin = 'true'"))
     eid = str(uuid.uuid4())
-    await session.execute(
-        text("""INSERT INTO empreses (id, nom, nif, subdomini, pla_subscripcio, estat_pagament, vertical)
-                VALUES (:id, :nom, :nif, :sub, 'STARTER', 'ACTIU', 'SEVALOR')"""),
-        {"id": eid, "nom": "Test SA", "nif": _nif(), "sub": _sub()},
-    )
+    from app.models.models import Empresa
+    session.add(Empresa(
+        id=uuid.UUID(eid), nom="Test SA", nif=_nif(), subdomini=_sub()
+    ))
+    await session.flush()
     return eid
 
 async def crear_client(admin_session: AsyncSession, empresa_id: str) -> str:
@@ -79,47 +79,45 @@ async def crear_article_amb_magatzem(session, empresa_id: str, stock: float = 10
     """Crea un article i un magatzem central amb estoc. Retorna (article_id, magatzem_id)."""
     # Magatzem
     mid = str(uuid.uuid4())
-    await session.execute(
-        text("""INSERT INTO magatzems (id, empresa_id, nom, tipus, actiu)
-                VALUES (:id, :eid, 'Nau Central Test', 'NAU_CENTRAL', TRUE)"""),
-        {"id": mid, "eid": empresa_id},
-    )
+    from app.models.models import Magatzem, Article, EstocMagatzem
+    session.add(Magatzem(
+        id=uuid.UUID(mid), empresa_id=uuid.UUID(empresa_id), nom='Nau Central Test', tipus='NAU_CENTRAL', actiu=True
+    ))
+    await session.flush()
     # Article
     aid = str(uuid.uuid4())
     ref = _codi("ART")
-    await session.execute(
-        text("""INSERT INTO articles (id, empresa_id, referencia_inventari, nom, unitat_mesura, familia, actiu)
-                VALUES (:id, :eid, :ref, 'Material Test', 'UNITAT', 'GENERAL', TRUE)"""),
-        {"id": aid, "eid": empresa_id, "ref": ref},
-    )
+    session.add(Article(
+        id=uuid.UUID(aid), empresa_id=uuid.UUID(empresa_id), referencia_inventari=ref, nom='Material Test', unitat_mesura='UNITAT', familia='GENERAL', actiu=True
+    ))
+    await session.flush()
     # Estoc
-    await session.execute(
-        text("""INSERT INTO estocs_magatzem (empresa_id, article_id, magatzem_id, quantitat_fisica, quantitat_virtual_reservada)
-                VALUES (:eid, :aid, :mid, :stock, 0)"""),
-        {"eid": empresa_id, "aid": aid, "mid": mid, "stock": stock},
-    )
+    session.add(EstocMagatzem(
+        empresa_id=uuid.UUID(empresa_id), article_id=uuid.UUID(aid), magatzem_id=uuid.UUID(mid), quantitat_fisica=stock, quantitat_virtual_reservada=0
+    ))
+    await session.flush()
     return aid, mid
 
 
 async def crear_ordre_treball(session, empresa_id: str, client_id: str) -> str:
     """Crea una ordre de treball i retorna el seu ID."""
     oid = str(uuid.uuid4())
-    await session.execute(
-        text("""INSERT INTO ordres_treball (id, empresa_id, codi, client_id, titol, adreca, estat, data_planificacio)
-                VALUES (:id, :eid, :cod, :cid, 'OT Test', 'Adreça Test', 'PENDENT', CURRENT_DATE)"""),
-        {"id": oid, "eid": empresa_id, "cod": _codi("OT"), "cid": client_id},
-    )
+    from app.models.models import OrdreTreball
+    session.add(OrdreTreball(
+        id=uuid.UUID(oid), empresa_id=uuid.UUID(empresa_id), codi=_codi("OT"), client_id=uuid.UUID(client_id), titol='OT Test', adreca='Adreça Test', estat='PENDENT'
+    ))
+    await session.flush()
     return oid
 
 
 async def crear_carpeta_planol(session, empresa_id: str) -> str:
     """Crea una carpeta de plànols i retorna el seu ID."""
     cid = str(uuid.uuid4())
-    await session.execute(
-        text("""INSERT INTO carpetes_planols (id, empresa_id, nom, categoria)
-                VALUES (:id, :eid, 'Carpeta Test', 'CLIENTS')"""),
-        {"id": cid, "eid": empresa_id},
-    )
+    from app.models.models import CarpetaPlanol
+    session.add(CarpetaPlanol(
+        id=uuid.UUID(cid), empresa_id=uuid.UUID(empresa_id), nom='Carpeta Test', categoria='CLIENTS'
+    ))
+    await session.flush()
     return cid
 
 
@@ -547,10 +545,14 @@ class TestFluxOperari:
         async with AsyncSessionLocal() as s:
             await s.execute(text("SET LOCAL app.is_superadmin='true'"))
             eid = str(uuid.uuid4())
-            await s.execute(text("INSERT INTO empreses (id, nom, nif, subdomini, pla_subscripcio, estat_pagament, vertical) VALUES (:id, 'T', :nif, :sub, 'STARTER', 'ACTIU', 'SEVALOR')"), {"id": eid, "nif": f"T{uuid.uuid4().int % 100000000:08d}", "sub": f"sub-{uuid.uuid4().int % 10000000}"})
+            from app.models.models import Empresa
+            s.add(Empresa(id=uuid.UUID(eid), nom="T", nif=f"T{uuid.uuid4().int % 100000000:08d}", subdomini=f"sub-{uuid.uuid4().int % 10000000}"))
+            await s.flush()
             onif = f"O{uuid.uuid4().int % 100000000:08d}"
             ph = _bcrypt.hashpw(b"4826", _bcrypt.gensalt()).decode()
-            await s.execute(text("INSERT INTO usuaris (id, empresa_id, nif, nom, cognoms, rol, pin_hash, estat, telefon) VALUES (:id, :eid, :nif, 'Op', 'Test', 'OPERARI', :ph, 'ACTIU', '+34600000000')"), {"id": str(uuid.uuid4()), "eid": eid, "nif": onif, "ph": ph})
+            from app.models.models import Usuari
+            s.add(Usuari(id=uuid.uuid4(), empresa_id=uuid.UUID(eid), nif=onif, nom="Op", cognoms="Test", rol="OPERARI", pin_hash=ph, estat="ACTIU", telefon="+34600000000"))
+            await s.flush()
             await s.commit()
 
         resp = await async_client.post("/operari_auth/login",
@@ -570,10 +572,14 @@ class TestFluxOperari:
         async with AsyncSessionLocal() as s:
             await s.execute(text("SET LOCAL app.is_superadmin='true'"))
             eid = str(uuid.uuid4())
-            await s.execute(text("INSERT INTO empreses (id, nom, nif, subdomini, pla_subscripcio, estat_pagament, vertical) VALUES (:id, 'T', :nif, :sub, 'STARTER', 'ACTIU', 'SEVALOR')"), {"id": eid, "nif": f"T{uuid.uuid4().int % 100000000:08d}", "sub": f"sub-{uuid.uuid4().int % 10000000}"})
+            from app.models.models import Empresa
+            s.add(Empresa(id=uuid.UUID(eid), nom="T", nif=f"T{uuid.uuid4().int % 100000000:08d}", subdomini=f"sub-{uuid.uuid4().int % 10000000}"))
+            await s.flush()
             onif = f"O{uuid.uuid4().int % 100000000:08d}"
             ph = _bcrypt.hashpw(b"4826", _bcrypt.gensalt()).decode()
-            await s.execute(text("INSERT INTO usuaris (id, empresa_id, nif, nom, cognoms, rol, pin_hash, estat, telefon) VALUES (:id, :eid, :nif, 'Op', 'Test', 'OPERARI', :ph, 'ACTIU', '+34600000000')"), {"id": str(uuid.uuid4()), "eid": eid, "nif": onif, "ph": ph})
+            from app.models.models import Usuari
+            s.add(Usuari(id=uuid.uuid4(), empresa_id=uuid.UUID(eid), nif=onif, nom="Op", cognoms="Test", rol="OPERARI", pin_hash=ph, estat="ACTIU", telefon="+34600000000"))
+            await s.flush()
             await s.commit()
         # Login
         resp = await async_client.post("/operari_auth/login",
