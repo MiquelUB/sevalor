@@ -1,9 +1,9 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { Shield, Lock, Mail, ArrowRight, Building2 } from "lucide-react";
-import { apiFetch, setAuthToken } from "@/lib/api";
+import { Shield, Lock, Mail, ArrowRight, Building2, Settings, Globe } from "lucide-react";
+import { getApiBaseUrl, setAuthToken } from "@/lib/api";
 
 export default function GestioLogin() {
   const router = useRouter();
@@ -11,6 +11,21 @@ export default function GestioLogin() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [showConfig, setShowConfig] = useState(false);
+  const [apiUrl, setApiUrl] = useState("");
+
+  useEffect(() => {
+    setApiUrl(getApiBaseUrl());
+  }, []);
+
+  const handleSaveApiUrl = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (apiUrl) {
+      localStorage.setItem("sevalor_api_url", apiUrl.trim().replace(/\/+$/, ""));
+      setShowConfig(false);
+      setError("");
+    }
+  };
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -18,17 +33,18 @@ export default function GestioLogin() {
     setLoading(true);
 
     try {
-      const resp = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8001/api/v1"}/auth/login`, {
+      const baseUrl = apiUrl || getApiBaseUrl();
+      const resp = await fetch(`${baseUrl}/auth/login`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ email, password }),
+        body: JSON.stringify({ email: email.trim(), password }),
       });
 
       if (!resp.ok) {
         const errorData = await resp.json().catch(() => ({}));
-        throw new Error(errorData.detail || "Credencials incorrectes");
+        throw new Error(errorData.detail || `Error ${resp.status}: Credencials incorrectes`);
       }
 
       const data = await resp.json();
@@ -43,14 +59,14 @@ export default function GestioLogin() {
 
       router.push("/gestio/mapa");
     } catch (err: any) {
-      setError(err.message || "Error al connectar amb el servidor");
+      setError(err.message || "Error al connectar amb el servidor. Comprova la URL de l'API.");
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center p-4">
+    <div className="min-h-screen flex items-center justify-center p-4 bg-slate-100 dark:bg-slate-950">
       <div className="w-full max-w-md bg-white dark:bg-slate-900 rounded-3xl shadow-xl overflow-hidden border border-slate-200 dark:border-slate-800">
         
         {/* Capçalera */}
@@ -63,7 +79,7 @@ export default function GestioLogin() {
               <Building2 className="w-8 h-8 text-white" />
             </div>
             <h1 className="text-2xl font-bold text-white tracking-tight">SEVALOR Oficina</h1>
-            <p className="text-slate-400 mt-2 text-sm">Accés corporatiu segur</p>
+            <p className="text-slate-400 mt-2 text-sm">Accés corporatiu segur (Gestió)</p>
           </div>
         </div>
 
@@ -91,7 +107,7 @@ export default function GestioLogin() {
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   className="block w-full pl-10 pr-3 py-3 border border-slate-200 dark:border-slate-700 rounded-xl bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-500 transition-shadow"
-                  placeholder="admin@empresa.com"
+                  placeholder="gestio@sevalor.com"
                 />
               </div>
             </div>
@@ -126,9 +142,45 @@ export default function GestioLogin() {
               {!loading && <ArrowRight className="w-4 h-4" />}
             </button>
           </form>
-          
-          <div className="mt-6 text-center">
-            <p className="text-xs text-slate-500 dark:text-slate-400 font-mono">
+
+          {/* Opcions de xarxa / servidor */}
+          <div className="mt-6 pt-4 border-t border-slate-200 dark:border-slate-800 flex flex-col items-center">
+            <button
+              type="button"
+              onClick={() => setShowConfig(!showConfig)}
+              className="text-xs text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 flex items-center gap-1 transition-colors"
+            >
+              <Settings className="w-3.5 h-3.5" />
+              <span>Configuració del servidor API</span>
+            </button>
+
+            {showConfig && (
+              <form onSubmit={handleSaveApiUrl} className="mt-3 w-full space-y-2 text-xs">
+                <label className="block font-medium text-slate-600 dark:text-slate-400">
+                  URL base de l&apos;API backend:
+                </label>
+                <div className="flex gap-2">
+                  <div className="relative flex-1">
+                    <Globe className="w-3.5 h-3.5 absolute left-2.5 top-2.5 text-slate-400" />
+                    <input
+                      type="text"
+                      value={apiUrl}
+                      onChange={(e) => setApiUrl(e.target.value)}
+                      placeholder="https://api.domini.com/api/v1"
+                      className="w-full pl-8 pr-2 py-1.5 border border-slate-300 dark:border-slate-700 rounded-lg bg-slate-50 dark:bg-slate-800 text-slate-800 dark:text-slate-200"
+                    />
+                  </div>
+                  <button
+                    type="submit"
+                    className="px-3 py-1.5 bg-slate-800 dark:bg-slate-700 text-white rounded-lg font-medium hover:bg-slate-700"
+                  >
+                    Desar
+                  </button>
+                </div>
+              </form>
+            )}
+
+            <p className="text-[11px] text-slate-400 dark:text-slate-500 font-mono mt-3">
               Entorn protegit per Zero-Trust RLS
             </p>
           </div>

@@ -2,24 +2,53 @@
  * Client API centralitzat per a la PWA de Sevalor Suite.
  *
  * - URL base configurable via variable d'entorn NEXT_PUBLIC_API_URL
- * - Injecció automàtica del tenant (X-Empresa-ID) des del subdomini
+ * - Suport resilient per entorns remots (EasyPanel, Nginx) i locals
+ * - Injecció automàtica del tenant (X-Empresa-ID) des del subdomini o localStorage
  * - Interceptor per afegir token Authorization
- * - Reintents automàtics en cas de fallada de xarxa (offline-first)
+ * - Gestió d'errors neta i descriptiva
  */
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8001/api/v1";
+export function getApiBaseUrl(): string {
+  if (typeof window !== "undefined") {
+    // 1. Permetre override dinàmic manual si està definit
+    const custom = localStorage.getItem("sevalor_api_url");
+    if (custom) return custom.replace(/\/+$/, "");
+
+    // 2. Variable d'entorn pública de Next.js
+    const envUrl = process.env.NEXT_PUBLIC_API_URL;
+    if (envUrl) {
+      const isLocalUrl = envUrl.includes("127.0.0.1") || envUrl.includes("localhost");
+      const isLocalBrowser = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
+      // Si és una URL remota o estem en local, usem envUrl
+      if (!isLocalUrl || isLocalBrowser) {
+        return envUrl.replace(/\/+$/, "");
+      }
+    }
+
+    // 3. Si estem al navegador en un domini remot (EasyPanel / VPS):
+    // Utilitzem ruta relativa /api/v1 del mateix domini per evitar Mixed Content i CORS
+    if (window.location.hostname !== "localhost" && window.location.hostname !== "127.0.0.1") {
+      return `${window.location.origin}/api/v1`;
+    }
+
+    // 4. Per defecte en desenvolupament local
+    return envUrl ? envUrl.replace(/\/+$/, "") : "http://127.0.0.1:8001/api/v1";
+  }
+
+  return process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8001/api/v1";
+}
 
 /**
  * Extreu l'empresa_id del host si el format és <tenant>.localhost o similar.
  * En producció es llegeix del subdomini configurat a EasyPanel.
  */
-function extractTenantId(): string | null {
+export function extractTenantId(): string | null {
   if (typeof window === "undefined") return null;
   const host = window.location.hostname;
   const parts = host.split(".");
 
   // Patró: tenant.localhost:3000 → tenant
-  if (parts.length >= 3 && parts[0] !== "www" && parts[0] !== "api") {
+  if (parts.length >= 3 && parts[0] !== "www" && parts[0] !== "api" && parts[0] !== "app") {
     return parts[0];
   }
 
@@ -28,8 +57,7 @@ function extractTenantId(): string | null {
 }
 
 /**
- * Emmagatzema el token JWT (xifrat amb AES-GCM des de crypto.service.ts).
- * Aquest mòdul només recupera el token en clar per les peticions.
+ * Emmagatzema el token JWT.
  */
 export function getAuthToken(): string | null {
   if (typeof window === "undefined") return null;
@@ -80,22 +108,24 @@ export async function apiFetch<T = any>(
   path: string,
   options: RequestInit = {}
 ): Promise<T> {
-  const url = `${API_BASE_URL}${path}`;
+  const baseUrl = getApiBaseUrl();
+  const normalizedPath = path.startsWith("/") ? path : `/${path}`;
+  const url = `${baseUrl}${normalizedPath}`;
 
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
     ...((options.headers as Record<string, string>) || {}),
   };
 
-  // Tenant header
+  // Tenant header si existeix
   const tenantId = extractTenantId();
-  if (tenantId) {
+  if (tenantId && !headers["X-Empresa-ID"]) {
     headers["X-Empresa-ID"] = tenantId;
   }
 
   // Auth token
   const token = getAuthToken();
-  if (token) {
+  if (token && !headers["Authorization"]) {
     headers["Authorization"] = `Bearer ${token}`;
   }
 
@@ -105,8 +135,15 @@ export async function apiFetch<T = any>(
   });
 
   if (!response.ok) {
-    const errorBody = await response.text();
-    throw new Error(`API Error ${response.status}: ${errorBody}`);
+    let errorDetail = `Error ${response.status}: ${response.statusText}`;
+    try {
+      const errorJson = await response.json();
+      errorDetail = errorJson.detail || errorJson.message || errorDetail;
+    } catch {
+      const errorText = await response.text().catch(() => "");
+      if (errorText) errorDetail = errorText;
+    }
+    throw new Error(errorDetail);
   }
 
   // Si la resposta és 204 No Content
