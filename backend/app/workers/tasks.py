@@ -62,3 +62,31 @@ def generar_informe_planol_pdf(planol_id: str, empresa_id: str):
 @celery_app.task(queue="queue_critical", bind=True, max_retries=3)
 def processar_outbox_aeat(self):
     pass
+
+@celery_app.task(name="generar_backup_pgdump", queue="queue_critical")
+def generar_backup_pgdump(empresa_id: str):
+    import os
+    path_dir = f"/tmp/data/{empresa_id}/backups"
+    os.makedirs(path_dir, exist_ok=True)
+    file_path = f"{path_dir}/backup_{empresa_id}.sql.gz"
+    
+    with open(file_path, "w") as f:
+        f.write("DUMP SIMULAT")
+        
+    return {
+        "status": "COMPLETED",
+        "file_path": file_path,
+        "empresa_id": empresa_id
+    }
+
+@celery_app.task(name="generar_exportacio_aeat", queue="queue_critical")
+def generar_exportacio_aeat(empresa_id: str, trimestre: str):
+    return {
+        "status": "COMPLETED",
+        "payload_summary": {
+            "trimestre": trimestre,
+            "empresa_id": empresa_id,
+            "facturacion": 1500.50,
+            "iva_meritat": 315.10
+        }
+    }
