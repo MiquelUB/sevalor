@@ -11,6 +11,7 @@ async def test_telegram_rag(admin_session, boss_token):
     boss_nif = "B" + str(uuid.uuid4())[:8].upper()
     
     admin_session.add(Empresa(id=uuid.UUID(empresa_id), nom="Test Empresa", nif=boss_nif, subdomini="testragbot", pla_subscripcio="STARTER", estat_pagament="ACTIU"))
+    await admin_session.flush()
     
     # Crear client i afegir info RAG
     client_id = uuid.uuid4()
