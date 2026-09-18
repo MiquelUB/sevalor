@@ -38,6 +38,7 @@ async def test_alta_operari_nou(admin_session, headers, boss_token):
         id=uuid.UUID(empresa_id), nom='Test Company', nif='NIF' + str(uuid.uuid4())[:8], subdomini='sub' + str(uuid.uuid4())[:6], pla_subscripcio='STARTER', estat_pagament='ACTIU'
     ))
     await admin_session.flush()
+    await admin_session.flush()
 
     payload = {
         "nif": "12345678Z",
@@ -76,12 +77,14 @@ async def test_reset_pin_operari(admin_session, headers, boss_token):
     admin_session.add(Empresa(
         id=uuid.UUID(empresa_id), nom='Test Reset', nif='RES' + str(uuid.uuid4())[:8], subdomini='sub' + str(uuid.uuid4())[:6], pla_subscripcio='STARTER', estat_pagament='ACTIU'
     ))
+    await admin_session.flush()
     
     # 2. Crear operari bloquejat
     operari_id = str(uuid.uuid4())
     admin_session.add(Usuari(
         id=uuid.UUID(operari_id), empresa_id=uuid.UUID(empresa_id), nif='RESET123', nom='Maria', rol='OPERARI', pin_bloquejat=True, intents_pin_fallits=4
     ))
+    await admin_session.flush()
     await admin_session.flush()
     
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:

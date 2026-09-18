@@ -17,11 +17,13 @@ async def setup_jornada_test(admin_session):
     admin_session.add(Empresa(
         id=uuid.UUID(empresa_id), nom='Test PWA', nif=nif_rand, subdomini=sub_rand, pla_subscripcio='STARTER', estat_pagament='ACTIU'
     ))
+    await admin_session.flush()
     
     # 2. Operari
     admin_session.add(Usuari(
         id=uuid.UUID(operari_id), empresa_id=uuid.UUID(empresa_id), nif=nif_rand + 'A', nom='Pere PWA', rol='OPERARI', pin_hash='hash', pin_bloquejat=False, intents_pin_fallits=0
     ))
+    await admin_session.flush()
     await admin_session.flush()
     
     return {"empresa_id": empresa_id, "operari_id": operari_id}

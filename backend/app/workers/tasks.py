@@ -43,12 +43,12 @@ def crear_directoris_sobirans(empresa_id: str, base_data_dir: str = None, base_d
         docs_prefix = "/tmp/docs"
 
     dirs = [
+        f"{data_prefix}/{empresa_id}",
+        f"{data_prefix}/{empresa_id}/docs",
+        f"{data_prefix}/{empresa_id}/docs/albarans",
+        f"{data_prefix}/{empresa_id}/docs/planols",
         f"{data_prefix}/{empresa_id}/incidencies",
-        f"{data_prefix}/{empresa_id}/vehicles",
-        f"{data_prefix}/{empresa_id}/comptabilitat",
-        f"{docs_prefix}/{empresa_id}/planols",
-        f"{docs_prefix}/{empresa_id}/factures",
-        f"{docs_prefix}/{empresa_id}/backups",
+        f"{data_prefix}/{empresa_id}/backups",
     ]
     creades = []
     for d in dirs:

@@ -45,6 +45,7 @@ async def empresa_i_admin(admin_session: AsyncSession):
     admin_session.add(Empresa(
         id=uuid.UUID(eid), nom='Test SA', nif=nif, subdomini=_sub(), pla_subscripcio='STARTER', estat_pagament='ACTIU', vertical='SEVALOR'
     ))
+    await admin_session.flush()
     # Boss
     boss_id = str(uuid.uuid4())
     boss_nif = _nif()
@@ -52,6 +53,7 @@ async def empresa_i_admin(admin_session: AsyncSession):
     admin_session.add(Usuari(
         id=uuid.UUID(boss_id), empresa_id=uuid.UUID(eid), nif=boss_nif, nom='Boss', cognoms='Admin', email=f'boss@{nif.lower()}.com', password_hash=boss_pw, rol='BOSS'
     ))
+    await admin_session.flush()
     await admin_session.flush()
     return eid
 
@@ -70,6 +72,7 @@ async def operari_token(empresa_i_admin, async_client: AsyncClient, admin_sessio
     admin_session.add(Usuari(
         id=uuid.UUID(op_id), empresa_id=uuid.UUID(eid), nif=op_nif, nom='Operari', cognoms='Test', rol='OPERARI', pin_hash=pin_hash, estat='ACTIU', telefon=f'+346{uuid.uuid4().int % 100000000:08d}'
     ))
+    await admin_session.flush()
     await admin_session.flush()
 
     # Login
@@ -150,6 +153,7 @@ class TestFluxOperari:
         id=uuid.UUID(client_id), empresa_id=uuid.UUID(eid), codi=f'CLI-{uuid.uuid4().hex[:4]}', rao_social='Client SA', nif=_nif()
     ))
         await admin_session.flush()
+        await admin_session.flush()
 
         # Crear factura
         resp = await async_client.post(
@@ -179,16 +183,19 @@ class TestFluxOperari:
         admin_session.add(Client(
         id=uuid.UUID(client_a), empresa_id=uuid.UUID(eid_a), codi='CLI-A', rao_social='Client A', nif=_nif()
     ))
+        await admin_session.flush()
         # Crear Tenant B
         eid_b = str(uuid.uuid4())
         admin_session.add(Empresa(
         id=uuid.UUID(eid_b), nom='EmpB', nif=_nif(), subdomini=_sub(), pla_subscripcio='STARTER', estat_pagament='ACTIU'
     ))
+        await admin_session.flush()
         # Client a Tenant B
         client_b = str(uuid.uuid4())
         admin_session.add(Client(
         id=uuid.UUID(client_b), empresa_id=uuid.UUID(eid_b), codi='CLI-B', rao_social='Client B', nif=_nif()
     ))
+        await admin_session.flush()
         await admin_session.flush()
 
         # Token de BOSS A (prova accedir a client de B)

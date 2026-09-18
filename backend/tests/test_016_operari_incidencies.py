@@ -16,9 +16,11 @@ async def setup_incidencia_test(admin_session):
     admin_session.add(Empresa(
         id=uuid.UUID(empresa_id), nom='Test Inc', nif=nif_rand, subdomini='incpwa-' + str(uuid.uuid4())[:8], pla_subscripcio='STARTER', estat_pagament='ACTIU'
     ))
+    await admin_session.flush()
     admin_session.add(Usuari(
         id=uuid.UUID(operari_id), empresa_id=uuid.UUID(empresa_id), nif=nif_rand + 'P', nom='Pere Incidencia', rol='OPERARI', pin_hash='hash', pin_bloquejat=False, intents_pin_fallits=0
     ))
+    await admin_session.flush()
     await admin_session.flush()
     
     return {"empresa_id": empresa_id, "operari_id": operari_id}

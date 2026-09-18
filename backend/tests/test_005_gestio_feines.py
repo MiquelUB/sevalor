@@ -14,18 +14,21 @@ async def test_alta_ordre_treball(admin_session, headers, boss_token):
     admin_session.add(Empresa(
         id=uuid.UUID(empresa_id), nom='Test Feines', nif=boss_nif, subdomini='testfeina-' + str(uuid.uuid4())[:5], pla_subscripcio='STARTER', estat_pagament='ACTIU'
     ))
+    await admin_session.flush()
     
     # 2. Crear client per tenir client_id
     client_id = str(uuid.uuid4())
     admin_session.add(Client(
         id=uuid.UUID(client_id), empresa_id=uuid.UUID(empresa_id), codi='CLI-1', rao_social='Client FEINA', nif='12345678A'
     ))
+    await admin_session.flush()
     
     # 3. Crear operari per tenir cap_de_colla_id
     operari_id = str(uuid.uuid4())
     admin_session.add(Usuari(
         id=uuid.UUID(operari_id), empresa_id=uuid.UUID(empresa_id), nif='OP-999', nom='Paco', cognoms='Garcia', rol='OPERARI', estat='ACTIU'
     ))
+    await admin_session.flush()
     await admin_session.flush()
     
     payload = {

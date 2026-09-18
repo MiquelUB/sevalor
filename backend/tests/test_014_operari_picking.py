@@ -16,26 +16,31 @@ async def setup_picking_test(admin_session):
     admin_session.add(Empresa(
         id=uuid.UUID(empresa_id), nom='Test Picking', nif=nif_rand, subdomini='pickpwa-' + str(uuid.uuid4())[:8], pla_subscripcio='STARTER', estat_pagament='ACTIU'
     ))
+    await admin_session.flush()
     admin_session.add(Usuari(
         id=uuid.UUID(operari_id), empresa_id=uuid.UUID(empresa_id), nif=nif_rand + 'P', nom='Pere Picking', rol='OPERARI', pin_hash='hash', pin_bloquejat=False, intents_pin_fallits=0
     ))
+    await admin_session.flush()
     
     # Client i Ordre
     client_id = str(uuid.uuid4())
     admin_session.add(Client(
         id=uuid.UUID(client_id), empresa_id=uuid.UUID(empresa_id), codi='CLI-1', rao_social='C', nif='NIFC'
     ))
+    await admin_session.flush()
     ordre_id = str(uuid.uuid4())
     from app.models.models import OrdreTreball, Article
     admin_session.add(OrdreTreball(
         id=uuid.UUID(ordre_id), empresa_id=uuid.UUID(empresa_id), codi='OT-1', client_id=uuid.UUID(client_id), titol='OT picking', estat='PENDENT', adreca='Adreça de prova', data_planificacio=None
     ))
+    await admin_session.flush()
     
     # Article
     article_id = str(uuid.uuid4())
     admin_session.add(Article(
         id=uuid.UUID(article_id), empresa_id=uuid.UUID(empresa_id), referencia_inventari='REF-1', nom='Article Picking'
     ))
+    await admin_session.flush()
     await admin_session.flush()
     
     return {"empresa_id": empresa_id, "operari_id": operari_id, "ordre_id": ordre_id, "article_id": article_id}

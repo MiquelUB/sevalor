@@ -14,6 +14,7 @@ async def test_alta_vehicle_valid(admin_session, headers, boss_token):
         id=uuid.UUID(empresa_id), nom='Test Flota', nif=boss_nif, subdomini='testflota-' + str(uuid.uuid4())[:5], pla_subscripcio='STARTER', estat_pagament='ACTIU'
     ))
     await admin_session.flush()
+    await admin_session.flush()
     
     payload = {
         "matricula": "1234ABC",

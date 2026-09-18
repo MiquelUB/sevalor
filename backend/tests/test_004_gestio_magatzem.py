@@ -14,6 +14,7 @@ async def test_alta_article_valid(admin_session, headers, boss_token):
         id=uuid.UUID(empresa_id), nom='Test Magatzem', nif=boss_nif, subdomini='testmag-' + str(uuid.uuid4())[:5], pla_subscripcio='STARTER', estat_pagament='ACTIU'
     ))
     await admin_session.flush()
+    await admin_session.flush()
     
     payload = {
         "referencia_inventari": "REF-ART-001",

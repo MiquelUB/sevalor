@@ -23,11 +23,13 @@ async def setup_operari_test(admin_session):
     admin_session.add(Empresa(
         id=uuid.UUID(empresa_id), nom='Test PWA', nif='EMP' + str(uuid.uuid4())[:5], subdomini='testpwa-' + str(uuid.uuid4())[:5], pla_subscripcio='STARTER', estat_pagament='ACTIU'
     ))
+    await admin_session.flush()
     
     # 2. Crear operari actiu
     admin_session.add(Usuari(
         id=uuid.UUID(operari_id), empresa_id=uuid.UUID(empresa_id), nif=nif, nom='Pere', rol='OPERARI', pin_hash=pin_hash, pin_bloquejat=False, intents_pin_fallits=0
     ))
+    await admin_session.flush()
     await admin_session.flush()
     
     return {"empresa_id": empresa_id, "operari_id": operari_id, "nif": nif, "pin": pin_real}
@@ -98,6 +100,7 @@ async def test_login_tenant_isolation(setup_operari_test, admin_session):
     admin_session.add(Empresa(
         id=uuid.UUID(altre_empresa_id), nom='Test RLS', nif='EMP' + str(uuid.uuid4())[:5], subdomini='testrls-' + str(uuid.uuid4())[:5], pla_subscripcio='STARTER', estat_pagament='ACTIU'
     ))
+    await admin_session.flush()
     await admin_session.flush()
     
     # Intentem loguejar l'operari de la primera empresa a la segona empresa

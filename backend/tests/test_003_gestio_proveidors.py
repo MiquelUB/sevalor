@@ -14,6 +14,7 @@ async def test_alta_proveidor_valid(admin_session, headers, boss_token):
         id=uuid.UUID(empresa_id), nom='Test Prov', nif=boss_nif, subdomini='testprov-' + str(uuid.uuid4())[:5], pla_subscripcio='STARTER', estat_pagament='ACTIU'
     ))
     await admin_session.flush()
+    await admin_session.flush()
     
     payload = {
         "codi": "PROV-001",

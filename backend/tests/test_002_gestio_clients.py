@@ -15,6 +15,7 @@ async def test_alta_client_i_llistat(admin_session, headers, boss_token):
         id=uuid.UUID(empresa_id), nom='Test Clients', nif=boss_nif, subdomini='testcli-' + str(uuid.uuid4())[:5], pla_subscripcio='STARTER', estat_pagament='ACTIU'
     ))
     await admin_session.flush()
+    await admin_session.flush()
     
     # 2. Creem un client
     payload = {
@@ -54,6 +55,7 @@ async def test_llistat_clients_buit(admin_session, headers, boss_token):
         id=uuid.UUID(empresa_id), nom='Test Buits', nif=boss_nif, subdomini='testbuits-' + str(uuid.uuid4())[:5], pla_subscripcio='STARTER', estat_pagament='ACTIU'
     ))
     await admin_session.flush()
+    await admin_session.flush()
     
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
         res = await ac.get("/api/v1/gestio/clients", headers=headers)
@@ -70,10 +72,12 @@ async def test_rls_clients(admin_session, headers, boss_token):
     admin_session.add(Empresa(
         id=uuid.UUID(empresa_id_1), nom='Test 1', nif=boss_nif1, subdomini='test1-' + str(uuid.uuid4())[:5], pla_subscripcio='STARTER', estat_pagament='ACTIU'
     ))
+    await admin_session.flush()
     client_id_1 = str(uuid.uuid4())
     admin_session.add(Client(
         id=uuid.UUID(client_id_1), empresa_id=uuid.UUID(empresa_id_1), codi='CLI-1', rao_social='Client Emp 1', nif='NIF111'
     ))
+    await admin_session.flush()
     
     # 2. Crear empresa 2 i client 2
     empresa_id_2 = str(uuid.uuid4())
@@ -81,10 +85,12 @@ async def test_rls_clients(admin_session, headers, boss_token):
     admin_session.add(Empresa(
         id=uuid.UUID(empresa_id_2), nom='Test 2', nif=boss_nif2, subdomini='test2-' + str(uuid.uuid4())[:5], pla_subscripcio='STARTER', estat_pagament='ACTIU'
     ))
+    await admin_session.flush()
     client_id_2 = str(uuid.uuid4())
     admin_session.add(Client(
         id=uuid.UUID(client_id_2), empresa_id=uuid.UUID(empresa_id_2), codi='CLI-2', rao_social='Client Emp 2', nif='NIF222'
     ))
+    await admin_session.flush()
     await admin_session.flush()
     
     # 3. Empresa 1 consulta clients (hauria de veure'n 1)
