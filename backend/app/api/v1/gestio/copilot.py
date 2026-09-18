@@ -10,6 +10,9 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+import logging
+import httpx
+from app.core.config import settings
 from app.core.db import get_db_with_tenant_context
 from app.core.security import get_current_user_claims, require_roles
 from app.models.models import (
@@ -65,6 +68,56 @@ PARAULES_CLAU_FINANCERES_VETO = [
     "facturacio total",
     "marge brut global",
 ]
+
+logger = logging.getLogger("copilot_ia")
+
+
+async def cridar_lm_studio(pregunta: str, vertical: str, context_addicional: str = "") -> Optional[str]:
+    """Fa una petició a la instància local o remota de LM Studio (OpenAI-compatible)."""
+    lm_url = getattr(settings, "LMSTUDIO_URL", None) or getattr(settings, "LM_STUDIO_URL", None)
+    if not lm_url:
+        return None
+
+    base_url = lm_url.rstrip("/")
+    endpoint = f"{base_url}/chat/completions" if base_url.endswith("/v1") else f"{base_url}/v1/chat/completions"
+
+    system_prompt = (
+        f"Ets el Copilot d'Intel·ligència Artificial tècnic de SEVALOR Suite, especialitzat en {vertical}. "
+        "Respon en català de forma professional, tècnica, precisa i concisa. "
+        "No facis càlculs financers de salaris ni dades sensibles no autoritzades. "
+        f"{context_addicional}"
+    )
+
+    model_name = getattr(settings, "LM_STUDIO_MODEL", "default")
+    api_key = getattr(settings, "LM_STUDIO_API_KEY", "lm-studio")
+
+    payload = {
+        "model": model_name,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": pregunta},
+        ],
+        "temperature": 0.4,
+        "max_tokens": 600,
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=12.0) as client:
+            resp = await client.post(
+                endpoint,
+                json=payload,
+                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            )
+            if resp.status_code == 200:
+                resultat = resp.json()
+                choices = resultat.get("choices", [])
+                if choices and "message" in choices[0]:
+                    content = choices[0]["message"].get("content", "").strip()
+                    if content:
+                        return content
+    except Exception as e:
+        logger.warning(f"Connexió amb LM Studio fallida a {endpoint}: {e}")
+    return None
 
 
 def aplicar_tenant_context(claims: Dict[str, Any]) -> uuid.UUID:
@@ -786,7 +839,12 @@ async def consultar_xat_tecnic(
         resposta = "Protocol PRL de camp: Davant l'aparició d'un cable soterrat no senyalitzat, és obligatori aturar l'excavació mecànica de forma immediata, senyalitzar la zona i notificar a la Torre de Control."
         enllacos.append({"titol": "Manual de Bones Pràctiques i Prevenció", "url": "/gestio/notificacions"})
     else:
-        resposta = f"Consulta atesa satisfactòriament pel Copilot IA sota normativa del sector {vertical} i protocols interns d'empresa."
+        # Consulta a LM Studio si està disponible, amb fallback resilient
+        resposta_ia = await cridar_lm_studio(dades.pregunta, vertical)
+        if resposta_ia:
+            resposta = resposta_ia
+        else:
+            resposta = f"Consulta atesa satisfactòriament pel Copilot IA sota normativa del sector {vertical} i protocols interns d'empresa."
 
     # Guardar registre
     consulta_db = ConsultaXatCopilot(

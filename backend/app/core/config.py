@@ -28,6 +28,12 @@ class Settings(BaseSettings):
     # Servei d'Intel·ligència Artificial Local Whisper (CPU-only INT8 Hetzner CPX21)
     WHISPER_URL: str = "http://localhost:8008"
 
+    # LM Studio / LLM Local (API compatible OpenAI)
+    LM_STUDIO_URL: str = "http://localhost:1234/v1"
+    LMSTUDIO_URL: str | None = None
+    LM_STUDIO_MODEL: str = "default"
+    LM_STUDIO_API_KEY: str = "lm-studio"
+
     # Criptografia i Tokens
     SECRET_KEY: str = "sevalor-dev-secret-key-32-chars-long-abc"
     ALGORITHM: str = "HS256"

@@ -56,6 +56,8 @@ services:
       - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-sevalor}
       - REDIS_URL=redis://:${REDIS_PASSWORD:-}@redis:6379/0
       - WHISPER_URL=http://whisper:8000
+      - LM_STUDIO_URL=${LM_STUDIO_URL:-http://host.docker.internal:1234/v1}
+      - LM_STUDIO_MODEL=${LM_STUDIO_MODEL:-default}
       - SECRET_KEY=${SECRET_KEY:-sevalor-dev-secret-key-32-chars-long-abc}
     ports:
       - "127.0.0.1:8001:8000"
