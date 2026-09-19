@@ -23,7 +23,7 @@ async def test_albara_ocr_i_confirmacio(admin_session, headers, boss_token):
         res_ocr = await ac.post("/api/v1/gestio/magatzem/albara/ocr", files=files, headers=headers)
         assert res_ocr.status_code == 200
         data_ocr = res_ocr.json()
-        assert data_ocr["proveidor"]["nom"] == "PROVEIDOR DETECTAT S.L."
+        assert data_ocr["proveidor"]["nom"] == "Jardineria Verda, S.A."
 
         # Pas 2: Confirmar Albarà
         data_albara = (date.today() - timedelta(days=2)).isoformat()
