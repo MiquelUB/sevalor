@@ -5,7 +5,7 @@ from datetime import date
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Request, status, UploadFile, File
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, or_, text
+from sqlalchemy import select, or_, text, func
 from pydantic import BaseModel, Field
 
 from app.core.db import get_db_with_tenant_context
@@ -56,6 +56,7 @@ class ArticleCreate(BaseModel):
 class ArticleResponse(ArticleCreate):
     id: uuid.UUID
     actiu: bool
+    estoc_real: float = 0.0
 
 # ---------------------------------------------------------------------------
 # Estoc de magatzem (Spec 004 — gestió multimagatzem amb bloqueig pessimista)
@@ -684,3 +685,44 @@ async def confirmar_document(
             "moviments_realitzats": moviments_creats,
             "carpeta": carpeta_proveidor
         }
+
+@router.put("/articles/{article_id}", response_model=ArticleResponse)
+async def modificar_article(
+    request: Request,
+    article_id: uuid.UUID,
+    article: ArticleCreate,
+    db: AsyncSession = Depends(get_db_with_tenant_context)
+):
+    empresa_id = request.state.empresa_id
+    if not empresa_id:
+        raise HTTPException(status_code=401, detail="No identificat")
+        
+    stmt = select(Article).where(Article.id == article_id, Article.empresa_id == uuid.UUID(empresa_id))
+    result = await db.execute(stmt)
+    art_db = result.scalars().first()
+    if not art_db:
+        raise HTTPException(status_code=404, detail="Article no trobat")
+        
+    art_db.referencia_inventari = article.referencia_inventari
+    art_db.nom = article.nom
+    art_db.unitat_mesura = article.unitat_mesura
+    art_db.familia = article.familia
+    art_db.estoc_optim = article.estoc_optim
+    art_db.estoc_minim = article.estoc_minim
+    art_db.es_lot_caducable = article.es_lot_caducable
+    art_db.preu_cost = article.preu_cost
+    art_db.preu_venda = article.preu_venda
+    
+    await db.commit()
+    
+    # Calcular estoc real
+    from sqlalchemy import func
+    stmt_estoc = select(func.sum(EstocMagatzem.quantitat_fisica)).where(
+        EstocMagatzem.article_id == article_id
+    )
+    estoc_real = (await db.execute(stmt_estoc)).scalar() or 0.0
+    
+    art_dict = {c.name: getattr(art_db, c.name) for c in art_db.__table__.columns}
+    art_dict["estoc_real"] = float(estoc_real)
+    
+    return art_dict
