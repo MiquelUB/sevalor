@@ -29,6 +29,7 @@ interface Article {
   preu_cost: number;
   preu_venda: number;
   actiu?: boolean;
+  es_lot_caducable?: boolean;
   estoc_real?: number;
 }
 
