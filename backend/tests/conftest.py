@@ -6,8 +6,10 @@ Compleix Audotoria_i_Normativa_Tests_Backend.md:
 - Zero warnings de loops asíncrons
 - Sobreescriu TOTES les dependències de base de dades (get_db i get_db_with_tenant_context)"""
 
-import asyncio
 import os
+os.environ["TESTING"] = "1"
+
+import asyncio
 import uuid
 import jwt
 from datetime import datetime, timedelta, timezone
