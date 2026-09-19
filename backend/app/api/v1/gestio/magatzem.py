@@ -636,6 +636,7 @@ async def confirmar_document(
             stmt_art = select(Article).where(Article.empresa_id == empresa_id, Article.referencia_inventari == linia.referencia)
             article = (await db.execute(stmt_art)).scalars().first()
             
+            nou_preu = float(linia.preu) * (1.0 - (float(linia.descompte_percent)/100.0))
             if not article:
                 article = Article(
                     empresa_id=empresa_id,
@@ -643,12 +644,24 @@ async def confirmar_document(
                     nom=linia.nom,
                     unitat_mesura="UNITAT",
                     familia="EINA" if linia.tipus == "EINA" else "GENERAL",
-                    preu_cost=linia.preu * (1 - (linia.descompte_percent/100))
+                    preu_cost=nou_preu
                 )
                 db.add(article)
                 await db.flush()
                 articles_creats += 1
-            
+            else:
+                # Calcular PMP (Preu Mitjà Ponderat)
+                estoc_res = await db.execute(select(EstocMagatzem).where(EstocMagatzem.article_id == article.id))
+                estocs_actuals = estoc_res.scalars().all()
+                estoc_total_actual = sum(float(e.quantitat_fisica) for e in estocs_actuals)
+                
+                if estoc_total_actual + float(linia.quantitat) > 0 and nou_preu > 0:
+                    valor_actual = estoc_total_actual * float(article.preu_cost)
+                    valor_entrada = float(linia.quantitat) * nou_preu
+                    pmp = (valor_actual + valor_entrada) / (estoc_total_actual + float(linia.quantitat))
+                    article.preu_cost = pmp
+                elif nou_preu > 0 and estoc_total_actual <= 0:
+                    article.preu_cost = nou_preu
             stmt_estoc = select(EstocMagatzem).where(EstocMagatzem.magatzem_id == magatzem.id, EstocMagatzem.article_id == article.id)
             estoc = (await db.execute(stmt_estoc)).scalars().first()
             if not estoc:
