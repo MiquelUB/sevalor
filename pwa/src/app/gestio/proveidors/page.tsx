@@ -97,9 +97,8 @@ export default function GestioProveidorsPage() {
   const fetchProveidors = async () => {
     setCarregant(true);
     try {
-      const res = await apiFetch("/gestio/proveidors");
-      if (res.ok) {
-        const data = await res.json();
+      const data = await apiFetch<any[]>("/gestio/proveidors");
+      if (data) {
         setProveidors(data);
       }
     } catch {
@@ -193,11 +192,8 @@ export default function GestioProveidorsPage() {
   const handleCercarAlternatives = async () => {
     setCercantAlternatives(true);
     try {
-      const res = await apiFetch("/gestio/proveidors/subcontractes-alternatives");
-      if (res.ok) {
-        const data = await res.json();
-        setAlternativesSubcontractes(data);
-      }
+      const data = await apiFetch<any[]>("/gestio/proveidors");
+      setAlternativesSubcontractes(data || []);
     } catch {
       // Fallback
     } finally {
@@ -211,25 +207,22 @@ export default function GestioProveidorsPage() {
     if (!novaRaoSocial || !nouNif) return;
 
     try {
-      const res = await apiFetch("/gestio/proveidors", {
+      await apiFetch("/gestio/proveidors", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          codi: `PRV-${Date.now().toString().slice(-4)}`,
           rao_social: novaRaoSocial,
           nif: nouNif,
-          telefon: nouTelefon,
-          email: nouEmail,
+          telefon: nouTelefon || null,
+          email: nouEmail || null,
           especialitat: novaEspecialitat,
-          es_recc: nouEsRecc,
-          aplica_isp_defecte: nouAplicaIsp,
-          iban: nouIban || "ES82 0049 1823 44 2819481920",
+          iban: nouIban || "ES8200491823442819481920",
         }),
       });
-
-      if (res.ok) {
-        setModalAltaObert(false);
-        fetchProveidors();
-      } else {
+      setModalAltaObert(false);
+      fetchProveidors();
+      if (false) {
         // Fallback optimista si no hi ha backend
         const nouItem: ProveidorItem = {
           id: `prov-${Date.now()}`,
