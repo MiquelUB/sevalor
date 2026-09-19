@@ -9,6 +9,14 @@ const nextConfig = {
     cpus: 1,
     memoryBasedWorkersCount: true,
   },
+  async rewrites() {
+    return [
+      {
+        source: '/api/v1/:path*',
+        destination: process.env.NEXT_PUBLIC_API_URL ? `${process.env.NEXT_PUBLIC_API_URL}/:path*` : 'http://backend:8000/api/v1/:path*'
+      }
+    ];
+  },
   async headers() {
     return [
       {
