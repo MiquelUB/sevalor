@@ -15,7 +15,7 @@ import {
   CheckCircle2,
   Layers,
 } from "lucide-react";
-import { apiFetch } from "@/lib/api";
+import { apiFetch, getAuthToken, getApiBaseUrl, extractTenantId } from "@/lib/api";
 import { useGestio } from "@/lib/gestio-context";
 
 interface Article {
@@ -88,11 +88,16 @@ export default function GestioMagatzemPage() {
       const formData = new FormData();
       formData.append("fitxer", fitxerOcr);
       
-      const token = localStorage.getItem("token");
-      const urlBase = typeof window !== 'undefined' ? (window as any).API_BASE_URL || "/api/v1" : "/api/v1";
+      const token = getAuthToken();
+      const urlBase = getApiBaseUrl();
+      const tenantId = extractTenantId();
+      
+      const headers: any = { "Authorization": `Bearer ${token}` };
+      if (tenantId) headers["X-Empresa-ID"] = tenantId;
+      
       const res = await fetch(`${urlBase}/gestio/magatzem/albara/ocr`, {
         method: "POST",
-        headers: { "Authorization": `Bearer ${token}` },
+        headers,
         body: formData
       });
       
