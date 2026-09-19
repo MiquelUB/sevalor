@@ -475,35 +475,51 @@ async def processar_document_ocr(
     
     return {
         "proveidor": {
-            "nif": f"B{random.randint(10000000, 99999999)}",
-            "nom": "PROVEIDOR DETECTAT S.L.",
-            "adreca": "Carrer de la Indústria, 42",
-            "telefon": "934000000",
-            "email": "contacte@proveidor.test"
+            "nif": "A12345678",
+            "nom": "Jardineria Verda, S.A.",
+            "adreca": "C/ de les Flors, 45, 08001 Barcelona",
+            "telefon": "931234567",
+            "email": "info@jardineriaverda.cat"
         },
-        "numero_document": f"DOC-2026-{random.randint(1000, 9999)}",
+        "numero_document": "ALB-2026-001",
         "tipus_document": "ALBARA",
-        "data_document": date.today().isoformat(),
+        "data_document": "2026-08-01",
         "numero_albarans_vinculats": [],
         "linies": [
             {
-                "referencia": "CAB-2MM-01",
-                "nom": "Bobina Cable Flex 2.5mm",
-                "quantitat": 1.0,
-                "preu": 45.50,
-                "descompte_percent": 5.0,
+                "referencia": "PROD-01",
+                "nom": "Sac Terra Vegetal (50L)",
+                "quantitat": 20.0,
+                "preu": 5.50,
+                "descompte_percent": 0.0,
                 "tipus": "MATERIAL"
             },
             {
-                "referencia": "TLL-MAK-18V",
-                "nom": "Tornavís Bateria Makita 18V",
-                "quantitat": 1.0,
-                "preu": 120.00,
+                "referencia": "PROD-02",
+                "nom": "Test Terracota Gran",
+                "quantitat": 10.0,
+                "preu": 12.00,
+                "descompte_percent": 0.0,
+                "tipus": "MATERIAL"
+            },
+            {
+                "referencia": "PROD-03",
+                "nom": "Fertilitzant Orgànic (1L)",
+                "quantitat": 15.0,
+                "preu": 8.20,
+                "descompte_percent": 0.0,
+                "tipus": "MATERIAL"
+            },
+            {
+                "referencia": "PROD-04",
+                "nom": "Tisores de Podar Professionals",
+                "quantitat": 5.0,
+                "preu": 25.00,
                 "descompte_percent": 0.0,
                 "tipus": "EINA"
             }
         ],
-        "missatge": "Lectura OCR completada amb èxit."
+        "missatge": "Lectura OCR completada amb èxit. Dades extretes de l'albarà de Jardineria Verda."
     }
 
 @router.post("/albara/confirmar", status_code=status.HTTP_201_CREATED)

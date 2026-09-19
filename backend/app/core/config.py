@@ -37,7 +37,7 @@ class Settings(BaseSettings):
     # Criptografia i Tokens
     SECRET_KEY: str = "sevalor-dev-secret-key-32-chars-long-abc"
     ALGORITHM: str = "HS256"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 15
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 720
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
 
     # CORS

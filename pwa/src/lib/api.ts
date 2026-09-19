@@ -88,7 +88,8 @@ export function setAuthToken(token: string): void {
   const data = { token, timestamp: Date.now() };
   localStorage.setItem("sevalor_auth_token", JSON.stringify(data));
   if (typeof document !== "undefined") {
-    document.cookie = `sevalor_access_token=${token}; path=/; max-age=86400; SameSite=Strict`;
+    const isHttps = window.location.protocol === "https:";
+    document.cookie = `sevalor_access_token=${token}; path=/; max-age=86400; SameSite=Lax${isHttps ? "; Secure" : ""}`;
   }
 }
 
