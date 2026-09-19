@@ -199,3 +199,58 @@ async def canviar_iban_proveidor(
     await db.commit()
 
     return {"id": prov.id, "rao_social": prov.rao_social, "iban_xifrat_simetric": prov.iban_xifrat_simetric}
+
+@router.put("/{proveidor_id}", response_model=ProveidorResponse)
+async def editar_proveidor(
+    request: Request,
+    proveidor_id: uuid.UUID,
+    proveidor: ProveidorCreate,
+    db: AsyncSession = Depends(get_db_with_tenant_context)
+):
+    """Edita la fitxa del proveïdor (nom, telèfon, email, especialitat)."""
+    empresa_id = request.state.empresa_id
+    if not empresa_id:
+        raise HTTPException(status_code=401, detail="No identificat")
+        
+    stmt = select(Proveidor).where(Proveidor.id == proveidor_id, Proveidor.empresa_id == uuid.UUID(empresa_id))
+    result = await db.execute(stmt)
+    prov = result.scalars().first()
+    if not prov:
+        raise HTTPException(status_code=404, detail="Proveïdor no trobat")
+        
+    # Evitar codi o nif duplicat si han canviat
+    if prov.nif != proveidor.nif:
+        stmt_nif = select(Proveidor).where(Proveidor.empresa_id == uuid.UUID(empresa_id), Proveidor.nif == proveidor.nif)
+        if (await db.execute(stmt_nif)).scalars().first():
+            raise HTTPException(status_code=400, detail="Aquest NIF ja pertany a un altre proveïdor")
+            
+    if prov.codi != proveidor.codi:
+        stmt_cod = select(Proveidor).where(Proveidor.empresa_id == uuid.UUID(empresa_id), Proveidor.codi == proveidor.codi)
+        if (await db.execute(stmt_cod)).scalars().first():
+            raise HTTPException(status_code=400, detail="Aquest codi ja pertany a un altre proveïdor")
+
+    prov.codi = proveidor.codi
+    prov.rao_social = proveidor.rao_social
+    prov.nif = proveidor.nif
+    prov.telefon = proveidor.telefon
+    prov.email = proveidor.email
+    prov.especialitat = proveidor.especialitat
+    
+    await db.commit()
+    
+    iban_ocult = "****" + prov.iban_xifrat_simetric[-4:] if prov.iban_xifrat_simetric else None
+    
+    return {
+        "id": prov.id,
+        "codi": prov.codi,
+        "rao_social": prov.rao_social,
+        "nif": prov.nif,
+        "telefon": prov.telefon,
+        "email": prov.email,
+        "especialitat": prov.especialitat,
+        "iban": None,
+        "iban_ofuscat": iban_ocult,
+        "actiu": prov.actiu,
+        "es_recc": prov.es_recc,
+        "aplica_isp_defecte": prov.aplica_isp_defecte,
+    }
