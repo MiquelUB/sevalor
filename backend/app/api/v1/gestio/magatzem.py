@@ -671,7 +671,7 @@ async def confirmar_document(
                 notes=f"Albarà Proveïdor OCR"
             )
             db.add(moviment)
-            estoc.quantitat_fisica += linia.quantitat
+            estoc.quantitat_fisica = float(estoc.quantitat_fisica) + linia.quantitat
             moviments_creats += 1
             
         await db.commit()
