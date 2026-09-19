@@ -482,7 +482,7 @@ async def processar_document_ocr(
             "telefon": "931234567",
             "email": "info@jardineriaverda.cat"
         },
-        "numero_document": "ALB-2026-001",
+        "numero_document": f"ALB-2026-{random.randint(100, 999)}",
         "tipus_document": "ALBARA",
         "data_document": "2026-08-01",
         "numero_albarans_vinculats": [],
