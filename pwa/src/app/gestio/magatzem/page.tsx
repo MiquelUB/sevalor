@@ -428,7 +428,7 @@ export default function GestioMagatzemPage() {
               ) : (
                 <div className="space-y-4">
                   <div className="p-4 bg-slate-50 dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 text-xs">
-                    <p><strong>Proveïdor:</strong> {resultatOcr.proveidor}</p>
+                    <p><strong>Proveïdor:</strong> {resultatOcr.proveidor.nom}</p>
                     <p><strong>Número:</strong> {resultatOcr.numero_document}</p>
                     <p><strong>Data:</strong> {resultatOcr.data_document}</p>
                     <p className="mt-2 font-bold">Línies detectades: {resultatOcr.linies?.length || 0}</p>
