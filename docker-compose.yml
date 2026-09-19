@@ -71,6 +71,8 @@ services:
     user: "1000:1000"
     tmpfs:
       - /tmp
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
 
   # 4. Worker de Celery (processament asíncron)
   celery_worker:
@@ -92,6 +94,8 @@ services:
     security_opt:
       - no-new-privileges:true
     user: "1000:1000"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
 
   # 5. Planificador de Celery Beat (cron diari + backups setmanals)
   celery_beat:

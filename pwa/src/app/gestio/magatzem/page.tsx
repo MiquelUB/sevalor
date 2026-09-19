@@ -374,6 +374,83 @@ export default function GestioMagatzemPage() {
         )}
       </div>
 
+      {/* Modal Entrada OCR */}
+      {modalOcr && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="w-full max-w-lg bg-white dark:bg-slate-900 rounded-3xl shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden">
+            <div className="p-5 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between">
+              <h3 className="font-bold text-sm text-slate-800 dark:text-slate-100 flex items-center gap-2">
+                <Sparkles className="w-4 h-4 text-indigo-600" />
+                Entrada Assistida per IA (OCR)
+              </h3>
+              <button
+                onClick={() => {
+                  setModalOcr(false);
+                  setFitxerOcr(null);
+                  setResultatOcr(null);
+                }}
+                className="p-1 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-5 space-y-4">
+              {!resultatOcr ? (
+                <form onSubmit={handlePujarOcr} className="space-y-4">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-600 dark:text-slate-400 mb-2">
+                      Puja l'albarà o factura (PDF / Imatge)
+                    </label>
+                    <input
+                      type="file"
+                      accept=".pdf,image/*"
+                      onChange={(e) => setFitxerOcr(e.target.files?.[0] || null)}
+                      className="w-full text-xs"
+                      disabled={processantOcr}
+                    />
+                  </div>
+                  <div className="flex justify-end">
+                    <button
+                      type="submit"
+                      disabled={!fitxerOcr || processantOcr}
+                      className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold shadow disabled:opacity-50"
+                    >
+                      {processantOcr ? "Processant amb IA..." : "Processar Document"}
+                    </button>
+                  </div>
+                </form>
+              ) : (
+                <div className="space-y-4">
+                  <div className="p-4 bg-slate-50 dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 text-xs">
+                    <p><strong>Proveïdor:</strong> {resultatOcr.proveidor}</p>
+                    <p><strong>Número:</strong> {resultatOcr.numero_document}</p>
+                    <p><strong>Data:</strong> {resultatOcr.data_document}</p>
+                    <p className="mt-2 font-bold">Línies detectades: {resultatOcr.linies?.length || 0}</p>
+                  </div>
+                  <div className="flex justify-end gap-2">
+                    <button
+                      onClick={() => setResultatOcr(null)}
+                      className="px-4 py-2 rounded-xl border border-slate-300 dark:border-slate-700 text-slate-600 dark:text-slate-300 text-xs font-medium hover:bg-slate-100 dark:hover:bg-slate-800"
+                      disabled={processantOcr}
+                    >
+                      Tornar
+                    </button>
+                    <button
+                      onClick={handleConfirmarOcr}
+                      disabled={processantOcr}
+                      className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow disabled:opacity-50"
+                    >
+                      {processantOcr ? "Desant..." : "Confirmar i Desar"}
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Modal Alta Nou Article */}
       {modalNouArticle && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
