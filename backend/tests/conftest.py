@@ -28,6 +28,9 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from app.core.config import settings
 from app.core.db import get_db, get_db_with_tenant_context
 from app.main import app
+from app.workers.celery_app import celery_app
+
+celery_app.conf.update(task_always_eager=True, task_eager_propagates=True)
 
 # Desactivar rate‑limiting si estem en mode testing
 if os.getenv("TESTING") == "1":
