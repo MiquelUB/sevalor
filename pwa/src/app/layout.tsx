@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import { ChameleonProvider } from "@/lib/chameleon";
+import { AuthProvider } from "@/lib/auth-context";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -28,9 +29,11 @@ export default function RootLayout({
   return (
     <html lang="ca">
       <body className="min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 antialiased font-sans">
-        <ChameleonProvider>
-          {children}
-        </ChameleonProvider>
+        <AuthProvider>
+          <ChameleonProvider>
+            {children}
+          </ChameleonProvider>
+        </AuthProvider>
       </body>
     </html>
   );

@@ -64,12 +64,15 @@ export default function OperariLoginPage() {
   };
 
   const handleDigit = (digit: string) => {
-    if (pin.length < 4) {
-      const nouPin = pin + digit;
-      setPin(nouPin);
-      setError(null);
-    }
+    setPin((prev) => {
+      if (prev.length < 4) {
+        return prev + digit;
+      }
+      return prev;
+    });
+    setError(null);
   };
+
 
   const handleClear = () => {
     setPin("");
@@ -246,7 +249,7 @@ export default function OperariLoginPage() {
               required
               value={nif}
               onChange={handleNifChange}
-              placeholder="ex: 12345678A"
+              placeholder="Ex: 12345678A"
               className="block w-full pl-9 pr-3 py-2.5 text-base font-mono font-bold uppercase tracking-wider rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-500 shadow-sm"
             />
           </div>
@@ -314,6 +317,9 @@ export default function OperariLoginPage() {
         </div>
 
         {/* Botó directe d'Entrar */}
+        <div id="debug" className="text-xs text-black" style={{opacity:0}}>
+          NIF:{nif} PIN:{pin} LEN:{pin.length}
+        </div>
         <button
           type="button"
           disabled={loading || pin.length !== 4 || !nif.trim()}

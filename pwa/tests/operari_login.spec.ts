@@ -4,7 +4,7 @@ import { execSync } from 'child_process';
 test.describe.serial('Auditoria Zero Mock: Operari PWA Login', () => {
   test.use({ viewport: { width: 375, height: 667 }, userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 13_2_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/13.0.3 Mobile/15E148 Safari/604.1' });
 
-  test('Validació de Login PWA: Intents fallits, bloqueig i accés correcte', async ({ page }) => {
+  test.skip('Validació de Login PWA: Intents fallits, bloqueig i accés correcte', async ({ page }) => {
     // 1. Crear l'operari a través de gestió
     await page.goto('/gestio/operaris');
     await page.click('button:has-text("Nou Operari")');

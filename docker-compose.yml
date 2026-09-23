@@ -80,7 +80,7 @@ services:
       context: ./backend
     container_name: sevalor_celery_worker
     restart: always
-    command: celery -A app.workers.celery_app worker --loglevel=INFO --concurrency=4
+    command: celery -A app.workers.celery_app worker -Q celery,queue_critical,queue_media,queue_periodic,queue_documents --loglevel=INFO --concurrency=4
     environment:
       - POSTGRES_SERVER=db
       - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-sevalor}

@@ -1,36 +1,36 @@
-/**
- * Base de dades local IndexedDB del client (Dexie.js).
- *
- * Compleix Spec 013, 015, 018, 020:
- * - Persistència 100% offline-first de dades de camp
- * - Cua de sincronització asíncrona amb blocs atòmics idempotents
- * - Zero Mock Data
- */
+import Dexie, { type Table } from 'dexie';
 
-import Dexie, { Table } from "dexie";
-
+// Define data structures
 export interface LocalOrdreTreball {
   id: string;
   empresa_id: string;
-  codi: string;
+  client_id: string;
   titol: string;
   descripcio?: string;
-  estat: "PENDENT" | "EN_TRAMIT" | "PAUSADA" | "COMPLETADA";
-  client_nom: string;
-  coords_gps?: [number, number]; // [lat, lng]
-  data_planificacio: string;
-  updated_at: string;
+  estat: "PENDENT" | "EN_CURS" | "COMPLETADA" | "CANCELADA";
+  prioritat: "BAIXA" | "NORMAL" | "ALTA" | "CRITICA";
+  assignat_a: string;
+  data_inici_prevista?: string;
+  data_final_prevista?: string;
 }
 
-export interface LocalTiquetDespesa {
+export interface LocalMaterialDraft {
   id: string;
   empresa_id: string;
-  categoria: "CARBURANT" | "DIETES" | "MATERIAL" | "ALTRES";
-  import_total: number;
-  tiquet_foto_blob?: Blob | string;
-  odometre_foto_blob?: Blob | string; // Obligatori per a CARBURANT
-  odometre_valor?: number;
-  data_despesa: string;
+  ordre_id: string;
+  article_id: string;
+  quantitat_utilitzada: number;
+  data_registre: string;
+  estat_sync: "PENDENT" | "SINCRONITZAT";
+}
+
+export interface LocalFichajeLaboral {
+  id: string;
+  empresa_id: string;
+  usuari_id: string;
+  tipus: "ENTRADA" | "SORTIDA";
+  coords_gps?: [number, number];
+  timestamp_local: number;
   estat_sync: "PENDENT" | "SINCRONITZAT" | "ERROR";
 }
 
@@ -47,30 +47,21 @@ export interface LocalIncidencia {
   estat_sync: "PENDENT" | "SINCRONITZAT";
 }
 
-export interface SyncQueueItem {
-  id: string;
-  bloc_uuid: string;
-  acció: "CREAR_TIQUET" | "REPORTAR_INCIDENCIA" | "INICIAR_TRAJECTE" | "FINALITZAR_ORDRE";
-  payload: any;
-  timestamp: number;
-  intents: number;
-}
-
-export class SevalorLocalDatabase extends Dexie {
-  ordres!: Table<LocalOrdreTreball, string>;
-  tiquets!: Table<LocalTiquetDespesa, string>;
+export class SevalorOfflineDatabase extends Dexie {
+  ordresTreball!: Table<LocalOrdreTreball, string>;
+  materialsDraft!: Table<LocalMaterialDraft, string>;
+  fichajes!: Table<LocalFichajeLaboral, string>;
   incidencies!: Table<LocalIncidencia, string>;
-  sync_queue!: Table<SyncQueueItem, string>;
 
   constructor() {
-    super("SevalorFieldDB");
+    super('SevalorOfflineDB');
     this.version(1).stores({
-      ordres: "id, empresa_id, estat, data_planificacio",
-      tiquets: "id, empresa_id, categoria, estat_sync",
-      incidencies: "id, empresa_id, tipus, estat_sync",
-      sync_queue: "id, bloc_uuid, timestamp, intents",
+      ordresTreball: 'id, empresa_id, assignat_a, estat',
+      materialsDraft: 'id, ordre_id, estat_sync',
+      fichajes: 'id, usuari_id, estat_sync',
+      incidencies: 'id, ordre_id, estat_sync'
     });
   }
 }
 
-export const localDB = new SevalorLocalDatabase();
+export const db = new SevalorOfflineDatabase();
