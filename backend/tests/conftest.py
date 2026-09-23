@@ -1,6 +1,6 @@
 import os
 
-os.environ['REDIS_URL'] = 'redis://:sevalor_redis_pass@127.0.0.1:6380/0'
+os.environ.setdefault('REDIS_URL', 'redis://:sevalor_redis_pass@127.0.0.1:6380/0')
 """Configuració de fixtures per a Pytest amb aïllament SAVEPOINT per test.
 
 Compleix Audotoria_i_Normativa_Tests_Backend.md:

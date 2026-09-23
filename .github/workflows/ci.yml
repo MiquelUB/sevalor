@@ -28,6 +28,15 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6380:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
 
     steps:
       - name: Checkout repository
@@ -56,6 +65,7 @@ jobs:
           DATABASE_URL: postgresql+asyncpg://postgres:postgrespassword@localhost:5432/sevalor
           TESTING: "1"
           SECRET_KEY: "ci_cd_secret_key_for_testing_purposes_only_minimum_length"
+          REDIS_URL: "redis://localhost:6380/0"
         run: |
           alembic upgrade head
           python scripts/seed.py
@@ -72,6 +82,7 @@ jobs:
           TEST_DATABASE_URL: postgresql+asyncpg://postgres:postgrespassword@localhost:5432/sevalor
           TESTING: "1"
           SECRET_KEY: "ci_cd_secret_key_for_testing_purposes_only_minimum_length"
+          REDIS_URL: "redis://localhost:6380/0"
         run: |
           pytest tests/ -v --tb=short
 
