@@ -107,6 +107,10 @@ Requisits Funcionals (EARS Notation)
 Àmbit 2: Aprovisionament Tècnic, Estructura de Volums i Aïllament RLS
 
     RF-07 (Event-driven): En confirmar el formulari d'alta d'un tenant, EL SISTEMA executarà una transacció de base de dades atòmica que insereixi el registre a la taula mestra empreses (UUID v4 d'empresa_id) i habiliti les polítiques de Row Level Security (RLS) vinculades.
+        - **Detall Tècnic RLS (Base de Dades):** Tota taula core (`Client`, `Article`, `OrdreTreball`, `Vehicle`, etc.) tindrà activat `ALTER TABLE ... ENABLE ROW LEVEL SECURITY;`.
+        - La política d'accés obligatòria serà: `CREATE POLICY tenant_isolation_policy ON <taula> USING (empresa_id = current_setting('app.current_empresa_id')::uuid)`.
+        - El rol `sevalor_app` serà l'únic autoritzat a connectar-se per heretar aquestes polítiques.
+    RF-07.1 (System Constraint) — Prohibició de Filtratge Manual a l'Aplicació: A causa de l'activació del RLS, QUEDA TERMINANTMENT PROHIBIT incloure clàusules manuals `WHERE empresa_id = X` o similars en les consultes SQLAlchemy de l'API (repositoris de magatzem, proveïdors, clients...). Tot l'aïllament multi-tenant es delegarà exclusivament al motor PostgreSQL.
     RF-08 (Event-driven) — Inicialització d'Arbre de Volums Sobirans: QUAN s'aprovi el tenant, EL SISTEMA delegarà a Celery la creació física local a Hetzner del directori sobirà de l'empresa sota les rutes:
         /data/<empresa_id>/incidencies/ (Fotos d'incidències i tiquets).
         /data/<empresa_id>/vehicles/ (Fotos d'odòmetres i tiquets de gasoil).

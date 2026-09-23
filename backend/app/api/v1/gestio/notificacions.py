@@ -1,16 +1,16 @@
-import uuid
 import secrets
-from datetime import datetime, timezone, timedelta
+import uuid
+from datetime import datetime, timedelta, timezone
 from typing import List, Optional
+
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
-from sqlalchemy import text
 from pydantic import BaseModel, Field
+from sqlalchemy import select, text
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db_with_tenant_context
 from app.core.security import require_roles
-from app.models.models import ConversaNotificacio, MissatgeNotificacio, Client
+from app.models.models import Client, ConversaNotificacio, MissatgeNotificacio
 
 router = APIRouter(
     prefix="/gestio/notificacions",

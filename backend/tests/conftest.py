@@ -1,3 +1,6 @@
+import os
+
+os.environ['REDIS_URL'] = 'redis://:sevalor_redis_pass@127.0.0.1:6380/0'
 """Configuració de fixtures per a Pytest amb aïllament SAVEPOINT per test.
 
 Compleix Audotoria_i_Normativa_Tests_Backend.md:
@@ -7,23 +10,24 @@ Compleix Audotoria_i_Normativa_Tests_Backend.md:
 - Sobreescriu TOTES les dependències de base de dades (get_db i get_db_with_tenant_context)"""
 
 import os
+
 os.environ["TESTING"] = "1"
 
 import asyncio
 import uuid
-import jwt
 from datetime import datetime, timedelta, timezone
 from typing import AsyncGenerator
 
+import jwt
 import pytest
 import pytest_asyncio
-from httpx import AsyncClient, ASGITransport
-from sqlalchemy import text, pool
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from httpx import ASGITransport, AsyncClient
+from sqlalchemy import pool, text
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
 from app.core.config import settings
-from app.main import app
 from app.core.db import get_db, get_db_with_tenant_context
+from app.main import app
 
 # Desactivar rate‑limiting si estem en mode testing
 if os.getenv("TESTING") == "1":
@@ -47,17 +51,16 @@ def event_loop():
 async def setup_test_database():
     """Initializes the database schema and RLS policies for testing before any tests run."""
     engine = create_async_engine(TEST_DB_URL, echo=False)
-    
+
     from app.core.db import Base
-    from app.models import models
-    
+
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
         import os
 
         try:
 
-            with open("../db/migrations/002_rls_global.sql", "r") as f:
+            with open(os.path.join(os.path.dirname(__file__), "../app/db/migrations/002_rls_global.sql"), "r") as f:
 
                 rls_sql = f.read()
 
@@ -70,7 +73,7 @@ async def setup_test_database():
         except Exception as e:
 
             print("No RLS policies loaded:", e)
-        
+
         await conn.execute(text("""
         DO $$
         BEGIN
@@ -85,7 +88,7 @@ async def setup_test_database():
         await conn.execute(text("ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO sevalor_app;"))
         await conn.execute(text("GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO sevalor_app;"))
         await conn.execute(text("ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO sevalor_app;"))
-    
+
     await engine.dispose()
 
 

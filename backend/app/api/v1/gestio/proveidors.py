@@ -1,12 +1,13 @@
 import uuid
 from typing import List, Optional
+
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, or_
 from pydantic import BaseModel, Field
+from sqlalchemy import or_, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db_with_tenant_context
-from app.core.security import require_roles, get_current_user_claims
+from app.core.security import get_current_user_claims, require_roles
 from app.models.models import Proveidor, RegistreEsdevenimentsSIF
 
 router = APIRouter(
@@ -51,9 +52,9 @@ async def llistar_proveidors(
     empresa_id = request.state.empresa_id
     if not empresa_id:
         raise HTTPException(status_code=401, detail="No identificat")
-        
-    stmt = select(Proveidor).where(Proveidor.empresa_id == uuid.UUID(empresa_id))
-    
+
+    stmt = select(Proveidor)
+
     if q:
         search_term = f"%{q}%"
         stmt = stmt.where(
@@ -62,9 +63,9 @@ async def llistar_proveidors(
                 Proveidor.nif.ilike(search_term)
             )
         )
-        
+
     stmt = stmt.limit(limit).offset(offset).order_by(Proveidor.created_at.desc())
-    
+
     result = await db.execute(stmt)
     proveidors = result.scalars().all()
 
@@ -99,13 +100,13 @@ async def alta_proveidor(
     empresa_id = request.state.empresa_id
     if not empresa_id:
         raise HTTPException(status_code=401, detail="No identificat")
-        
-    stmt_nif = select(Proveidor).where(Proveidor.empresa_id == uuid.UUID(empresa_id), Proveidor.nif == proveidor.nif)
+
+    stmt_nif = select(Proveidor).where(Proveidor.nif == proveidor.nif)
     result_nif = await db.execute(stmt_nif)
     if result_nif.scalars().first():
         raise HTTPException(status_code=400, detail="El NIF/CIF ja es troba registrat en el sistema")
 
-    stmt_codi = select(Proveidor).where(Proveidor.empresa_id == uuid.UUID(empresa_id), Proveidor.codi == proveidor.codi)
+    stmt_codi = select(Proveidor).where(Proveidor.codi == proveidor.codi)
     result_codi = await db.execute(stmt_codi)
     if result_codi.scalars().first():
         raise HTTPException(status_code=400, detail="El codi ja es troba registrat")
@@ -120,7 +121,7 @@ async def alta_proveidor(
         especialitat=proveidor.especialitat,
         iban_xifrat_simetric=proveidor.iban
     )
-    
+
     db.add(nou_proveidor)
     await db.commit()
 
@@ -211,21 +212,21 @@ async def editar_proveidor(
     empresa_id = request.state.empresa_id
     if not empresa_id:
         raise HTTPException(status_code=401, detail="No identificat")
-        
-    stmt = select(Proveidor).where(Proveidor.id == proveidor_id, Proveidor.empresa_id == uuid.UUID(empresa_id))
+
+    stmt = select(Proveidor).where(Proveidor.id == proveidor_id)
     result = await db.execute(stmt)
     prov = result.scalars().first()
     if not prov:
         raise HTTPException(status_code=404, detail="Proveïdor no trobat")
-        
+
     # Evitar codi o nif duplicat si han canviat
     if prov.nif != proveidor.nif:
-        stmt_nif = select(Proveidor).where(Proveidor.empresa_id == uuid.UUID(empresa_id), Proveidor.nif == proveidor.nif)
+        stmt_nif = select(Proveidor).where(Proveidor.nif == proveidor.nif)
         if (await db.execute(stmt_nif)).scalars().first():
             raise HTTPException(status_code=400, detail="Aquest NIF ja pertany a un altre proveïdor")
-            
+
     if prov.codi != proveidor.codi:
-        stmt_cod = select(Proveidor).where(Proveidor.empresa_id == uuid.UUID(empresa_id), Proveidor.codi == proveidor.codi)
+        stmt_cod = select(Proveidor).where(Proveidor.codi == proveidor.codi)
         if (await db.execute(stmt_cod)).scalars().first():
             raise HTTPException(status_code=400, detail="Aquest codi ja pertany a un altre proveïdor")
 
@@ -235,11 +236,11 @@ async def editar_proveidor(
     prov.telefon = proveidor.telefon
     prov.email = proveidor.email
     prov.especialitat = proveidor.especialitat
-    
+
     await db.commit()
-    
+
     iban_ocult = "****" + prov.iban_xifrat_simetric[-4:] if prov.iban_xifrat_simetric else None
-    
+
     return {
         "id": prov.id,
         "codi": prov.codi,

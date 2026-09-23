@@ -1,15 +1,15 @@
 """Connexió asíncrona a la base de dades PostgreSQL amb SQLAlchemy 2.0 i asyncpg."""
 
+import os
 from collections.abc import AsyncGenerator
+
 from fastapi import Request
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
+from sqlalchemy.pool import NullPool
 
 from app.core.config import settings
-
-import os
-from sqlalchemy.pool import NullPool
 
 # Configuració del motor segons entorn
 engine_kwargs: dict = {"echo": False, "pool_pre_ping": True}
@@ -40,24 +40,24 @@ class Base(DeclarativeBase):
 
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
-    """Generador de sessions de base de dades asíncrones per a injecció de dependències."""
+    """Generador de sessions de base de dades asíncrones per a injecció de dependències.
+    Injecta automàticament el context RLS."""
     async with AsyncSessionLocal() as session:
         try:
+            from app.core.context import tenant_context, superadmin_context
+            empresa_id = tenant_context.get()
+            is_superadmin = superadmin_context.get()
+            
+            await set_tenant_context(session, empresa_id, is_superadmin)
             yield session
         finally:
             await session.close()
 
 
 async def get_db_with_tenant_context(request: Request) -> AsyncGenerator[AsyncSession, None]:
-    """Generador de sessions amb RLS automàtic des del tenant extret pel middleware."""
-    async with AsyncSessionLocal() as session:
-        try:
-            empresa_id = getattr(request.state, "empresa_id", None)
-            is_superadmin = getattr(request.state, "is_superadmin", False)
-            await set_tenant_context(session, empresa_id, is_superadmin)
-            yield session
-        finally:
-            await session.close()
+    """Deprecated: Utilitzeu get_db. Aquest mètode és un àlies per compatibilitat."""
+    async for session in get_db():
+        yield session
 
 
 async def set_tenant_context(session: AsyncSession, empresa_id: str | None, is_superadmin: bool = False) -> None:

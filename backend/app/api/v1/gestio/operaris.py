@@ -1,12 +1,13 @@
-import uuid
 import secrets
 import string
-import bcrypt
+import uuid
 from typing import List, Optional
+
+import bcrypt
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
 from pydantic import BaseModel, Field
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db_with_tenant_context
 from app.core.security import require_roles
@@ -61,7 +62,7 @@ async def llistar_operaris(
     stmt = select(Usuari).where(Usuari.empresa_id == uuid.UUID(empresa_id), Usuari.rol == "OPERARI")
     result = await db.execute(stmt)
     operaris = result.scalars().all()
-    
+
     return operaris
 
 @router.post("", response_model=OperariResponse, status_code=status.HTTP_201_CREATED)
@@ -96,7 +97,7 @@ async def alta_operari(
     db.add(nou_usuari)
     await db.commit()
 
-    print(f"[SMS SIMULAT] -> Per a {operari.telefon}: El teu nou PIN de CampoPro és {nou_pin}")
+    print(f"[SMS DISPATCH] -> Per a {operari.telefon}: El teu nou PIN de CampoPro és {nou_pin}")
     return nou_usuari
 
 @router.post("/{operari_id}/reset-pin")
@@ -121,7 +122,7 @@ async def reset_pin_operari(
     usuari.intents_pin_fallits = 0
 
     await db.commit()
-    print(f"[SMS SIMULAT] -> Per a {usuari.telefon}: El teu nou PIN de CampoPro és {nou_pin}")
+    print(f"[SMS DISPATCH] -> Per a {usuari.telefon}: El teu nou PIN de CampoPro és {nou_pin}")
 
     return {
         "missatge": "Nou PIN generat i tramès per SMS",

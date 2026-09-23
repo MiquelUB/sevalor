@@ -6,6 +6,7 @@ from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoin
 
 from app.core.config import settings
 
+
 class TenantMiddleware(BaseHTTPMiddleware):
     """Intercepta peticions HTTP per extreure l'empresa_id del tenant i associar-lo al request.state."""
 
@@ -24,10 +25,10 @@ class TenantMiddleware(BaseHTTPMiddleware):
                     algorithms=[settings.ALGORITHM],
                     options={"verify_aud": False},
                 )
-                
+
                 if payload.get("rol") == "SUPERADMIN":
                     is_superadmin = True
-                
+
                 extret_id = payload.get("empresa_id")
                 if extret_id:
                     jwt_empresa_id = str(extret_id)
@@ -40,10 +41,10 @@ class TenantMiddleware(BaseHTTPMiddleware):
             header_tenant = request.headers.get("X-Empresa-ID")
             if header_tenant:
                 empresa_id = header_tenant.strip()
-                    
+
         elif auth_header:
             empresa_id = jwt_empresa_id
-            
+
         elif not auth_header:
             # Per a usuaris anònims (ex. pantalla de login PWA), acceptem X-Empresa-ID
             header_tenant = request.headers.get("X-Empresa-ID")
@@ -58,5 +59,13 @@ class TenantMiddleware(BaseHTTPMiddleware):
         request.state.empresa_id = empresa_id
         request.state.is_superadmin = is_superadmin
 
-        response = await call_next(request)
-        return response
+        from app.core.context import tenant_context, superadmin_context
+        token_tenant = tenant_context.set(empresa_id)
+        token_superadmin = superadmin_context.set(is_superadmin)
+
+        try:
+            response = await call_next(request)
+            return response
+        finally:
+            tenant_context.reset(token_tenant)
+            superadmin_context.reset(token_superadmin)

@@ -2,6 +2,7 @@
 
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from slowapi import Limiter, _rate_limit_exceeded_handler
@@ -9,31 +10,35 @@ from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 from slowapi.util import get_remote_address
 
-from app.api.v1.health import router as health_router
-from app.api.v1.superadmin.tenants import router as tenants_router
-from app.api.v1.gestio.operaris import router as operaris_router
-from app.api.v1.gestio.clients import router as clients_router
-from app.api.v1.gestio.proveidors import router as proveidors_router
-from app.api.v1.gestio.flota import router as flota_router
-from app.api.v1.gestio.magatzem import router as magatzem_router
-from app.api.v1.webhooks.telegram import router as telegram_webhook_router
-from app.api.v1.gestio.feines import router as feines_router
-from app.api.v1.gestio.planols import router as planols_router
-from app.api.v1.gestio.comptabilitat import router as comptabilitat_router
-from app.api.v1.gestio.notificacions import router as notificacions_router
-from app.api.v1.operari_auth import router as operari_auth_router
 from app.api.v1.auth import router as auth_router
-from app.api.v1.operari_pwa.jornada import router as jornada_router
-from app.api.v1.operari_pwa.picking import router as picking_router
-from app.api.v1.operari_pwa.incidencies import router as incidencies_router
+from app.api.v1.gestio.cerca import router as cerca_router
+from app.api.v1.gestio.cerca import spotlight_router
+from app.api.v1.gestio.clients import router as clients_router
+from app.api.v1.gestio.comptabilitat import router as comptabilitat_router
 from app.api.v1.gestio.configuracio import router as configuracio_router
 from app.api.v1.gestio.copilot import router as copilot_router
-from app.api.v1.telemetria import router as telemetria_router
+from app.api.v1.gestio.feines import intervencions_router
+from app.api.v1.gestio.feines import router as feines_router
+from app.api.v1.gestio.flota import router as flota_router
+from app.api.v1.gestio.magatzem import router as magatzem_router
+from app.api.v1.gestio.notificacions import router as notificacions_router
+from app.api.v1.gestio.operaris import router as operaris_router
+from app.api.v1.gestio.planols import router as planols_router
+from app.api.v1.gestio.pressupostos import router as pressupostos_router
+from app.api.v1.gestio.proveidors import router as proveidors_router
+from app.api.v1.health import router as health_router
+from app.api.v1.operari_auth import router as operari_auth_router
 from app.api.v1.operari_pwa.feines import router as feines_pwa_router
+from app.api.v1.operari_pwa.incidencies import router as incidencies_router
+from app.api.v1.operari_pwa.jornada import router as jornada_router
+from app.api.v1.operari_pwa.picking import router as picking_router
+from app.api.v1.operari_pwa.sync import router as sync_router
 from app.api.v1.operari_pwa.tiquets import router as tiquets_router
 from app.api.v1.operari_pwa.vehicles import router as vehicles_pwa_router
-from app.api.v1.gestio.feines import intervencions_router
-from app.api.v1.gestio.cerca import router as cerca_router, spotlight_router
+from app.api.v1.superadmin.tenants import router as tenants_router
+from app.api.v1.telemetria import router as telemetria_router
+from app.api.v1.webhooks.telegram import router as telegram_webhook_router
+from app.api.v1.workers import router as workers_router
 from app.core.config import settings
 from app.middleware.tenant import TenantMiddleware
 
@@ -51,7 +56,7 @@ app = FastAPI(
 )
 
 app.state.limiter = limiter
-app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)  # type: ignore[arg-type]
 
 app.add_middleware(
     CORSMiddleware,
@@ -73,6 +78,7 @@ app.include_router(magatzem_router, prefix=settings.API_V1_STR)
 app.include_router(telegram_webhook_router, prefix=settings.API_V1_STR)
 app.include_router(feines_router, prefix=settings.API_V1_STR)
 app.include_router(planols_router, prefix=settings.API_V1_STR)
+app.include_router(pressupostos_router, prefix=settings.API_V1_STR)
 app.include_router(comptabilitat_router, prefix=settings.API_V1_STR)
 app.include_router(notificacions_router, prefix=settings.API_V1_STR)
 app.include_router(operari_auth_router, prefix=settings.API_V1_STR)
@@ -83,6 +89,7 @@ app.include_router(picking_router, prefix=settings.API_V1_STR)
 app.include_router(incidencies_router, prefix=settings.API_V1_STR)
 app.include_router(tiquets_router, prefix=settings.API_V1_STR)
 app.include_router(vehicles_pwa_router, prefix=settings.API_V1_STR)
+app.include_router(sync_router, prefix=settings.API_V1_STR + "/operari_pwa")
 app.include_router(intervencions_router, prefix=settings.API_V1_STR)
 app.include_router(cerca_router, prefix=settings.API_V1_STR)
 app.include_router(spotlight_router, prefix=settings.API_V1_STR)
@@ -90,16 +97,19 @@ app.include_router(configuracio_router, prefix=settings.API_V1_STR)
 
 # Compatibilitat de rutes per a crides directes a /configuracio/empresa
 from fastapi import APIRouter
+
 from app.api.v1.gestio.configuracio import obtenir_dades_empresa, obtenir_marca_camaleonica
+
 compat_config_router = APIRouter(prefix="/configuracio", tags=["Configuració Compat"])
 compat_config_router.add_api_route("/empresa", obtenir_dades_empresa, methods=["GET"])
 compat_config_router.add_api_route("/empresa/marca", obtenir_marca_camaleonica, methods=["GET"])
 app.include_router(compat_config_router, prefix=settings.API_V1_STR)
 app.include_router(copilot_router, prefix=settings.API_V1_STR)
 app.include_router(telemetria_router, prefix=settings.API_V1_STR)
+app.include_router(workers_router, prefix=settings.API_V1_STR + "/workers", tags=["Workers Celery"])
 
 @app.get("/")
-async def root():
+async def root() -> dict[str, str]:
     return {
         "service": settings.PROJECT_NAME,
         "version": settings.VERSION,

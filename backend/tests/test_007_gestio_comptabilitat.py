@@ -1,11 +1,12 @@
-from app.models.models import Empresa, Usuari, Client
-import pytest_asyncio
-import pytest
 import uuid
-import hashlib
-from httpx import AsyncClient, ASGITransport
-from sqlalchemy import text
+
+import pytest
+import pytest_asyncio
+from httpx import ASGITransport, AsyncClient
+
 from app.main import app
+from app.models.models import Client, Empresa
+
 
 @pytest_asyncio.fixture
 async def setup_comptabilitat_test(admin_session):
@@ -13,7 +14,7 @@ async def setup_comptabilitat_test(admin_session):
     client_id = str(uuid.uuid4())
     nif_rand = "NIF-" + str(uuid.uuid4())[:5]
     sub_rand = "comp-" + str(uuid.uuid4())[:5]
-    
+
     admin_session.add(Empresa(
         id=uuid.UUID(empresa_id), nom='Test Comp', nif=nif_rand, subdomini=sub_rand, pla_subscripcio='STARTER', estat_pagament='ACTIU'
     ))
@@ -23,16 +24,18 @@ async def setup_comptabilitat_test(admin_session):
     ))
     await admin_session.flush()
     await admin_session.flush()
-    
+
     return {"empresa_id": empresa_id, "client_id": client_id}
 
 @pytest.mark.asyncio
 async def test_alta_factura_verifactu(setup_comptabilitat_test, headers):
     data = setup_comptabilitat_test
-    import jwt
     from datetime import datetime, timedelta, timezone
+
+    import jwt
+
     from app.core.config import settings
-    
+
     # Boss token
     payload = {
         "sub": str(uuid.uuid4()),
@@ -42,7 +45,7 @@ async def test_alta_factura_verifactu(setup_comptabilitat_test, headers):
     }
     token = jwt.encode(payload, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
     headers = {"Authorization": f"Bearer {token}"}
-    
+
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
         fac_payload = {
             "numero_factura": 1,
@@ -58,7 +61,7 @@ async def test_alta_factura_verifactu(setup_comptabilitat_test, headers):
         assert factura["numero_factura"] == 1
         assert factura["hash_sha256"] is not None
         assert len(factura["hash_sha256"]) == 64  # Hash SHA-256 for VeriFactu
-        
+
         # Test duplicat de sèrie i número
         res_dup = await ac.post("/api/v1/gestio/comptabilitat/factures", json=fac_payload, headers=headers)
         assert res_dup.status_code == 400

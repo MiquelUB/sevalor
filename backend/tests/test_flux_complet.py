@@ -1,4 +1,5 @@
-from app.models.models import Empresa, Usuari, Client
+from app.models.models import Client, Empresa, Usuari
+
 """
 Test de flux complet: Operari PWA + Gestió Backend.
 
@@ -14,12 +15,11 @@ Cobreix:
 """
 
 import uuid
+
 import pytest
 import pytest_asyncio
 from httpx import AsyncClient
-from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
-
 
 # ---------------------------------------------------------------------------
 # HELPERS
@@ -125,8 +125,9 @@ class TestFluxOperari:
             "sub": str(uuid.uuid4()), "rol": "ENGINYER", "empresa_id": eid,
         }
         # No tenim secrets aquí; cal generar un token vàlid amb la SECRET_KEY
-        from app.core.config import settings
         import jwt as pyjwt
+
+        from app.core.config import settings
         eng_token = pyjwt.encode(jwt_payload, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
 
         resp = await async_client.get(
@@ -139,8 +140,9 @@ class TestFluxOperari:
         """El Boss crea un client i una factura."""
         eid = empresa_i_admin
         # Token de Boss
-        from app.core.config import settings
         import jwt as pyjwt
+
+        from app.core.config import settings
         boss_token = pyjwt.encode(
             {"sub": str(uuid.uuid4()), "rol": "BOSS", "empresa_id": eid},
             settings.SECRET_KEY, algorithm=settings.ALGORITHM,
@@ -174,8 +176,9 @@ class TestFluxOperari:
 
     async def test_05_rls_tenant_aillament(self, empresa_i_admin, async_client: AsyncClient, admin_session: AsyncSession):
         """Usuari del Tenant A no pot veure dades del Tenant B."""
-        from app.core.config import settings
         import jwt as pyjwt
+
+        from app.core.config import settings
 
         eid_a = empresa_i_admin
         # Client a Tenant A

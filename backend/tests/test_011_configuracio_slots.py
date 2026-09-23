@@ -1,7 +1,10 @@
-import pytest
-from httpx import AsyncClient, ASGITransport
-from app.main import app
 import uuid
+
+import pytest
+from httpx import ASGITransport, AsyncClient
+
+from app.main import app
+
 
 @pytest.mark.asyncio
 async def test_crear_slot_jornada_continua(admin_session, headers, boss_token):
@@ -23,7 +26,7 @@ async def test_crear_slot_jornada_continua(admin_session, headers, boss_token):
         data = res.json()
         assert data["status"] == "OK"
         assert "id" in data
-        
+
         # Validem llistat
         res_list = await ac.get("/api/v1/gestio/configuracio/slots", headers=headers)
         assert res_list.status_code == 200

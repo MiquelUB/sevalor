@@ -15,7 +15,6 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Importem la Base declarativa i tots els models perquè l'autogenerate els vegi
 from app.core.db import Base  # noqa: E402
-from app.core.config import settings  # noqa: E402
 from app.models import models  # noqa: F401, E402  -- registre de models
 
 # Alembic Config

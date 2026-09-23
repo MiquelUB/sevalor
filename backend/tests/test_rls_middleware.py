@@ -1,9 +1,12 @@
-import pytest
-import jwt
-from httpx import AsyncClient, ASGITransport
 from datetime import datetime, timedelta, timezone
-from app.main import app
+
+import jwt
+import pytest
+from httpx import ASGITransport, AsyncClient
+
 from app.core.config import settings
+from app.main import app
+
 
 @pytest.fixture
 def fake_secret():
@@ -25,13 +28,13 @@ def create_token(rol: str, empresa_id: str, secret: str):
 async def test_middleware_blocks_tenant_spoofing(fake_secret):
     real_tenant = "11111111-1111-1111-1111-111111111111"
     forged_tenant = "99999999-9999-9999-9999-999999999999"
-    
+
     token = create_token("OPERARI", real_tenant, fake_secret)
     headers = {
         "Authorization": f"Bearer {token}",
         "X-Empresa-ID": forged_tenant
     }
-    
+
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         res = await ac.get("/api/v1/auth/me", headers=headers)
@@ -49,7 +52,7 @@ async def test_superadmin_can_impersonate_tenant(fake_secret):
         "Authorization": f"Bearer {superadmin_token}",
         "X-Empresa-ID": target_tenant
     }
-    
+
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         res = await ac.get("/api/v1/auth/me", headers=headers)

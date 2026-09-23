@@ -1,14 +1,15 @@
 import uuid
-import pytest
-from httpx import AsyncClient, ASGITransport
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
 
+import jwt
+import pytest
+from httpx import ASGITransport, AsyncClient
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.config import settings
 from app.main import app
 from app.models.models import Empresa, Usuari
-from app.core.config import settings
-from app.workers.tasks import crear_directoris_sobirans, celery_app
-import jwt
+from app.workers.tasks import crear_directoris_sobirans
 
 
 @pytest.fixture

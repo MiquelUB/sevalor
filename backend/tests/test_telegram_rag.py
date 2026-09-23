@@ -1,18 +1,20 @@
-import pytest
 import uuid
-from httpx import AsyncClient, ASGITransport
+
+import pytest
+from httpx import ASGITransport, AsyncClient
+
 from app.main import app
-from app.models.models import Empresa, Client, FaqCorporativaRag
-from datetime import datetime, timezone
+from app.models.models import Client, Empresa, FaqCorporativaRag
+
 
 @pytest.mark.asyncio
 async def test_telegram_rag(admin_session, boss_token):
     token_jwt, empresa_id = boss_token
     boss_nif = "B" + str(uuid.uuid4())[:8].upper()
-    
+
     admin_session.add(Empresa(id=uuid.UUID(empresa_id), nom="Test Empresa", nif=boss_nif, subdomini="testragbot", pla_subscripcio="STARTER", estat_pagament="ACTIU"))
     await admin_session.flush()
-    
+
     # Crear client i afegir info RAG
     client_id = uuid.uuid4()
     admin_session.add(Client(
@@ -24,7 +26,7 @@ async def test_telegram_rag(admin_session, boss_token):
         estat_canal_telegram="ACTIU",
         telegram_chat_id=999888
     ))
-    
+
     admin_session.add(FaqCorporativaRag(
         empresa_id=uuid.UUID(empresa_id),
         pregunta="Temps de garantia instal·lacions",
@@ -32,7 +34,7 @@ async def test_telegram_rag(admin_session, boss_token):
         paraules_clau="garantia, temps, durada",
         actiu=True
     ))
-    
+
     await admin_session.flush()
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:

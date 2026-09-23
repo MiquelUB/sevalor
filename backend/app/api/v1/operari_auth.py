@@ -1,22 +1,21 @@
 import logging
+import os
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
-import os
 
+import bcrypt
+import jwt
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
-from sqlalchemy import select, func
-from sqlalchemy.ext.asyncio import AsyncSession
 from slowapi import Limiter
 from slowapi.util import get_remote_address
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.db import get_db, set_tenant_context
-from app.models.models import Usuari, Empresa
-from app.api.v1.gestio.operaris import hash_pin
-import jwt
-import bcrypt
+from app.models.models import Empresa, Usuari
 
 logger = logging.getLogger("operari_auth")
 

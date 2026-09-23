@@ -1,18 +1,19 @@
 import logging
+import os
 import uuid
+from datetime import datetime, timedelta, timezone
+
 import bcrypt
 import jwt
-from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, EmailStr
-from sqlalchemy import select, func
-from sqlalchemy.ext.asyncio import AsyncSession
 from slowapi import Limiter
 from slowapi.util import get_remote_address
-import os
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.core.db import get_db, set_tenant_context
+from app.core.db import get_db
 from app.core.security import get_current_user_claims
 from app.models.models import Usuari
 
@@ -65,7 +66,7 @@ async def login_oficina(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Credencials invàlides",
             )
-            
+
         if usuari.rol.upper() == "OPERARI":
              raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,

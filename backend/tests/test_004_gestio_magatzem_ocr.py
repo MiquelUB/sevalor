@@ -1,35 +1,40 @@
-import pytest
 import uuid
 from datetime import date, timedelta
-from httpx import AsyncClient, ASGITransport
+
+import pytest
+from httpx import ASGITransport, AsyncClient
+
 from app.main import app
-from app.models.models import Empresa, Usuari
-from sqlalchemy import text
+from app.models.models import Empresa
+
 
 @pytest.mark.asyncio
 async def test_albara_ocr_i_confirmacio(admin_session, headers, boss_token):
     token, empresa_id = boss_token
     boss_nif = "B" + str(uuid.uuid4())[:8].upper()
-    
+
     admin_session.add(Empresa(
         id=uuid.UUID(empresa_id), nom='Test OCR Magatzem', nif=boss_nif, subdomini='testocr-' + str(uuid.uuid4())[:5], pla_subscripcio='STARTER', estat_pagament='ACTIU'
     ))
     await admin_session.flush()
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-        # Pas 1: Pujar arxiu
+        # Pas 1: Pujar arxiu (Ara en Background - Spec 004 RF-08)
         file_content = b"Mock PDF/Image Data"
         files = {"fitxer": ("albara.pdf", file_content, "application/pdf")}
         res_ocr = await ac.post("/api/v1/gestio/magatzem/albara/ocr", files=files, headers=headers)
-        assert res_ocr.status_code == 200
+        assert res_ocr.status_code == 202
         data_ocr = res_ocr.json()
-        assert data_ocr["proveidor"]["nom"] == "Jardineria Verda, S.A."
+        assert "task_id" in data_ocr
+
+        # Simulem que hem rebut les dades processades per la IA per continuar el flux
+        mock_numero = "ALB-2026-123"
 
         # Pas 2: Confirmar Albarà
         data_albara = (date.today() - timedelta(days=2)).isoformat()
         payload_confirmar = {
-            "proveidor": data_ocr["proveidor"],
-            "numero_document": data_ocr["numero_document"],
+            "proveidor": {"nif": "A12345678", "nom": "Jardineria Verda, S.A.", "adreca": "C/ de les Flors, 45", "telefon": "931234567", "email": "info@jardineriaverda.cat"},
+            "numero_document": mock_numero,
             "tipus_document": "ALBARA",
             "data_document": data_albara,
             "numero_albarans_vinculats": [],
@@ -56,19 +61,19 @@ async def test_albara_ocr_i_confirmacio(admin_session, headers, boss_token):
         assert res_conf.status_code == 201
         data_conf = res_conf.json()
         assert data_conf["estat"] == "OK"
-        
+
         # Pas 3: Provar duplicat (ha de fallar)
         res_dup = await ac.post("/api/v1/gestio/magatzem/albara/confirmar", json=payload_confirmar, headers=headers)
         assert res_dup.status_code == 400
         assert "Albarà ja pujat" in res_dup.json()["detail"]
-        
+
         # Pas 4: Confirmar Factura
         payload_factura = payload_confirmar.copy()
         payload_factura["tipus_document"] = "FACTURA"
         payload_factura["numero_document"] = "FAC-999"
         payload_factura["data_document"] = date.today().isoformat()
-        payload_factura["numero_albarans_vinculats"] = [data_ocr["numero_document"]]
-        
+        payload_factura["numero_albarans_vinculats"] = [mock_numero]
+
         res_fac = await ac.post("/api/v1/gestio/magatzem/albara/confirmar", json=payload_factura, headers=headers)
         assert res_fac.status_code == 201
         data_fac = res_fac.json()

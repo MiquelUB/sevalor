@@ -10,11 +10,10 @@ Implementa:
 - Protecció anti-recursivitat: el backup no inclou backups anteriors.
 """
 
+import logging
 import os
 import zipfile
-import logging
 from datetime import datetime, timezone
-from typing import Optional
 
 logger = logging.getLogger("backup_service")
 

@@ -1,16 +1,27 @@
-import uuid
 import os
+import uuid
 from datetime import date
-
 from typing import List, Optional
-from fastapi import APIRouter, Depends, HTTPException, Request, status, UploadFile, File
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, or_, text, func
+
+from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
 from pydantic import BaseModel, Field
+from sqlalchemy import func, or_, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db_with_tenant_context
 from app.core.security import require_roles
-from app.models.models import Article, Proveidor, Magatzem, EstocMagatzem, MovimentEstoc, FullaPicking, LiniaPicking, OrdreTreball, FacturaProveidor, AlbaraProveidor
+from app.models.models import (
+    AlbaraProveidor,
+    Article,
+    EstocMagatzem,
+    FacturaProveidor,
+    FullaPicking,
+    LiniaPicking,
+    Magatzem,
+    MovimentEstoc,
+    OrdreTreball,
+    Proveidor,
+)
 
 router = APIRouter(
     prefix="/gestio/magatzem",
@@ -84,12 +95,12 @@ async def llistar_articles(
     offset: int = 0,
     db: AsyncSession = Depends(get_db_with_tenant_context)
 ):
-    empresa_id = request.state.empresa_id
+    empresa_id = request.headers.get("X-Empresa-ID") or getattr(request.state, "empresa_id", None)
     if not empresa_id:
         raise HTTPException(status_code=401, detail="No identificat")
-        
+
     stmt = select(Article).where(Article.empresa_id == uuid.UUID(empresa_id))
-    
+
     if q:
         search_term = f"%{q}%"
         stmt = stmt.where(
@@ -98,12 +109,12 @@ async def llistar_articles(
                 Article.nom.ilike(search_term)
             )
         )
-        
+
     stmt = stmt.limit(limit).offset(offset).order_by(Article.created_at.desc())
-    
+
     result = await db.execute(stmt)
     articles = result.scalars().all()
-    
+
     return articles
 
 @router.post("/articles", response_model=ArticleResponse, status_code=status.HTTP_201_CREATED)
@@ -115,8 +126,8 @@ async def alta_article(
     empresa_id = request.state.empresa_id
     if not empresa_id:
         raise HTTPException(status_code=401, detail="No identificat")
-        
-    stmt_ref = select(Article).where(Article.empresa_id == uuid.UUID(empresa_id), Article.referencia_inventari == article.referencia_inventari)
+
+    stmt_ref = select(Article).where(Article.referencia_inventari == article.referencia_inventari)
     result_ref = await db.execute(stmt_ref)
     if result_ref.scalars().first():
         raise HTTPException(status_code=400, detail="La referència ja es troba registrada")
@@ -133,7 +144,7 @@ async def alta_article(
         preu_cost=article.preu_cost,
         preu_venda=article.preu_venda
     )
-    
+
     db.add(nou_article)
     await db.commit()
 
@@ -368,7 +379,7 @@ async def afegir_linia_picking(
             )
             if not avís_ia:
                 avís_ia = f"Comanda amb entrega parcial detectada (falta estoc): {disponible} unitats disponibles físiques. Bloqueig de picking matinal activat (Copilot Offline)."
-                
+
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail=f"❌ Copilot IA: {avís_ia}",
@@ -462,6 +473,7 @@ async def confirmar_devolucio(
     if estoc:
         estoc.quantitat_virtual_reservada = float(estoc.quantitat_virtual_reservada) - float(linia.quantitat_prevista)
         estoc.quantitat_fisica = float(estoc.quantitat_fisica) - quantitat_mermada
+        estoc.quantitat_cuarentena = float(estoc.quantitat_cuarentena) + quantitat_mermada
 
     await db.commit()
     return linia
@@ -471,68 +483,34 @@ async def confirmar_devolucio(
 
 
 
-@router.post("/albara/ocr", response_model=dict, status_code=status.HTTP_200_OK)
+@router.post("/albara/ocr", response_model=dict, status_code=status.HTTP_202_ACCEPTED)
 async def processar_document_ocr(
     request: Request,
     fitxer: UploadFile = File(...)
 ):
-    """Processa un document PDF o imatge via OCR d'IA per extreure dades d'albarà o factura."""
+    """Processa un document PDF o imatge via OCR d'IA per extreure dades d'albarà o factura en BACKGROUND."""
     empresa_id = request.state.empresa_id
     if not empresa_id:
         raise HTTPException(status_code=401)
-    
-    import random
-    from datetime import date
-    
-    return {
-        "proveidor": {
-            "nif": "A12345678",
-            "nom": "Jardineria Verda, S.A.",
-            "adreca": "C/ de les Flors, 45, 08001 Barcelona",
-            "telefon": "931234567",
-            "email": "info@jardineriaverda.cat"
-        },
-        "numero_document": f"ALB-2026-{random.randint(100, 999)}",
-        "tipus_document": "ALBARA",
-        "data_document": "2026-08-01",
-        "numero_albarans_vinculats": [],
-        "linies": [
-            {
-                "referencia": "PROD-01",
-                "nom": "Sac Terra Vegetal (50L)",
-                "quantitat": 20.0,
-                "preu": 5.50,
-                "descompte_percent": 0.0,
-                "tipus": "MATERIAL"
-            },
-            {
-                "referencia": "PROD-02",
-                "nom": "Test Terracota Gran",
-                "quantitat": 10.0,
-                "preu": 12.00,
-                "descompte_percent": 0.0,
-                "tipus": "MATERIAL"
-            },
-            {
-                "referencia": "PROD-03",
-                "nom": "Fertilitzant Orgànic (1L)",
-                "quantitat": 15.0,
-                "preu": 8.20,
-                "descompte_percent": 0.0,
-                "tipus": "MATERIAL"
-            },
-            {
-                "referencia": "PROD-04",
-                "nom": "Tisores de Podar Professionals",
-                "quantitat": 5.0,
-                "preu": 25.00,
-                "descompte_percent": 0.0,
-                "tipus": "EINA"
-            }
-        ],
-        "missatge": "Lectura OCR completada amb èxit. Dades extretes de l'albarà de Jardineria Verda."
-    }
 
+    import os
+    import uuid
+
+    from app.workers.tasks import processar_ocr_document_task
+
+    # 1. Guardem temporalment l'arxiu pujat per poder processar-lo asíncronament
+    temp_dir = f"/tmp/docs/{empresa_id}/ocr_inbox"
+    os.makedirs(temp_dir, exist_ok=True)
+    temp_path = f"{temp_dir}/{uuid.uuid4()}_{fitxer.filename}"
+
+    with open(temp_path, "wb") as f:
+        f.write(await fitxer.read())
+
+    # 2. Despatxa la tasca a Celery (queue_media segons Spec 024 RF-10)
+    task = processar_ocr_document_task.delay(temp_path, str(empresa_id))
+
+    # 3. Retorna immediatament
+    return {"task_id": task.id, "status": "PROCESSING"}
 @router.post("/albara/confirmar", status_code=status.HTTP_201_CREATED)
 async def confirmar_document(
     request: Request,
@@ -540,9 +518,9 @@ async def confirmar_document(
     db: AsyncSession = Depends(get_db_with_tenant_context)
 ):
     empresa_id = uuid.UUID(request.state.empresa_id)
-    
+
     # 1. Buscar o crear Proveïdor
-    stmt_prov = select(Proveidor).where(Proveidor.empresa_id == empresa_id, Proveidor.nif == payload.proveidor.nif)
+    stmt_prov = select(Proveidor).where(Proveidor.nif == payload.proveidor.nif)
     prov = (await db.execute(stmt_prov)).scalars().first()
     if not prov:
         prov = Proveidor(
@@ -561,59 +539,59 @@ async def confirmar_document(
         if payload.proveidor.telefon and not prov.telefon: prov.telefon = payload.proveidor.telefon
         if payload.proveidor.email and not prov.email: prov.email = payload.proveidor.email
         await db.flush()
-        
+
     # Crear carpeta del proveïdor al directori sobirà
     carpeta_proveidor = f"/tmp/data/{empresa_id}/proveidors/{prov.id}"
     os.makedirs(carpeta_proveidor, exist_ok=True)
-    
+
     # Buscar el magatzem principal
-    stmt_mag = select(Magatzem).where(Magatzem.empresa_id == empresa_id, Magatzem.tipus == "NAU_CENTRAL")
+    stmt_mag = select(Magatzem).where(Magatzem.tipus == "NAU_CENTRAL")
     magatzem = (await db.execute(stmt_mag)).scalars().first()
     if not magatzem:
         magatzem = Magatzem(empresa_id=empresa_id, nom="Nau Central Base", tipus="NAU_CENTRAL")
         db.add(magatzem)
         await db.flush()
-        
+
     articles_creats = 0
     moviments_creats = 0
-    
+
     if payload.tipus_document == "FACTURA":
         if not payload.numero_albarans_vinculats:
             raise HTTPException(status_code=400, detail="La factura necessita referenciar almenys un número d'albarà per creuar dades.")
-            
+
         quantitat_total_albarans = 0.0
-        
+
         for num_albara in payload.numero_albarans_vinculats:
             # 1. Comprovar que l'albarà existeix i pertany al mateix proveïdor
-            stmt_alb = select(AlbaraProveidor).where(AlbaraProveidor.empresa_id == empresa_id, AlbaraProveidor.numero_albara == num_albara)
+            stmt_alb = select(AlbaraProveidor).where(AlbaraProveidor.numero_albara == num_albara)
             albara_db = (await db.execute(stmt_alb)).scalars().first()
             if not albara_db:
                 raise HTTPException(status_code=400, detail=f"No s'ha trobat l'albarà {num_albara}. No podem validar la factura.")
-            
+
             if albara_db.proveidor_id != prov.id:
                 raise HTTPException(status_code=400, detail=f"L'albarà {num_albara} no pertany a aquest proveïdor (NIF diferent).")
-                
+
             # 2. Comprovar la data
             if payload.data_document <= albara_db.data_albara:
                 raise HTTPException(status_code=400, detail=f"La data de la factura ha de ser posterior a la de l'albarà {num_albara}.")
-                
+
             # 3. Sumar quantitats del MovimentEstoc associades a aquest albarà
             stmt_movs = select(MovimentEstoc).where(MovimentEstoc.magatzem_id == magatzem.id, MovimentEstoc.referencia_document == num_albara)
             moviments_albara = (await db.execute(stmt_movs)).scalars().all()
             quantitat_total_albarans += sum([float(m.quantitat) for m in moviments_albara])
-            
+
         quantitat_factura = sum([float(l.quantitat) for l in payload.linies])
-        
+
         if abs(quantitat_total_albarans - quantitat_factura) > 0.01:
             raise HTTPException(status_code=400, detail="DISCORDÀNCIA: Les quantitats de la factura no quadren amb la suma dels albarans vinculats. Revisa-ho manualment.")
-            
+
         base_imposable = sum([(l.quantitat * l.preu) * (1 - (l.descompte_percent/100)) for l in payload.linies])
         quota_iva = base_imposable * 0.21
-        
-        stmt_fact = select(FacturaProveidor).where(FacturaProveidor.empresa_id == empresa_id, FacturaProveidor.proveidor_id == prov.id, FacturaProveidor.numero_factura == payload.numero_document)
+
+        stmt_fact = select(FacturaProveidor).where(FacturaProveidor.proveidor_id == prov.id, FacturaProveidor.numero_factura == payload.numero_document)
         if (await db.execute(stmt_fact)).scalars().first():
             raise HTTPException(status_code=400, detail="Aquesta factura ja ha estat registrada prèviament.")
-            
+
         factura = FacturaProveidor(
             empresa_id=empresa_id,
             proveidor_id=prov.id,
@@ -627,13 +605,13 @@ async def confirmar_document(
         db.add(factura)
         await db.commit()
         return {"estat": "OK", "missatge": "Factura validada amb els albarans i enviada a Control Econòmic.", "factura_id": str(factura.id), "carpeta": carpeta_proveidor}
-    
+
     else:
         # És ALBARA
-        stmt_alb_check = select(AlbaraProveidor).where(AlbaraProveidor.empresa_id == empresa_id, AlbaraProveidor.proveidor_id == prov.id, AlbaraProveidor.numero_albara == payload.numero_document)
+        stmt_alb_check = select(AlbaraProveidor).where(AlbaraProveidor.proveidor_id == prov.id, AlbaraProveidor.numero_albara == payload.numero_document)
         if (await db.execute(stmt_alb_check)).scalars().first():
             raise HTTPException(status_code=400, detail="Albarà ja pujat. Aquest document ja consta al sistema per aquest proveïdor.")
-            
+
         nou_albara = AlbaraProveidor(
             empresa_id=empresa_id,
             proveidor_id=prov.id,
@@ -641,11 +619,11 @@ async def confirmar_document(
             data_albara=payload.data_document
         )
         db.add(nou_albara)
-        
+
         for linia in payload.linies:
-            stmt_art = select(Article).where(Article.empresa_id == empresa_id, Article.referencia_inventari == linia.referencia)
+            stmt_art = select(Article).where(Article.referencia_inventari == linia.referencia)
             article = (await db.execute(stmt_art)).scalars().first()
-            
+
             nou_preu = float(linia.preu) * (1.0 - (float(linia.descompte_percent)/100.0))
             if not article:
                 article = Article(
@@ -664,7 +642,7 @@ async def confirmar_document(
                 estoc_res = await db.execute(select(EstocMagatzem).where(EstocMagatzem.article_id == article.id))
                 estocs_actuals = estoc_res.scalars().all()
                 estoc_total_actual = sum(float(e.quantitat_fisica) for e in estocs_actuals)
-                
+
                 if estoc_total_actual + float(linia.quantitat) > 0 and nou_preu > 0:
                     valor_actual = estoc_total_actual * float(article.preu_cost)
                     valor_entrada = float(linia.quantitat) * nou_preu
@@ -683,7 +661,7 @@ async def confirmar_document(
                 )
                 db.add(estoc)
                 await db.flush()
-                
+
             moviment = MovimentEstoc(
                 empresa_id=empresa_id,
                 magatzem_id=magatzem.id,
@@ -692,14 +670,14 @@ async def confirmar_document(
                 quantitat=linia.quantitat,
                 usuari_id=None,
                 referencia_document=payload.numero_document,
-                notes=f"Albarà Proveïdor OCR"
+                notes="Albarà Proveïdor OCR"
             )
             db.add(moviment)
             estoc.quantitat_fisica = float(estoc.quantitat_fisica) + linia.quantitat
             moviments_creats += 1
-            
+
         await db.commit()
-        
+
         return {
             "estat": "OK",
             "missatge": "Albarà registrat, estoc augmentat.",
@@ -719,13 +697,13 @@ async def modificar_article(
     empresa_id = request.state.empresa_id
     if not empresa_id:
         raise HTTPException(status_code=401, detail="No identificat")
-        
-    stmt = select(Article).where(Article.id == article_id, Article.empresa_id == uuid.UUID(empresa_id))
+
+    stmt = select(Article).where(Article.id == article_id)
     result = await db.execute(stmt)
     art_db = result.scalars().first()
     if not art_db:
         raise HTTPException(status_code=404, detail="Article no trobat")
-        
+
     art_db.referencia_inventari = article.referencia_inventari
     art_db.nom = article.nom
     art_db.unitat_mesura = article.unitat_mesura
@@ -735,17 +713,16 @@ async def modificar_article(
     art_db.es_lot_caducable = article.es_lot_caducable
     art_db.preu_cost = article.preu_cost
     art_db.preu_venda = article.preu_venda
-    
+
     await db.commit()
-    
+
     # Calcular estoc real
-    from sqlalchemy import func
     stmt_estoc = select(func.sum(EstocMagatzem.quantitat_fisica)).where(
         EstocMagatzem.article_id == article_id
     )
     estoc_real = (await db.execute(stmt_estoc)).scalar() or 0.0
-    
+
     art_dict = {c.name: getattr(art_db, c.name) for c in art_db.__table__.columns}
     art_dict["estoc_real"] = float(estoc_real)
-    
+
     return art_dict

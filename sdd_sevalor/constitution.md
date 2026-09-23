@@ -54,5 +54,6 @@ El motor de facturación debe cumplir con los requisitos de la normativa españo
 
 ### 7. Gobernanza SDD (Spec-Driven Development)
 Ninguna línea de código de producción o refactorización se escribirá sin seguir el ciclo:
-**Constitución ➔ Spec (EARS) ➔ Clarificación (QA) ➔ Plan de Arquitectura ➔ Tareas Atómicas (TDD) ➔ Validación.**
+**Constitución ➔ Actualización de Spec (Mostrar Diff al CTO) ➔ Clarificación (QA) ➔ Plan de Arquitectura ➔ Tareas Atómicas (TDD) ➔ Validación.**
 Si el código contradice la especificación aprobada, la especificación prevalece.
+**Regla Estricta de IA:** Queda terminantemente prohibido tocar el código fuente sin actualizar primero la Spec correspondiente y mostrar un `diff` de los cambios para la aprobación del CTO.

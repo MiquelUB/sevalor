@@ -9,19 +9,19 @@ Implementa:
 - Zero Mock Data: si no hi ha factura anterior, hash_anterior = None (Dia 0 real).
 """
 
-import uuid
 import hashlib
 import logging
-from datetime import datetime, timezone
+import uuid
 from typing import Optional
-from sqlalchemy import select, text
+
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = logging.getLogger("verifactu")
 
 # ---------------------------------------------------------------------------
 # Esquema QR Veri*factu (segons RD 1007/2023 i Ordre HAC/1177/2024)
-# El QR ha de codificar: NIF emissor + NIF destinatari + Sèrie + Número + 
+# El QR ha de codificar: NIF emissor + NIF destinatari + Sèrie + Número +
 #   Hash SHA-256 + Import + Data emissió
 # ---------------------------------------------------------------------------
 QR_BASE_URL = "https://sede.aeat.gob.es/verifactu/"
@@ -169,11 +169,10 @@ async def generar_factura_pdf(
     )
 
     # Pas 4: Generar PDF amb ReportLab
-    from reportlab.lib.pagesizes import A4
-    from reportlab.lib.units import mm
-    from reportlab.pdfgen import canvas
-    from reportlab.lib.colors import HexColor
     from reportlab.graphics.barcode import qr
+    from reportlab.lib.colors import HexColor
+    from reportlab.lib.pagesizes import A4
+    from reportlab.pdfgen import canvas
 
     c = canvas.Canvas(ruta_desti, pagesize=A4)
 

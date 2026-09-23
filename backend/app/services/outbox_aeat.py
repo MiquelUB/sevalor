@@ -14,7 +14,6 @@ Actualment es proporciona un stub que registra la intenció d'enviament.
 
 import logging
 from datetime import datetime, timezone
-from typing import Optional
 
 logger = logging.getLogger("outbox_aeat")
 

@@ -1,14 +1,15 @@
 import uuid
+from datetime import date, datetime
 from typing import List, Optional
-from datetime import date
+
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, or_
 from pydantic import BaseModel, Field
+from sqlalchemy import or_, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db_with_tenant_context
 from app.core.security import require_roles
-from app.models.models import OrdreTreball
+from app.models.models import Client, OrdreTreball
 
 router = APIRouter(
     prefix="/gestio/feines",
@@ -42,9 +43,9 @@ async def llistar_feines(
     empresa_id = request.state.empresa_id
     if not empresa_id:
         raise HTTPException(status_code=401, detail="No identificat")
-        
+
     stmt = select(OrdreTreball).where(OrdreTreball.empresa_id == uuid.UUID(empresa_id))
-    
+
     if q:
         search_term = f"%{q}%"
         stmt = stmt.where(
@@ -53,12 +54,12 @@ async def llistar_feines(
                 OrdreTreball.titol.ilike(search_term)
             )
         )
-        
+
     stmt = stmt.limit(limit).offset(offset).order_by(OrdreTreball.created_at.desc())
-    
+
     result = await db.execute(stmt)
     feines = result.scalars().all()
-    
+
     return feines
 
 @router.post("", response_model=FeinaResponse, status_code=status.HTTP_201_CREATED)
@@ -70,7 +71,7 @@ async def alta_feina(
     empresa_id = request.state.empresa_id
     if not empresa_id:
         raise HTTPException(status_code=401, detail="No identificat")
-        
+
     stmt_codi = select(OrdreTreball).where(
         OrdreTreball.empresa_id == uuid.UUID(empresa_id),
         OrdreTreball.codi == feina.codi
@@ -92,12 +93,128 @@ async def alta_feina(
         cap_de_colla_id=feina.cap_de_colla_id,
         vehicle_id=feina.vehicle_id
     )
-    
+
     db.add(nova_feina)
     await db.commit()
 
     return nova_feina
 
+
+class MapaMarkerItem(BaseModel):
+    id: str
+    codi: str
+    titol: str
+    estat: str
+    lat: float
+    lng: float
+    is_incidencia: bool = False
+    adreca: Optional[str] = None
+    client_rao_social: Optional[str] = None
+
+@router.get("/mapa", response_model=List[MapaMarkerItem])
+async def llistar_feines_mapa(
+    request: Request,
+    db: AsyncSession = Depends(get_db_with_tenant_context)
+):
+    """Retorna les OTs del tenant actual amb les seves coordenades reals per al Mapa GIS (Spec 001/005)."""
+    empresa_id = request.headers.get("X-Empresa-ID") or getattr(request.state, "empresa_id", None)
+    if not empresa_id:
+        raise HTTPException(status_code=401, detail="No identificat")
+
+    stmt = (
+        select(OrdreTreball, Client)
+        .outerjoin(Client, OrdreTreball.client_id == Client.id)
+        .where(
+            OrdreTreball.empresa_id == uuid.UUID(empresa_id),
+            OrdreTreball.estat.in_(["PENDENT", "EN_CURS", "BLOQUEJADA", "EN_OBRA", "EN_RUTA"])
+        )
+        .order_by(OrdreTreball.created_at.desc())
+    )
+    result = await db.execute(stmt)
+    rows = result.all()
+
+    markers: List[MapaMarkerItem] = []
+    for ordre, client in rows:
+        lat = 41.3851
+        lng = 2.1734
+        if ordre.adreca and "," in ordre.adreca:
+            try:
+                parts = [float(p.strip()) for p in ordre.adreca.split(",")]
+                if len(parts) >= 2:
+                    lat, lng = parts[0], parts[1]
+            except (ValueError, TypeError):
+                pass
+
+        markers.append(MapaMarkerItem(
+            id=str(ordre.id),
+            codi=ordre.codi,
+            titol=ordre.titol,
+            estat=ordre.estat,
+            lat=lat,
+            lng=lng,
+            is_incidencia=False,
+            adreca=ordre.adreca,
+            client_rao_social=client.rao_social if client else None
+        ))
+
+    return markers
+
+class AgendarFeinaRequest(BaseModel):
+    hora_inici_prevista: datetime
+    hora_fi_prevista: datetime
+    version_id: int
+
+class AgendarFeinaResponse(BaseModel):
+    id: uuid.UUID
+    hora_inici_prevista: datetime
+    hora_fi_prevista: datetime
+    version_id: int
+    estat: str
+
+@router.put("/{feina_id}/agendar", response_model=AgendarFeinaResponse)
+async def agendar_feina(
+    feina_id: uuid.UUID,
+    payload: AgendarFeinaRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db_with_tenant_context)
+):
+    """
+    Planifica/reagenda una Ordre de Treball usant Optimistic Locking (version_id).
+    Si un altre usuari ha modificat l'OT, es retorna HTTP 409 Conflict.
+    """
+    empresa_id = request.headers.get("X-Empresa-ID") or getattr(request.state, "empresa_id", None)
+    if not empresa_id:
+        raise HTTPException(status_code=401, detail="No identificat")
+
+    stmt = select(OrdreTreball).where(
+        OrdreTreball.id == feina_id,
+        OrdreTreball.empresa_id == uuid.UUID(empresa_id)
+    )
+    result = await db.execute(stmt)
+    ordre = result.scalars().first()
+    if not ordre:
+        raise HTTPException(status_code=404, detail="Ordre de treball no trobada")
+
+    if ordre.version_id != payload.version_id:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Conflicte de concurrència: la feina ha estat modificada per un altre usuari (versió actual: {ordre.version_id}, versió enviada: {payload.version_id})"
+        )
+
+    ordre.hora_inici_prevista = payload.hora_inici_prevista
+    ordre.hora_fi_prevista = payload.hora_fi_prevista
+    ordre.version_id = ordre.version_id + 1
+
+    await db.commit()
+    await db.refresh(ordre)
+
+    return AgendarFeinaResponse(
+        id=ordre.id,
+        hora_inici_prevista=ordre.hora_inici_prevista,
+        hora_fi_prevista=ordre.hora_fi_prevista,
+        version_id=ordre.version_id,
+        estat=ordre.estat
+    )
 
 # ---------------------------------------------------------------------------
 # Intervencions Actives per a la Torre de Control GIS (Spec 001)
@@ -126,18 +243,29 @@ async def llistar_intervencions_actives(
     res = await db.execute(stmt)
     ordres = res.scalars().all()
 
-    return [
-        {
+    items = []
+    for o in ordres:
+        lat = 41.3851
+        lng = 2.1734
+        if o.adreca and "," in o.adreca:
+            try:
+                parts = [float(p.strip()) for p in o.adreca.split(",")]
+                if len(parts) >= 2:
+                    lat, lng = parts[0], parts[1]
+            except (ValueError, TypeError):
+                pass
+
+        items.append({
             "id": str(o.id),
             "codi": o.codi,
             "client": "Client " + str(o.client_id)[:8],
             "titol": o.titol,
             "cap_colla": "Capataz",
             "estat": o.estat if o.estat in ["EN_OBRA", "EN_RUTA", "PENDENT", "INCIDENCIA"] else "PENDENT",
-            "coords": [41.3851, 2.1734],
-            "sector": "Sector Central",
+            "coords": [lat, lng],
+            "sector": "Sector Operatiu",
             "pressio_bar": 3.8,
-            "codi_candat": "4826-B",
-        }
-        for o in ordres
-    ]
+            "codi_candat": "N/A",
+        })
+
+    return items

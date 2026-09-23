@@ -1,14 +1,14 @@
 import uuid
-import pytest
-import bcrypt
-from httpx import AsyncClient, ASGITransport
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, text
 
-from app.main import app
-from app.models.models import Usuari, Empresa
-from app.core.config import settings
+import bcrypt
+import pytest
+from httpx import ASGITransport, AsyncClient
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.api.v1.gestio.operaris import hash_pin
+from app.main import app
+from app.models.models import Empresa, Usuari
 
 
 @pytest.mark.asyncio

@@ -1,19 +1,21 @@
-from app.models.models import Empresa, Usuari, Client
-import pytest
-from httpx import AsyncClient, ASGITransport
-from app.main import app
-from app.core.config import settings
-import jwt
-from datetime import datetime, timedelta, timezone
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import text
 import uuid
+from datetime import datetime, timedelta, timezone
+
+import jwt
+import pytest
+from httpx import ASGITransport, AsyncClient
+from sqlalchemy import text
+
+from app.core.config import settings
+from app.main import app
+from app.models.models import Empresa, Usuari
+
 
 @pytest.fixture
 def boss_token(admin_session):
     # Generem un UUID per a l'empresa
     empresa_id = str(uuid.uuid4())
-    
+
     payload = {
         "sub": str(uuid.uuid4()),
         "rol": "BOSS",
@@ -31,9 +33,8 @@ def headers(boss_token):
 @pytest.mark.asyncio
 async def test_alta_operari_nou(admin_session, headers, boss_token):
     _, empresa_id = boss_token
-    
+
     # Inserim l'empresa de prova via BD manual per poder complir amb les Foreign Keys
-    from app.models.models import Empresa
     admin_session.add(Empresa(
         id=uuid.UUID(empresa_id), nom='Test Company', nif='NIF' + str(uuid.uuid4())[:8], subdomini='sub' + str(uuid.uuid4())[:6], pla_subscripcio='STARTER', estat_pagament='ACTIU'
     ))
@@ -48,10 +49,10 @@ async def test_alta_operari_nou(admin_session, headers, boss_token):
         "especialitat": "SISTEMES_REG",
         "cost_hora_eur": 25.50
     }
-    
+
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
         res = await ac.post("/api/v1/gestio/operaris", json=payload, headers=headers)
-        
+
         assert res.status_code == 201, f"Error: {res.text}"
         data = res.json()
         assert data["nif"] == payload["nif"]
@@ -59,7 +60,7 @@ async def test_alta_operari_nou(admin_session, headers, boss_token):
         assert data["estat"] == "ACTIU"
         assert data["rol"] == "OPERARI"
         assert "pin_hash" not in data # Seguretat: no retornar el PIN
-        
+
         # Validem que s'ha desat a la DB
         result = await admin_session.execute(text("SELECT nif, pin_hash, telefon FROM usuaris WHERE id = :id"), {"id": data["id"]})
         row = result.fetchone()
@@ -71,14 +72,13 @@ async def test_alta_operari_nou(admin_session, headers, boss_token):
 @pytest.mark.asyncio
 async def test_reset_pin_operari(admin_session, headers, boss_token):
     _, empresa_id = boss_token
-    
+
     # 1. Crear empresa
-    from app.models.models import Empresa
     admin_session.add(Empresa(
         id=uuid.UUID(empresa_id), nom='Test Reset', nif='RES' + str(uuid.uuid4())[:8], subdomini='sub' + str(uuid.uuid4())[:6], pla_subscripcio='STARTER', estat_pagament='ACTIU'
     ))
     await admin_session.flush()
-    
+
     # 2. Crear operari bloquejat
     operari_id = str(uuid.uuid4())
     admin_session.add(Usuari(
@@ -86,7 +86,7 @@ async def test_reset_pin_operari(admin_session, headers, boss_token):
     ))
     await admin_session.flush()
     await admin_session.flush()
-    
+
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
         res = await ac.post(f"/api/v1/gestio/operaris/{operari_id}/reset-pin", headers=headers)
         assert res.status_code == 200, res.text

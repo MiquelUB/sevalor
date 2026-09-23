@@ -1,17 +1,17 @@
-import os
-import uuid
-import secrets
 import logging
-from datetime import datetime, timezone, timedelta
+import secrets
+import uuid
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db_with_tenant_context
+from app.core.security import require_roles
 from app.models.models import Empresa, Usuari
-from app.core.security import get_current_user_claims, require_roles
 
 logger = logging.getLogger("superadmin.tenants")
 
@@ -75,7 +75,7 @@ async def llistar_tenants(
 ) -> List[Dict[str, Any]]:
     res = await db.execute(select(Empresa).order_by(Empresa.created_at.desc()))
     empreses = res.scalars().all()
-    
+
     resultat = []
     for emp in empreses:
         resultat.append({
@@ -95,7 +95,7 @@ async def crear_nou_tenant(
     db: AsyncSession = Depends(get_db_with_tenant_context),
     claims: Dict[str, Any] = Depends(require_roles(["SUPERADMIN"])),
 ) -> Dict[str, Any]:
-    
+
     subdomini_norm = payload.subdomini.strip().lower()
     if subdomini_norm in {"api", "admin", "www", "app", "superadmin", "billing"}:
         raise HTTPException(
@@ -157,7 +157,7 @@ async def crear_nou_tenant(
         )
 
     emp_id_str = str(nou_id)
-    
+
     # (RF-08) Delegar a Celery la creació dels directoris sobirans
     try:
         from app.workers.tasks import crear_directoris_sobirans_task
@@ -271,7 +271,7 @@ async def update_feature_flags(
     db: AsyncSession = Depends(get_db_with_tenant_context),
     claims: Dict[str, Any] = Depends(require_roles(["SUPERADMIN"])),
 ) -> Dict[str, Any]:
-    
+
     try:
         emp_uuid = uuid.UUID(empresa_id)
     except ValueError:
@@ -287,9 +287,9 @@ async def update_feature_flags(
     empresa.feature_planols = payload.feature_planols
     empresa.feature_telegram = payload.feature_telegram
     empresa.updated_at = datetime.now(timezone.utc)
-    
+
     await db.commit()
-    
+
     return {
         "status": "OK",
         "empresa_id": empresa_id,

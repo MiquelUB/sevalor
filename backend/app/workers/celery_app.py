@@ -7,9 +7,10 @@ Compleix Spec 024:
 """
 
 import os
+
 from celery import Celery
 
-REDIS_URL = os.getenv("REDIS_URL", "redis://127.0.0.1:6380/0")
+REDIS_URL = os.getenv("REDIS_URL", "redis://:sevalor_redis_pass@127.0.0.1:6380/0")
 
 celery_app = Celery(
     "sevalor_workers",

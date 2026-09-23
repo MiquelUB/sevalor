@@ -1,13 +1,14 @@
 import uuid
 from typing import List, Optional
+
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, or_
 from pydantic import BaseModel, Field
+from sqlalchemy import or_, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db_with_tenant_context
 from app.core.security import require_roles
-from app.models.models import PlanolBase, CarpetaPlanol, CapaVectorial
+from app.models.models import CapaVectorial, CarpetaPlanol, PlanolBase
 from app.workers.tasks import generar_informe_planol_pdf
 
 router = APIRouter(
@@ -73,12 +74,12 @@ async def llistar_planols(
     empresa_id = request.state.empresa_id
     if not empresa_id:
         raise HTTPException(status_code=401, detail="No identificat")
-        
+
     stmt = select(PlanolBase).where(PlanolBase.empresa_id == uuid.UUID(empresa_id))
-    
+
     if carpeta_id:
         stmt = stmt.where(PlanolBase.carpeta_id == carpeta_id)
-        
+
     if q:
         search_term = f"%{q}%"
         stmt = stmt.where(
@@ -87,12 +88,12 @@ async def llistar_planols(
                 PlanolBase.titol.ilike(search_term)
             )
         )
-        
+
     stmt = stmt.limit(limit).offset(offset).order_by(PlanolBase.created_at.desc())
-    
+
     result = await db.execute(stmt)
     planols = result.scalars().all()
-    
+
     return planols
 
 @router.post("", response_model=PlanolResponse, status_code=status.HTTP_201_CREATED)
@@ -104,7 +105,7 @@ async def alta_planol(
     empresa_id = request.state.empresa_id
     if not empresa_id:
         raise HTTPException(status_code=401, detail="No identificat")
-        
+
     # Comprovem que la carpeta existeix i pertany a l'empresa
     stmt_carp = select(CarpetaPlanol).where(
         CarpetaPlanol.id == planol.carpeta_id,
@@ -132,7 +133,7 @@ async def alta_planol(
         mida_bytes=planol.mida_bytes,
         es_georeferenciat=planol.es_georeferenciat
     )
-    
+
     db.add(nou_planol)
     await db.commit()
 
@@ -337,8 +338,8 @@ async def exportar_planol_pdf(
     planol = (await db.execute(stmt)).scalars().first()
     if not planol:
         raise HTTPException(status_code=404)
-        
+
     # Llençar a Celery
     generar_informe_planol_pdf.delay(str(planol_id), str(empresa_id))
-    
+
     return {"estat": "EN_PROCES", "missatge": "El PDF s'està generant a Celery"}

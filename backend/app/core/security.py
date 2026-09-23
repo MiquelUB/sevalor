@@ -1,8 +1,10 @@
 """Seguretat, control d'accés basat en rols (RBAC) i dependències d'autorització."""
 
 from typing import Any, Callable, Dict, List
-from fastapi import Depends, HTTPException, Request, status
+
 import jwt
+from fastapi import Depends, HTTPException, Request, status
+
 from app.core.config import settings
 
 

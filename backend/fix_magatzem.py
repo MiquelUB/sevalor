@@ -1,4 +1,3 @@
-import sys
 
 with open("app/api/v1/gestio/magatzem.py", "r") as f:
     content = f.read()

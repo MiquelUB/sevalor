@@ -1,6 +1,7 @@
 """Configuració de l'aplicació Sevalor Suite."""
 
 from typing import List
+
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -82,7 +83,6 @@ class Settings(BaseSettings):
 
 settings = Settings()
 
-import secrets
 
 if not settings.SECRET_KEY:
     settings.SECRET_KEY = "sevalor-dev-secret-key-32-chars-long-abc"

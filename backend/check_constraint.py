@@ -1,6 +1,9 @@
 import asyncio
+
 from sqlalchemy import text
+
 from app.core.db import engine
+
 
 async def main():
     async with engine.connect() as conn:

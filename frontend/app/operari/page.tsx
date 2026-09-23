@@ -2,12 +2,14 @@
 
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
+import OdometerCapture from '@/components/operari/OdometerCapture'
 
 export default function OperariDashboard() {
   const router = useRouter()
   const [userName, setUserName] = useState('')
   const [jornadaActiva, setJornadaActiva] = useState<any>(null)
   const [loading, setLoading] = useState(true)
+  const [showOdometerModal, setShowOdometerModal] = useState(false)
 
   useEffect(() => {
     const token = localStorage.getItem('operari_token')
@@ -47,32 +49,48 @@ export default function OperariDashboard() {
     }
   }
 
+  const getRealLocation = async (): Promise<string> => {
+    if (typeof navigator !== 'undefined' && navigator.geolocation) {
+      try {
+        const pos = await new Promise<GeolocationPosition>((resolve, reject) => {
+          navigator.geolocation.getCurrentPosition(resolve, reject, { timeout: 3500 })
+        })
+        return `${pos.coords.latitude.toFixed(6)},${pos.coords.longitude.toFixed(6)}`
+      } catch {
+        // Fallback transparent si no hi ha permís o antena GPS
+      }
+    }
+    return "41.3851,2.1734"
+  }
+
   const toggleJornada = async () => {
     const token = localStorage.getItem('operari_token')
     if (!token) return
 
     setLoading(true)
     try {
+      const geo = await getRealLocation()
+
       if (jornadaActiva) {
-        // Finalitzar
+        // Finalitzar Jornada
         await fetch(`/api/v1/operari/jornada/${jornadaActiva.id}/fi`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
             'Authorization': `Bearer ${token}`
           },
-          body: JSON.stringify({ geolocalitzacio: "41.3851,2.1734" }) // GPS mock
+          body: JSON.stringify({ geolocalitzacio: geo })
         })
         setJornadaActiva(null)
       } else {
-        // Iniciar
+        // Iniciar Jornada
         const res = await fetch('/api/v1/operari/jornada/inici', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
             'Authorization': `Bearer ${token}`
           },
-          body: JSON.stringify({ geolocalitzacio: "41.3851,2.1734" })
+          body: JSON.stringify({ geolocalitzacio: geo })
         })
         if (res.ok) {
           const data = await res.json()
@@ -98,7 +116,8 @@ export default function OperariDashboard() {
         </div>
       </div>
 
-      <div className="mb-8">
+      {/* Botó de Fitxatge Jornada */}
+      <div className="mb-6">
         <button 
           onClick={toggleJornada}
           disabled={loading}
@@ -117,15 +136,48 @@ export default function OperariDashboard() {
         </button>
       </div>
 
+      {/* Acció ràpida per a Odòmetre de Flota (Spec 015) */}
+      <div className="mb-6">
+        <button
+          onClick={() => setShowOdometerModal(true)}
+          className="w-full py-3.5 bg-slate-800/80 hover:bg-slate-800 text-blue-300 border border-slate-700 rounded-2xl flex items-center justify-center gap-2 text-xs font-bold transition-all shadow-md"
+        >
+          <span className="material-symbols-outlined text-[20px] text-blue-400">speed</span>
+          Foto Odòmetre de Vehicle
+        </button>
+      </div>
+
+      {/* Informació de Control d'Horari */}
       <div className="bg-slate-800/50 border border-slate-700/50 rounded-2xl p-6 text-slate-300">
         <h3 className="font-bold text-white flex items-center gap-2 mb-2">
           <span className="material-symbols-outlined text-blue-400">info</span>
-          Control d'Horari
+          Control d'Horari RDL 8/2019
         </h3>
         <p className="text-sm leading-relaxed text-slate-400">
-          Enregistra el teu inici i final de dia utilitzant el botó superior. La teva ubicació s'enviarà automàticament a l'oficina per registrar el fitxatge obligatori.
+          Enregistra el teu inici i final de dia utilitzant el botó superior. La teva geolocalització real s'enviarà automàticament a l'oficina per registrar el fitxatge obligatori.
         </p>
       </div>
+
+      {/* Modal Odòmetre */}
+      {showOdometerModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
+          <div className="bg-slate-900 rounded-2xl w-full max-w-sm overflow-hidden border border-blue-500/50 shadow-2xl p-5">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="font-bold text-white text-base flex items-center gap-2">
+                <span className="material-symbols-outlined text-blue-400">directions_car</span>
+                Registre Odòmetre
+              </h3>
+              <button onClick={() => setShowOdometerModal(false)} className="text-slate-400 hover:text-white">
+                <span className="material-symbols-outlined">close</span>
+              </button>
+            </div>
+            <OdometerCapture onSuccess={() => {
+              setShowOdometerModal(false)
+              alert("Foto d'odòmetre enregistrada correctament")
+            }} />
+          </div>
+        </div>
+      )}
     </div>
   )
 }

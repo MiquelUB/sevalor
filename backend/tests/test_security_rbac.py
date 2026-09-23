@@ -1,12 +1,14 @@
+import uuid
+
+import jwt as pyjwt
 import pytest
 import pytest_asyncio
-import uuid
-import jwt as pyjwt
-from httpx import AsyncClient
 from fastapi import status
+from httpx import AsyncClient
 
-from app.main import app
 from app.core.config import settings
+from app.main import app
+
 
 def crear_token(rol: str, empresa_id: str, sub: str = None) -> str:
     payload = {
@@ -30,6 +32,7 @@ def altre_operari_id():
     return str(uuid.uuid4())
 
 from httpx import ASGITransport
+
 
 @pytest_asyncio.fixture
 async def client_autenticat_enginyer(empresa_id):

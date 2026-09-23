@@ -6,14 +6,14 @@ Prohibició absoluta d'accés a dades privades o de negoci dels inquilins (Zero 
 
 from typing import Any, Dict, List, Optional
 from uuid import UUID
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.config import settings
 from app.core.db import get_db_with_tenant_context
-from app.core.security import get_current_user_claims, require_roles
+from app.core.security import require_roles
 from app.models.models import Empresa, Usuari
 
 router = APIRouter(

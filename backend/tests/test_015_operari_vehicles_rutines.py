@@ -1,20 +1,22 @@
-import pytest
 import uuid
-from httpx import AsyncClient, ASGITransport
+
+import pytest
+from httpx import ASGITransport, AsyncClient
+
 from app.main import app
-from app.models.models import Empresa, Usuari, Vehicle
-from sqlalchemy import text
+from app.models.models import Empresa, Vehicle
+
 
 @pytest.mark.asyncio
 async def test_vehicle_checkin_checkout_repostatge(admin_session, headers, boss_token):
     token, empresa_id = boss_token
     boss_nif = "B" + str(uuid.uuid4())[:8].upper()
-    
+
     admin_session.add(Empresa(
         id=uuid.UUID(empresa_id), nom='Test Flota', nif=boss_nif, subdomini='flota-' + str(uuid.uuid4())[:5], pla_subscripcio='STARTER', estat_pagament='ACTIU'
     ))
     await admin_session.flush()
-    
+
     # 1. Crear Vehicle
     vehicle = Vehicle(
         id=uuid.uuid4(),

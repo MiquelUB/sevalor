@@ -1,6 +1,7 @@
 """Endpoint de diagnòstic i salut de Sevalor Suite."""
 
 from typing import Any, Dict
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession

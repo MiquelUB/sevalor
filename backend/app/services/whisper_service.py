@@ -1,8 +1,6 @@
 import logging
 import os
-import subprocess
 from typing import Optional
-from app.core.config import settings
 
 logger = logging.getLogger("whisper_service")
 
@@ -21,17 +19,17 @@ async def transcriure_audio(
 
     if not os.path.isfile(audio_path):
         return {"status": "ERROR", "error": "L'arxiu no existeix físicament a disc"}
-        
+
     try:
         # Simulació o crida real per ara si LM_STUDIO està disponible.
         # En comptes d'un stub que fa "Extracció simulada", provem d'executar faster-whisper.
         # Si faster-whisper no està instal·lat en l'entorn de producció, farem un fallback segur
         # per evitar trencar el servei. Aquesta és la des-simulació inicial.
-        
+
         # Exemple de procés CLI fictici si estigués (per evitar dependències pesades en local):
         # res = subprocess.run(["whisper", audio_path, "--model", model_size], capture_output=True, text=True)
         # return {"status": "SUCCESS", "text": res.stdout}
-        
+
         # Fallback a REVISIO_MANUAL
         return {
             "status": "REVISIO_MANUAL",

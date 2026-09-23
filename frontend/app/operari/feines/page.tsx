@@ -74,7 +74,7 @@ export default function PWAFeines() {
       ) : feines.length === 0 ? (
         <div className="bg-slate-800/50 border border-slate-700/50 rounded-2xl p-8 text-center text-slate-400">
           <span className="material-symbols-outlined text-5xl mb-3 opacity-50">done_all</span>
-          <p className="font-medium">No tens feines pendents avui.</p>
+          <p className="font-medium">No hi ha feines assignades per a avui</p>
         </div>
       ) : (
         <div className="space-y-4">

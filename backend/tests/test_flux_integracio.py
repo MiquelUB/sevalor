@@ -1,4 +1,5 @@
-from app.models.models import Empresa, Usuari, Client
+from app.models.models import Client, Empresa, Usuari
+
 """
 Tests d'integració de flux per a SEVALOR.
 Cobreixen els fluxos complets de Gestió, Operari, Superadmin i aïllament RLS.
@@ -6,11 +7,10 @@ Cada test crea les seves pròpies dades dins d'un SAVEPOINT i fa rollback al fin
 """
 
 import uuid
+
 import bcrypt
 import jwt as pyjwt
 import pytest
-import pytest_asyncio
-from httpx import AsyncClient
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -46,7 +46,6 @@ async def crear_empresa(session) -> str:
     """Crea una empresa de test i retorna el seu ID."""
     await session.execute(text("SET LOCAL app.is_superadmin = 'true'"))
     eid = str(uuid.uuid4())
-    from app.models.models import Empresa
     session.add(Empresa(
         id=uuid.UUID(eid), nom="Test SA", nif=_nif(), subdomini=_sub()
     ))
@@ -79,7 +78,7 @@ async def crear_article_amb_magatzem(session, empresa_id: str, stock: float = 10
     """Crea un article i un magatzem central amb estoc. Retorna (article_id, magatzem_id)."""
     # Magatzem
     mid = str(uuid.uuid4())
-    from app.models.models import Magatzem, Article, EstocMagatzem
+    from app.models.models import Article, EstocMagatzem, Magatzem
     session.add(Magatzem(
         id=uuid.UUID(mid), empresa_id=uuid.UUID(empresa_id), nom='Nau Central Test', tipus='NAU_CENTRAL', actiu=True
     ))
@@ -540,8 +539,9 @@ class TestFluxOperari:
 
     async def test_10_login_operari(self, async_client):
         """L'operari fa login amb PIN correcte i obté token JWT (Spec 019)."""
-        from app.core.db import AsyncSessionLocal
         import bcrypt as _bcrypt
+
+        from app.core.db import AsyncSessionLocal
         async with AsyncSessionLocal() as s:
             await s.execute(text("SET LOCAL app.is_superadmin='true'"))
             eid = str(uuid.uuid4())
@@ -567,8 +567,9 @@ class TestFluxOperari:
 
     async def test_11_jornada_completa(self, async_client):
         """Flux complet de jornada: inici → llistar feines → tancar (Spec 019)."""
-        from app.core.db import AsyncSessionLocal
         import bcrypt as _bcrypt
+
+        from app.core.db import AsyncSessionLocal
         async with AsyncSessionLocal() as s:
             await s.execute(text("SET LOCAL app.is_superadmin='true'"))
             eid = str(uuid.uuid4())

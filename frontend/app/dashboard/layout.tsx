@@ -8,7 +8,10 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
   const navItems = [
     { name: 'Dashboard', href: '/dashboard', icon: 'dashboard' },
+    { name: 'Mapa GIS', href: '/dashboard/mapa', icon: 'public' },
     { name: 'Feines', href: '/dashboard/feines', icon: 'work' },
+    { name: 'Agenda', href: '/dashboard/agenda', icon: 'calendar_month' },
+    { name: 'Pressupostos', href: '/dashboard/pressupostos', icon: 'request_quote' },
     { name: 'Clients', href: '/dashboard/clients', icon: 'group' },
     { name: 'Operaris', href: '/dashboard/operaris', icon: 'engineering' },
     { name: 'Proveïdors', href: '/dashboard/proveidors', icon: 'local_shipping' },

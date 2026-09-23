@@ -1,17 +1,16 @@
 """Suite de proves per al Microservei del Bot de Telegram (Spec 023) — condicionat a disponibilitat."""
 
 import unittest
-import sys
 
 try:
     from aiogram import Bot, Dispatcher, types  # noqa: F401
-    from bot.security import detectar_doble_extensio, validar_magic_bytes, RedisRateLimiter
     from bot.main import (
-        registrar_token_invitacio,
-        processar_missatge_text,
-        processar_document_adjunt,
         processar_aprovacio_pressupost,
+        processar_document_adjunt,
+        processar_missatge_text,
+        registrar_token_invitacio,
     )
+    from bot.security import RedisRateLimiter, detectar_doble_extensio, validar_magic_bytes
     BOT_DISPONIBLE = True
 except (ImportError, ModuleNotFoundError):
     BOT_DISPONIBLE = False

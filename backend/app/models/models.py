@@ -3,6 +3,7 @@
 import uuid
 from datetime import date, datetime, time, timezone
 from typing import Any, List, Optional
+
 from sqlalchemy import (
     BIGINT,
     Boolean,
@@ -18,7 +19,7 @@ from sqlalchemy import (
     text,
 )
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.db import Base
 
@@ -227,6 +228,7 @@ class EstocMagatzem(Base):
     magatzem_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("magatzems.id", ondelete="CASCADE"), nullable=False)
     quantitat_fisica: Mapped[float] = mapped_column(Numeric(12, 3), default=0.0, server_default=text('0'))
     quantitat_virtual_reservada: Mapped[float] = mapped_column(Numeric(12, 3), default=0.0, server_default=text('0'))
+    quantitat_cuarentena: Mapped[float] = mapped_column(Numeric(12, 3), default=0.0, server_default=text('0'))
     ubicacio_passadis: Mapped[Optional[str]] = mapped_column(String(50))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), server_default=text('now()'))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), server_default=text('now()'))
@@ -372,6 +374,7 @@ class FacturaProveidor(Base):
     quota_iva: Mapped[float] = mapped_column(Numeric(12, 2), default=0.00, server_default=text('0'))
     total: Mapped[float] = mapped_column(Numeric(12, 2), default=0.00, server_default=text('0'))
     albara_numero: Mapped[Optional[str]] = mapped_column(String(100))
+    estat: Mapped[str] = mapped_column(String(50), default="PENDENT_REVISIO", server_default="PENDENT_REVISIO")
     comanda_numero: Mapped[Optional[str]] = mapped_column(String(100))
     estat_conciliacio: Mapped[str] = mapped_column(String(30), default="PENDENT", server_default="PENDENT")
     desviacio_percent: Mapped[float] = mapped_column(Numeric(5, 2), default=0.00, server_default=text('0'))
@@ -396,10 +399,17 @@ class OrdreTreball(Base):
     descripcio: Mapped[Optional[str]] = mapped_column(Text)
     estat: Mapped[str] = mapped_column(String(30), default="PENDENT", server_default="PENDENT")
     data_planificacio: Mapped[date] = mapped_column(Date, default=date.today, server_default=text('CURRENT_DATE'))
+    hora_inici_prevista: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    hora_fi_prevista: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    version_id: Mapped[int] = mapped_column(Integer, default=1, server_default="1", nullable=False)
     cap_de_colla_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("usuaris.id", ondelete="SET NULL"))
     vehicle_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("vehicles.id", ondelete="SET NULL"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), server_default=text('now()'))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), server_default=text('now()'))
+
+    __mapper_args__ = {
+        "version_id_col": version_id
+    }
 
 
 class FullaPicking(Base):
@@ -762,6 +772,9 @@ class ConsultaXatCopilot(Base):
     enllacos_relacionats: Mapped[list] = mapped_column(JSONB, default=list, server_default=text("'[]'"))
     es_error_timeout: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text('false'))
     denegat_per_rol: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text('false'))
+    tool_name: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    tool_args: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+    tool_result: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), server_default=text('now()'))
 
 
@@ -798,3 +811,32 @@ class AlbaraProveidor(Base):
     data_albara: Mapped[date] = mapped_column(Date, nullable=False)
     fitxer_path: Mapped[Optional[str]] = mapped_column(String(500))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), server_default=text('now()'))
+
+class FacturaProveidorLinia(Base):
+    __tablename__ = "factures_proveidor_linies"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, server_default=text("gen_random_uuid()"))
+    empresa_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("empreses.id", ondelete="CASCADE"), nullable=False)
+    factura_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("factures_proveidor.id", ondelete="CASCADE"), nullable=False)
+    article_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("articles.id", ondelete="SET NULL"))
+    quantitat: Mapped[float] = mapped_column(Numeric(12, 3), nullable=True, default=1.0)
+    preu_unitari: Mapped[float] = mapped_column(Numeric(10, 2), nullable=True, default=0.0)
+
+class Pressupost(Base):
+    """Model per emmagatzemar pressupostos abans de la factura (Phase 4)."""
+    __tablename__ = "pressupostos"
+    __table_args__ = (
+        UniqueConstraint("empresa_id", "numero", name="uq_pressupost_empresa_numero"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, server_default=text("gen_random_uuid()"))
+    empresa_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("empreses.id", ondelete="CASCADE"), nullable=False)
+    client_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("clients.id", ondelete="RESTRICT"), nullable=False)
+    numero: Mapped[str] = mapped_column(String(30), nullable=False)
+    
+    total: Mapped[float] = mapped_column(Numeric(12, 2), default=0.00, server_default=text('0'))
+    estat: Mapped[str] = mapped_column(String(20), default="PENDENT", server_default="PENDENT")  # PENDENT, APROVAT, REBUTJAT
+    token_signatura: Mapped[Optional[str]] = mapped_column(String(100))  # Token de Telegram al aprovar
+    
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), server_default=text('now()'))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), server_default=text('now()'))

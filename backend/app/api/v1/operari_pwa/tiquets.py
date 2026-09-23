@@ -1,11 +1,12 @@
 import uuid
+from datetime import datetime
 from typing import List, Optional
-from datetime import datetime, timezone
-from fastapi import APIRouter, Depends, HTTPException, Request, status
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
-from pydantic import BaseModel, Field
+
 import jwt
+from fastapi import APIRouter, Depends, HTTPException, Request, status
+from pydantic import BaseModel, Field
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.db import get_db_with_tenant_context
@@ -144,9 +145,11 @@ async def registrar_tiquet_carburant(
         created_at=nou_tiquet.created_at,
     )
 
-from fastapi import UploadFile, File, Form
 import os
 import secrets
+
+from fastapi import File, Form, UploadFile
+
 
 @router.post("/tiquets/ocr", response_model=dict, status_code=status.HTTP_200_OK)
 async def pujar_tiquet_ocr(
@@ -176,7 +179,7 @@ async def pujar_tiquet_ocr(
             v_id = uuid.UUID(vehicle_id)
         except ValueError:
             pass
-            
+
     if not v_id:
         v_res = await db.execute(select(Vehicle).where(Vehicle.empresa_id == uuid.UUID(empresa_id)))
         v = v_res.scalars().first()
@@ -198,11 +201,11 @@ async def pujar_tiquet_ocr(
     base_dir = os.getenv("SOVEREIGN_DATA_PATH", "/tmp/data")
     save_dir = f"{base_dir}/{empresa_id}/docs/tiquets"
     os.makedirs(save_dir, exist_ok=True)
-    
+
     file_ext = file.filename.split(".")[-1] if file.filename else "jpg"
     safe_name = f"ocr_{secrets.token_hex(8)}.{file_ext}"
     file_path = f"{save_dir}/{safe_name}"
-    
+
     with open(file_path, "wb") as f:
         f.write(await file.read())
 

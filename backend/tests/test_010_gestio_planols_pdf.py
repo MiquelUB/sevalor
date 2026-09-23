@@ -1,22 +1,24 @@
-import pytest
-import uuid
 import os
+import uuid
 from unittest.mock import patch
-from httpx import AsyncClient, ASGITransport
+
+import pytest
+from httpx import ASGITransport, AsyncClient
+
 from app.main import app
-from app.models.models import Empresa, PlanolBase, CarpetaPlanol
-from sqlalchemy import text
+from app.models.models import CarpetaPlanol, Empresa, PlanolBase
+
 
 @pytest.mark.asyncio
 async def test_generar_pdf_planol(admin_session, headers, boss_token):
     token, empresa_id = boss_token
     boss_nif = "B" + str(uuid.uuid4())[:8].upper()
-    
+
     admin_session.add(Empresa(
         id=uuid.UUID(empresa_id), nom='Test Planols', nif=boss_nif, subdomini='planols-' + str(uuid.uuid4())[:5], pla_subscripcio='STARTER', estat_pagament='ACTIU'
     ))
     await admin_session.flush()
-    
+
     carpeta = CarpetaPlanol(
         id=uuid.uuid4(),
         empresa_id=uuid.UUID(empresa_id),

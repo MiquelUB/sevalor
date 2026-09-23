@@ -1,10 +1,13 @@
 import uuid
-import pytest
-import jwt
-from httpx import AsyncClient, ASGITransport
 from datetime import datetime, timedelta, timezone
-from app.main import app
+
+import jwt
+import pytest
+from httpx import ASGITransport, AsyncClient
+
 from app.core.config import settings
+from app.main import app
+
 
 @pytest.fixture
 def superadmin_token():
@@ -59,7 +62,7 @@ async def test_onboarding_requires_superadmin():
     }
     token = jwt.encode(payload_jwt, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
     headers = {"Authorization": f"Bearer {token}"}
-    
+
     payload = {
         "rao_social": "Test Fals",
         "nif": "B00000000",
@@ -84,7 +87,7 @@ async def test_estat_transicions_correctes(headers):
         llista = res_list.json()
         assert len(llista) > 0
         empresa_id = llista[0]["id"]
-        
+
         payload = {"estat": "SUSPES_PAGAMENT"}
         res_update = await ac.put(f"/api/v1/superadmin/tenants/{empresa_id}/estat", json=payload, headers=headers)
         assert res_update.status_code == 200, f"Expected 200 but got {res_update.status_code}: {res_update.text}"

@@ -5,9 +5,11 @@ import sys
 # Inject backend path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from sqlalchemy import select
+
 from app.core.db import AsyncSessionLocal
 from app.models.models import Usuari
-from sqlalchemy import select
+
 
 async def fix():
     async with AsyncSessionLocal() as session:

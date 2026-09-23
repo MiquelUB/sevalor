@@ -1,9 +1,11 @@
 import uuid
+from datetime import date, datetime, timedelta, timezone
 from typing import List, Optional
+
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, or_
 from pydantic import BaseModel, Field
+from sqlalchemy import or_, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db_with_tenant_context
 from app.core.security import require_roles
@@ -29,6 +31,7 @@ class ClientResponse(ClientCreate):
     id: uuid.UUID
     estat_canal_telegram: str
     actiu: bool
+    model_config = {"from_attributes": True}
 
 
 class ClientAmbIBANResponse(BaseModel):
@@ -53,7 +56,7 @@ async def llistar_clients(
         raise HTTPException(status_code=401, detail="No identificat")
 
     stmt = select(Client).where(Client.empresa_id == uuid.UUID(empresa_id))
-    
+
     if q:
         search_term = f"%{q}%"
         stmt = stmt.where(
@@ -62,12 +65,12 @@ async def llistar_clients(
                 Client.nif.ilike(search_term)
             )
         )
-        
+
     stmt = stmt.limit(limit).offset(offset).order_by(Client.created_at.desc())
-    
+
     result = await db.execute(stmt)
     clients = result.scalars().all()
-    
+
     return clients
 
 @router.post("", response_model=ClientResponse, status_code=status.HTTP_201_CREATED)
@@ -149,3 +152,245 @@ async def canviar_iban_client(
     client.iban_xifrat_simetric = payload.nou_iban
     await db.commit()
     return {"id": client.id, "rao_social": client.rao_social, "iban_xifrat_simetric": client.iban_xifrat_simetric}
+
+
+# ---------------------------------------------------------------------------
+# Fitxa 360° del Client (Spec 012 RF-04 & Spec 002)
+# ---------------------------------------------------------------------------
+
+class FincaFitxa360(BaseModel):
+    id: uuid.UUID
+    nom: str
+    adreca: Optional[str] = None
+    superficie_ha: Optional[float] = None
+    dades_sigpac: Optional[dict] = None
+
+class PecaInstaladaFitxa360(BaseModel):
+    article_id: uuid.UUID
+    codi_article: str
+    nom_article: str
+    quantitat_instalada: float
+    unitat_mesura: str
+    data_instalacio: datetime
+    ordre_treball_id: uuid.UUID
+    ordre_treball_codi: str
+
+class IncidenciaFitxa360(BaseModel):
+    id: uuid.UUID
+    ordre_treball_id: Optional[uuid.UUID] = None
+    ordre_treball_codi: Optional[str] = None
+    ambit: str
+    estat: str
+    text_observacions: Optional[str] = None
+    foto_path: Optional[str] = None
+    audio_path: Optional[str] = None
+    created_at: datetime
+
+class IntervencioFitxa360(BaseModel):
+    id: uuid.UUID
+    codi: str
+    titol: str
+    adreca: str
+    estat: str
+    data_planificacio: Optional[date] = None
+    hora_inici_prevista: Optional[datetime] = None
+    hora_fi_prevista: Optional[datetime] = None
+    created_at: datetime
+
+class Fitxa360Resum(BaseModel):
+    total_intervencions: int
+    total_incidencies: int
+    total_peces_instalades: int
+    dies_analitzats: int = 365
+
+class Fitxa360Response(BaseModel):
+    client: ClientResponse
+    finques: List[FincaFitxa360]
+    intervencions: List[IntervencioFitxa360]
+    peces_instalades: List[PecaInstaladaFitxa360]
+    incidencies: List[IncidenciaFitxa360]
+    alertes_garantia: List[dict]
+    resum: Fitxa360Resum
+
+
+@router.get("/{client_id}/fitxa360", response_model=Fitxa360Response)
+async def obtenir_fitxa_360_client(
+    request: Request,
+    client_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db_with_tenant_context)
+):
+    """
+    Recopila cronològicament totes les intervencions tècniques, peces instal·lades
+    i incidències registrades per al client durant els últims 365 dies (Spec 012 RF-04).
+    """
+    empresa_id = request.headers.get("X-Empresa-ID") or getattr(request.state, "empresa_id", None)
+    if not empresa_id:
+        raise HTTPException(status_code=401, detail="No identificat")
+
+    empresa_uuid = uuid.UUID(empresa_id)
+
+    # 1. Verificar client
+    res_client = await db.execute(
+        select(Client).where(Client.id == client_id, Client.empresa_id == empresa_uuid)
+    )
+    client = res_client.scalars().first()
+    if not client:
+        raise HTTPException(status_code=404, detail="Client no trobat")
+
+    fa_un_any = datetime.now(timezone.utc) - timedelta(days=365)
+
+    # 2. Obtenir Finques
+    from app.models.models import (
+        AlertaGarantiaRecompra,
+        Article,
+        Finca,
+        FullaPicking,
+        Incidencia,
+        LiniaPicking,
+        OrdreTreball,
+    )
+
+    res_finques = await db.execute(
+        select(Finca).where(Finca.client_id == client_id, Finca.empresa_id == empresa_uuid)
+    )
+    finques_db = res_finques.scalars().all()
+    finques = [
+        FincaFitxa360(
+            id=f.id,
+            nom=f.nom,
+            adreca=f.adreca,
+            superficie_ha=float(f.superficie_ha) if f.superficie_ha is not None else None,
+            dades_sigpac=f.dades_sigpac or {}
+        )
+        for f in finques_db
+    ]
+
+    # 3. Obtenir Ordres de Treball (últims 365 dies)
+    res_ots = await db.execute(
+        select(OrdreTreball).where(
+            OrdreTreball.client_id == client_id,
+            OrdreTreball.empresa_id == empresa_uuid,
+            OrdreTreball.created_at >= fa_un_any
+        ).order_by(OrdreTreball.created_at.desc())
+    )
+    ots = res_ots.scalars().all()
+    ot_map = {ot.id: ot for ot in ots}
+    ot_ids = list(ot_map.keys())
+
+    intervencions = [
+        IntervencioFitxa360(
+            id=ot.id,
+            codi=ot.codi,
+            titol=ot.titol,
+            adreca=ot.adreca,
+            estat=ot.estat,
+            data_planificacio=ot.data_planificacio,
+            hora_inici_prevista=ot.hora_inici_prevista,
+            hora_fi_prevista=ot.hora_fi_prevista,
+            created_at=ot.created_at
+        )
+        for ot in ots
+    ]
+
+    # 4. Obtenir Peces instal·lades a les OTs dels últims 365 dies
+    peces_instalades: List[PecaInstaladaFitxa360] = []
+    if ot_ids:
+        stmt_peces = (
+            select(LiniaPicking, Article, FullaPicking)
+            .join(FullaPicking, LiniaPicking.picking_id == FullaPicking.id)
+            .join(Article, LiniaPicking.article_id == Article.id)
+            .where(
+                FullaPicking.ordre_treball_id.in_(ot_ids),
+                LiniaPicking.empresa_id == empresa_uuid
+            )
+            .order_by(LiniaPicking.created_at.desc())
+        )
+        res_peces = await db.execute(stmt_peces)
+        for lp, art, fp in res_peces.all():
+            ot = ot_map.get(fp.ordre_treball_id)
+            # Consum real = carregat - retornat
+            quantitat = float(lp.quantitat_carregada_pick_in or 0.0) - float(lp.quantitat_retornada_pick_out or 0.0)
+            if quantitat <= 0:
+                quantitat = float(lp.quantitat_carregada_pick_in or 0.0)
+            peces_instalades.append(PecaInstaladaFitxa360(
+                article_id=art.id,
+                codi_article=art.referencia_inventari,
+                nom_article=art.nom,
+                quantitat_instalada=quantitat,
+                unitat_mesura=art.unitat_mesura,
+                data_instalacio=lp.created_at,
+                ordre_treball_id=fp.ordre_treball_id,
+                ordre_treball_codi=ot.codi if ot else "S/C"
+            ))
+
+    # 5. Obtenir Incidències associades
+    incidencies: List[IncidenciaFitxa360] = []
+    if ot_ids:
+        stmt_inc = select(Incidencia).where(
+            Incidencia.ordre_treball_id.in_(ot_ids),
+            Incidencia.empresa_id == empresa_uuid,
+            Incidencia.created_at >= fa_un_any
+        ).order_by(Incidencia.created_at.desc())
+        res_inc = await db.execute(stmt_inc)
+        for inc in res_inc.scalars().all():
+            ot = ot_map.get(inc.ordre_treball_id) if inc.ordre_treball_id else None
+            incidencies.append(IncidenciaFitxa360(
+                id=inc.id,
+                ordre_treball_id=inc.ordre_treball_id,
+                ordre_treball_codi=ot.codi if ot else None,
+                ambit=inc.ambit,
+                estat=inc.estat,
+                text_observacions=inc.text_observacions,
+                foto_path=inc.foto_path,
+                audio_path=inc.audio_path,
+                created_at=inc.created_at
+            ))
+
+    # 6. Obtenir Alertes de Garantia
+    alertes: List[dict] = []
+    if ot_ids:
+        stmt_alertes = select(AlertaGarantiaRecompra).where(
+            AlertaGarantiaRecompra.ordre_treball_id.in_(ot_ids),
+            AlertaGarantiaRecompra.empresa_id == empresa_uuid
+        )
+        res_alertes = await db.execute(stmt_alertes)
+        for al in res_alertes.scalars().all():
+            alertes.append({
+                "id": str(al.id),
+                "ordre_treball_id": str(al.ordre_treball_id) if al.ordre_treball_id else None,
+                "tipus_alerta": al.tipus_alerta,
+                "missatge": al.missatge,
+                "data_fi_garantia": str(al.data_fi_garantia) if al.data_fi_garantia else None,
+                "estat": al.estat
+            })
+
+    resum = Fitxa360Resum(
+        total_intervencions=len(intervencions),
+        total_incidencies=len(incidencies),
+        total_peces_instalades=len(peces_instalades),
+        dies_analitzats=365
+    )
+
+    client_resp = ClientResponse(
+        id=client.id,
+        codi=client.codi,
+        rao_social=client.rao_social,
+        nif=client.nif,
+        telefon=client.telefon,
+        email=client.email,
+        adreca_fiscal=client.adreca_fiscal,
+        iban=client.iban_xifrat_simetric,
+        estat_canal_telegram=client.estat_canal_telegram,
+        actiu=client.actiu
+    )
+
+    return Fitxa360Response(
+        client=client_resp,
+        finques=finques,
+        intervencions=intervencions,
+        peces_instalades=peces_instalades,
+        incidencies=incidencies,
+        alertes_garantia=alertes,
+        resum=resum
+    )
+

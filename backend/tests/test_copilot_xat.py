@@ -1,22 +1,25 @@
-import pytest
 import uuid
+
 import jwt
-from httpx import AsyncClient, ASGITransport
+import pytest
+from httpx import ASGITransport, AsyncClient
+
 from app.main import app
-from app.models.models import Empresa, Usuari, Article, EstocMagatzem, Magatzem, FaqCorporativaRag
+from app.models.models import Empresa, FaqCorporativaRag, Usuari
+
 
 @pytest.mark.asyncio
 async def test_copilot_xat(admin_session, headers, boss_token):
     token_jwt, empresa_id = boss_token
     boss_nif = "B" + str(uuid.uuid4())[:8].upper()
-    
+
     decoded = jwt.decode(token_jwt, options={"verify_signature": False})
-    
+
     admin_session.add(Empresa(
         id=uuid.UUID(empresa_id), nom='Test Copilot', nif=boss_nif, subdomini='copi-' + str(uuid.uuid4())[:5], pla_subscripcio='STARTER', estat_pagament='ACTIU'
     ))
     admin_session.add(Usuari(id=uuid.UUID(decoded["sub"]), empresa_id=uuid.UUID(empresa_id), nom="Boss", cognoms="Boss", nif="BOSS1", rol="BOSS", estat="ACTIU"))
-    
+
     # Afegir un FAQ Real al RAG
     admin_session.add(FaqCorporativaRag(
         empresa_id=uuid.UUID(empresa_id),
@@ -25,7 +28,7 @@ async def test_copilot_xat(admin_session, headers, boss_token):
         paraules_clau="electricitat, quadre, rebt",
         actiu=True
     ))
-    
+
     await admin_session.flush()
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:

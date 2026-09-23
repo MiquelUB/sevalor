@@ -1,13 +1,13 @@
 import uuid
-import pytest
-from httpx import AsyncClient, ASGITransport
-from sqlalchemy.ext.asyncio import AsyncSession
-import bcrypt
 
-from app.main import app
-from app.models.models import Usuari, Empresa, Vehicle, OrdreTreball, Client
-from app.core.config import settings
+import bcrypt
+import pytest
+from httpx import ASGITransport, AsyncClient
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.api.v1.gestio.operaris import hash_pin
+from app.main import app
+from app.models.models import Client, Empresa, OrdreTreball, Usuari, Vehicle
 
 
 @pytest.fixture

@@ -1,10 +1,11 @@
 import uuid
-from typing import Optional
 from datetime import datetime, timezone
+from typing import Optional
+
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from sqlalchemy.ext.asyncio import AsyncSession
+from pydantic import BaseModel
 from sqlalchemy import select
-from pydantic import BaseModel, Field
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db_with_tenant_context
 from app.core.security import require_roles
@@ -34,9 +35,10 @@ async def iniciar_jornada(
     empresa_id = request.state.empresa_id
     if not empresa_id:
         raise HTTPException(status_code=401, detail="No identificat")
-        
+
     # L'usuari ha de ser extret del token JWT (el Subject)
     import jwt
+
     from app.core.config import settings
     auth_header = request.headers.get("Authorization")
     token = auth_header.split(" ")[1]
@@ -60,7 +62,7 @@ async def iniciar_jornada(
         geolocalitzacio_inici=payload.geolocalitzacio,
         estat="EN_CURS"
     )
-    
+
     db.add(jornada)
     await db.commit()
 
@@ -75,10 +77,11 @@ async def get_jornada_activa(
     empresa_id = request.state.empresa_id
     if not empresa_id:
         raise HTTPException(status_code=401)
-        
+
     auth_header = request.headers.get("Authorization")
     token = auth_header.split(" ")[1]
     import jwt
+
     from app.core.config import settings
     decoded = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM], options={"verify_aud": False})
     usuari_id = decoded.get("sub")
@@ -91,10 +94,10 @@ async def get_jornada_activa(
     )
     result = await db.execute(stmt)
     jornada = result.scalars().first()
-    
+
     if not jornada:
         raise HTTPException(status_code=404, detail="No hi ha jornada activa")
-        
+
     return jornada
 
 @router.post("/{jornada_id}/fi", response_model=JornadaResponse)
@@ -108,7 +111,7 @@ async def finalitzar_jornada(
     empresa_id = request.state.empresa_id
     if not empresa_id:
         raise HTTPException(status_code=401)
-        
+
 
     stmt = select(RegistreJornadaLaboral).where(
         RegistreJornadaLaboral.id == jornada_id,
@@ -116,17 +119,17 @@ async def finalitzar_jornada(
     )
     result = await db.execute(stmt)
     jornada = result.scalars().first()
-    
+
     if not jornada:
         raise HTTPException(status_code=404, detail="Jornada no trobada")
-        
+
     if jornada.estat == "COMPLERT":
         raise HTTPException(status_code=400, detail="La jornada ja està tancada")
-        
+
     jornada.hora_fi = datetime.now(timezone.utc)
     jornada.geolocalitzacio_fi = payload.geolocalitzacio
     jornada.estat = "COMPLERT"
-    
+
     await db.commit()
 
     return jornada
@@ -147,16 +150,17 @@ async def assignar_vehicle_a_jornada(
     empresa_id = request.state.empresa_id
     if not empresa_id:
         raise HTTPException(status_code=401)
-        
+
     auth_header = request.headers.get("Authorization")
     token = auth_header.split(" ")[1]
     import jwt
+
     from app.core.config import settings
     decoded = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM], options={"verify_aud": False})
     usuari_id = decoded.get("sub")
 
     # Obtenir vehicle
-    from app.models.models import Vehicle, Usuari
+    from app.models.models import Usuari, Vehicle
     v_res = await db.execute(select(Vehicle).where(Vehicle.id == payload.vehicle_id, Vehicle.empresa_id == uuid.UUID(empresa_id)))
     vehicle = v_res.scalars().first()
     if not vehicle:
@@ -170,8 +174,8 @@ async def assignar_vehicle_a_jornada(
     u_res = await db.execute(select(Usuari).where(Usuari.id == uuid.UUID(usuari_id)))
     usuari = u_res.scalars().first()
     usuari.vehicle_assignat_id = vehicle.id
-    
+
     await db.commit()
-    
+
     return {"status": "OK", "vehicle_assignat_id": str(vehicle.id), "km_actuals": payload.km_actuals}
 

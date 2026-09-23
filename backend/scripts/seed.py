@@ -2,17 +2,17 @@ import asyncio
 import os
 import sys
 import uuid
+
 import bcrypt
-from sqlalchemy import select, func
+from sqlalchemy import func, select
 
 # Inject backend path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from app.core.db import AsyncSessionLocal, engine
-from app.core.db import Base
-from app.models import models  # Ensure all models are registered
-from app.models.models import Empresa, Usuari
 from app.api.v1.gestio.operaris import hash_pin
+from app.core.db import AsyncSessionLocal, Base, engine
+from app.models.models import Empresa, Usuari
+
 
 def hash_password(password: str) -> str:
     return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")

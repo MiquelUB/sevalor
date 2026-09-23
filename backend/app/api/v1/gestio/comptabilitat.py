@@ -1,18 +1,18 @@
-import uuid
-import hashlib
 import os
+import uuid
 from datetime import datetime, timezone
 from typing import List, Optional
+
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
 from pydantic import BaseModel, Field
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db_with_tenant_context
-from app.core.security import get_current_user_claims, require_financial_access
-from app.models.models import FacturaCapcalera, Client, Empresa
-from app.services.verifactu import generar_factura_pdf
+from app.core.security import require_financial_access
+from app.models.models import Client, Empresa, FacturaCapcalera
 from app.services.outbox_aeat import registrar_enviament_outbox
+from app.services.verifactu import generar_factura_pdf
 
 router = APIRouter(
     prefix="/gestio/comptabilitat",
@@ -33,7 +33,7 @@ class FacturaCreate(BaseModel):
 
 class FacturaResponse(BaseModel):
     id: uuid.UUID
-    numero_factura: int 
+    numero_factura: int
     serie: str
     client_id: uuid.UUID
     base_imposable: float = 0.0
@@ -166,3 +166,68 @@ async def crear_factura(
     )
 
     return nova_factura
+
+import xml.etree.ElementTree as ET
+
+from fastapi.responses import Response
+
+
+@router.get("/factures/{factura_id}/xml")
+async def exportar_factura_xml(
+    factura_id: uuid.UUID,
+    request: Request,
+    db: AsyncSession = Depends(get_db_with_tenant_context)
+):
+    empresa_id = request.state.empresa_id
+    if not empresa_id:
+        raise HTTPException(status_code=401)
+
+    stmt = select(FacturaCapcalera).where(
+        FacturaCapcalera.id == factura_id,
+        FacturaCapcalera.empresa_id == uuid.UUID(empresa_id)
+    )
+    factura = (await db.execute(stmt)).scalars().first()
+    if not factura:
+        raise HTTPException(status_code=404, detail="Factura no trobada")
+
+    # Creació de l'estructura XML Veri*factu
+    root = ET.Element("RegistroAlta")
+
+    # Dades identificatives
+    id_factura = ET.SubElement(root, "IDFactura")
+    num_serie = ET.SubElement(id_factura, "NumSerieFactura")
+    num_serie.text = f"{factura.serie}-{factura.numero_factura}"
+    data_exp = ET.SubElement(id_factura, "FechaExpedicionFactura")
+    data_exp.text = factura.data_emissio.strftime("%d-%m-%Y")
+
+    # Desglossament i Inversió de Subjecte Passiu (ISP)
+    desglose = ET.SubElement(root, "Desglose")
+    if factura.quota_iva == 0.0:
+        detalle = ET.SubElement(desglose, "DetalleExenta")
+        causa = ET.SubElement(detalle, "CausaExencion")
+        causa.text = "I"  # Codi I = Inversión Sujeto Pasivo
+        base = ET.SubElement(detalle, "BaseImponible")
+        base.text = f"{factura.base_imposable:.2f}"
+    else:
+        detalle = ET.SubElement(desglose, "DetalleSujeta")
+        base = ET.SubElement(detalle, "BaseImponible")
+        base.text = f"{factura.base_imposable:.2f}"
+        quota = ET.SubElement(detalle, "CuotaRepercutida")
+        quota.text = f"{factura.quota_iva:.2f}"
+
+    # Encadenament
+    encadenamiento = ET.SubElement(root, "Encadenamiento")
+    reg_ant = ET.SubElement(encadenamiento, "RegistroAnterior")
+    if factura.hash_anterior:
+        reg_ant.text = factura.hash_anterior
+    else:
+        reg_ant.text = "PRIMER_REGISTRO"
+
+    # Sistema informàtic
+    sist_info = ET.SubElement(root, "SistemaInformatico")
+    hash_node = ET.SubElement(sist_info, "Hash")
+    hash_node.text = factura.hash_sha256
+
+    xml_str = ET.tostring(root, encoding="utf-8", xml_declaration=True).decode("utf-8")
+
+    return Response(content=xml_str, media_type="application/xml")

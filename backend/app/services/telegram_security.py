@@ -6,7 +6,6 @@ Aquest mòdul proporciona aliases perquè els tests del backend puguin
 importar les funcions sense dependre del paquet bot complet.
 """
 
-import sys
 
 # Intentar importar des de bot.security
 try:
@@ -27,9 +26,9 @@ def validate_telegram_file_safety(nom_fitxer: str, contingut_bytes: bytes) -> di
     es_perillos, motiu = detectar_doble_extensio(nom_fitxer)
     if es_perillos:
         return {"valid": False, "motiu": motiu}
-    
+
     es_valid = validar_magic_bytes(contingut_bytes)
     if not es_valid:
         return {"valid": False, "motiu": "Magic bytes no vàlids"}
-    
+
     return {"valid": True, "motiu": "OK"}

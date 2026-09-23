@@ -1,18 +1,18 @@
 """Tests d'integració d'aïllament multi-tenant amb Row Level Security (RLS) de PostgreSQL."""
 
 import uuid
-import pytest
-from sqlalchemy import select, text
-from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 
-from app.models.models import Client, Empresa
-from app.core.config import settings
+import pytest
+from sqlalchemy import select
+
 from app.core.db import set_tenant_context
+from app.models.models import Client, Empresa
+
 
 @pytest.mark.asyncio
 async def test_tenant_isolation_rls(admin_session):
     """Verifica que l'Inquilí A mai veu les dades de l'Inquilí B sota cap circumstància (RLS natiu)."""
-    
+
     # 1. Creem dades de prova per a 2 tenants usant la sessió admin (bypasseja RLS temporalment per setup)
     empresa_a = Empresa(
         id=uuid.uuid4(),
@@ -45,17 +45,17 @@ async def test_tenant_isolation_rls(admin_session):
     )
     admin_session.add_all([client_a, client_b])
     await admin_session.flush()
-    
+
     # Perquè les polítiques RLS funcionin, cal establir el context de tenant.
     # L'admin_session ja és dins un savepoint on es veuen aquestes dades.
     # Simulem un entorn de l'usuari A dins la mateixa connexió configurant RLS localment
-    
+
     await set_tenant_context(admin_session, str(empresa_a.id), is_superadmin=False)
-    
+
     # Executem la consulta general sota el context de l'Empresa A
     result_all_a = await admin_session.execute(select(Client))
     clients_visibles_a = result_all_a.scalars().all()
-    
+
     assert len(clients_visibles_a) >= 1
     # Ha d'haver-hi el seu client
     assert any(c.id == client_a.id for c in clients_visibles_a), "No es veu el propi client"
@@ -64,14 +64,14 @@ async def test_tenant_isolation_rls(admin_session):
 
     # Verificació amb l'Empresa B
     await set_tenant_context(admin_session, str(empresa_b.id), is_superadmin=False)
-    
+
     result_all_b = await admin_session.execute(select(Client))
     clients_visibles_b = result_all_b.scalars().all()
-    
+
     assert len(clients_visibles_b) >= 1
     assert any(c.id == client_b.id for c in clients_visibles_b), "No es veu el propi client"
     assert not any(c.id == client_a.id for c in clients_visibles_b), "BRETXA RLS: L'inquilí B pot veure dades d'A"
-    
+
     # Restablim el superadmin per permetre el rollback automàtic net
     await set_tenant_context(admin_session, None, is_superadmin=True)
 

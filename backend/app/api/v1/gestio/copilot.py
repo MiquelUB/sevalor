@@ -1,17 +1,18 @@
 """Endpoints per al Mòdul d'IA Copilot de Camp i Gestió (/gestio/copilot & PWA — Spec 012)."""
 
-import os
+import json
+import logging
 import re
 import uuid
 from datetime import date, datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
+
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import BaseModel, Field
-from sqlalchemy import func, select, update
+from pydantic import AliasChoices, BaseModel, Field
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-import logging
-import httpx
 from app.core.config import settings
 from app.core.db import get_db_with_tenant_context
 from app.core.security import get_current_user_claims, require_roles
@@ -25,13 +26,8 @@ from app.models.models import (
     Empresa,
     EstocMagatzem,
     FaqCorporativaRag,
-    Finca,
-    Incidencia,
-    LiniaPicking,
     MemorandumTecnicCopilot,
     OrdreTreball,
-    Proveidor,
-    Usuari,
     Vehicle,
 )
 
@@ -67,13 +63,439 @@ PARAULES_CLAU_FINANCERES_VETO = [
     "comptabilitat agregada",
     "facturacio total",
     "marge brut global",
+    "cobrem per hora",
+    "cobrar per hora",
+    "cost per hora",
+    "preu per hora",
+    "cost hora",
+    "tarifa horària",
+    "tarifa horaria",
 ]
 
 logger = logging.getLogger("copilot_ia")
 
+# ---------------------------------------------------------------------------
+# Registre d'Eines (TOOLS_SCHEMA) per a Tool Calling (Spec 012 / Phase 3)
+# ---------------------------------------------------------------------------
 
-async def cridar_lm_studio(pregunta: str, vertical: str, context_addicional: str = "") -> Optional[str]:
-    """Fa una petició a la instància local o remota de LM Studio (OpenAI-compatible)."""
+TOOLS_SCHEMA = [
+    {
+        "type": "function",
+        "function": {
+            "name": "get_real_stock",
+            "description": "Consulta l'estoc real en temps real d'un article o material als magatzems de l'empresa.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "article_ref": {
+                        "type": "string",
+                        "description": "Referència d'inventari o nom de l'article (ex: 'Cable 6mm²', 'Tub PE-100', 'Electrovalvula')",
+                    }
+                },
+                "required": ["article_ref"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_vehicle_info",
+            "description": "Consulta les dades tècniques, estat i data d'ITV d'un vehicle de la flota per matrícula.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "matricula": {
+                        "type": "string",
+                        "description": "Matrícula del vehicle (ex: '1234-XYZ')",
+                    }
+                },
+                "required": ["matricula"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_closest_vehicle",
+            "description": "Determina quin vehicle de la flota és el més proper a unes coordenades GPS donades usant la fórmula Haversine.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "lat": {
+                        "type": "number",
+                        "description": "Latitud geogràfica de la ubicació o obra",
+                    },
+                    "lng": {
+                        "type": "number",
+                        "description": "Longitud geogràfica de la ubicació o obra",
+                    },
+                },
+                "required": ["lat", "lng"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_warranty_status",
+            "description": "Audita si una finca, client o equip disposa de garantia oficial o garantia de mà d'obra vigent.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "finca_id": {
+                        "type": "string",
+                        "description": "UUID de la finca",
+                    },
+                    "client_id": {
+                        "type": "string",
+                        "description": "UUID del client",
+                    },
+                    "numero_serie": {
+                        "type": "string",
+                        "description": "Número de sèrie de l'equip",
+                    },
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_client_history",
+            "description": "Recopila la Fitxa 360° i l'historial complet dels darrers 365 dies d'un client (intervencions, peces instal·lades i incidències).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "client_id": {
+                        "type": "string",
+                        "description": "UUID del client",
+                    },
+                    "client_nom": {
+                        "type": "string",
+                        "description": "Nom o raó social del client",
+                    },
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_rag_knowledge",
+            "description": "Cerca procediments tècnics, manuals d'obra i normatives a la base de coneixement corporativa RAG.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Paraules clau o descripció del procediment a cercar",
+                    }
+                },
+                "required": ["query"],
+            },
+        },
+    },
+]
+
+
+# ---------------------------------------------------------------------------
+# Funcions d'Execució d'Eines (Tools Execution Engine)
+# ---------------------------------------------------------------------------
+
+async def execute_tool_get_real_stock(db: AsyncSession, empresa_id: uuid.UUID, article_ref: str) -> dict:
+    terme = article_ref.strip()
+    cerca = f"%{terme}%"
+    stmt = select(Article).where(
+        Article.empresa_id == empresa_id,
+        or_(
+            Article.referencia_inventari.ilike(cerca),
+            Article.nom.ilike(cerca)
+        )
+    )
+    res = await db.execute(stmt)
+    articles = res.scalars().all()
+
+    # Si no troba coincidència exacta de frase, provar amb paraules clau
+    if not articles:
+        paraules = [p for p in terme.split() if len(p) > 2]
+        if paraules:
+            clauses = [or_(Article.referencia_inventari.ilike(f"%{p}%"), Article.nom.ilike(f"%{p}%")) for p in paraules]
+            stmt_p = select(Article).where(Article.empresa_id == empresa_id, or_(*clauses))
+            res_p = await db.execute(stmt_p)
+            articles = res_p.scalars().all()
+
+    if not articles:
+        return {
+            "trobat": False,
+            "article_cercat": article_ref,
+            "total_disponible": 0.0,
+            "articles": [],
+            "missatge": f"No s'ha trobat cap article amb la referència o nom '{article_ref}'."
+        }
+
+    articles_data = []
+    total_disponible_global = 0.0
+
+    for art in articles:
+        q_stock = select(
+            func.coalesce(func.sum(EstocMagatzem.quantitat_fisica - EstocMagatzem.quantitat_virtual_reservada), 0)
+        ).where(
+            EstocMagatzem.article_id == art.id,
+            EstocMagatzem.empresa_id == empresa_id
+        )
+        stock_val = float((await db.execute(q_stock)).scalar_one() or 0.0)
+        total_disponible_global += stock_val
+        articles_data.append({
+            "id": str(art.id),
+            "referencia": art.referencia_inventari,
+            "nom": art.nom,
+            "estoc_disponible": stock_val,
+            "unitat_mesura": art.unitat_mesura,
+            "estoc_minim": float(art.estoc_minim),
+            "estoc_optim": float(art.estoc_optim),
+            "familia": art.familia
+        })
+
+    return {
+        "trobat": True,
+        "article_cercat": article_ref,
+        "total_disponible": total_disponible_global,
+        "articles": articles_data
+    }
+
+
+async def execute_tool_get_vehicle_info(db: AsyncSession, empresa_id: uuid.UUID, matricula: str) -> dict:
+    stmt = select(Vehicle).where(
+        Vehicle.empresa_id == empresa_id,
+        Vehicle.matricula.ilike(f"%{matricula.strip()}%")
+    )
+    res = await db.execute(stmt)
+    v = res.scalars().first()
+    if not v:
+        return {
+            "trobat": False,
+            "matricula_cercada": matricula,
+            "missatge": f"No s'ha trobat cap vehicle amb la matrícula '{matricula}'."
+        }
+    return {
+        "trobat": True,
+        "vehicle_id": str(v.id),
+        "matricula": v.matricula,
+        "marca": v.marca,
+        "model": v.model,
+        "tipus": v.tipus,
+        "estat": v.estat,
+        "data_proxima_itv": v.data_proxima_itv.isoformat() if v.data_proxima_itv else None,
+        "odometre_acumulat": v.odometre_acumulat
+    }
+
+
+async def execute_tool_get_closest_vehicle(db: AsyncSession, empresa_id: uuid.UUID, lat: float, lng: float) -> dict:
+    from app.api.v1.gestio.flota import calcular_distancia_haversine
+
+    stmt_v = select(Vehicle).where(Vehicle.empresa_id == empresa_id)
+    res_v = await db.execute(stmt_v)
+    vehicles = res_v.scalars().all()
+
+    if not vehicles:
+        return {
+            "trobat": False,
+            "missatge": "No hi ha cap vehicle registrat a la flota."
+        }
+
+    stmt_ot = select(OrdreTreball).where(
+        OrdreTreball.empresa_id == empresa_id,
+        OrdreTreball.vehicle_id.isnot(None),
+        OrdreTreball.estat.in_(["EN_OBRA", "EN_RUTA", "EN_CURS", "PENDENT"])
+    ).order_by(OrdreTreball.created_at.desc())
+    res_ot = await db.execute(stmt_ot)
+    ots = res_ot.scalars().all()
+    vehicle_ot_map = {}
+    for ot in ots:
+        if ot.vehicle_id not in vehicle_ot_map:
+            vehicle_ot_map[ot.vehicle_id] = ot
+
+    llista = []
+    for v in vehicles:
+        v_lat, v_lng = 41.3851, 2.1734
+        ot_rel = vehicle_ot_map.get(v.id)
+        if ot_rel and ot_rel.adreca:
+            m = re.findall(r"[-+]?\d+\.\d+", ot_rel.adreca)
+            if len(m) >= 2:
+                v_lat, v_lng = float(m[0]), float(m[1])
+            elif "," in ot_rel.adreca:
+                try:
+                    parts = [float(p.strip()) for p in ot_rel.adreca.split(",")]
+                    if len(parts) >= 2:
+                        v_lat, v_lng = parts[0], parts[1]
+                except (ValueError, TypeError):
+                    pass
+
+        dist = calcular_distancia_haversine(lat, lng, v_lat, v_lng)
+        llista.append({
+            "vehicle_id": str(v.id),
+            "matricula": v.matricula,
+            "marca": v.marca,
+            "model": v.model,
+            "estat": v.estat,
+            "distancia_km": dist,
+            "lat": v_lat,
+            "lng": v_lng,
+            "ordre_treball_actual": ot_rel.codi if ot_rel else None
+        })
+
+    llista.sort(key=lambda x: x["distancia_km"])
+    closest = llista[0]
+
+    return {
+        "trobat": True,
+        "coordenades_cercades": {"lat": lat, "lng": lng},
+        "vehicle_mes_proper": closest,
+        "tots_els_vehicles": llista
+    }
+
+
+async def execute_tool_get_warranty_status(
+    db: AsyncSession,
+    empresa_id: uuid.UUID,
+    finca_id: Optional[str] = None,
+    client_id: Optional[str] = None,
+    numero_serie: Optional[str] = None
+) -> dict:
+    f_uuid = uuid.UUID(finca_id) if finca_id else None
+    c_uuid = uuid.UUID(client_id) if client_id else None
+    avui = date.today()
+    fa_un_any = avui - timedelta(days=365)
+    alertes = []
+
+    if f_uuid or c_uuid:
+        query = select(OrdreTreball).where(
+            OrdreTreball.empresa_id == empresa_id,
+            OrdreTreball.data_planificacio >= fa_un_any
+        ).order_by(OrdreTreball.data_planificacio.desc())
+        if f_uuid:
+            query = query.where(OrdreTreball.finca_id == f_uuid)
+        if c_uuid:
+            query = query.where(OrdreTreball.client_id == c_uuid)
+        ots = (await db.execute(query)).scalars().all()
+        if ots:
+            darrera = ots[0]
+            dies = (avui - darrera.data_planificacio).days
+            if dies <= TERMINI_GARANTIA_MA_OBRA_DIES:
+                alertes.append({
+                    "tipus": "GARANTIA_INTERNA_SERVEI",
+                    "activa": True,
+                    "cost_euros": 0.0,
+                    "dies_passats": dies,
+                    "missatge": f"Garantia interna de mà d'obra vigent (<90 dies: {dies} dies). Cost 0 € per al client."
+                })
+
+    if numero_serie:
+        res_eina = await db.execute(
+            select(EinaCustodia).where(EinaCustodia.empresa_id == empresa_id, EinaCustodia.numero_serie == numero_serie)
+        )
+        eina = res_eina.scalar_one_or_none()
+        if eina:
+            data_compra = eina.created_at.date()
+            data_fi = data_compra + timedelta(days=730)
+            dies_restants = (data_fi - avui).days
+            if dies_restants >= 0:
+                alertes.append({
+                    "tipus": "GARANTIA_FABRICANT",
+                    "activa": True,
+                    "dies_restants": dies_restants,
+                    "missatge": f"Garantia oficial del fabricant vigent fins al {data_fi.isoformat()} ({dies_restants} dies restants)."
+                })
+
+    return {
+        "trobat": len(alertes) > 0,
+        "garanties": alertes
+    }
+
+
+async def execute_tool_get_client_history(
+    db: AsyncSession,
+    empresa_id: uuid.UUID,
+    client_id: Optional[str] = None,
+    client_nom: Optional[str] = None
+) -> dict:
+    c_uuid = uuid.UUID(client_id) if client_id else None
+    if not c_uuid and client_nom:
+        res_c = await db.execute(
+            select(Client).where(Client.empresa_id == empresa_id, Client.rao_social.ilike(f"%{client_nom.strip()}%"))
+        )
+        cl = res_c.scalars().first()
+        if cl:
+            c_uuid = cl.id
+
+    if not c_uuid:
+        return {"trobat": False, "missatge": f"No s'ha trobat cap client amb '{client_nom or client_id}'."}
+
+    fa_un_any = datetime.now(timezone.utc) - timedelta(days=365)
+    res_ots = await db.execute(
+        select(OrdreTreball).where(
+            OrdreTreball.client_id == c_uuid,
+            OrdreTreball.empresa_id == empresa_id,
+            OrdreTreball.created_at >= fa_un_any
+        ).order_by(OrdreTreball.created_at.desc())
+    )
+    ots = res_ots.scalars().all()
+
+    return {
+        "trobat": True,
+        "client_id": str(c_uuid),
+        "total_intervencions_365d": len(ots),
+        "intervencions": [{"id": str(o.id), "codi": o.codi, "titol": o.titol, "estat": o.estat} for o in ots]
+    }
+
+
+async def execute_tool_get_rag_knowledge(db: AsyncSession, empresa_id: uuid.UUID, query: str) -> dict:
+    paraules = [p for p in query.lower().split() if len(p) > 3]
+    if not paraules:
+        return {"trobat": False, "documents": []}
+    filtres = []
+    for p in paraules:
+        filtres.append(func.lower(FaqCorporativaRag.resposta).contains(p))
+        filtres.append(func.lower(FaqCorporativaRag.pregunta).contains(p))
+        filtres.append(func.lower(FaqCorporativaRag.paraules_clau).contains(p))
+    q_faq = select(FaqCorporativaRag).where(FaqCorporativaRag.empresa_id == empresa_id, or_(*filtres))
+    docs = (await db.execute(q_faq)).scalars().all()
+    return {
+        "trobat": len(docs) > 0,
+        "documents": [{"pregunta": d.pregunta, "resposta": d.resposta, "tags": d.paraules_clau} for d in docs]
+    }
+
+
+async def executar_eina(nom_eina: str, args: dict, db: AsyncSession, empresa_id: uuid.UUID) -> dict:
+    """Invoca l'eina corresponent passant el context RLS."""
+    if nom_eina == "get_real_stock":
+        return await execute_tool_get_real_stock(db, empresa_id, args.get("article_ref", ""))
+    elif nom_eina == "get_vehicle_info":
+        return await execute_tool_get_vehicle_info(db, empresa_id, args.get("matricula", ""))
+    elif nom_eina == "get_closest_vehicle":
+        lat = float(args.get("lat", 0.0))
+        lng = float(args.get("lng", 0.0))
+        return await execute_tool_get_closest_vehicle(db, empresa_id, lat, lng)
+    elif nom_eina == "get_warranty_status":
+        return await execute_tool_get_warranty_status(
+            db, empresa_id, args.get("finca_id"), args.get("client_id"), args.get("numero_serie")
+        )
+    elif nom_eina == "get_client_history":
+        return await execute_tool_get_client_history(
+            db, empresa_id, args.get("client_id"), args.get("client_nom")
+        )
+    elif nom_eina == "get_rag_knowledge":
+        return await execute_tool_get_rag_knowledge(db, empresa_id, args.get("query", ""))
+    else:
+        return {"error": f"Eina desconeguda: {nom_eina}"}
+
+
+async def cridar_lm_studio(
+    pregunta: str,
+    vertical: str = "SEVALOR",
+    context_addicional: Optional[str] = None
+) -> Optional[str]:
+    """Cridar LM Studio per a generació de text estàndard / suport."""
     lm_url = getattr(settings, "LMSTUDIO_URL", None) or getattr(settings, "LM_STUDIO_URL", None)
     if not lm_url:
         return None
@@ -82,14 +504,14 @@ async def cridar_lm_studio(pregunta: str, vertical: str, context_addicional: str
     endpoint = f"{base_url}/chat/completions" if base_url.endswith("/v1") else f"{base_url}/v1/chat/completions"
 
     system_prompt = (
-        f"Ets el Copilot d'Intel·ligència Artificial tècnic de SEVALOR Suite, especialitzat en {vertical}. "
-        "Respon en català de forma professional, tècnica, precisa i concisa. "
-        "No facis càlculs financers de salaris ni dades sensibles no autoritzades. "
-        f"{context_addicional}"
+        f"Ets el Copilot Tècnic Especialitzat de SEVALOR (Vertical: {vertical}). "
+        "Respon sempre en català de forma professional, tècnica, breu i concisa."
     )
+    if context_addicional:
+        system_prompt += f"\nContext addicional:\n{context_addicional}"
 
-    model_name = getattr(settings, "LM_STUDIO_MODEL", "default")
-    api_key = getattr(settings, "LM_STUDIO_API_KEY", "lm-studio")
+    model_name = getattr(settings, "LMSTUDIO_MODEL", "qwen2.5-coder-7b-instruct")
+    api_key = getattr(settings, "LMSTUDIO_API_KEY", "lm-studio")
 
     payload = {
         "model": model_name,
@@ -97,8 +519,67 @@ async def cridar_lm_studio(pregunta: str, vertical: str, context_addicional: str
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": pregunta},
         ],
-        "temperature": 0.4,
-        "max_tokens": 600,
+        "temperature": 0.2,
+        "max_tokens": 500,
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            resp = await client.post(
+                endpoint,
+                json=payload,
+                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                choices = data.get("choices", [])
+                if choices:
+                    return choices[0].get("message", {}).get("content", "").strip()
+    except Exception as e:
+        logger.warning(f"Connexió amb LM Studio fallida a {endpoint}: {e}")
+
+    return None
+
+
+async def cridar_lm_studio_amb_tools(
+    pregunta: str,
+    vertical: str,
+    db: AsyncSession,
+    empresa_id: uuid.UUID
+) -> Tuple[Optional[str], Optional[str], Optional[dict], Optional[dict]]:
+    """
+    Executa el cicle d'Agent de Tool Calling amb LM Studio (OpenAI-compatible).
+    Retorna (resposta_final, tool_name, tool_args, tool_result).
+    """
+    lm_url = getattr(settings, "LMSTUDIO_URL", None) or getattr(settings, "LM_STUDIO_URL", None)
+    if not lm_url:
+        return None, None, None, None
+
+    base_url = lm_url.rstrip("/")
+    endpoint = f"{base_url}/chat/completions" if base_url.endswith("/v1") else f"{base_url}/v1/chat/completions"
+
+    system_prompt = (
+        f"Ets el Copilot d'Intel·ligència Artificial tècnic de SEVALOR Suite, especialitzat en {vertical}. "
+        "Tens accés a eines internes del sistema (tools) per consultar dades en temps real (estoc, vehicles, garanties, fitxa 360). "
+        "Quan l'usuari pregunti sobre estoc, vehicles, proximitat o clients, utilitza les eines proporcionades abans de respondre. "
+        "Respon sempre en català de forma professional, tècnica i precisa, basant-te exclusivament en les dades obtingudes de les eines."
+    )
+
+    model_name = getattr(settings, "LM_STUDIO_MODEL", "default")
+    api_key = getattr(settings, "LM_STUDIO_API_KEY", "lm-studio")
+
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": pregunta},
+    ]
+
+    payload = {
+        "model": model_name,
+        "messages": messages,
+        "tools": TOOLS_SCHEMA,
+        "tool_choice": "auto",
+        "temperature": 0.2,
+        "max_tokens": 700,
     }
 
     try:
@@ -108,16 +589,221 @@ async def cridar_lm_studio(pregunta: str, vertical: str, context_addicional: str
                 json=payload,
                 headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
             )
-            if resp.status_code == 200:
-                resultat = resp.json()
-                choices = resultat.get("choices", [])
-                if choices and "message" in choices[0]:
-                    content = choices[0]["message"].get("content", "").strip()
-                    if content:
-                        return content
+            if resp.status_code != 200:
+                return None, None, None, None
+
+            res_json = resp.json()
+            choices = res_json.get("choices", [])
+            if not choices:
+                return None, None, None, None
+
+            msg = choices[0].get("message", {})
+            tool_calls = msg.get("tool_calls", [])
+
+            if tool_calls:
+                tc = tool_calls[0]
+                fn_name = tc.get("function", {}).get("name")
+                args_str = tc.get("function", {}).get("arguments", "{}")
+                try:
+                    fn_args = json.loads(args_str) if isinstance(args_str, str) else args_str
+                except Exception:
+                    fn_args = {}
+
+                # Executar l'eina demanada
+                tool_res = await executar_eina(fn_name, fn_args, db, empresa_id)
+
+                # Segona crida per sintetitzar la resposta amb el resultat
+                messages.append(msg)
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tc.get("id", "call_1"),
+                    "name": fn_name,
+                    "content": json.dumps(tool_res, ensure_ascii=False)
+                })
+
+                payload_synthesis = {
+                    "model": model_name,
+                    "messages": messages,
+                    "temperature": 0.2,
+                    "max_tokens": 700,
+                }
+                resp_synth = await client.post(
+                    endpoint,
+                    json=payload_synthesis,
+                    headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                )
+                if resp_synth.status_code == 200:
+                    synth_json = resp_synth.json()
+                    synth_choices = synth_json.get("choices", [])
+                    if synth_choices:
+                        content = synth_choices[0].get("message", {}).get("content", "").strip()
+                        if content:
+                            return content, fn_name, fn_args, tool_res
+
+                return None, fn_name, fn_args, tool_res
+
+            content = msg.get("content", "").strip()
+            if content:
+                return content, None, None, None
+
     except Exception as e:
-        logger.warning(f"Connexió amb LM Studio fallida a {endpoint}: {e}")
-    return None
+        logger.warning(f"Connexió o execució de Tool Calling amb LM Studio fallida a {endpoint}: {e}")
+
+    return None, None, None, None
+
+
+async def executar_agent_local(
+    pregunta: str,
+    db: AsyncSession,
+    empresa_id: uuid.UUID
+) -> Tuple[str, Optional[str], Optional[dict], Optional[dict], List[dict]]:
+    """
+    Agent determinista sobirà local: selecciona l'eina òptima i sintetitza la resposta
+    amb les dades reals de la base de dades (Zero Mock Data).
+    """
+    pregunta_lower = pregunta.lower()
+    enllacos: List[dict] = []
+
+    # 1. Proximitat / Vehicle més proper
+    if any(k in pregunta_lower for k in ["més a prop", "mes aprop", "mes a prop", "més proper", "mes proper", "proper", "aprop", "proxim", "pròxim", "closest", "cercano", "cerca"]):
+        coords = re.findall(r"[-+]?\d+\.\d+", pregunta)
+        if len(coords) >= 2:
+            lat = float(coords[0])
+            lng = float(coords[1])
+        else:
+            nums = re.findall(r"[-+]?\d+(?:\.\d+)?", pregunta)
+            if len(nums) >= 2:
+                lat = float(nums[0])
+                lng = float(nums[1])
+            else:
+                lat, lng = 41.3851, 2.1734
+
+        tool_name = "get_closest_vehicle"
+        tool_args = {"lat": lat, "lng": lng}
+        tool_res = await execute_tool_get_closest_vehicle(db, empresa_id, lat, lng)
+        enllacos.append({"titol": "Flota de Vehicles", "url": "/gestio/flota"})
+
+        if tool_res.get("trobat") and tool_res.get("vehicle_mes_proper"):
+            v = tool_res["vehicle_mes_proper"]
+            resposta = (
+                f"El vehicle més proper a les coordenades [{lat}, {lng}] és el {v['matricula']} "
+                f"({v['marca']} {v['model']}), que es troba a {v['distancia_km']} km (estat: {v['estat']})."
+            )
+        else:
+            resposta = "No hi ha cap vehicle registrat a la flota per calcular la proximitat."
+
+        return resposta, tool_name, tool_args, tool_res, enllacos
+
+    # 2. Estoc / Inventari
+    if any(k in pregunta_lower for k in ["estoc", "stock", "quantitat", "queden", "queda", "disposem", "cable", "tub", "electrovalvula", "material", "inventari"]):
+        stmt_arts = select(Article).where(Article.empresa_id == empresa_id)
+        articles_db = (await db.execute(stmt_arts)).scalars().all()
+
+        target_ref = ""
+        best_match_len = 0
+        for art in articles_db:
+            nom_l = art.nom.lower()
+            ref_l = art.referencia_inventari.lower()
+            if nom_l in pregunta_lower and len(nom_l) > best_match_len:
+                target_ref = art.nom
+                best_match_len = len(nom_l)
+            elif ref_l in pregunta_lower and len(ref_l) > best_match_len:
+                target_ref = art.referencia_inventari
+                best_match_len = len(ref_l)
+
+        if not target_ref:
+            stopwords = ["tenim", "suficient", "per", "l'obra", "obra", "quant", "quants", "queden", "disposem", "de", "d'", "ens", "queda", "el", "la", "els", "les"]
+            cleaned = " ".join([w for w in pregunta_lower.split() if w not in stopwords and len(w) > 1])
+            target_ref = cleaned or pregunta_lower
+
+        tool_name = "get_real_stock"
+        tool_args = {"article_ref": target_ref}
+        tool_res = await execute_tool_get_real_stock(db, empresa_id, target_ref)
+        enllacos.append({"titol": "Inventari de Magatzem", "url": "/gestio/magatzem"})
+
+        if tool_res.get("trobat"):
+            tot = tool_res["total_disponible"]
+            tot_str = f"{int(tot)}" if float(tot).is_integer() else f"{tot:.1f}"
+            detalls = ", ".join([
+                f"{a['nom']} ({int(a['estoc_disponible']) if float(a['estoc_disponible']).is_integer() else a['estoc_disponible']} {a['unitat_mesura']})"
+                for a in tool_res["articles"]
+            ])
+            resposta = (
+                f"Segons la consulta en temps real d'inventari a magatzem (eina get_real_stock), "
+                f"disposem de {tot_str} unitats disponibles en total. Detall d'estoc: {detalls}."
+            )
+        else:
+            resposta = f"No s'ha trobat cap registre d'estoc per a '{target_ref}' als magatzems de l'empresa."
+
+        return resposta, tool_name, tool_args, tool_res, enllacos
+
+    # 3. Vehicle per matrícula o informació general de vehicle
+    if any(k in pregunta_lower for k in ["vehicle", "furgoneta", "cotxe", "matricula", "itv", "asseguranca"]):
+        stmt_v = select(Vehicle).where(Vehicle.empresa_id == empresa_id)
+        vehs = (await db.execute(stmt_v)).scalars().all()
+        target_mat = ""
+        for v in vehs:
+            if v.matricula.lower() in pregunta_lower:
+                target_mat = v.matricula
+                break
+
+        if not target_mat:
+            mat_match = re.search(r"\b[0-9]{4}[ -]?[A-Z]{3}\b", pregunta.upper())
+            if mat_match:
+                target_mat = mat_match.group(0).replace(" ", "-")
+
+        if target_mat:
+            tool_name = "get_vehicle_info"
+            tool_args = {"matricula": target_mat}
+            tool_res = await execute_tool_get_vehicle_info(db, empresa_id, target_mat)
+            enllacos.append({"titol": "Flota de Vehicles", "url": "/gestio/flota"})
+            if tool_res.get("trobat"):
+                resposta = (
+                    f"Vehicle {tool_res['matricula']} ({tool_res['marca']} {tool_res['model']}): "
+                    f"Estat: {tool_res['estat']}. Data propera ITV: {tool_res.get('data_proxima_itv') or 'Pendent'}. "
+                    f"Odòmetre: {tool_res['odometre_acumulat']} km."
+                )
+            else:
+                resposta = tool_res.get("missatge", f"No s'ha trobat informació per la matrícula {target_mat}.")
+            return resposta, tool_name, tool_args, tool_res, enllacos
+
+    # 4. Historial de Client / Fitxa 360
+    if any(k in pregunta_lower for k in ["client", "historial", "fitxa 360", "360", "intervencions de"]):
+        tool_name = "get_client_history"
+        tool_args = {"client_nom": pregunta}
+        tool_res = await execute_tool_get_client_history(db, empresa_id, client_nom=pregunta)
+        enllacos.append({"titol": "Directori de Clients", "url": "/gestio/clients"})
+        if tool_res.get("trobat"):
+            resposta = f"Historial del client: {tool_res['total_intervencions_365d']} intervencions registrades en els últims 365 dies."
+        else:
+            resposta = tool_res.get("missatge", "No s'han trobat dades històriques del client.")
+        return resposta, tool_name, tool_args, tool_res, enllacos
+
+    # 5. Garanties
+    if any(k in pregunta_lower for k in ["garantia", "garanties", "rma", "fabricant"]):
+        tool_name = "get_warranty_status"
+        tool_args = {"numero_serie": None}
+        tool_res = await execute_tool_get_warranty_status(db, empresa_id)
+        enllacos.append({"titol": "Auditoria de Garanties", "url": "/gestio/copilot"})
+        if tool_res.get("trobat"):
+            msg_g = "; ".join([g["missatge"] for g in tool_res["garanties"]])
+            resposta = f"Estat de garanties: {msg_g}"
+        else:
+            resposta = "No hi ha alertes de garantia actives per als elements consultats."
+        return resposta, tool_name, tool_args, tool_res, enllacos
+
+    # 6. Fallback a RAG de coneixement
+    tool_name = "get_rag_knowledge"
+    tool_args = {"query": pregunta}
+    tool_res = await execute_tool_get_rag_knowledge(db, empresa_id, pregunta)
+    if tool_res.get("trobat"):
+        enllacos.append({"titol": "Base de Coneixement Corporativa", "url": "/gestio/copilot"})
+        docs_txt = "\n".join([f"• [{d['pregunta']}]: {d['resposta']}" for d in tool_res["documents"]])
+        resposta = f"He trobat aquesta informació a la base de coneixement corporativa:\n\n{docs_txt}"
+    else:
+        resposta = "No he trobat protocols específics ni dades directes a la base de coneixement corporativa per a aquesta consulta."
+
+    return resposta, tool_name, tool_args, tool_res, enllacos
 
 
 def aplicar_tenant_context(claims: Dict[str, Any]) -> uuid.UUID:
@@ -179,9 +865,9 @@ class VerificacioStockIn(BaseModel):
 
 
 class DocumentRagIn(BaseModel):
-    pregunta: str
-    resposta: str
-    paraules_clau: Optional[str] = None
+    pregunta: str = Field(validation_alias=AliasChoices('pregunta', 'titol'))
+    resposta: str = Field(validation_alias=AliasChoices('resposta', 'contingut'))
+    paraules_clau: Optional[str] = Field(default=None, validation_alias=AliasChoices('paraules_clau', 'tags'))
 
 class ConsultaXatIn(BaseModel):
     pregunta: str
@@ -739,9 +1425,30 @@ async def verificar_stock_en_assignacio(
         estoc_minim = float(article.estoc_minim)
 
         if saldo_projectat < estoc_minim:
+            # RF-33 / Tarea 3.3: Detecció de Backorders en Trànsit per evitar comandes duplicades.
+            # L'assistent (o worker de Celery associat) avalua les factures/comandes pendents.
+
+            from app.models.models import FacturaProveidor, FacturaProveidorLinia
+
+            q_backorder = select(FacturaProveidorLinia).join(
+                FacturaProveidor, FacturaProveidor.id == FacturaProveidorLinia.factura_id
+            ).where(
+                FacturaProveidorLinia.empresa_id == empresa_id,
+                FacturaProveidorLinia.article_id == article.id,
+                FacturaProveidor.estat == "PENDENT"
+            )
+            res_backorder = await db.execute(q_backorder)
+            backorder_actiu = res_backorder.scalars().first()
+
+            if backorder_actiu and saldo_projectat <= 0:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail=f"❌ Copilot IA: Comanda en trànsit detectada. Existeix un Backorder actiu per l'article '{article.nom}'. S'ha deturat la generació d'una nova comanda de compra per evitar duplicitat d'inventari."
+                )
+
             # Generar Alerta Preventiva de Recompra Inmediata (RF-15)
             missatge = f"ALERTA PREVENTIVA DE RECOMPRA: L'article '{article.nom}' quedarà a {saldo_projectat:.1f} {article.unitat_mesura} (sota mínim de seguretat de {estoc_minim:.1f}). S'ha generat l'esborrany de comanda de reposició."
-            
+
             comanda_esborrany = {
                 "article_id": str(article.id),
                 "article_nom": article.nom,
@@ -812,58 +1519,34 @@ async def consultar_xat_tecnic(
     vertical = empresa.vertical if empresa else "SEVALOR"
 
 
-    # 3. RAG REAL: Cerca dinàmica a la base de dades
+    # 3. Agent Autònom Copilot amb Tool Calling (OpenAI / LM Studio compatible + Sobirà Local Fallback)
+    resposta_ia, tool_name, tool_args, tool_result = await cridar_lm_studio_amb_tools(
+        pregunta=dades.pregunta,
+        db=db,
+        empresa_id=empresa_id,
+        vertical=vertical,
+    )
+
     enllacos = []
-    context_rag = ""
-    
-    # a) Estoc dinàmic
-    if any(k in pregunta_net for k in ["estoc", "stock", "quantitat", "queden", "disposem", "tub", "cable"]):
-        q_estoc = select(Article.nom, func.sum(EstocMagatzem.quantitat_fisica).label("total")).join(EstocMagatzem).where(Article.empresa_id == empresa_id).group_by(Article.nom)
-        res_estoc = (await db.execute(q_estoc)).all()
-        if res_estoc:
-            context_rag += "Informació d'estoc actual en temps real:\n"
-            for row in res_estoc:
-                context_rag += f"- {row.nom}: {row.total} unitats\n"
-            enllacos.append({"titol": "Inventari de Magatzem", "url": "/gestio/magatzem"})
-    
-    # b) Vehicles dinàmics
-    if any(k in pregunta_net for k in ["vehicle", "furgoneta", "cotxe", "matricula", "itv", "asseguranca", "seguro"]):
-        q_veh = select(Vehicle).where(Vehicle.empresa_id == empresa_id)
-        res_veh = (await db.execute(q_veh)).scalars().all()
-        if res_veh:
-            context_rag += "Informació de la flota de vehicles:\n"
-            for v in res_veh:
-                context_rag += f"- {v.marca} {v.model} ({v.matricula}): ITV vàlida fins {v.data_proxima_itv}, Assegurança fins {v.data_venciment_asseguranca}. Estat: {v.estat}\n"
-            enllacos.append({"titol": "Flota de Vehicles", "url": "/gestio/flota"})
-    
-    # c) Base de coneixement Corporativa RAG (FaqCorporativaRag)
-    paraules = pregunta_net.split()
-    filtres_rag = []
-    for p in paraules:
-        if len(p) > 3:
-            filtres_rag.append(func.lower(FaqCorporativaRag.resposta).contains(p))
-            filtres_rag.append(func.lower(FaqCorporativaRag.pregunta).contains(p))
-            filtres_rag.append(func.lower(FaqCorporativaRag.paraules_clau).contains(p))
-    
-    if filtres_rag:
-        from sqlalchemy import or_
-        q_faq = select(FaqCorporativaRag).where(FaqCorporativaRag.empresa_id == empresa_id).where(or_(*filtres_rag))
-        res_faq = (await db.execute(q_faq)).scalars().all()
-        if res_faq:
-            context_rag += "Base de coneixement corporativa (Procediments/Protocols):\n"
-            for faq in res_faq:
-                context_rag += f"[{faq.pregunta}]: {faq.resposta}\n"
-            enllacos.append({"titol": "Base de Coneixement Corporativa", "url": "/gestio/copilot"})
-    
-    resposta_ia = await cridar_lm_studio(dades.pregunta, vertical, context_addicional=context_rag)
     if resposta_ia:
         resposta = resposta_ia
+        if tool_name == "get_real_stock":
+            enllacos.append({"titol": "Inventari de Magatzem", "url": "/gestio/magatzem"})
+        elif tool_name in ("get_vehicle_info", "get_closest_vehicle"):
+            enllacos.append({"titol": "Flota de Vehicles", "url": "/gestio/flota"})
+        elif tool_name == "get_client_history":
+            enllacos.append({"titol": "Directori de Clients", "url": "/gestio/clients"})
+        elif tool_name == "get_warranty_status":
+            enllacos.append({"titol": "Auditoria de Garanties", "url": "/gestio/copilot"})
+        elif tool_name == "get_rag_knowledge":
+            enllacos.append({"titol": "Base de Coneixement Corporativa", "url": "/gestio/copilot"})
     else:
-        if context_rag:
-            resposta = f"L'assistent d'IA principal no està disponible, però he trobat aquesta informació als sistemes de l'empresa:\n\n{context_rag}"
-        else:
-            resposta = "L'assistent d'IA principal no està disponible i no he trobat dades específiques a la base de coneixement per aquesta consulta."
+        # Fallback determinista sobirà local (quan el servei LM Studio està inactiu o offline)
+        resposta, tool_name, tool_args, tool_result, enllacos = await executar_agent_local(
+            dades.pregunta, db, empresa_id
+        )
 
+    # 4. Registre d'Auditoria complet a la BD
     consulta_db = ConsultaXatCopilot(
         empresa_id=empresa_id,
         usuari_id=usuari_id,
@@ -872,6 +1555,9 @@ async def consultar_xat_tecnic(
         vertical=vertical,
         temps_inferencia_ms=115,
         enllacos_relacionats=enllacos,
+        tool_name=tool_name,
+        tool_args=tool_args,
+        tool_result=tool_result,
     )
     db.add(consulta_db)
     await db.commit()
@@ -880,6 +1566,9 @@ async def consultar_xat_tecnic(
         "resposta": resposta,
         "vertical": vertical,
         "temps_inferencia_ms": 115,
+        "tool_utilitzada": tool_name,
+        "tool_args": tool_args,
+        "tool_resultat": tool_result,
         "enllacos": enllacos,
         "declinat_per_vertical": False,
     }
@@ -924,7 +1613,7 @@ async def afegir_document_rag(
 ):
     """Permet als administradors afegir protocols i documentació al RAG del Copilot."""
     empresa_id = aplicar_tenant_context(claims)
-    
+
     nou_doc = FaqCorporativaRag(
         empresa_id=empresa_id,
         pregunta=dades.pregunta,
@@ -934,7 +1623,7 @@ async def afegir_document_rag(
     )
     db.add(nou_doc)
     await db.commit()
-    
+
     return {"estat": "OK", "missatge": "Document afegit a la base de coneixement de la IA."}
 
 @router.get("/rag")
@@ -944,9 +1633,20 @@ async def llistar_documents_rag(
 ):
     """Llista els protocols del RAG actius."""
     empresa_id = aplicar_tenant_context(claims)
-    
-    q = select(FaqCorporativaRag).where(FaqCorporativaRag.empresa_id == empresa_id, FaqCorporativaRag.actiu == True)
+
+    q = select(FaqCorporativaRag).where(FaqCorporativaRag.empresa_id == empresa_id, FaqCorporativaRag.actiu.is_(True))
     res = await db.execute(q)
     docs = res.scalars().all()
-    
-    return [{"id": str(d.id), "titol": d.titol, "contingut": d.contingut, "tags": d.tags} for d in docs]
+
+    return [
+        {
+            "id": str(d.id),
+            "titol": d.pregunta,
+            "contingut": d.resposta,
+            "tags": d.paraules_clau,
+            "pregunta": d.pregunta,
+            "resposta": d.resposta,
+            "paraules_clau": d.paraules_clau,
+        }
+        for d in docs
+    ]

@@ -1,20 +1,20 @@
 """Endpoints de configuració de l'empresa, jornada laboral, marca camaleònica i rols (/gestio/configuracio — Spec 011)."""
 
 import os
-import re
 import secrets
 import string
 import uuid
-from datetime import date, datetime, time, timezone
-from typing import Any, Dict, List, Optional
-from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile, status
-from pydantic import BaseModel, Field, EmailStr
-from sqlalchemy import func, select, update, delete
-from sqlalchemy.ext.asyncio import AsyncSession
-import httpx
+from datetime import date, time
+from typing import Any, Dict, Optional
+
 import bcrypt
+import httpx
+from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
+from pydantic import BaseModel, Field
 from slowapi import Limiter
 from slowapi.util import get_remote_address
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db, set_tenant_context
 from app.core.security import get_current_user_claims
@@ -48,17 +48,17 @@ def hsl_to_rgb(h: float, s: float, l: float) -> tuple[float, float, float]:
     m = l - c / 2.0
 
     if 0 <= h < 60:
-        r_p, g_p, b_p = c, x, 0
+        r_p, g_p, b_p = c, x, 0.0
     elif 60 <= h < 120:
-        r_p, g_p, b_p = x, c, 0
+        r_p, g_p, b_p = x, c, 0.0
     elif 120 <= h < 180:
-        r_p, g_p, b_p = 0, c, x
+        r_p, g_p, b_p = 0.0, c, x
     elif 180 <= h < 240:
-        r_p, g_p, b_p = 0, x, c
+        r_p, g_p, b_p = 0.0, x, c
     elif 240 <= h < 300:
-        r_p, g_p, b_p = x, 0, c
+        r_p, g_p, b_p = x, 0.0, c
     else:
-        r_p, g_p, b_p = c, 0, x
+        r_p, g_p, b_p = c, 0.0, x
 
     return r_p + m, g_p + m, b_p + m
 
@@ -89,7 +89,7 @@ def validar_contrast_wcag(hsl_str: str) -> float:
         lum = get_relative_luminance(r, g, b)
         contrast_white = get_contrast_ratio(1.0, lum)
         return contrast_white
-    except Exception as e:
+    except Exception:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=f"Format HSL de color invàlid: {hsl_str}",

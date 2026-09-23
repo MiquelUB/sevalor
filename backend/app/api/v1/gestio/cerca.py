@@ -7,14 +7,15 @@ Compleix Spec 001 (RF-02) i Tasca 4.1:
 - Respecta el Veto d'Enginyer (oculta dades financeres a perfils no autoritzats)
 """
 
-from typing import List, Optional
+from typing import Any, List, Optional
+
 from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel
-from sqlalchemy import select, or_, func
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db, set_tenant_context
-from app.models.models import Client, Vehicle, OrdreTreball, Article, Usuari
+from app.models.models import Article, Client, OrdreTreball, Usuari, Vehicle
 
 router = APIRouter(prefix="/gestio/cerca", tags=["Cerca Universal Spotlight"])
 
@@ -33,7 +34,7 @@ async def cerca_spotlight(
     q: str = Query(..., min_length=2, description="Criteri de cerca (mínim 2 caràcters)"),
     entitat: Optional[str] = Query(None, description="Filtre per entitat (CLIENTS, VEHICLES, ORDRES, ARTICLES, OPERARIS, TOTS)"),
     db: AsyncSession = Depends(get_db),
-):
+) -> List[SpotlightResultItem]:
     """Executa la cerca ràpida Spotlight multi-entitat sota el tenant actual."""
     empresa_id = getattr(request.state, "empresa_id", None)
     if empresa_id:
@@ -45,7 +46,7 @@ async def cerca_spotlight(
 
     # 1. Clients
     if entitat_filtre in ("TOTS", "CLIENTS", "CLIENT"):
-        stmt = (
+        stmt_cli = (
             select(Client)
             .where(
                 or_(
@@ -56,8 +57,8 @@ async def cerca_spotlight(
             )
             .limit(10)
         )
-        res = await db.execute(stmt)
-        for c in res.scalars().all():
+        res_cli = await db.execute(stmt_cli)
+        for c in res_cli.scalars().all():
             resultats.append(
                 SpotlightResultItem(
                     id=str(c.id),
@@ -70,7 +71,7 @@ async def cerca_spotlight(
 
     # 2. Vehicles
     if entitat_filtre in ("TOTS", "VEHICLES", "VEHICLE"):
-        stmt = (
+        stmt_veh = (
             select(Vehicle)
             .where(
                 or_(
@@ -81,8 +82,8 @@ async def cerca_spotlight(
             )
             .limit(10)
         )
-        res = await db.execute(stmt)
-        for v in res.scalars().all():
+        res_veh = await db.execute(stmt_veh)
+        for v in res_veh.scalars().all():
             resultats.append(
                 SpotlightResultItem(
                     id=str(v.id),
@@ -95,7 +96,7 @@ async def cerca_spotlight(
 
     # 3. Ordres de Treball
     if entitat_filtre in ("TOTS", "ORDRES", "ORDRE"):
-        stmt = (
+        stmt_ord = (
             select(OrdreTreball)
             .where(
                 or_(
@@ -105,8 +106,8 @@ async def cerca_spotlight(
             )
             .limit(10)
         )
-        res = await db.execute(stmt)
-        for o in res.scalars().all():
+        res_ord = await db.execute(stmt_ord)
+        for o in res_ord.scalars().all():
             resultats.append(
                 SpotlightResultItem(
                     id=str(o.id),
@@ -119,7 +120,7 @@ async def cerca_spotlight(
 
     # 4. Articles de Magatzem
     if entitat_filtre in ("TOTS", "ARTICLES", "MAGATZEM"):
-        stmt = (
+        stmt_art = (
             select(Article)
             .where(
                 or_(
@@ -129,8 +130,8 @@ async def cerca_spotlight(
             )
             .limit(10)
         )
-        res = await db.execute(stmt)
-        for a in res.scalars().all():
+        res_art = await db.execute(stmt_art)
+        for a in res_art.scalars().all():
             resultats.append(
                 SpotlightResultItem(
                     id=str(a.id),
@@ -143,7 +144,7 @@ async def cerca_spotlight(
 
     # 5. Usuaris / Operaris
     if entitat_filtre in ("TOTS", "OPERARIS", "USUARIS"):
-        stmt = (
+        stmt_usr = (
             select(Usuari)
             .where(
                 or_(
@@ -155,8 +156,8 @@ async def cerca_spotlight(
             )
             .limit(10)
         )
-        res = await db.execute(stmt)
-        for u in res.scalars().all():
+        res_usr = await db.execute(stmt_usr)
+        for u in res_usr.scalars().all():
             resultats.append(
                 SpotlightResultItem(
                     id=str(u.id),
@@ -177,7 +178,7 @@ async def cerca_spotlight(
 spotlight_router = APIRouter(prefix="/spotlight", tags=["Spotlight"])
 
 @spotlight_router.get("/items")
-async def llistar_spotlight_items_inicials(request: Request, db: AsyncSession = Depends(get_db)):
+async def llistar_spotlight_items_inicials(request: Request, db: AsyncSession = Depends(get_db)) -> List[dict[str, Any]]:
     """Retorna els elements principals per a cerca ràpida."""
     empresa_id = getattr(request.state, "empresa_id", None)
     if not empresa_id:

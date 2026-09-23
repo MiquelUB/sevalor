@@ -6,16 +6,18 @@ import uuid
 # Inject backend path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from app.core.db import AsyncSessionLocal, engine
 from sqlalchemy import text
+
 from app.api.v1.gestio.operaris import hash_pin
+from app.core.db import AsyncSessionLocal
+
 
 async def inject():
     async with AsyncSessionLocal() as session:
         print("⏳ Buscant empresa...")
         result = await session.execute(text("SELECT id, nom FROM empreses LIMIT 1;"))
         empresa = result.fetchone()
-        
+
         if not empresa:
             print("⏳ No hi ha cap empresa, la creem...")
             empresa_id = str(uuid.uuid4())
@@ -31,11 +33,11 @@ async def inject():
 
         print("⏳ Injectant usuari SUPERADMIN...")
         nou_hash = hash_pin("1234")
-        
+
         # Check if user exists
         res = await session.execute(text("SELECT id FROM usuaris WHERE upper(nif) = 'ADMIN';"))
         user = res.fetchone()
-        
+
         if user:
             print("⏳ L'usuari ADMIN ja existeix. Actualitzant PIN a 1234 i rol a SUPERADMIN...")
             await session.execute(text(f"""
@@ -50,7 +52,7 @@ async def inject():
                 INSERT INTO usuaris (id, empresa_id, nif, nom, pin_hash, rol, estat)
                 VALUES ('{user_id}', '{empresa_id}', 'ADMIN', 'Admin Principal', '{nou_hash}', 'SUPERADMIN', 'ACTIU')
             """))
-            
+
         await session.commit()
         print("✅ ============================================")
         print("✅ ÈXIT: Usuari ADMIN injectat/actualitzat!")
