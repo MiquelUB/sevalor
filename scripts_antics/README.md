@@ -1,0 +1,1 @@
+# Esborranys i Scripts Antics\nAquesta carpeta conté tots els scripts solts (`patch_*`, `fix_*`, `test_*`) generats prèviament per diferents agents AI per aplicar pegats ràpids. S'han mogut aquí per mantenir l'arrel neta sense trencar el repositori ni les rutes absolutes del CI/CD.
