@@ -53,7 +53,7 @@ function GestioLayoutContent({ children }: { children: React.ReactNode }) {
   };
 
   const navLinks = [
-    { label: "Torre de Control GIS", href: "/gestio/mapa", icon: Compass, badge: "GIS" },
+    { label: "Torre de Control GIS", href: "/gestio", icon: Compass, badge: "GIS" },
     { label: "Clients i Finques", href: "/gestio/clients", icon: Users, badge: "CLI" },
     { label: "Magatzem & Inventari", href: "/gestio/magatzem", icon: Package, badge: "STK" },
     { label: "Flota & Vehicles", href: "/gestio/flota", icon: Truck, badge: "FLT" },
@@ -121,7 +121,7 @@ function GestioLayoutContent({ children }: { children: React.ReactNode }) {
       {/* CAPÇALERA SUPERIOR */}
       <header className="h-14 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between px-4 z-40 sticky top-0 shadow-sm transition-colors">
         <div className="flex items-center gap-4">
-          <Link href="/gestio/mapa" className="flex items-center gap-2">
+          <Link href="/gestio" className="flex items-center gap-2">
             <div className="w-8 h-8 rounded-xl bg-emerald-600 flex items-center justify-center font-bold text-white shadow-lg shadow-emerald-600/20">
               <MapPin className="w-5 h-5" />
             </div>
@@ -148,18 +148,7 @@ function GestioLayoutContent({ children }: { children: React.ReactNode }) {
             </span>
           </button>
 
-          {/* Veto d'Enginyer (Simulador de Rols per Testing) */}
-          <div className="flex items-center gap-1.5 px-2 py-1 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg">
-            <Shield className="w-3.5 h-3.5 text-amber-600 dark:text-amber-500" />
-            <select
-              value={rolActiu}
-              onChange={(e) => setRolActiu(e.target.value as RolGestio)}
-              className="bg-transparent text-xs font-bold text-amber-700 dark:text-amber-400 outline-none cursor-pointer"
-            >
-              <option value="BOSS">Rol: Administrador (SaaS)</option>
-              <option value="ENGINYER">Rol: Enginyer (Veto Financer)</option>
-            </select>
-          </div>
+
 
           <button
             onClick={toggleTheme}
