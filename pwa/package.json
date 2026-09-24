@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start -H 0.0.0.0 -p 3000",
     "lint": "next lint",
-    "test": "node test_crypto.mjs && node test_phase0_auth.mjs && node test_phase0_apifetch.mjs && node test_pwa_logic.mjs",
+    "test": "node test_crypto.mjs && node test_phase0_auth.mjs && node test_phase0_apifetch.mjs && node test_pwa_logic.mjs && node test_pwa_dexie.mjs && node test_pwa_sw.mjs",
     "test:e2e": "playwright test"
   },
   "dependencies": {

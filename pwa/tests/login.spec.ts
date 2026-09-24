@@ -42,13 +42,14 @@ test.describe.serial('Auditoria de Test 1: PWA Login E2E', () => {
     
     const enterButton = page.locator('button:has-text("ENTRAR"), button:has-text("Continuar"), button:has-text("Accedir")').first();
     await enterButton.click();
-    await expect(page.locator('text=invàlides, text=incorrecte, text=Error')).toBeVisible({ timeout: 5000 });
+    await expect(page.locator('text=Credencials invàlides')).toBeVisible({ timeout: 5000 });
   });
 
   test('Test 3: Bloqueig al 4t intent fallit de PIN', async ({ page }) => {
     const nifInput = page.locator('input[placeholder="Ex: 12345678A"]');
     await nifInput.fill('99999999E');
     
+    // Perquè es bloquegi, fem 3 intents més dolents (ja en portem 1 del test anterior)
     for (let i = 0; i < 3; i++) {
       await page.click('button:has-text("2")');
       await page.click('button:has-text("2")');
@@ -57,6 +58,12 @@ test.describe.serial('Auditoria de Test 1: PWA Login E2E', () => {
         
       const enterButton = page.locator('button:has-text("ENTRAR"), button:has-text("Continuar"), button:has-text("Accedir")').first();
       await enterButton.click();
+      
+      if (i < 2) {
+        await expect(page.locator('text=Credencials invàlides')).toBeVisible();
+      } else {
+        await expect(page.locator('text=excedit el límit d\'intents')).toBeVisible();
+      }
     }
   });
 });
