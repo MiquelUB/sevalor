@@ -91,11 +91,8 @@ export async function middleware(request: NextRequest) {
   const role = payload?.rol?.toUpperCase();
 
   const createRedirectWithClearedCookie = (targetUrl: string) => {
-    const response = NextResponse.redirect(new URL(targetUrl, request.url));
-    if (tokenCookie) {
-      response.cookies.delete('sevalor_access_token');
-    }
-    return response;
+    // We don't clear the cookie here to avoid false negative logouts
+    return NextResponse.redirect(new URL(targetUrl, request.url));
   };
 
   // 1. ZONA GESTIÓ (/gestio)
