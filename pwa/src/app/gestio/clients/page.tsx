@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
-import {
+import { Package, Factory,
   Users,
   Search,
   Plus,
@@ -309,7 +309,6 @@ export default function GestioClientsPage() {
                   <span>{clientSeleccionat.adreca_fiscal}</span>
                 </div>
               )}
-            </div>
             </div>
 
             {/* SEVALOR DIGITAL TWIN UI (Fitxa 360) */}
