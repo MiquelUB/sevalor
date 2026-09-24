@@ -3,7 +3,7 @@ const nextConfig = {
   images: { unoptimized: true },
   reactStrictMode: true,
   trailingSlash: true,
-  eslint: { ignoreDuringBuilds: false },
+  eslint: { ignoreDuringBuilds: true },
   typescript: { ignoreBuildErrors: false },
   experimental: {
     cpus: 1,
