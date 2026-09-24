@@ -151,7 +151,10 @@ export default function GestioClientsPage() {
       };
       await apiFetch("/gestio/feines", {
         method: "POST",
-        body: payload
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify(payload)
       });
       setModalNovaTasca(false);
       // Reload Fitxa 360 to see the new tasca
