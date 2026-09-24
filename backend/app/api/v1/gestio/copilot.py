@@ -82,6 +82,28 @@ TOOLS_SCHEMA = [
     {
         "type": "function",
         "function": {
+            "name": "replanificar_ot",
+            "description": "Proposa re-planificar una Ordre de Treball (canvi de data o tècnic assignat). L'acció no s'executa immediatament, es demana confirmació a l'usuari.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "codi_ot": {
+                        "type": "string",
+                        "description": "Codi de l'Ordre de Treball (ex: 'OT-2026-001')"
+                    },
+                    "nova_data": {
+                        "type": "string",
+                        "description": "Nova data de planificació en format YYYY-MM-DD"
+                    }
+                },
+                "required": ["codi_ot", "nova_data"]
+            }
+        }
+    },
+
+    {
+        "type": "function",
+        "function": {
             "name": "get_real_stock",
             "description": "Consulta l'estoc real en temps real d'un article o material als magatzems de l'empresa.",
             "parameters": {
@@ -200,6 +222,30 @@ TOOLS_SCHEMA = [
 
 # ---------------------------------------------------------------------------
 # Funcions d'Execució d'Eines (Tools Execution Engine)
+
+async def execute_tool_replanificar_ot(db: AsyncSession, empresa_id: uuid.UUID, codi_ot: str, nova_data: str) -> dict:
+    from sqlalchemy import select
+    from app.models.models import OrdreTreball
+    q = select(OrdreTreball).where(OrdreTreball.empresa_id == empresa_id, OrdreTreball.codi == codi_ot)
+    res = await db.execute(q)
+    ot = res.scalar_one_or_none()
+    if not ot:
+        return {"trobat": False, "missatge": f"No s'ha trobat l'ordre de treball {codi_ot}."}
+    
+    # En lloc de canviar-ho directament, retornem una proposta
+    return {
+        "trobat": True,
+        "requires_confirmation": True,
+        "action": "confirm_replanificar_ot",
+        "payload": {
+            "ot_id": str(ot.id),
+            "codi_ot": codi_ot,
+            "nova_data": nova_data,
+            "titol": ot.titol
+        },
+        "missatge": f"He preparat la proposta per moure l'ordre {codi_ot} ({ot.titol}) al dia {nova_data}. Necessito la teva confirmació per executar l'acció."
+    }
+
 # ---------------------------------------------------------------------------
 
 async def execute_tool_get_real_stock(db: AsyncSession, empresa_id: uuid.UUID, article_ref: str) -> dict:
@@ -484,6 +530,8 @@ async def executar_eina(nom_eina: str, args: dict, db: AsyncSession, empresa_id:
         return await execute_tool_get_client_history(
             db, empresa_id, args.get("client_id"), args.get("client_nom")
         )
+    elif nom_eina == "replanificar_ot":
+        return await execute_tool_replanificar_ot(db, empresa_id, args.get("codi_ot", ""), args.get("nova_data", ""))
     elif nom_eina == "get_rag_knowledge":
         return await execute_tool_get_rag_knowledge(db, empresa_id, args.get("query", ""))
     else:
@@ -1650,3 +1698,36 @@ async def llistar_documents_rag(
         }
         for d in docs
     ]
+
+
+class ActionConfirmIn(BaseModel):
+    action: str
+    payload: dict
+
+@router.post("/action/confirm")
+async def confirmar_accio_copilot(
+    dades: ActionConfirmIn,
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+    claims: dict = Depends(get_current_user_claims)
+):
+    empresa_id = uuid.UUID(claims["empresa_id"])
+    if dades.action == "confirm_replanificar_ot":
+        from app.models.models import OrdreTreball
+        from sqlalchemy import update
+        ot_id = uuid.UUID(dades.payload["ot_id"])
+        nova_data_str = dades.payload["nova_data"]
+        try:
+            nova_data = date.fromisoformat(nova_data_str)
+        except:
+            raise HTTPException(400, "Format de data invàlid. Esperat YYYY-MM-DD.")
+            
+        stmt = update(OrdreTreball).where(
+            OrdreTreball.id == ot_id, 
+            OrdreTreball.empresa_id == empresa_id
+        ).values(data_planificacio=nova_data)
+        
+        await db.execute(stmt)
+        await db.commit()
+        return {"success": True, "missatge": f"S'ha replanificat l'OT correctament al {nova_data_str}."}
+    
+    raise HTTPException(400, "Acció desconeguda o no suportada.")

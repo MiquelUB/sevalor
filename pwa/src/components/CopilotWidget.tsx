@@ -11,7 +11,33 @@ export default function CopilotWidget() {
   ]);
   const [carregant, setCarregant] = useState(false);
 
+  
+  const [executantAccio, setExecutantAccio] = useState(false);
+  const confirmarAccio = async (actionContext: any, mIdx: number) => {
+    setExecutantAccio(true);
+    try {
+      const res = await apiFetch("/gestio/copilot/action/confirm", {
+        method: "POST",
+        body: JSON.stringify({ action: actionContext.action, payload: actionContext.payload }),
+      });
+      const dades = await res.json();
+      
+      // Update message to show success
+      setConversaXat(prev => {
+        const newArr = [...prev];
+        newArr[mIdx].actionContext = null; // Hide the action box
+        newArr[mIdx].text = newArr[mIdx].text + "\n\n✅ " + (dades.missatge || "Acció executada amb èxit.");
+        return newArr;
+      });
+    } catch (err) {
+      alert("Error a l'executar l'acció.");
+    } finally {
+      setExecutantAccio(false);
+    }
+  };
+
   const enviarMissatgeXat = async (msgOpcional?: string) => {
+
     const textFinal = msgOpcional || missatgeXat;
     if (!textFinal.trim()) return;
 
@@ -26,9 +52,15 @@ export default function CopilotWidget() {
       });
       if (res.ok) {
         const dades = await res.json();
+        const requiresConf = dades.metadata?.tool_resultat?.requires_confirmation;
         setConversaXat((prev) => [
           ...prev,
-          { sender: "bot", text: dades.resposta, links: dades.enllacos || [] },
+          { 
+            sender: "bot", 
+            text: dades.resposta || (requiresConf ? dades.metadata.tool_resultat.missatge : ""), 
+            links: dades.enllacos || [],
+            actionContext: requiresConf ? dades.metadata.tool_resultat : null
+          },
         ]);
       } else {
         const errorData = await res.json();
@@ -86,6 +118,24 @@ export default function CopilotWidget() {
                 >
                   {m.text}
                 </div>
+                {m.actionContext && (
+                  <div className="mt-2 p-2 bg-indigo-50 border border-indigo-200 rounded-xl">
+                    <p className="text-[10px] font-bold text-indigo-800 mb-1">Requereix Confirmació:</p>
+                    <pre className="text-[9px] text-indigo-900 bg-indigo-100 p-1.5 rounded mb-2 overflow-x-auto">
+                      {JSON.stringify(m.actionContext.payload, null, 2)}
+                    </pre>
+                    <div className="flex gap-2">
+                      <button 
+                        onClick={() => confirmarAccio(m.actionContext, idx)}
+                        disabled={executantAccio}
+                        className="flex-1 bg-indigo-600 text-white py-1 rounded text-[10px] font-bold hover:bg-indigo-700 disabled:opacity-50"
+                      >
+                        {executantAccio ? "Processant..." : "Aprovar i Executar"}
+                      </button>
+                    </div>
+                  </div>
+                )}
+
                 {m.links && m.links.length > 0 && (
                   <div className="flex flex-col items-start gap-1 mt-1 pl-1">
                     {m.links.map((link: any, lIdx: number) => (
