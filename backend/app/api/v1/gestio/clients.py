@@ -243,7 +243,7 @@ async def obtenir_fitxa_360_client(
     fa_un_any = datetime.now(timezone.utc) - timedelta(days=365)
 
     # 2. Obtenir Finques
-    from sqlalchemy import select, func
+    from sqlalchemy import func
     from app.models.models import (
         AlertaGarantiaRecompra,
         Article,
