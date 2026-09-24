@@ -59,7 +59,7 @@ export default function GestioLogin() {
       // Guardar dades d'usuari
       localStorage.setItem("sevalor_user", JSON.stringify(data));
 
-      window.location.href = "/gestio/mapa";
+      window.location.href = "/gestio";
     } catch (err: any) {
       setError(err.message || "Error al connectar amb el servidor. Comprova la URL de l'API.");
     } finally {

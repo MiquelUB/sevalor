@@ -104,7 +104,7 @@ export async function middleware(request: NextRequest) {
 
     if (isLoginPage) {
       if (payload && ['BOSS', 'SECRETARIA', 'ENGINYER', 'COMPTABILITAT', 'SUPERADMIN'].includes(role)) {
-        return NextResponse.redirect(new URL('/gestio/mapa', request.url));
+        return NextResponse.redirect(new URL('/gestio', request.url));
       }
       return NextResponse.next();
     }
