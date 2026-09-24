@@ -102,19 +102,19 @@ function GestioLayoutContent({ children }: { children: React.ReactNode }) {
   const resultatsFiltrats = itemsSpotlight.filter((item) => {
     // Spec 001 RF-03: Veto d'Enginyer (ocultar resultats financers)
     if (rolActiu === "ENGINYER" && item.esFinancera) return false;
-    if (isEmbed) {
+    return (
+      item.titol.toLowerCase().includes(cercaSpotlight.toLowerCase()) ||
+      item.desc.toLowerCase().includes(cercaSpotlight.toLowerCase())
+    );
+  });
+
+  if (isEmbed) {
     return (
       <div className="flex flex-col h-screen bg-slate-950 overflow-hidden">
         <main className="flex-1 flex flex-col h-full w-full">{children}</main>
       </div>
     );
   }
-
-  return (
-      item.titol.toLowerCase().includes(cercaSpotlight.toLowerCase()) ||
-      item.desc.toLowerCase().includes(cercaSpotlight.toLowerCase())
-    );
-  });
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-100 font-sans transition-colors duration-200 flex flex-col">
