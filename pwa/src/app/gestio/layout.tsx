@@ -38,6 +38,13 @@ function GestioLayoutContent({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const { rolActiu, setRolActiu, spotlightObert, setSpotlightObert, isDark, toggleTheme } = useGestio();
   const [cercaSpotlight, setCercaSpotlight] = useState("");
+  const [isEmbed, setIsEmbed] = useState(false);
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      setIsEmbed(window.location.search.includes("embed=true") || window.self !== window.top);
+    }
+  }, []);
   const [usuari, setUsuari] = useState<{ nom?: string; rol?: string } | null>(null);
 
   const handleLogout = () => {
@@ -95,7 +102,15 @@ function GestioLayoutContent({ children }: { children: React.ReactNode }) {
   const resultatsFiltrats = itemsSpotlight.filter((item) => {
     // Spec 001 RF-03: Veto d'Enginyer (ocultar resultats financers)
     if (rolActiu === "ENGINYER" && item.esFinancera) return false;
+    if (isEmbed) {
     return (
+      <div className="flex flex-col h-screen bg-slate-950 overflow-hidden">
+        <main className="flex-1 flex flex-col h-full w-full">{children}</main>
+      </div>
+    );
+  }
+
+  return (
       item.titol.toLowerCase().includes(cercaSpotlight.toLowerCase()) ||
       item.desc.toLowerCase().includes(cercaSpotlight.toLowerCase())
     );
