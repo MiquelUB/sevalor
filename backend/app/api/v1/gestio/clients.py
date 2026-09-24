@@ -9,6 +9,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db_with_tenant_context
 from app.core.security import require_roles
+
+import io
+from fastapi import UploadFile, File
+from fastapi.responses import StreamingResponse
+from sqlalchemy.exc import IntegrityError
+from app.services.csv_service import parse_and_validate_csv, generate_csv_content, CsvImportResult
+
 from app.models.models import Client
 
 router = APIRouter(
@@ -431,3 +438,80 @@ async def obtenir_fitxa_360_client(
         resum=resum
     )
 
+
+
+@router.post("/import", response_model=CsvImportResult)
+async def importar_clients_csv(
+    request: Request,
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db_with_tenant_context)
+):
+    if not file.filename.endswith('.csv'):
+        raise HTTPException(status_code=400, detail="El fitxer ha de ser un CSV")
+        
+    content = await file.read()
+    valid_records, errors = parse_and_validate_csv(content, ClientCreate)
+    
+    inserits = 0
+    total_processats = len(valid_records) + len(set(e["fila"] for e in errors))
+    
+    empresa_id = request.state.empresa_id
+    
+    # Processar els vàlids un a un per capturar duplicats de BD (ex. NIF repetit)
+    for index, record in enumerate(valid_records):
+        client_db = Client(
+            empresa_id=empresa_id,
+            **record.model_dump()
+        )
+        db.add(client_db)
+        try:
+            await db.flush()
+            inserits += 1
+        except IntegrityError as e:
+            await db.rollback()
+            # Mapejem la fila (afegim +2 pel offset d'index i capçalera, assumint sense errors previs, 
+            # però millor no lligar-ho estricte si ja hi ha hagut errors, per ara posem info genèrica)
+            errors.append({
+                "fila": "Desconeguda",
+                "columna": "nif/codi",
+                "valor": record.nif,
+                "motiu": "Ja existeix un client amb aquest NIF o Codi"
+            })
+            
+    await db.commit()
+    
+    return CsvImportResult(
+        total_processats=total_processats,
+        inserits=inserits,
+        errors_detectats=errors
+    )
+
+@router.get("/export")
+async def exportar_clients_csv(
+    request: Request,
+    db: AsyncSession = Depends(get_db_with_tenant_context)
+):
+    result = await db.execute(select(Client).where(Client.empresa_id == request.state.empresa_id))
+    clients = result.scalars().all()
+    
+    fieldnames = ["codi", "rao_social", "nif", "telefon", "email", "adreca_fiscal", "actiu"]
+    records = []
+    for c in clients:
+        records.append({
+            "codi": c.codi,
+            "rao_social": c.rao_social,
+            "nif": c.nif,
+            "telefon": c.telefon or "",
+            "email": c.email or "",
+            "adreca_fiscal": c.adreca_fiscal or "",
+            "actiu": str(c.actiu)
+        })
+        
+    csv_io = generate_csv_content(records, fieldnames)
+    csv_io.seek(0)
+    
+    return StreamingResponse(
+        iter([csv_io.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=clients_export.csv"}
+    )

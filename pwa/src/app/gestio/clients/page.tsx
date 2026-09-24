@@ -53,6 +53,7 @@ export default function GestioClientsPage() {
   const [filtreCerca, setFiltreCerca] = useState("");
   const [clientSeleccionat, setClientSeleccionat] = useState<Client | null>(null);
   const [modalNouClient, setModalNouClient] = useState(false);
+  const [isImportModalOpen, setIsImportModalOpen] = useState(false);
   
   // Gestió de Tasques
   const [modalNovaTasca, setModalNovaTasca] = useState(false);
@@ -238,6 +239,26 @@ export default function GestioClientsPage() {
             title="Refrescar llista"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${loading ? "animate-spin" : ""}`} />
+          </button>
+
+          
+          <button
+            onClick={() => {
+              const token = localStorage.getItem('sevalor_token');
+              window.open(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/v1/gestio/clients/export?token=${token}`, '_blank');
+            }}
+            className="px-3 py-1.5 rounded-xl bg-blue-50 text-blue-600 hover:bg-blue-100 dark:bg-blue-900/30 dark:text-blue-400 dark:hover:bg-blue-900/50 text-xs font-bold flex items-center gap-1 shadow-sm transition-all"
+            title="Exportar a CSV"
+          >
+            <span>Exportar CSV</span>
+          </button>
+          
+          <button
+            onClick={() => setIsImportModalOpen(true)}
+            className="px-3 py-1.5 rounded-xl bg-orange-50 text-orange-600 hover:bg-orange-100 dark:bg-orange-900/30 dark:text-orange-400 dark:hover:bg-orange-900/50 text-xs font-bold flex items-center gap-1 shadow-sm transition-all"
+            title="Importar des de CSV"
+          >
+            <span>Importar CSV</span>
           </button>
 
           <button
@@ -512,6 +533,18 @@ export default function GestioClientsPage() {
           </div>
         )}
       </div>
+
+      
+      <CsvImportModal 
+        isOpen={isImportModalOpen} 
+        onClose={() => setIsImportModalOpen(false)} 
+        resourceName="Clients"
+        endpoint={`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/v1/gestio/clients/import`}
+        onSuccess={() => {
+          setIsImportModalOpen(false);
+          carregarClients();
+        }}
+      />
 
       {/* Modal Alta Nou Client */}
       {modalNouClient && (
