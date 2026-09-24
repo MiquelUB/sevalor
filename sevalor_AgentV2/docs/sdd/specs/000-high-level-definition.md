@@ -4,7 +4,7 @@
 
 **Created**: 2026-09-24
 
-**Status**: Draft
+**Status**: IMPLEMENTED (V2 SPRINT DONE)
 
 **Input**: User description: "Sevalor V2 High Level Definition with Fitxa360, Operational Dashboard HUD, Copilot AI RAG, Zero Mock Data, and RLS Multi-tenant improvements."
 
@@ -76,7 +76,7 @@ Com a usuari (Gestor o Operari), vull poder consultar l'Agent IA Copilot mitjan�
 - Els models i models de la base de dades suporten completament la visió 360 i el Tenant ID.
 
 
-### User Story 4 - Agent IA Operatiu (Tools & Live Data) (Priority: P0)
+### User Story 4 - Agent IA Operatiu (Tools & Live Data) (Priority: P0) - 🟢 IMPLEMENTAT
 
 Com a gestor, vull que el Copilot IA no sigui només un chatbot, sinó un "Agent" que tingui accés a eines (Tools/Funcions) per consultar dades en temps real (API/SQL) sobre agenda, operaris, stock i economia. Vull que l'agent pugui creuar dades, raonar i executar accions (prèvia confirmació).
 
@@ -88,7 +88,7 @@ Com a gestor, vull que el Copilot IA no sigui només un chatbot, sinó un "Agent
 
 ---
 
-### User Story 5 - IA Multimodal (Priority: P1)
+### User Story 5 - IA Multimodal (Priority: P1) - 🟢 IMPLEMENTAT
 
 Com a operari al camp, vull poder fer una fotografia a la placa de característiques d'una màquina (chiller, UTA) perquè l'IA multimodal n'identifiqui el model exacte i m'ofereixi automàticament els manuals o protocols de manteniment relacionats des del RAG documental.
 
