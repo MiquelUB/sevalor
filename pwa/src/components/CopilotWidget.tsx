@@ -1,15 +1,28 @@
 "use client";
 import React, { useState } from "react";
-import { Sparkles, X, Send, ExternalLink, Bot, MessageSquare } from "lucide-react";
+import { Sparkles, X, Send, ExternalLink, Bot, MessageSquare, Camera, Image as ImageIcon } from "lucide-react";
 import { apiFetch } from "@/lib/api";
 
-export default function CopilotWidget() {
+export default function CopilotWidget({ isMobile = false }: { isMobile?: boolean }) {
   const [obert, setObert] = useState(false);
   const [missatgeXat, setMissatgeXat] = useState("");
   const [conversaXat, setConversaXat] = useState<any[]>([
     { sender: "bot", text: "Hola! Sóc l'assistent intel·ligent. Què necessites consultar?" }
   ]);
   const [carregant, setCarregant] = useState(false);
+  const [imatgeB64, setImatgeB64] = useState<string | null>(null);
+
+  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setImatgeB64(reader.result as string);
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
 
   
   const [executantAccio, setExecutantAccio] = useState(false);
@@ -44,11 +57,12 @@ export default function CopilotWidget() {
     setConversaXat((prev) => [...prev, { sender: "user", text: textFinal }]);
     setMissatgeXat("");
     setCarregant(true);
+    setImatgeB64(null);
 
     try {
       const res = await apiFetch("/gestio/copilot/xat", {
         method: "POST",
-        body: JSON.stringify({ pregunta: textFinal }),
+        body: JSON.stringify({ pregunta: textFinal, imatge_b64: imatgeB64 }),
       });
       if (res.ok) {
         const dades = await res.json();
@@ -84,14 +98,14 @@ export default function CopilotWidget() {
       {/* Botó Flotant Global */}
       <button
         onClick={() => setObert(true)}
-        className={`fixed bottom-6 right-6 p-4 rounded-full bg-indigo-600 text-white shadow-xl hover:bg-indigo-700 transition-all z-50 flex items-center justify-center ${obert ? 'hidden' : ''}`}
+        className={`fixed p-4 rounded-full bg-indigo-600 text-white shadow-xl hover:bg-indigo-700 transition-all z-50 flex items-center justify-center ${obert ? 'hidden' : ''} ${isMobile ? "bottom-20 right-4" : "bottom-6 right-6"}`}
       >
         <Sparkles className="w-6 h-6" />
       </button>
 
       {/* Pop-Up Window */}
       {obert && (
-        <div className="fixed bottom-6 right-6 w-96 h-[550px] bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-2xl flex flex-col z-50 overflow-hidden flex flex-col">
+        <div className={`fixed z-50 bg-white dark:bg-slate-900 flex flex-col overflow-hidden shadow-2xl border-slate-200 dark:border-slate-800 ${isMobile ? "inset-0 w-full h-full pb-[60px]" : "bottom-6 right-6 w-96 h-[550px] border rounded-2xl"}`}>
           {/* Header */}
           <div className="p-3 bg-indigo-600 text-white flex items-center justify-between">
             <div className="flex items-center gap-2">
@@ -164,9 +178,24 @@ export default function CopilotWidget() {
           </div>
 
           {/* Chat Input */}
-          <div className="p-3 border-t border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-850 flex items-center gap-2">
-            <input
-              type="text"
+
+          <div className="p-3 border-t border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-850">
+            {imatgeB64 && (
+              <div className="mb-2 relative inline-block">
+                <img src={imatgeB64} alt="Upload preview" className="h-16 w-16 object-cover rounded-lg border border-slate-200" />
+                <button onClick={() => setImatgeB64(null)} className="absolute -top-2 -right-2 bg-rose-500 text-white rounded-full p-0.5">
+                  <X className="w-3 h-3" />
+                </button>
+              </div>
+            )}
+            <div className="flex items-center gap-2">
+              <label className="p-2 text-slate-400 hover:text-indigo-600 cursor-pointer bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 rounded-xl transition-colors">
+                <Camera className="w-5 h-5" />
+                <input type="file" accept="image/*" capture="environment" className="hidden" onChange={handleImageUpload} />
+              </label>
+              <input
+                type="text"
+
               value={missatgeXat}
               onChange={(e) => setMissatgeXat(e.target.value)}
               onKeyDown={(e) => {
@@ -175,13 +204,14 @@ export default function CopilotWidget() {
               placeholder="Fes la teva consulta..."
               className="flex-1 bg-slate-100 dark:bg-slate-800 border border-transparent rounded-xl px-3 py-2 text-xs text-slate-800 dark:text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-indigo-500 focus:bg-white transition-all"
             />
-            <button
-              onClick={() => enviarMissatgeXat()}
-              disabled={carregant || !missatgeXat.trim()}
-              className="p-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white transition-all shadow"
-            >
-              <Send className="w-4 h-4" />
-            </button>
+              <button
+                onClick={() => enviarMissatgeXat()}
+                disabled={carregant || (!missatgeXat.trim() && !imatgeB64)}
+                className="p-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white transition-all shadow"
+              >
+                <Send className="w-4 h-4" />
+              </button>
+            </div>
           </div>
         </div>
       )}

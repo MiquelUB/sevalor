@@ -15,6 +15,7 @@ import {
   Bell,
   Volume2,
 } from "lucide-react";
+import CopilotWidget from "@/components/CopilotWidget";
 
 export default function OperariLayout({
   children,
@@ -166,6 +167,8 @@ export default function OperariLayout({
           </nav>
         )}
       </main>
+      
+      {!isLoginPage && <CopilotWidget isMobile={true} />}
     </div>
   );
 }
