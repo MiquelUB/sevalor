@@ -3,18 +3,18 @@ import assert from 'node:assert';
 // Mock browser globals (window, document, localStorage)
 const storage = new Map();
 globalThis.localStorage = {
-  getItem: (k) => storage.get(k) || null,
-  setItem: (k, v) => storage.set(k, String(v)),
-  removeItem: (k) => storage.delete(k),
+  getItem: (k: string) => storage.get(k) || null,
+  setItem: (k: string, v: string) => storage.set(k, String(v)),
+  removeItem: (k: string) => storage.delete(k),
   clear: () => storage.clear(),
-};
+} as any;
 globalThis.window = {
   location: { hostname: 'tenant1.sevalor.app' },
-};
+} as any;
 let cookieJar = '';
 globalThis.document = {
   get cookie() { return cookieJar; },
-  set cookie(val) {
+  set cookie(val: string) {
     const parts = val.split(';')[0].trim();
     const [name, value] = parts.split('=');
     if (val.includes('max-age=0')) {
@@ -24,7 +24,7 @@ globalThis.document = {
       cookieJar = `${name}=${value}`;
     }
   }
-};
+} as any;
 
 // Import getAuthToken, setAuthToken, clearAuthToken from api.ts
 import { getAuthToken, setAuthToken, clearAuthToken, apiFetch } from './src/lib/api';
@@ -41,7 +41,7 @@ async function run() {
 
   assert.strictEqual(getAuthToken(), fakeToken, "getAuthToken should return set token");
   assert(document.cookie.includes(`sevalor_access_token=${fakeToken}`), "Cookie must have sevalor_access_token");
-  assert(localStorage.getItem("sevalor_auth_token").includes(fakeToken), "LocalStorage must have token");
+  assert(localStorage.getItem("sevalor_auth_token")?.includes(fakeToken), "LocalStorage must have token");
   console.log("  ✅ setAuthToken sincronitza localStorage I document.cookie");
 
   // Test fallback to cookie if localStorage cleared

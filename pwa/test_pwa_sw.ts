@@ -31,6 +31,6 @@ function runTest() {
 try {
   runTest();
 } catch (err) {
-  console.error("❌ Error en el test:", err.message);
+  console.error("❌ Error en el test:", (err as Error).message);
   process.exit(1);
 }
