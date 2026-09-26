@@ -4,8 +4,10 @@ import React, { useState, useEffect } from "react";
 import { Users, Truck, AlertTriangle, CheckCircle2, Wrench, ShieldAlert } from "lucide-react";
 import Link from "next/link";
 import { apiFetch } from "@/lib/api";
+import { CrearOTModal } from "@/components/gestio/CrearOTModal";
 
 export default function GestioDashboardPage() {
+  const [showModalOT, setShowModalOT] = useState(false);
   return (
     <div className="flex flex-col h-full bg-slate-50 dark:bg-slate-950 p-4 md:p-6 space-y-6 overflow-y-auto">
       {/* 1. HUD DE PULSO OPERATIVO EN TIEMPO REAL (RF-07) */}
@@ -85,7 +87,7 @@ export default function GestioDashboardPage() {
       {/* 2. ACCIONES RÁPIDAS (RF-05) */}
       <div className="flex flex-wrap gap-3">
         <button 
-          onClick={() => alert('Mòdul de Creació d\'OT en desenvolupament (Proper Sprint)')}
+          onClick={() => setShowModalOT(true)}
           className="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-bold shadow-sm flex items-center gap-2 transition-all cursor-pointer"
         >
           <Wrench className="w-4 h-4" />
@@ -111,6 +113,12 @@ export default function GestioDashboardPage() {
         </div>
       </div>
 
+      {showModalOT && (
+        <CrearOTModal 
+          onClose={() => setShowModalOT(false)} 
+          onSuccess={() => window.location.reload()}
+        />
+      )}
     </div>
   );
 }
