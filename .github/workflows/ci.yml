@@ -83,6 +83,7 @@ jobs:
           TESTING: "1"
           SECRET_KEY: "ci_cd_secret_key_for_testing_purposes_only_minimum_length"
           REDIS_URL: "redis://localhost:6380/0"
+          PYTHONPATH: ${{ github.workspace }}
         run: |
           pytest tests/ -v --tb=short
 

@@ -4,7 +4,7 @@ import {
   decryptWithPin,
   verifySentinelBlock,
   SENTINEL_PLAINTEXT,
-} from "./src/lib/crypto.ts";
+} from "./src/lib/crypto";
 
 async function runTests() {
   console.log("=== INICIANT TEST CRIPTOGRÀFIC TASCA 2.4 (SEVALOR_SENTINEL) ===");

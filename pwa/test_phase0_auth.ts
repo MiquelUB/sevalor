@@ -2,7 +2,7 @@ import assert from 'node:assert';
 import crypto from 'node:crypto';
 
 // Import from the real middleware!
-import { middleware } from './src/middleware.ts';
+import { middleware } from './src/middleware';
 
 const JWT_SECRET = 'sevalor-dev-secret-key-32-chars-long-abc';
 

@@ -1,6 +1,6 @@
 import "fake-indexeddb/auto";
 import assert from "node:assert";
-import { localDB } from "./src/lib/db.ts";
+import { localDB } from "./src/lib/db";
 
 async function runTest() {
   console.log("=== INICIANT TEST PWA INDEXEDDB (DEXIE.JS) ===");

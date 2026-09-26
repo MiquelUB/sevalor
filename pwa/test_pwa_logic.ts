@@ -1,6 +1,6 @@
 import assert from "node:assert";
-import { calcularDistanciaMetres, validarGeovalla, MAX_GEOVALLA_METRES } from "./src/lib/geo.ts";
-import { CAMERA_LIVE_INPUT_PROPS } from "./src/lib/media.ts";
+import { calcularDistanciaMetres, validarGeovalla, MAX_GEOVALLA_METRES } from "./src/lib/geo";
+import { CAMERA_LIVE_INPUT_PROPS } from "./src/lib/media";
 
 console.log("=== INICIANT TEST DE LÒGICA PWA DE CAMP (BLOC 3) ===");
 

@@ -27,7 +27,7 @@ globalThis.document = {
 };
 
 // Import getAuthToken, setAuthToken, clearAuthToken from api.ts
-import { getAuthToken, setAuthToken, clearAuthToken, apiFetch } from './src/lib/api.ts';
+import { getAuthToken, setAuthToken, clearAuthToken, apiFetch } from './src/lib/api';
 
 async function run() {
   console.log("=== TEST DE SINCRONITZACIÓ TOKEN (LOCALSTORAGE & COOKIE) ===");
