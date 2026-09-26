@@ -1,93 +1,10 @@
-/**
- * Test de Verificació Web Crypto API (Tasca 2.4)
- * Valida PBKDF2 (100.000 iteracions) + AES-GCM-256 + SEVALOR_SENTINEL en Node 20
- */
-
 import assert from "node:assert";
-
-// Implementació equivalent executable directament en Node.js per a test
-const SENTINEL_PLAINTEXT = "SEVALOR_SENTINEL";
-const PBKDF2_ITERATIONS = 100000;
-
-function buf2hex(buffer) {
-  const bytes = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
-  return Array.from(bytes)
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
-}
-
-function hex2buf(hexString) {
-  const bytes = new Uint8Array(hexString.length / 2);
-  for (let i = 0; i < hexString.length; i += 2) {
-    bytes[i / 2] = parseInt(hexString.substring(i, i + 2), 16);
-  }
-  return bytes;
-}
-
-async function deriveKeyFromPin(pin, salt) {
-  const enc = new TextEncoder();
-  const keyMaterial = await crypto.subtle.importKey(
-    "raw",
-    enc.encode(pin),
-    { name: "PBKDF2" },
-    false,
-    ["deriveKey"]
-  );
-
-  return crypto.subtle.deriveKey(
-    {
-      name: "PBKDF2",
-      salt: salt,
-      iterations: PBKDF2_ITERATIONS,
-      hash: "SHA-256",
-    },
-    keyMaterial,
-    { name: "AES-GCM", length: 256 },
-    false,
-    ["encrypt", "decrypt"]
-  );
-}
-
-async function encryptWithPin(plainText, pin, salt) {
-  const key = await deriveKeyFromPin(pin, salt);
-  const iv = crypto.getRandomValues(new Uint8Array(12));
-  const enc = new TextEncoder();
-
-  const encryptedBuffer = await crypto.subtle.encrypt(
-    { name: "AES-GCM", iv: iv },
-    key,
-    enc.encode(plainText)
-  );
-
-  return {
-    cipherTextHex: buf2hex(encryptedBuffer),
-    ivHex: buf2hex(iv),
-  };
-}
-
-async function decryptWithPin(cipherTextHex, ivHex, pin, salt) {
-  const key = await deriveKeyFromPin(pin, salt);
-  const iv = hex2buf(ivHex);
-  const cipherBuffer = hex2buf(cipherTextHex);
-
-  const decryptedBuffer = await crypto.subtle.decrypt(
-    { name: "AES-GCM", iv: iv },
-    key,
-    cipherBuffer
-  );
-
-  const dec = new TextDecoder();
-  return dec.decode(decryptedBuffer);
-}
-
-async function verifySentinelBlock(pin, salt, cipherTextHex, ivHex) {
-  try {
-    const decrypted = await decryptWithPin(cipherTextHex, ivHex, pin, salt);
-    return decrypted === SENTINEL_PLAINTEXT;
-  } catch {
-    return false;
-  }
-}
+import {
+  encryptWithPin,
+  decryptWithPin,
+  verifySentinelBlock,
+  SENTINEL_PLAINTEXT,
+} from "./src/lib/crypto.ts";
 
 async function runTests() {
   console.log("=== INICIANT TEST CRIPTOGRÀFIC TASCA 2.4 (SEVALOR_SENTINEL) ===");

@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start -H 0.0.0.0 -p 3000",
     "lint": "next lint",
-    "test": "node test_crypto.mjs && node test_phase0_auth.mjs && node test_phase0_apifetch.mjs && node test_pwa_logic.mjs && node test_pwa_dexie.mjs && node test_pwa_sw.mjs",
+    "test": "npx tsx test_crypto.ts && npx tsx test_phase0_auth.ts && npx tsx test_phase0_apifetch.ts && npx tsx test_pwa_logic.ts && npx tsx test_pwa_dexie.ts && npx tsx test_pwa_sw.ts",
     "test:e2e": "playwright test"
   },
   "dependencies": {
@@ -24,6 +24,7 @@
     "autoprefixer": "^10.4.18",
     "postcss": "^8.4.35",
     "tailwindcss": "^3.4.1",
+    "tsx": "^4.23.13",
     "typescript": "^5.3.3"
   }
 }

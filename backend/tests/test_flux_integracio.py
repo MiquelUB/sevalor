@@ -636,17 +636,20 @@ class TestFluxSuperadminRLS:
         sa_tok = crear_token("SUPERADMIN", eid)
         h = {"Authorization": f"Bearer {sa_tok}", "X-Empresa-ID": eid}
         resp = await async_client.post("/superadmin/tenants/onboarding", headers=h, json={
-            "empresa_nom": "Nova Empresa SL",
-            "empresa_nif": _nif(),
-            "empresa_subdomini": _sub(),
-            "boss_nom": "Boss Nou",
+            "rao_social": "Nova Empresa SL",
+            "nif": _nif(),
+            "subdomini": _sub(),
+            "vertical": "SEVALOR",
+            "pla_subscripcio": "STARTER",
+            "quota_disc_gb": 10,
             "boss_nif": _nif("Y"),
+            "boss_nom": "Boss",
+            "boss_cognoms": "Nou",
             "boss_email": f"boss@{_sub()}.com",
-            "boss_telefon": f"+346{uuid.uuid4().int % 100000000:08d}",
-            "pla": "STARTER",
+            "boss_telefon": f"+346{uuid.uuid4().int % 100000000:08d}"
         })
-        # 201 (creat) o 422 (validació)
-        assert resp.status_code in (201, 422), f"Onboarding: {resp.status_code} {resp.text}"
+        # 201 (creat)
+        assert resp.status_code == 201, f"Onboarding: {resp.status_code} {resp.text}"
         if resp.status_code == 422:
             # La validació pot fallar per camps; documentem
             pytest.skip(f"Onboarding no complet: {resp.text}")

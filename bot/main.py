@@ -31,7 +31,7 @@ storage = RedisStorage(
 )
 
 dp = Dispatcher(storage=storage)
-rate_limiter = RedisRateLimiter(redis_client, limit_per_minut=10)
+rate_limiter = RedisRateLimiter(limit_per_minut=10, redis_client=redis_client)
 
 class ConversaClient(StatesGroup):
     esperant_incidencia = State()
