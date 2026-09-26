@@ -51,3 +51,20 @@ L'auditoria de `backend/app/api/v1/gestio/copilot.py` ha revelat un progrés tè
 ## 6. Conclusions (Tancament de l'Esprint V2)
 L'auditoria certifica que **TOTS ELS REQUISITS** definits al document de "Mejoras Propuestas" han estat traduïts a codi real, testeado al 100% (Test d'Aprovació), i pujats a producció. 
 La base arquitectònica és d'una immensa qualitat i el "Sistema Operatiu Empresarial" s'erigeix com una plataforma 100% autònoma, multitenant, sobirana i lliure de mock data.
+
+## Registre d'Incidències CI/CD (GitHub Actions)
+
+### 1. Error de mòdul al frontend (`test_crypto.ts`)
+**Error:** `An import path can only end with a '.ts' extension when 'allowImportingTsExtensions' is enabled.`
+**Motiu:** El compilador de Next.js i TypeScript de producció estava analitzant el fitxer de test (`test_crypto.ts`) durant la generació de la *build*. Atès que en TypeScript estàndard les importacions no han d'incloure l'extensió `.ts`, el procés fallava.
+**Resolució:** S'han corregit tots els fitxers de test a `pwa/test_*.ts` i s'han eliminat les extensions `.ts` i `.js` de les rutes d'importació, com ara `import { ... } from "./src/lib/crypto"`.
+
+### 2. Error al backend (`ModuleNotFoundError: No module named 'bot'`)
+**Error:** La suite de tests fallava amb `E ModuleNotFoundError: No module named 'bot'`.
+**Motiu:** A diferència de l'entorn local, els *runners* de Github Actions executen el backend (on hi ha `test_bot_telegram.py`) amb el root restringit a `./backend`. A l'estar la carpeta del bot situada a l'arrel (`./bot`), Pytest no la podia trobar.
+**Resolució:** S'ha afegit explícitament `PYTHONPATH: ${{ github.workspace }}` dins la configuració del job del test a `.github/workflows/ci.yml`.
+
+### 3. Error d'emulació base de dades (`Cannot find module 'fake-indexeddb/auto'`)
+**Error:** El test `test_pwa_dexie.ts` fallava perquè no trobava el paquet encarregat d'emular IndexedDB a Node.js.
+**Motiu:** S'havia requerit al codi amb un `import` però no constava en les dependències de `package.json`.
+**Resolució:** Instal·lació directa via `npm install -D fake-indexeddb` sota l'ecosistema de la PWA.
