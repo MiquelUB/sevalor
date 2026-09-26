@@ -106,11 +106,7 @@ jobs:
 
       - name: Run Cryptographic & Logic Tests
         working-directory: ./pwa
-        run: |
-          node test_crypto.mjs
-          node test_phase0_auth.mjs
-          npx --yes tsx test_phase0_apifetch.mjs
-          node test_pwa_logic.mjs
+        run: npm run test
 
       - name: Next.js Production Build (Strict TypeScript & ESLint)
         working-directory: ./pwa
