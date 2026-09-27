@@ -181,7 +181,7 @@ spotlight_router = APIRouter(prefix="/spotlight", tags=["Spotlight"])
 async def llistar_spotlight_items_inicials(request: Request, db: AsyncSession = Depends(get_db)) -> List[dict[str, Any]]:
     """Retorna els elements principals per a cerca ràpida."""
     empresa_id = getattr(request.state, "empresa_id", None)
-    if not empresa_id:
+    if not empresa_id or empresa_id == 'undefined':
         return []
     await set_tenant_context(db, empresa_id)
 

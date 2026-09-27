@@ -4,7 +4,7 @@ from datetime import date
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -54,6 +54,7 @@ class ConfirmarDocumentRequest(BaseModel):
     linies: List[LiniaOcr]
 
 class ArticleCreate(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
     referencia_inventari: str = Field(..., max_length=50)
     nom: str = Field(..., max_length=150)
     unitat_mesura: str = Field("UNITAT", max_length=30)
@@ -96,7 +97,7 @@ async def llistar_articles(
     db: AsyncSession = Depends(get_db_with_tenant_context)
 ):
     empresa_id = request.headers.get("X-Empresa-ID") or getattr(request.state, "empresa_id", None)
-    if not empresa_id:
+    if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401, detail="No identificat")
 
     stmt = select(Article).where(Article.empresa_id == uuid.UUID(empresa_id))
@@ -130,13 +131,18 @@ async def llistar_articles(
     for art in articles:
         # Assignem estoc_real dinàmicament a l'objecte ORM
         setattr(art, "estoc_real", estocs_map.get(art.id, 0.0))
-        
+    
         # Protecció per a camps que poden ser NULL a la BD per errors antics
         if getattr(art, "estoc_optim") is None: setattr(art, "estoc_optim", 0.0)
         if getattr(art, "estoc_minim") is None: setattr(art, "estoc_minim", 0.0)
         if getattr(art, "preu_cost") is None: setattr(art, "preu_cost", 0.0)
         if getattr(art, "preu_venda") is None: setattr(art, "preu_venda", 0.0)
         if getattr(art, "familia") is None: setattr(art, "familia", "GENERAL")
+        if getattr(art, "unitat_mesura") is None: setattr(art, "unitat_mesura", "UNITAT")
+        if getattr(art, "es_lot_caducable") is None: setattr(art, "es_lot_caducable", False)
+        if getattr(art, "actiu") is None: setattr(art, "actiu", True)
+        if getattr(art, "referencia_inventari") is None: setattr(art, "referencia_inventari", "N/A")
+        if getattr(art, "nom") is None: setattr(art, "nom", "N/A")
 
     return articles
 
@@ -147,7 +153,7 @@ async def alta_article(
     db: AsyncSession = Depends(get_db_with_tenant_context)
 ):
     empresa_id = request.state.empresa_id
-    if not empresa_id:
+    if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401, detail="No identificat")
 
     stmt_ref = select(Article).where(Article.referencia_inventari == article.referencia_inventari)
@@ -182,7 +188,7 @@ async def llistar_estoc_magatzem(
 ):
     """Llista l'estoc d'un magatzem (Spec 004)."""
     empresa_id = request.state.empresa_id
-    if not empresa_id:
+    if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401, detail="No identificat")
 
     mag_res = await db.execute(select(Magatzem).where(
@@ -225,7 +231,7 @@ async def registrar_moviment_estoc(
     stock concurrentment.
     """
     empresa_id = request.state.empresa_id
-    if not empresa_id:
+    if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401, detail="No identificat")
 
     # Verificar article pertany a l'empresa
@@ -333,7 +339,7 @@ async def crear_fulla_picking(
 ):
     """Crea una fulla de picking per a una ordre de treball (RF-20: 1 tasca = 1 fulla)."""
     empresa_id = request.state.empresa_id
-    if not empresa_id:
+    if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401)
 
     # Verificar que l'ordre de treball pertany a l'empresa
@@ -370,7 +376,7 @@ async def afegir_linia_picking(
 ):
     """Afegeix una línia de picking a una fulla (RF-17: reserva amb SELECT FOR UPDATE)."""
     empresa_id = request.state.empresa_id
-    if not empresa_id:
+    if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401)
 
     # Verificar fulla
@@ -441,7 +447,7 @@ async def confirmar_pick_in(
 ):
     """Confirma la recollida de material (pick-in) des de la PWA (RF-23)."""
     empresa_id = request.state.empresa_id
-    if not empresa_id:
+    if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401)
 
     linia_res = await db.execute(select(LiniaPicking).where(
@@ -471,7 +477,7 @@ async def confirmar_devolucio(
 ):
     """Registra la devolució de sobrants i mermes (RF-22: pick-out post-obra)."""
     empresa_id = request.state.empresa_id
-    if not empresa_id:
+    if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401)
 
     linia_res = await db.execute(select(LiniaPicking).where(
@@ -513,7 +519,7 @@ async def processar_document_ocr(
 ):
     """Processa un document PDF o imatge via OCR d'IA per extreure dades d'albarà o factura en BACKGROUND."""
     empresa_id = request.state.empresa_id
-    if not empresa_id:
+    if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401)
 
     import os
@@ -718,7 +724,7 @@ async def modificar_article(
     db: AsyncSession = Depends(get_db_with_tenant_context)
 ):
     empresa_id = request.state.empresa_id
-    if not empresa_id:
+    if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401, detail="No identificat")
 
     stmt = select(Article).where(Article.id == article_id)

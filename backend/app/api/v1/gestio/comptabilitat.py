@@ -53,7 +53,7 @@ async def llistar_factures(
     db: AsyncSession = Depends(get_db_with_tenant_context)
 ):
     empresa_id = request.state.empresa_id
-    if not empresa_id:
+    if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401)
 
     stmt = select(FacturaCapcalera).where(FacturaCapcalera.empresa_id == uuid.UUID(empresa_id)).order_by(FacturaCapcalera.created_at.desc())
@@ -67,7 +67,7 @@ async def crear_factura(
     db: AsyncSession = Depends(get_db_with_tenant_context)
 ):
     empresa_id = request.state.empresa_id
-    if not empresa_id:
+    if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401)
 
     # Validar client
@@ -179,7 +179,7 @@ async def exportar_factura_xml(
     db: AsyncSession = Depends(get_db_with_tenant_context)
 ):
     empresa_id = request.state.empresa_id
-    if not empresa_id:
+    if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401)
 
     stmt = select(FacturaCapcalera).where(

@@ -81,7 +81,7 @@ async def llistar_les_meves_feines(
     db: AsyncSession = Depends(get_db_with_tenant_context)
 ):
     empresa_id = request.state.empresa_id
-    if not empresa_id: raise HTTPException(status_code=401)
+    if not empresa_id or empresa_id == 'undefined': raise HTTPException(status_code=401)
     usuari_id = _get_usuari_id(request)
 
     stmt = (
@@ -112,7 +112,7 @@ async def obtenir_detall_feina(
 ):
     try:
         empresa_id = getattr(request.state, "empresa_id", None)
-        if not empresa_id:
+        if not empresa_id or empresa_id == 'undefined':
             raise HTTPException(status_code=401, detail="No empresa_id in state")
 
         usuari_id = _get_usuari_id(request)
@@ -195,7 +195,7 @@ async def iniciar_trajecte(
 ):
     """Commuta el vehicle a Blau (En trànsit) i activa buffer de 25 min (Spec 013 RF-11)."""
     empresa_id = request.state.empresa_id
-    if not empresa_id:
+    if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401)
     
     ot_res = await db.execute(select(OrdreTreball).where(
@@ -235,7 +235,7 @@ async def comencar_feina(
 ):
     """Comença el cronòmetre de la feina amb control de geovalla (Spec 013 RF-12, RF-12.1)."""
     empresa_id = request.state.empresa_id
-    if not empresa_id:
+    if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401)
     
     ot_res = await db.execute(select(OrdreTreball).where(
@@ -275,7 +275,7 @@ async def pujar_foto_qualitat(
 ):
     """Protocol obligatori de 3 fotos de control de qualitat (Spec 013 RF-13)."""
     empresa_id = request.state.empresa_id
-    if not empresa_id:
+    if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401)
     
     tipus_upper = tipus.upper()
@@ -305,7 +305,7 @@ async def consultar_fotos_qualitat(
 ):
     """Consulta l'estat del protocol de 3 fotos (Spec 013 RF-13, RF-14)."""
     empresa_id = request.state.empresa_id
-    if not empresa_id:
+    if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401)
     
     dir_feina = f"/tmp/data/{empresa_id}/feines/{feina_id}"
@@ -329,7 +329,7 @@ async def finalitzar_feina(
 ):
     """Finalitza la feina. Bloquejat si no s'han capturat les 3 fotos (Spec 013 RF-14, RF-17)."""
     empresa_id = request.state.empresa_id
-    if not empresa_id:
+    if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401)
     
     ot_res = await db.execute(select(OrdreTreball).where(

@@ -34,7 +34,7 @@ async def llistar_converses(
     db: AsyncSession = Depends(get_db_with_tenant_context)
 ):
     empresa_id = request.state.empresa_id
-    if not empresa_id:
+    if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401)
     stmt = select(ConversaNotificacio).where(ConversaNotificacio.empresa_id == uuid.UUID(empresa_id)).order_by(ConversaNotificacio.updated_at.desc())
     result = await db.execute(stmt)
@@ -47,7 +47,7 @@ async def crear_conversa(
     db: AsyncSession = Depends(get_db_with_tenant_context)
 ):
     empresa_id = request.state.empresa_id
-    if not empresa_id:
+    if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401)
     stmt_c = select(Client).where(Client.id == payload.client_id, Client.empresa_id == uuid.UUID(empresa_id))
     if not (await db.execute(stmt_c)).scalars().first():
@@ -80,7 +80,7 @@ async def llistar_missatges(
     db: AsyncSession = Depends(get_db_with_tenant_context)
 ):
     empresa_id = request.state.empresa_id
-    if not empresa_id:
+    if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401)
     stmt = select(MissatgeNotificacio).where(
         MissatgeNotificacio.conversa_id == conversa_id,
@@ -95,7 +95,7 @@ async def crear_missatge(
     db: AsyncSession = Depends(get_db_with_tenant_context)
 ):
     empresa_id = request.state.empresa_id
-    if not empresa_id:
+    if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401)
     conv_res = await db.execute(select(ConversaNotificacio).where(
         ConversaNotificacio.id == conversa_id, ConversaNotificacio.empresa_id == uuid.UUID(empresa_id),
@@ -120,7 +120,7 @@ async def canviar_estat_conversa(
     db: AsyncSession = Depends(get_db_with_tenant_context)
 ):
     empresa_id = request.state.empresa_id
-    if not empresa_id:
+    if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401)
     conv_res = await db.execute(select(ConversaNotificacio).where(
         ConversaNotificacio.id == conversa_id, ConversaNotificacio.empresa_id == uuid.UUID(empresa_id),
@@ -142,7 +142,7 @@ async def generar_enllac_factura(
     db: AsyncSession = Depends(get_db_with_tenant_context)
 ):
     empresa_id = request.state.empresa_id
-    if not empresa_id:
+    if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401)
     conv_res = await db.execute(select(ConversaNotificacio).where(
         ConversaNotificacio.id == conversa_id, ConversaNotificacio.empresa_id == uuid.UUID(empresa_id),
@@ -173,7 +173,7 @@ async def generar_invitacio_telegram(
 ):
     """Genera un token d'invitació per al Bot de Telegram (Spec 023 RF-05: expira 48h, un sol ús)."""
     empresa_id = request.headers.get("X-Empresa-ID") or getattr(request.state, "empresa_id", None)
-    if not empresa_id:
+    if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401, detail="No identificat")
     conv_res = await db.execute(select(ConversaNotificacio).where(
         ConversaNotificacio.id == conversa_id, ConversaNotificacio.empresa_id == uuid.UUID(empresa_id),

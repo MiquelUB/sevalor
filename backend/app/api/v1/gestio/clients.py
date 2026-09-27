@@ -59,7 +59,7 @@ async def llistar_clients(
     db: AsyncSession = Depends(get_db_with_tenant_context)
 ):
     empresa_id = request.state.empresa_id
-    if not empresa_id:
+    if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401, detail="No identificat")
 
     stmt = select(Client).where(Client.empresa_id == uuid.UUID(empresa_id))
@@ -87,7 +87,7 @@ async def alta_client(
     db: AsyncSession = Depends(get_db_with_tenant_context)
 ):
     empresa_id = request.state.empresa_id
-    if not empresa_id:
+    if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401, detail="No identificat")
 
     stmt_nif = select(Client).where(Client.empresa_id == uuid.UUID(empresa_id), Client.nif == client.nif)
@@ -129,7 +129,7 @@ async def obtenir_iban_client(
 ):
     """Retorna l'IBAN complet del client. Enginyer rep 403."""
     empresa_id = request.headers.get("X-Empresa-ID") or getattr(request.state, "empresa_id", None)
-    if not empresa_id:
+    if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401, detail="No identificat")
     res = await db.execute(select(Client).where(
         Client.id == client_id, Client.empresa_id == uuid.UUID(empresa_id)
@@ -148,7 +148,7 @@ async def canviar_iban_client(
 ):
     """Canvia l'IBAN d'un client (Spec 002). Enginyer rep 403."""
     empresa_id = request.headers.get("X-Empresa-ID") or getattr(request.state, "empresa_id", None)
-    if not empresa_id:
+    if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401, detail="No identificat")
     res = await db.execute(select(Client).where(
         Client.id == client_id, Client.empresa_id == uuid.UUID(empresa_id)
@@ -234,7 +234,7 @@ async def obtenir_fitxa_360_client(
     i incidències registrades per al client durant els últims 365 dies (Spec 012 RF-04).
     """
     empresa_id = request.headers.get("X-Empresa-ID") or getattr(request.state, "empresa_id", None)
-    if not empresa_id:
+    if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401, detail="No identificat")
 
     empresa_uuid = uuid.UUID(empresa_id)

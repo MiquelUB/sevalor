@@ -35,7 +35,7 @@ async def llistar_incidencies_operari(
     db: AsyncSession = Depends(get_db_with_tenant_context)
 ):
     empresa_id = request.state.empresa_id
-    if not empresa_id:
+    if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401)
 
     auth_header = request.headers.get("Authorization")
@@ -64,7 +64,7 @@ async def reportar_incidencia(
     db: AsyncSession = Depends(get_db_with_tenant_context)
 ):
     empresa_id = request.state.empresa_id
-    if not empresa_id:
+    if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401)
 
     auth_header = request.headers.get("Authorization")

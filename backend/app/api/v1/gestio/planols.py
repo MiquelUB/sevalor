@@ -72,7 +72,7 @@ async def llistar_planols(
     db: AsyncSession = Depends(get_db_with_tenant_context)
 ):
     empresa_id = request.state.empresa_id
-    if not empresa_id:
+    if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401, detail="No identificat")
 
     stmt = select(PlanolBase).where(PlanolBase.empresa_id == uuid.UUID(empresa_id))
@@ -103,7 +103,7 @@ async def alta_planol(
     db: AsyncSession = Depends(get_db_with_tenant_context)
 ):
     empresa_id = request.state.empresa_id
-    if not empresa_id:
+    if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401, detail="No identificat")
 
     # Comprovem que la carpeta existeix i pertany a l'empresa
@@ -151,7 +151,7 @@ async def llistar_carpetes(
 ):
     """Llista les carpetes de plànols de l'empresa (Spec 010)."""
     empresa_id = request.state.empresa_id
-    if not empresa_id:
+    if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401, detail="No identificat")
 
     result = await db.execute(
@@ -168,7 +168,7 @@ async def crear_carpeta(
 ):
     """Crea una carpeta de plànols (Spec 010)."""
     empresa_id = request.state.empresa_id
-    if not empresa_id:
+    if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401, detail="No identificat")
 
     nova = CarpetaPlanol(
@@ -197,7 +197,7 @@ async def llistar_capes_planol(
 ):
     """Llista les capes vectorials d'un plànol (Spec 010)."""
     empresa_id = request.state.empresa_id
-    if not empresa_id:
+    if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401, detail="No identificat")
 
     result = await db.execute(
@@ -218,7 +218,7 @@ async def crear_capa_planol(
 ):
     """Crea una capa vectorial sobre un plànol (Spec 010)."""
     empresa_id = request.state.empresa_id
-    if not empresa_id:
+    if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401, detail="No identificat")
 
     # Verificar que el plànol pertany a l'empresa
@@ -265,7 +265,7 @@ async def editar_capa_planol(
 ):
     """Edita una capa vectorial d'un plànol (Spec 010). Les capes immutables no es poden editar."""
     empresa_id = request.state.empresa_id
-    if not empresa_id:
+    if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401, detail="No identificat")
 
     capa_res = await db.execute(select(CapaVectorial).where(
@@ -307,7 +307,7 @@ async def eliminar_capa_planol(
 ):
     """Elimina una capa vectorial (Spec 010). Les immutables no es poden eliminar."""
     empresa_id = request.state.empresa_id
-    if not empresa_id:
+    if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401, detail="No identificat")
 
     capa_res = await db.execute(select(CapaVectorial).where(

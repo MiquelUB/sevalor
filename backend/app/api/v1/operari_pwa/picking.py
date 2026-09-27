@@ -45,7 +45,7 @@ async def crear_fulla_picking_operari(
     db: AsyncSession = Depends(get_db_with_tenant_context)
 ):
     empresa_id = request.state.empresa_id
-    if not empresa_id:
+    if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401, detail="Context d'empresa no trobat")
 
     ot_res = await db.execute(select(OrdreTreball).where(
@@ -80,7 +80,7 @@ async def afegir_linia_picking_operari(
     db: AsyncSession = Depends(get_db_with_tenant_context)
 ):
     empresa_id = request.state.empresa_id
-    if not empresa_id:
+    if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401, detail="Context d'empresa no trobat")
 
     fulla_res = await db.execute(select(FullaPicking).where(
@@ -135,7 +135,7 @@ async def actualitzar_linia_picking_operari(
     db: AsyncSession = Depends(get_db_with_tenant_context)
 ):
     empresa_id = request.state.empresa_id
-    if not empresa_id:
+    if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401, detail="Context d'empresa no trobat")
 
     linia_res = await db.execute(select(LiniaPicking).where(

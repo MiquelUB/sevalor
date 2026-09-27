@@ -45,7 +45,7 @@ async def llistar_tiquets_operari(
     db: AsyncSession = Depends(get_db_with_tenant_context)
 ):
     empresa_id = request.state.empresa_id
-    if not empresa_id:
+    if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401, detail="Tenant context missing")
 
     auth_header = request.headers.get("Authorization")
@@ -86,7 +86,7 @@ async def registrar_tiquet_carburant(
     db: AsyncSession = Depends(get_db_with_tenant_context)
 ):
     empresa_id = request.state.empresa_id
-    if not empresa_id:
+    if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401, detail="Tenant context missing")
 
     auth_header = request.headers.get("Authorization")
@@ -160,7 +160,7 @@ async def pujar_tiquet_ocr(
 ):
     """(Spec 018) Rep una imatge de tiquet, simula extracció OCR i ho desa a DB."""
     empresa_id = request.state.empresa_id
-    if not empresa_id:
+    if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401, detail="Tenant context missing")
 
     auth_header = request.headers.get("Authorization")

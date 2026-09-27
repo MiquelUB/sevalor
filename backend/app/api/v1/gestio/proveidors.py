@@ -50,7 +50,7 @@ async def llistar_proveidors(
     db: AsyncSession = Depends(get_db_with_tenant_context)
 ):
     empresa_id = request.state.empresa_id
-    if not empresa_id:
+    if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401, detail="No identificat")
 
     stmt = select(Proveidor)
@@ -98,7 +98,7 @@ async def alta_proveidor(
     db: AsyncSession = Depends(get_db_with_tenant_context)
 ):
     empresa_id = request.state.empresa_id
-    if not empresa_id:
+    if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401, detail="No identificat")
 
     stmt_nif = select(Proveidor).where(Proveidor.nif == proveidor.nif)
@@ -141,7 +141,7 @@ async def obtenir_iban_proveidor(
 ):
     """Retorna l'IBAN complet del proveïdor. Només BOSS/SECRETARIA (403 per Enginyer)."""
     empresa_id = request.state.empresa_id
-    if not empresa_id:
+    if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401)
 
     res = await db.execute(select(Proveidor).where(
@@ -165,7 +165,7 @@ async def canviar_iban_proveidor(
 ):
     """Canvia l'IBAN d'un proveïdor amb autorització de BOSS i registre SIF (EDGE-01, RF-09)."""
     empresa_id = request.state.empresa_id
-    if not empresa_id:
+    if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401)
 
     res = await db.execute(select(Proveidor).where(
@@ -210,7 +210,7 @@ async def editar_proveidor(
 ):
     """Edita la fitxa del proveïdor (nom, telèfon, email, especialitat)."""
     empresa_id = request.state.empresa_id
-    if not empresa_id:
+    if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401, detail="No identificat")
 
     stmt = select(Proveidor).where(Proveidor.id == proveidor_id)

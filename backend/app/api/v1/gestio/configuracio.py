@@ -331,7 +331,7 @@ async def obtenir_marca_camaleonica(
 ):
     """Retorna la configuració cromàtica i visual de la marca de l'empresa."""
     empresa_id = claims.get("empresa_id")
-    if not empresa_id:
+    if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401, detail="No identificat")
 
     res = await db.execute(select(Empresa).where(Empresa.id == uuid.UUID(empresa_id)))

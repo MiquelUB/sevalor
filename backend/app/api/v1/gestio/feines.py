@@ -41,7 +41,7 @@ async def llistar_feines(
     db: AsyncSession = Depends(get_db_with_tenant_context)
 ):
     empresa_id = request.state.empresa_id
-    if not empresa_id:
+    if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401, detail="No identificat")
 
     stmt = select(OrdreTreball).where(OrdreTreball.empresa_id == uuid.UUID(empresa_id))
@@ -69,7 +69,7 @@ async def alta_feina(
     db: AsyncSession = Depends(get_db_with_tenant_context)
 ):
     empresa_id = request.state.empresa_id
-    if not empresa_id:
+    if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401, detail="No identificat")
 
     stmt_codi = select(OrdreTreball).where(
@@ -118,7 +118,7 @@ async def llistar_feines_mapa(
 ):
     """Retorna les OTs del tenant actual amb les seves coordenades reals per al Mapa GIS (Spec 001/005)."""
     empresa_id = request.headers.get("X-Empresa-ID") or getattr(request.state, "empresa_id", None)
-    if not empresa_id:
+    if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401, detail="No identificat")
 
     stmt = (
@@ -183,7 +183,7 @@ async def agendar_feina(
     Si un altre usuari ha modificat l'OT, es retorna HTTP 409 Conflict.
     """
     empresa_id = request.headers.get("X-Empresa-ID") or getattr(request.state, "empresa_id", None)
-    if not empresa_id:
+    if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401, detail="No identificat")
 
     stmt = select(OrdreTreball).where(
@@ -232,7 +232,7 @@ async def llistar_intervencions_actives(
     db: AsyncSession = Depends(get_db_with_tenant_context)
 ):
     empresa_id = request.state.empresa_id
-    if not empresa_id:
+    if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401, detail="No identificat")
 
     stmt = select(OrdreTreball).where(

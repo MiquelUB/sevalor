@@ -33,7 +33,7 @@ async def iniciar_jornada(
     db: AsyncSession = Depends(get_db_with_tenant_context)
 ):
     empresa_id = request.state.empresa_id
-    if not empresa_id:
+    if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401, detail="No identificat")
 
     # L'usuari ha de ser extret del token JWT (el Subject)
@@ -75,7 +75,7 @@ async def get_jornada_activa(
     db: AsyncSession = Depends(get_db_with_tenant_context)
 ):
     empresa_id = request.state.empresa_id
-    if not empresa_id:
+    if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401)
 
     auth_header = request.headers.get("Authorization")
@@ -109,7 +109,7 @@ async def finalitzar_jornada(
     db: AsyncSession = Depends(get_db_with_tenant_context)
 ):
     empresa_id = request.state.empresa_id
-    if not empresa_id:
+    if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401)
 
 
@@ -148,7 +148,7 @@ async def assignar_vehicle_a_jornada(
 ):
     """Assigna un vehicle a l'operari per a la jornada actual i comprova odòmetre."""
     empresa_id = request.state.empresa_id
-    if not empresa_id:
+    if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401)
 
     auth_header = request.headers.get("Authorization")

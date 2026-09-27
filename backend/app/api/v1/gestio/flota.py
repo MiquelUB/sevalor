@@ -42,7 +42,7 @@ async def llistar_flota(
     db: AsyncSession = Depends(get_db_with_tenant_context)
 ):
     empresa_id = request.state.empresa_id
-    if not empresa_id:
+    if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401, detail="No identificat")
 
     stmt = select(Vehicle).where(Vehicle.empresa_id == uuid.UUID(empresa_id))
@@ -71,7 +71,7 @@ async def alta_vehicle(
     db: AsyncSession = Depends(get_db_with_tenant_context)
 ):
     empresa_id = request.state.empresa_id
-    if not empresa_id:
+    if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401, detail="No identificat")
 
     stmt_mat = select(Vehicle).where(Vehicle.empresa_id == uuid.UUID(empresa_id), Vehicle.matricula == vehicle.matricula)
@@ -138,7 +138,7 @@ async def llistar_vehicles_propers(
     Determina la posició del vehicle segons l'OT activa en curs o ubicació registrada.
     """
     empresa_id = request.headers.get("X-Empresa-ID") or getattr(request.state, "empresa_id", None)
-    if not empresa_id:
+    if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401, detail="No identificat")
 
     empresa_uuid = uuid.UUID(empresa_id)
