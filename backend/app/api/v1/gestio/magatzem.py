@@ -111,11 +111,29 @@ async def llistar_articles(
         )
 
     stmt = stmt.limit(limit).offset(offset).order_by(Article.created_at.desc())
-
     result = await db.execute(stmt)
     articles = result.scalars().all()
 
-    return articles
+    # Calcular estoc_real per cada article agrupant des de EstocMagatzem
+    articles_ids = [a.id for a in articles]
+    estocs_map = {}
+    if articles_ids:
+        stmt_estocs = (
+            select(EstocMagatzem.article_id, func.sum(EstocMagatzem.quantitat_fisica))
+            .where(EstocMagatzem.article_id.in_(articles_ids))
+            .group_by(EstocMagatzem.article_id)
+        )
+        res_estocs = await db.execute(stmt_estocs)
+        for article_id, qt in res_estocs.all():
+            estocs_map[article_id] = float(qt or 0.0)
+
+    articles_resp = []
+    for art in articles:
+        art_dict = {c.name: getattr(art, c.name) for c in art.__table__.columns}
+        art_dict["estoc_real"] = estocs_map.get(art.id, 0.0)
+        articles_resp.append(art_dict)
+
+    return articles_resp
 
 @router.post("/articles", response_model=ArticleResponse, status_code=status.HTTP_201_CREATED)
 async def alta_article(

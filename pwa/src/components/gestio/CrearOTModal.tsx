@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
-import { X, Save, Building2, User, FileText, Calendar, MapPin, Map, Truck, Map as MapIcon, AlignLeft } from "lucide-react";
+import { X, Save, Building2, User, FileText, Calendar, MapPin, Map, Truck, Map as MapIcon, AlignLeft, Package, Plus, Trash2 } from "lucide-react";
 import { apiFetch } from "@/lib/api";
 
 interface CrearOTModalProps {
@@ -16,6 +16,7 @@ export function CrearOTModal({ onClose, onSuccess }: CrearOTModalProps) {
   const [operaris, setOperaris] = useState<any[]>([]);
   const [vehicles, setVehicles] = useState<any[]>([]);
   const [planols, setPlanols] = useState<any[]>([]);
+  const [articles, setArticles] = useState<any[]>([]);
 
   // Form state
   const [formData, setFormData] = useState({
@@ -32,26 +33,25 @@ export function CrearOTModal({ onClose, onSuccess }: CrearOTModalProps) {
     estat: "PENDENT"
   });
 
+  // Picking lines state
+  const [liniesPicking, setLiniesPicking] = useState<{ article_id: string; quantitat: number }[]>([]);
+  const [currentArticle, setCurrentArticle] = useState("");
+  const [currentQty, setCurrentQty] = useState(1);
+
   useEffect(() => {
-    // Load clients, operaris, flota and planols
+    // Load external data
     Promise.all([
       apiFetch("/api/v1/gestio/clients"),
       apiFetch("/api/v1/gestio/operaris"),
       apiFetch("/api/v1/gestio/flota"),
-      apiFetch("/api/v1/gestio/planols")
-    ]).then(([clientsRes, operarisRes, flotaRes, planolsRes]) => {
-      if (clientsRes.ok) {
-        clientsRes.json().then((data: any) => setClients(data.items || data || []));
-      }
-      if (operarisRes.ok) {
-        operarisRes.json().then((data: any) => setOperaris(data || []));
-      }
-      if (flotaRes.ok) {
-        flotaRes.json().then((data: any) => setVehicles(data || []));
-      }
-      if (planolsRes.ok) {
-        planolsRes.json().then((data: any) => setPlanols(data || []));
-      }
+      apiFetch("/api/v1/gestio/planols"),
+      apiFetch("/api/v1/gestio/magatzem/articles")
+    ]).then(([clientsRes, operarisRes, flotaRes, planolsRes, articlesRes]) => {
+      if (clientsRes.ok) clientsRes.json().then((data: any) => setClients(data.items || data || []));
+      if (operarisRes.ok) operarisRes.json().then((data: any) => setOperaris(data || []));
+      if (flotaRes.ok) flotaRes.json().then((data: any) => setVehicles(data || []));
+      if (planolsRes.ok) planolsRes.json().then((data: any) => setPlanols(data || []));
+      if (articlesRes.ok) articlesRes.json().then((data: any) => setArticles(data || []));
     }).catch(console.error);
   }, []);
 
@@ -62,7 +62,6 @@ export function CrearOTModal({ onClose, onSuccess }: CrearOTModalProps) {
         .then(res => res.json())
         .then(data => {
           setFinques(data.finques || []);
-          // Reset finca_id
           setFormData(prev => ({ ...prev, finca_id: "" }));
         })
         .catch(console.error);
@@ -71,6 +70,26 @@ export function CrearOTModal({ onClose, onSuccess }: CrearOTModalProps) {
       setFormData(prev => ({ ...prev, finca_id: "" }));
     }
   }, [formData.client_id]);
+
+  const addLiniaPicking = () => {
+    if (!currentArticle || currentQty <= 0) return;
+    const existingIndex = liniesPicking.findIndex(l => l.article_id === currentArticle);
+    if (existingIndex >= 0) {
+      const newLinies = [...liniesPicking];
+      newLinies[existingIndex].quantitat += currentQty;
+      setLiniesPicking(newLinies);
+    } else {
+      setLiniesPicking([...liniesPicking, { article_id: currentArticle, quantitat: currentQty }]);
+    }
+    setCurrentArticle("");
+    setCurrentQty(1);
+  };
+
+  const removeLiniaPicking = (index: number) => {
+    const newLinies = [...liniesPicking];
+    newLinies.splice(index, 1);
+    setLiniesPicking(newLinies);
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -82,26 +101,57 @@ export function CrearOTModal({ onClose, onSuccess }: CrearOTModalProps) {
         vehicle_id: formData.vehicle_id ? formData.vehicle_id : null,
       };
       
-      // Exclude planol_id from the backend submission since it is not part of FeinaCreate,
-      // it would be linked via CapaVectorial later in a real flow.
       const { planol_id, ...backendPayload } = payload;
 
+      // 1. Create OT
       const res = await apiFetch("/api/v1/gestio/feines", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(backendPayload)
       });
 
-      if (res.ok) {
-        alert("Ordre de treball creada amb èxit!");
-        if (onSuccess) onSuccess();
-        onClose();
-      } else {
+      if (!res.ok) {
         const errorData = await res.json();
-        alert(`Error: ${errorData.detail || 'Error desconegut'}`);
+        throw new Error(`Error creant OT: ${errorData.detail || 'Desconegut'}`);
       }
+
+      const createdOT = await res.json();
+
+      // 2. Create Fulla de Picking if materials assigned
+      if (liniesPicking.length > 0) {
+        const pickRes = await apiFetch("/api/v1/gestio/magatzem/picking", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            ordre_treball_id: createdOT.id,
+            vehicle_id: createdOT.vehicle_id
+          })
+        });
+
+        if (!pickRes.ok) {
+          throw new Error("S'ha creat l'OT però hi ha hagut un error en inicialitzar el picking.");
+        }
+
+        const createdPick = await pickRes.json();
+
+        // 3. Insert Picking Lines
+        for (const linia of liniesPicking) {
+          await apiFetch(`/api/v1/gestio/magatzem/picking/${createdPick.id}/linies`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              article_id: linia.article_id,
+              quantitat_prevista: linia.quantitat
+            })
+          });
+        }
+      }
+
+      alert("Ordre de treball i recursos assignats amb èxit!");
+      if (onSuccess) onSuccess();
+      onClose();
     } catch (err: any) {
-      alert(`Error en crear la feina: ${err.message}`);
+      alert(`Error: ${err.message}`);
     } finally {
       setLoading(false);
     }
@@ -263,9 +313,9 @@ export function CrearOTModal({ onClose, onSuccess }: CrearOTModalProps) {
             </div>
           </div>
 
-          {/* Secció 3: Assignació d'Actius */}
+          {/* Secció 3: Assignació d'Actius i Vehicles */}
           <div>
-            <h3 className="text-sm font-bold text-emerald-600 dark:text-emerald-500 uppercase tracking-wider mb-4 border-b border-slate-100 dark:border-slate-800 pb-2">3. Assignació d'Actius</h3>
+            <h3 className="text-sm font-bold text-emerald-600 dark:text-emerald-500 uppercase tracking-wider mb-4 border-b border-slate-100 dark:border-slate-800 pb-2">3. Assignació d'Actius i Vehicles</h3>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               <div className="space-y-2">
                 <label className="text-sm font-bold text-slate-700 dark:text-slate-300 flex items-center gap-2">
@@ -306,6 +356,82 @@ export function CrearOTModal({ onClose, onSuccess }: CrearOTModalProps) {
             </div>
           </div>
 
+          {/* Secció 4: Assignació de Materials i Eines */}
+          <div>
+            <h3 className="text-sm font-bold text-emerald-600 dark:text-emerald-500 uppercase tracking-wider mb-4 border-b border-slate-100 dark:border-slate-800 pb-2">4. Assignació de Material i Eines (Picking)</h3>
+            <div className="bg-slate-50 dark:bg-slate-800/30 p-4 rounded-xl border border-slate-200 dark:border-slate-800 space-y-4">
+              <div className="flex items-end gap-4 flex-wrap">
+                <div className="flex-1 space-y-2 min-w-[250px]">
+                  <label className="text-sm font-bold text-slate-700 dark:text-slate-300 flex items-center gap-2">
+                    <Package className="w-4 h-4 text-slate-400" /> Article / Eina
+                  </label>
+                  <select
+                    value={currentArticle}
+                    onChange={e => setCurrentArticle(e.target.value)}
+                    className="w-full px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100 focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 outline-none transition-all"
+                  >
+                    <option value="">Cercar material disponible...</option>
+                    {articles.map(art => (
+                      <option key={art.id} value={art.id} className={art.estoc_real <= 0 ? "text-red-500" : ""}>
+                        {art.nom} ({art.referencia_inventari}) - Estoc: {art.estoc_real} {art.unitat_mesura}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="w-24 space-y-2">
+                  <label className="text-sm font-bold text-slate-700 dark:text-slate-300">Quantitat</label>
+                  <input
+                    type="number"
+                    min="1"
+                    step="any"
+                    value={currentQty}
+                    onChange={e => setCurrentQty(Number(e.target.value))}
+                    className="w-full px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100 focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 outline-none transition-all"
+                  />
+                </div>
+                <button
+                  type="button"
+                  onClick={addLiniaPicking}
+                  disabled={!currentArticle || currentQty <= 0}
+                  className="px-4 py-2.5 rounded-xl bg-slate-800 dark:bg-slate-700 hover:bg-slate-900 dark:hover:bg-slate-600 disabled:opacity-50 text-white font-bold transition-colors flex items-center gap-2"
+                >
+                  <Plus className="w-4 h-4" /> Afegir
+                </button>
+              </div>
+
+              {/* Llista de Picking Seleccionada */}
+              {liniesPicking.length > 0 && (
+                <div className="mt-4 pt-4 border-t border-slate-200 dark:border-slate-700">
+                  <h4 className="text-xs font-bold text-slate-500 mb-3 uppercase tracking-wider">Fulla de Picking (Per preparar):</h4>
+                  <ul className="space-y-2">
+                    {liniesPicking.map((linia, idx) => {
+                      const articleDef = articles.find(a => a.id === linia.article_id);
+                      return (
+                        <li key={idx} className="flex items-center justify-between bg-white dark:bg-slate-900 p-3 rounded-lg border border-slate-100 dark:border-slate-800 shadow-sm">
+                          <span className="font-medium text-slate-800 dark:text-slate-200 text-sm">
+                            {articleDef?.nom} <span className="text-slate-400">({articleDef?.referencia_inventari})</span>
+                          </span>
+                          <div className="flex items-center gap-4">
+                            <span className="font-bold text-emerald-600 dark:text-emerald-400">
+                              {linia.quantitat} {articleDef?.unitat_mesura}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => removeLiniaPicking(idx)}
+                              className="text-red-500 hover:text-red-700 p-1 rounded-md hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </div>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </div>
+              )}
+            </div>
+          </div>
+
           {/* Footer Botons */}
           <div className="flex items-center justify-end gap-3 pt-6 border-t border-slate-100 dark:border-slate-800 mt-8">
             <button
@@ -321,7 +447,7 @@ export function CrearOTModal({ onClose, onSuccess }: CrearOTModalProps) {
               className="px-6 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-70 text-white font-bold shadow-sm flex items-center gap-2 transition-colors"
             >
               <Save className="w-4 h-4" />
-              {loading ? "Creant..." : "Crear Intervenció"}
+              {loading ? "Processant..." : "Crear Intervenció i Picking"}
             </button>
           </div>
         </form>
