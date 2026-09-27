@@ -78,18 +78,27 @@ export default function OperariMaterialPage() {
   const totsMarcats = materials.length > 0 && materials.every((m) => m.carregat_pick_in);
 
   // Confirmar càrrega matinal
-  const handleConfirmarPickIn = () => {
+  const handleConfirmarPickIn = async () => {
     if (desquadramentNau) {
       alert(
         "BLOQUEIG DE MAGATZEM (Spec 014 RF-05): No pots confirmar la sortida si hi ha desquadrament d'estoc físic a la nau. Registra una incidència."
       );
       return;
     }
-    // TODO: Confirmar al backend
-    apiFetch("/materials/confirmar-pick-in", {
-      method: "POST",
-      body: JSON.stringify({ materials: materials.map(m => ({ id: m.id, carregat: m.carregat_pick_in })) }),
-    }).catch(() => {});
+    // Confirmar al backend línia a línia
+    try {
+      for (const m of materials) {
+        if (m.carregat_pick_in) {
+          await apiFetch(`/operari/picking/linies/${m.id}`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ quantitat_carregada_pick_in: m.quantitat }),
+          });
+        }
+      }
+    } catch (err) {
+      console.error(err);
+    }
     setFase("OBRA");
   };
 
@@ -419,16 +428,16 @@ export default function OperariMaterialPage() {
 
             <button
               onClick={() => {
-                // TODO: Enviar al backend
-                apiFetch("/materials/confirmar-pick-out", {
-                  method: "POST",
-                  body: JSON.stringify({
-                    materials: materials.map((m) => ({
-                      id: m.id,
-                      retornat: m.retornat_pick_out ?? 0,
-                    })),
-                  }),
-                }).catch(() => {});
+                // Confirmar retorn al backend
+                materials.forEach((m) => {
+                  apiFetch(`/operari/picking/linies/${m.id}`, {
+                    method: "PUT",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                      quantitat_retornada_pick_out: m.retornat_pick_out ?? 0,
+                    }),
+                  }).catch(() => {});
+                });
                 alert("Pick Out confirmat. Consums derivats a la Torre de Control i Magatzem (Spec 004).");
                 setFase("PICK_IN");
               }}

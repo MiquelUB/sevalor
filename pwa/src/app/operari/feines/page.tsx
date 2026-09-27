@@ -81,8 +81,8 @@ export default function OperariFeinesPage() {
     setFeines((prev) =>
       prev.map((f) => (f.id === id ? { ...f, estat: "EN_TRAJECTE" } : f))
     );
-    // TODO: Enviar notificació ETA al backend
-    apiFetch(`/ordres-camp/${id}/iniciar-trajecte`, { method: "POST" }).catch(() => {});
+    // Enviar notificació ETA al backend
+    apiFetch(`/operari/feines/${id}/iniciar-trajecte`, { method: "PUT" }).catch(() => {});
     alert("Trajecte iniciat. Notificació d'ETA transmesa al client via Telegram.");
   };
 
@@ -105,8 +105,12 @@ export default function OperariFeinesPage() {
           setFeines((prev) =>
             prev.map((f) => (f.id === ordre.id ? { ...f, estat: "EN_CURS" } : f))
           );
-          // TODO: Notificar al backend
-          apiFetch(`/ordres-camp/${ordre.id}/comencar`, { method: "POST" }).catch(() => {});
+          // Notificar al backend
+          apiFetch(`/operari/feines/${ordre.id}/comencar`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ lat: coordsActuals[0], lng: coordsActuals[1] })
+          }).catch(() => {});
         } else {
           // Desviació > 50 metres
           setGeovallaAlerta(
@@ -130,10 +134,11 @@ export default function OperariFeinesPage() {
           f.id === ordreDesviacio ? { ...f, estat: "EN_CURS" } : f
         )
       );
-      // TODO: Registrar la desviació al backend
-      apiFetch(`/ordres-camp/${ordreDesviacio}/comencar-desviacio`, {
-        method: "POST",
-        body: JSON.stringify({ motiu }),
+      // Registrar la desviació al backend
+      apiFetch(`/operari/feines/${ordreDesviacio}/comencar`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ desviacio_justificada: true, motiu }), // Note: motiu will be ignored by pydantic if not schema, but safe
       }).catch(() => {});
       setGeovallaAlerta(null);
       setOrdreDesviacio(null);

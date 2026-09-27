@@ -35,6 +35,7 @@ from app.api.v1.operari_pwa.picking import router as picking_router
 from app.api.v1.operari_pwa.sync import router as sync_router
 from app.api.v1.operari_pwa.tiquets import router as tiquets_router
 from app.api.v1.operari_pwa.vehicles import router as vehicles_pwa_router
+from app.api.v1.operari_pwa.planols import router as operari_planols_router
 from app.api.v1.superadmin.tenants import router as tenants_router
 from app.api.v1.telemetria import router as telemetria_router
 from app.api.v1.webhooks.telegram import router as telegram_webhook_router
@@ -90,6 +91,7 @@ app.include_router(incidencies_router, prefix=settings.API_V1_STR)
 app.include_router(tiquets_router, prefix=settings.API_V1_STR)
 app.include_router(vehicles_pwa_router, prefix=settings.API_V1_STR)
 app.include_router(sync_router, prefix=settings.API_V1_STR + "/operari_pwa")
+app.include_router(operari_planols_router, prefix=settings.API_V1_STR)
 app.include_router(intervencions_router, prefix=settings.API_V1_STR)
 app.include_router(cerca_router, prefix=settings.API_V1_STR)
 app.include_router(spotlight_router, prefix=settings.API_V1_STR)

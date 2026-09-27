@@ -117,10 +117,12 @@ export default function OperariPlanolsPage() {
     setMostrarDialegCapaTancada(false);
     setPendentClickCoords(null);
 
-    // TODO: Persistir al backend
+    // Persistir al backend (requereix planol_id real del context)
     try {
-      await apiFetch("/planols/capes", {
+      const planolId = "00000000-0000-0000-0000-000000000000"; // TODO: obtenir planol real per props/query
+      await apiFetch(`/operari/planols/${planolId}/capes`, {
         method: "POST",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify(novaCapa),
       });
     } catch {}

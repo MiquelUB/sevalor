@@ -107,12 +107,9 @@ export default function OperariVehiclesPage() {
   const carregarActius = async () => {
     setLoadingActius(true);
     try {
-      const data = await apiFetch("/actius/operari");
-      if (data && typeof data === "object") {
-        const d = data as any;
-        if (d.vehicle) setVehicle(d.vehicle);
-        if (d.remolc) setRemolc(d.remolc);
-        if (d.maquinaria) setMaquinaria(d.maquinaria);
+      const data = await apiFetch("/operari/vehicles");
+      if (Array.isArray(data) && data.length > 0) {
+        setVehicle(data[0]);
       }
     } catch {
       // Sense actius assignats — estat buit real
@@ -155,14 +152,20 @@ export default function OperariVehiclesPage() {
     setErrorValidacio(null);
     setEstatJornada("EN_MARXA");
 
-    // TODO: Enviar check-in al backend
-    apiFetch("/actius/check-in", {
+    // Enviar check-in al backend
+    apiFetch(`/operari/vehicles/${vehicle?.id}/checkin`, {
       method: "POST",
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        vehicle_id: vehicle?.id,
+        odometre_inicial: 0, // En producció s'extreu per OCR de la foto
         nivell_combustible: nivellCombustibleInici,
       }),
-    }).catch(() => {});
+    })
+      .then((res) => res.json())
+      .then((data) => {
+        console.log("Check-in successful", data);
+      })
+      .catch((err) => console.error("Checkin error", err));
   };
 
   // Check-out Submit (Spec 015 RF-16, RF-17, RF-18, RF-20)
@@ -176,19 +179,19 @@ export default function OperariVehiclesPage() {
       return;
     }
 
-    // Intentar obtenir km reals del backend (OCR)
+    // Intentar obtenir km reals del backend
     try {
-      const res = await apiFetch("/actius/check-out", {
+      const res = await apiFetch(`/operari/vehicles/${vehicle?.id}/checkout`, {
         method: "POST",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          vehicle_id: vehicle?.id,
-          nivell_combustible_final: nivellCombustibleFi,
+          odometre_final: 0, // En producció s'extreu per OCR
+          nivell_combustible: nivellCombustibleFi,
         }),
       });
-      if (res && typeof res === "object") {
-        const r = res as any;
-        if (r.km_nets != null) setKmTotalsCalculats(r.km_nets);
-        if (r.hores_netes != null) setHoresTotalsCalculades(r.hores_netes);
+      if (res.ok) {
+        const r = await res.json();
+        if (r.km_recorreguts != null) setKmTotalsCalculats(r.km_recorreguts);
       }
     } catch {
       // Fallback: càlcul local aproximat
@@ -225,16 +228,15 @@ export default function OperariVehiclesPage() {
 
     setErrorValidacio(null);
 
-    // TODO: Enviar al backend
+    // Enviar al backend
     try {
-      await apiFetch("/actius/repostatge", {
+      await apiFetch(`/operari/vehicles/${vehicle?.id}/repostatge`, {
         method: "POST",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          vehicle_id: vehicle?.id,
-          tipus_carburant: tipusCarburant,
-          metode_pagament: metodePagament,
           litres: parseFloat(litresRepostats),
-          import_euros: parseFloat(importEuros),
+          euros: parseFloat(importEuros),
+          odometre: 0, // OCR en producció
         }),
       });
     } catch {}
