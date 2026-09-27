@@ -75,7 +75,9 @@ export default function SuperadminTenantOnboardingPage() {
   // Pas 1: Dades Fiscals
   const [raoSocial, setRaoSocial] = useState<string>("");
   const [nif, setNif] = useState<string>("");
-  const [vertical, setVertical] = useState<"SEVALOR" | "ELECTRICPRO" | "HYDROPRO" | "BUILDINGPRO">("SEVALOR");
+  const [vertical, setVertical] = useState<string>("SEVALOR");
+  const [magatzemFamilies, setMagatzemFamilies] = useState<string>("");
+  const [agentPrompt, setAgentPrompt] = useState<string>("");
   const [responsable, setResponsable] = useState<string>("");
   const [emailGerent, setEmailGerent] = useState<string>("");
   const [telefon, setTelefon] = useState<string>("");
@@ -133,7 +135,9 @@ export default function SuperadminTenantOnboardingPage() {
           rao_social: raoSocial.trim(),
           nif: nif.trim().toUpperCase(),
           subdomini: subdomini.trim().toLowerCase(),
-          vertical: vertical,
+          vertical: vertical.trim(),
+          magatzem_families_default: magatzemFamilies.trim() || undefined,
+          agent_prompt_system: agentPrompt.trim() || undefined,
           pla_subscripcio: tierPla,
           quota_disc_gb: tierPla === "ENTERPRISE" ? 100 : tierPla === "PRO" ? 50 : 10,
           boss_nif: nif.trim().toUpperCase(),

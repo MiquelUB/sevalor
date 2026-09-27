@@ -38,6 +38,7 @@ interface Article {
 export default function GestioMagatzemPage() {
   const { rolActiu } = useGestio();
   const [vertical, setVertical] = useState<string>("SEVALOR");
+  const [customFamilies, setCustomFamilies] = useState<string[]>([]);
   const [articles, setArticles] = useState<Article[]>([]);
   const [eines, setEines] = useState<any[]>([]);
   const [activeTab, setActiveTab] = useState<"MATERIALS" | "EINES">("MATERIALS");
@@ -93,8 +94,24 @@ export default function GestioMagatzemPage() {
     setLoading(true);
     setError(null);
     try {
-      const data = await apiFetch<Article[]>("/gestio/magatzem/articles");
-      setArticles(data || []);
+      const [articlesData, einesData, operarisData, configData] = await Promise.all([
+        apiFetch<Article[]>("/gestio/magatzem/articles").catch(() => []),
+        apiFetch<any[]>("/gestio/magatzem/eines").catch(() => []),
+        apiFetch<any[]>("/gestio/operaris").catch(() => []),
+        apiFetch<any>("/gestio/configuracio/empresa").catch(() => null)
+      ]);
+      setArticles(articlesData || []);
+      setEines(einesData || []);
+      setOperaris(operarisData || []);
+      
+      if (configData) {
+        if (configData.vertical) setVertical(configData.vertical);
+        if (configData.magatzem_families_default) {
+          setCustomFamilies(configData.magatzem_families_default.split(',').map((s: string) => s.trim()).filter(Boolean));
+        } else {
+          setCustomFamilies([]);
+        }
+      }
     } catch (err: any) {
       setError(err.message || "Error al carregar l'inventari");
       setArticles([]);
@@ -303,6 +320,51 @@ export default function GestioMagatzemPage() {
     const coincideixFamilia = filtreFamilia === "TOTS" || a.familia === filtreFamilia;
     return coincideixCerca && coincideixFamilia;
   });
+
+
+  const renderFamilyOptions = () => {
+    if (customFamilies.length > 0) {
+      return customFamilies.map(fam => <option key={fam} value={fam}>{fam}</option>);
+    }
+    if (vertical === "ELECTRICPRO") {
+      return (
+        <>
+          <option value="CABLES">Cables i Conducció</option>
+          <option value="QUADRES">Quadres i Proteccions</option>
+          <option value="ILLUMINACIO">Il·luminació</option>
+          <option value="MECANISMES">Mecanismes</option>
+        </>
+      );
+    }
+    if (vertical === "HYDROPRO") {
+      return (
+        <>
+          <option value="TUBERIA">Canonades i Tubs</option>
+          <option value="VALVULERIA">Valvuleria</option>
+          <option value="SANITARIS">Sanitaris</option>
+          <option value="AIXETES">Aixetes</option>
+        </>
+      );
+    }
+    if (vertical === "BUILDINGPRO") {
+      return (
+        <>
+          <option value="CIMENT">Ciment i Àrids</option>
+          <option value="FUSTA">Fusta i Fusteria</option>
+          <option value="PINTURA">Pintures i Acabats</option>
+          <option value="AILLAMENTS">Aïllaments</option>
+        </>
+      );
+    }
+    return (
+      <>
+        <option value="TUBERIA">Canonades i Tubs</option>
+        <option value="VALVULERIA">Valvuleria</option>
+        <option value="ACCESSORIS">Accessoris</option>
+        <option value="CABLES">Cables i Elèctric</option>
+      </>
+    );
+  };
 
   return (
     <div className="flex-1 flex flex-col h-[calc(100vh-3.5rem)] overflow-hidden bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 transition-colors">

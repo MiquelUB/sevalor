@@ -669,6 +669,11 @@ async def cridar_lm_studio_amb_tools(
 
     system_prompt = (
         f"Ets el Copilot d'Intel·ligència Artificial tècnic de SEVALOR Suite, especialitzat en {vertical}. "
+    )
+    if agent_prompt_system:
+        system_prompt += f" Directrius Específiques de l'Empresa: {agent_prompt_system}. "
+        
+    system_prompt += (
         "Tens accés a eines internes del sistema (tools) per consultar dades en temps real (estoc, vehicles, garanties, fitxa 360). "
         "Quan l'usuari pregunti sobre estoc, vehicles, proximitat o clients, utilitza les eines proporcionades abans de respondre. "
         "Respon sempre en català de forma professional, tècnica i precisa, basant-te exclusivament en les dades obtingudes de les eines."
@@ -1635,6 +1640,7 @@ async def consultar_xat_tecnic(
         db=db,
         empresa_id=empresa_id,
         vertical=vertical,
+        agent_prompt_system=empresa.agent_prompt_system if empresa else None,
     )
 
     enllacos = []
