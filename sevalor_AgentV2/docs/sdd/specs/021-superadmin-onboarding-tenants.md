@@ -188,3 +188,8 @@ Criteris de Finalització (Definition of Done) i Matriu de Traçabilitat
     Els 22 Requisits Funcionals (RF-01 al RF-22) i els 6 Casos Límit redactats amb sintaxi formal EARS estricta en català i lliures de dades mock o simulades.
     Aïllament PostgreSQL RLS provat unítariament: un supervisor o Superadmin de la plataforma té estrictament prohibit realitzar SELECT sobre dades d'altres inquilins (empresa_id).
     Certificat de Destrucció de Dades digital: l' offboarding purga els volums i schemas en cascada, guardant l'assegurança criptogràfica del procés d'esborrat de forma persistent.
+
+## 📝 Actualització de Registre de Verticals (RF-44)
+S'ha modificat el sistema d'onboarding per suportar **Verticals Personalitzades (Custom Verticals)**. A més de les 4 estàndards (SEVALOR, ELECTRICPRO, HYDROPRO, BUILDINGPRO), el Superadmin pot definir un nom de vertical manual. Quan ho fa, ha d'especificar:
+- **magatzem_families_default**: Les famílies de material base que s'usaran al Magatzem d'aquest tenant.
+- **agent_prompt_system**: Les regles directives pel Copilot IA específiques d'aquesta empresa.

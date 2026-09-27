@@ -600,3 +600,6 @@ RF-51 / RF-52
 EDGE-04 / EDGE-16
 	
 Fiança de palet Epal danyat es liquida com a despesa de la nau; RMA de client rebutjat es purga.
+
+## 📝 Adaptació Dinàmica per Verticals (RF-45)
+Els desplegables de Família al donar d'alta i editar un Material (`TUBERIA`, `CABLES`, etc.) han deixat de ser estàtics. Ara s'injecten de forma dinàmica a partir del camp `magatzem_families_default` de la base de dades, vinculat a la Vertical configurada durant l'Onboarding del Tenant (Ex: ELECTRICPRO proposarà Cables, Il·luminació i Quadres).
