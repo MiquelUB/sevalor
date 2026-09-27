@@ -172,7 +172,7 @@ async def generar_invitacio_telegram(
     db: AsyncSession = Depends(get_db_with_tenant_context)
 ):
     """Genera un token d'invitació per al Bot de Telegram (Spec 023 RF-05: expira 48h, un sol ús)."""
-    empresa_id = request.headers.get("X-Empresa-ID") or getattr(request.state, "empresa_id", None)
+    empresa_id = getattr(request.state, "empresa_id", None) or request.headers.get("X-Empresa-ID")
     if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401, detail="No identificat")
     conv_res = await db.execute(select(ConversaNotificacio).where(

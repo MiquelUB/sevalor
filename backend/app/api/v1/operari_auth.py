@@ -54,7 +54,7 @@ async def login_operari(
     login_data: LoginRequest,
     db: AsyncSession = Depends(get_db)
 ):
-    empresa_id = request.headers.get("X-Empresa-ID") or getattr(request.state, "empresa_id", None)
+    empresa_id = getattr(request.state, "empresa_id", None) or request.headers.get("X-Empresa-ID")
     empresa_uuid = None
 
     if empresa_id:

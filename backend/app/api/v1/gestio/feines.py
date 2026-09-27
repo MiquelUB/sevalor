@@ -117,7 +117,7 @@ async def llistar_feines_mapa(
     db: AsyncSession = Depends(get_db_with_tenant_context)
 ):
     """Retorna les OTs del tenant actual amb les seves coordenades reals per al Mapa GIS (Spec 001/005)."""
-    empresa_id = request.headers.get("X-Empresa-ID") or getattr(request.state, "empresa_id", None)
+    empresa_id = getattr(request.state, "empresa_id", None) or request.headers.get("X-Empresa-ID")
     if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401, detail="No identificat")
 
@@ -182,7 +182,7 @@ async def agendar_feina(
     Planifica/reagenda una Ordre de Treball usant Optimistic Locking (version_id).
     Si un altre usuari ha modificat l'OT, es retorna HTTP 409 Conflict.
     """
-    empresa_id = request.headers.get("X-Empresa-ID") or getattr(request.state, "empresa_id", None)
+    empresa_id = getattr(request.state, "empresa_id", None) or request.headers.get("X-Empresa-ID")
     if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401, detail="No identificat")
 

@@ -128,7 +128,7 @@ async def obtenir_iban_client(
     db: AsyncSession = Depends(get_db_with_tenant_context)
 ):
     """Retorna l'IBAN complet del client. Enginyer rep 403."""
-    empresa_id = request.headers.get("X-Empresa-ID") or getattr(request.state, "empresa_id", None)
+    empresa_id = getattr(request.state, "empresa_id", None) or request.headers.get("X-Empresa-ID")
     if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401, detail="No identificat")
     res = await db.execute(select(Client).where(
@@ -147,7 +147,7 @@ async def canviar_iban_client(
     db: AsyncSession = Depends(get_db_with_tenant_context)
 ):
     """Canvia l'IBAN d'un client (Spec 002). Enginyer rep 403."""
-    empresa_id = request.headers.get("X-Empresa-ID") or getattr(request.state, "empresa_id", None)
+    empresa_id = getattr(request.state, "empresa_id", None) or request.headers.get("X-Empresa-ID")
     if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401, detail="No identificat")
     res = await db.execute(select(Client).where(
@@ -233,7 +233,7 @@ async def obtenir_fitxa_360_client(
     Recopila cronològicament totes les intervencions tècniques, peces instal·lades
     i incidències registrades per al client durant els últims 365 dies (Spec 012 RF-04).
     """
-    empresa_id = request.headers.get("X-Empresa-ID") or getattr(request.state, "empresa_id", None)
+    empresa_id = getattr(request.state, "empresa_id", None) or request.headers.get("X-Empresa-ID")
     if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401, detail="No identificat")
 

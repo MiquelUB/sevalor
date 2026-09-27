@@ -137,7 +137,7 @@ async def llistar_vehicles_propers(
     Retorna els vehicles de l'empresa ordenats per proximitat geogràfica a les coordenades donades (Haversine).
     Determina la posició del vehicle segons l'OT activa en curs o ubicació registrada.
     """
-    empresa_id = request.headers.get("X-Empresa-ID") or getattr(request.state, "empresa_id", None)
+    empresa_id = getattr(request.state, "empresa_id", None) or request.headers.get("X-Empresa-ID")
     if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401, detail="No identificat")
 

@@ -96,7 +96,7 @@ async def llistar_articles(
     offset: int = 0,
     db: AsyncSession = Depends(get_db_with_tenant_context)
 ):
-    empresa_id = request.headers.get("X-Empresa-ID") or getattr(request.state, "empresa_id", None)
+    empresa_id = getattr(request.state, "empresa_id", None) or request.headers.get("X-Empresa-ID")
     if not empresa_id or empresa_id in ('undefined', 'null', 'None'):
         raise HTTPException(status_code=401, detail="No identificat")
         
