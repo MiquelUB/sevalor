@@ -47,6 +47,10 @@ export default function GestioMagatzemPage() {
   const [modalOcr, setModalOcr] = useState(false);
   const [modalEditarArticle, setModalEditarArticle] = useState(false);
   const [articleEditant, setArticleEditant] = useState<Article | null>(null);
+  const [operaris, setOperaris] = useState<any[]>([]);
+  const [modalCheckout, setModalCheckout] = useState(false);
+  const [einaCheckout, setEinaCheckout] = useState<any>(null);
+  const [selectedOperari, setSelectedOperari] = useState("");
   const [fitxerOcr, setFitxerOcr] = useState<File | null>(null);
   const [processantOcr, setProcessantOcr] = useState(false);
   const [resultatOcr, setResultatOcr] = useState<any>(null);
@@ -195,6 +199,33 @@ export default function GestioMagatzemPage() {
   const obrirFitxa = (art: Article) => {
     setArticleEditant({ ...art });
     setModalEditarArticle(true);
+  };
+
+  const handleCheckout = async () => {
+    if (!einaCheckout || !selectedOperari) return;
+    try {
+      await apiFetch(`/gestio/magatzem/eines/${einaCheckout.id}/checkout`, {
+        method: "POST",
+        body: JSON.stringify({ operari_id: selectedOperari })
+      });
+      setModalCheckout(false);
+      setEinaCheckout(null);
+      carregarArticles();
+    } catch (err: any) {
+      alert(err.message || "Error al fer checkout");
+    }
+  };
+
+  const handleCheckin = async (einaId: string) => {
+    if (!confirm("Confirmar devolució de l'eina al magatzem central?")) return;
+    try {
+      await apiFetch(`/gestio/magatzem/eines/${einaId}/checkin`, {
+        method: "POST"
+      });
+      carregarArticles();
+    } catch (err: any) {
+      alert(err.message || "Error al fer check-in");
+    }
   };
   const handleCrearArticle = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -506,6 +537,7 @@ export default function GestioMagatzemPage() {
                       <th className="p-3 font-mono">Nº Sèrie</th>
                       <th className="p-3">Estat</th>
                       <th className="p-3">Fi Garantia</th>
+                      <th className="p-3 text-right">Custòdia (Check-in/out)</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
@@ -521,12 +553,29 @@ export default function GestioMagatzemPage() {
                           {eina.numero_serie}
                         </td>
                         <td className="p-3">
-                          <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${eina.estat === "DISPONIBLE" ? "bg-emerald-100 text-emerald-700" : "bg-orange-100 text-orange-700"}`}>
+                          <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${eina.estat === "DISPONIBLE" ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400" : "bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400"}`}>
                             {eina.estat}
                           </span>
                         </td>
                         <td className="p-3 text-slate-500 font-mono">
                           {eina.data_fi_garantia ? new Date(eina.data_fi_garantia).toLocaleDateString('ca-ES') : "-"}
+                        </td>
+                        <td className="p-3 text-right">
+                          {eina.estat === "DISPONIBLE" ? (
+                            <button
+                              onClick={() => { setEinaCheckout(eina); setModalCheckout(true); }}
+                              className="px-3 py-1 rounded-lg bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-400 text-[10px] font-bold hover:bg-blue-200 transition-colors"
+                            >
+                              Check-Out 📤
+                            </button>
+                          ) : eina.estat === "CUSTODIADA" ? (
+                            <button
+                              onClick={() => handleCheckin(eina.id)}
+                              className="px-3 py-1 rounded-lg bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-400 text-[10px] font-bold hover:bg-emerald-200 transition-colors"
+                            >
+                              Check-In 📥
+                            </button>
+                          ) : null}
                         </td>
                       </tr>
                     ))}
@@ -1054,6 +1103,57 @@ export default function GestioMagatzemPage() {
                   </>
                 )}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+
+      {/* Modal Checkout Eina */}
+      {modalCheckout && einaCheckout && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="w-full max-w-sm bg-white dark:bg-slate-900 rounded-3xl shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden">
+            <div className="px-5 py-4 border-b border-slate-200 dark:border-slate-800 flex justify-between items-center bg-blue-50 dark:bg-blue-900/20">
+              <h2 className="text-sm font-bold text-blue-900 dark:text-blue-100">Check-Out d'Eina (Assignació)</h2>
+              <button onClick={() => { setModalCheckout(false); setEinaCheckout(null); }} className="text-slate-400 hover:text-slate-600">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="p-5 space-y-4">
+              <div className="p-3 bg-slate-50 dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700">
+                <p className="text-xs font-bold text-slate-700 dark:text-slate-300">{einaCheckout.nom}</p>
+                <p className="text-[10px] font-mono text-slate-500 mt-1">SN: {einaCheckout.numero_serie}</p>
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-600 dark:text-slate-400 mb-1">
+                  Assignar a l'Operari / Cap de Colla *
+                </label>
+                <select
+                  value={selectedOperari}
+                  onChange={(e) => setSelectedOperari(e.target.value)}
+                  className="w-full p-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs font-semibold"
+                >
+                  <option value="">-- Selecciona un operari --</option>
+                  {operaris.map(op => (
+                    <option key={op.id} value={op.id}>{op.nom} {op.cognoms}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="flex justify-end gap-2 pt-2">
+                <button
+                  onClick={() => { setModalCheckout(false); setEinaCheckout(null); }}
+                  className="px-4 py-2 rounded-xl border border-slate-300 dark:border-slate-700 text-slate-600 dark:text-slate-300 text-xs font-medium hover:bg-slate-100"
+                >
+                  Cancel·lar
+                </button>
+                <button
+                  onClick={handleCheckout}
+                  disabled={!selectedOperari}
+                  className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold shadow disabled:opacity-50"
+                >
+                  Confirmar Entrega
+                </button>
+              </div>
             </div>
           </div>
         </div>

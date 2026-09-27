@@ -822,3 +822,59 @@ async def llistar_eines(
     stmt = select(EinaCustodia).where(EinaCustodia.empresa_id == emp_uuid)
     res = await db.execute(stmt)
     return res.scalars().all()
+
+class CheckoutPayload(BaseModel):
+    operari_id: uuid.UUID
+
+@router.post("/eines/{eina_id}/checkout", response_model=EinaResponse)
+async def checkout_eina(
+    eina_id: uuid.UUID,
+    payload: CheckoutPayload,
+    request: Request,
+    db: AsyncSession = Depends(get_db_with_tenant_context)
+):
+    empresa_id = getattr(request.state, "empresa_id", None) or request.headers.get("X-Empresa-ID")
+    if not empresa_id or empresa_id in ('undefined', 'null', 'None'):
+        raise HTTPException(status_code=401, detail="No identificat")
+    emp_uuid = valida_uuid(empresa_id)
+
+    stmt = select(EinaCustodia).where(EinaCustodia.id == eina_id, EinaCustodia.empresa_id == emp_uuid)
+    res = await db.execute(stmt)
+    eina = res.scalars().first()
+    if not eina:
+        raise HTTPException(status_code=404, detail="Eina no trobada")
+    
+    if eina.estat != "DISPONIBLE":
+        raise HTTPException(status_code=400, detail="Eina no disponible per checkout")
+        
+    eina.estat = "CUSTODIADA"
+    eina.custodiat_per_operari_id = payload.operari_id
+    await db.commit()
+    await db.refresh(eina)
+    return eina
+
+@router.post("/eines/{eina_id}/checkin", response_model=EinaResponse)
+async def checkin_eina(
+    eina_id: uuid.UUID,
+    request: Request,
+    db: AsyncSession = Depends(get_db_with_tenant_context)
+):
+    empresa_id = getattr(request.state, "empresa_id", None) or request.headers.get("X-Empresa-ID")
+    if not empresa_id or empresa_id in ('undefined', 'null', 'None'):
+        raise HTTPException(status_code=401, detail="No identificat")
+    emp_uuid = valida_uuid(empresa_id)
+
+    stmt = select(EinaCustodia).where(EinaCustodia.id == eina_id, EinaCustodia.empresa_id == emp_uuid)
+    res = await db.execute(stmt)
+    eina = res.scalars().first()
+    if not eina:
+        raise HTTPException(status_code=404, detail="Eina no trobada")
+    
+    if eina.estat != "CUSTODIADA":
+        raise HTTPException(status_code=400, detail="L'eina no està custodiada actualment")
+        
+    eina.estat = "DISPONIBLE"
+    eina.custodiat_per_operari_id = None
+    await db.commit()
+    await db.refresh(eina)
+    return eina
