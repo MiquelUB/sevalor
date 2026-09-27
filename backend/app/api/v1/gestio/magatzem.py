@@ -5,6 +5,13 @@ from typing import List, Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
 from pydantic import BaseModel, Field, ConfigDict
+
+def valida_uuid(id_str: str) -> uuid.UUID:
+    try:
+        return uuid.UUID(str(id_str))
+    except Exception:
+        raise HTTPException(status_code=400, detail="Identificador d'empresa invàlid.")
+
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
