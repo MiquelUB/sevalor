@@ -555,7 +555,8 @@ class TestFluxOperari:
             await s.flush()
             await s.commit()
 
-        resp = await async_client.post("/operari_auth/login",
+        async_client.headers.pop("Authorization", None)
+        async_client.headers.pop("Authorization", None); resp = await async_client.post("/operari_auth/login",
             headers={"X-Empresa-ID": eid, "Content-Type": "application/json"},
             json={"nif": onif, "pin": "4826"})
         if resp.status_code == 429:
@@ -583,7 +584,8 @@ class TestFluxOperari:
             await s.flush()
             await s.commit()
         # Login
-        resp = await async_client.post("/operari_auth/login",
+        async_client.headers.pop("Authorization", None)
+        async_client.headers.pop("Authorization", None); resp = await async_client.post("/operari_auth/login",
             headers={"X-Empresa-ID": eid, "Content-Type": "application/json"},
             json={"nif": onif, "pin": "4826"})
         if resp.status_code == 429:

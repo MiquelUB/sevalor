@@ -76,7 +76,7 @@ async def operari_token(empresa_i_admin, async_client: AsyncClient, admin_sessio
     await admin_session.flush()
 
     # Login
-    resp = await async_client.post("/operari_auth/login", json={"nif": op_nif, "pin": pin_clear}, headers={"X-Empresa-ID": eid})
+    async_client.headers.pop("Authorization", None); resp = await async_client.post("/operari_auth/login", json={"nif": op_nif, "pin": pin_clear}, headers={"X-Empresa-ID": eid})
     assert resp.status_code == 200, f"Login fallit: {resp.status_code} {resp.text}"
     data = resp.json()
     assert "access_token" in data
