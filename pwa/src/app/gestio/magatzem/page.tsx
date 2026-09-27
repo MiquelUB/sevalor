@@ -55,6 +55,8 @@ export default function GestioMagatzemPage() {
     tipus_creacio: "MATERIAL", // MATERIAL o EINA
     referencia_inventari: "",
     nom: "",
+    numero_serie: "",
+    model_eina: "",
     unitat_mesura: "UNITAT",
     familia: "TUBERIA",
     estoc_optim: 10,
@@ -200,8 +202,8 @@ export default function GestioMagatzemPage() {
           body: JSON.stringify({
             referencia_fabricant: nouArticle.referencia_inventari,
             nom: nouArticle.nom,
-            numero_serie: "AUTO-" + Date.now().toString().slice(-6),
-            model: "General",
+            numero_serie: nouArticle.numero_serie,
+            model: nouArticle.model_eina,
           }),
         });
       } else {
@@ -227,6 +229,8 @@ export default function GestioMagatzemPage() {
         tipus_creacio: "MATERIAL",
         referencia_inventari: "",
         nom: "",
+        numero_serie: "",
+        model_eina: "",
         unitat_mesura: "UNITAT",
         familia: "TUBERIA",
         estoc_optim: 10,
@@ -577,47 +581,80 @@ export default function GestioMagatzemPage() {
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-400 mb-1">
-                    Referència *
+                    {nouArticle.tipus_creacio === "MATERIAL" ? "Referència *" : "Ref. Fabricant"}
                   </label>
                   <input
                     type="text"
-                    required
-                    placeholder="#ART-1001"
+                    required={nouArticle.tipus_creacio === "MATERIAL"}
+                    placeholder={nouArticle.tipus_creacio === "MATERIAL" ? "#ART-1001" : "Ex: BOSCH-234"}
                     value={nouArticle.referencia_inventari}
                     onChange={(e) => setNouArticle({ ...nouArticle, referencia_inventari: e.target.value })}
                     className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-mono"
                   />
                 </div>
-                <div>
-                  <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-400 mb-1">
-                    Família *
-                  </label>
-                  <select
-                    value={nouArticle.familia}
-                    onChange={(e) => setNouArticle({ ...nouArticle, familia: e.target.value })}
-                    className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-semibold"
-                  >
-                    <option value="TUBERIA">Canonades i Tubs</option>
-                    <option value="VALVULERIA">Valvuleria</option>
-                    <option value="ACCESSORIS">Accessoris</option>
-                    <option value="EINES">Eines de Custòdia</option>
-                    <option value="GENERAL">General</option>
-                  </select>
-                </div>
+                {nouArticle.tipus_creacio === "MATERIAL" && (
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-400 mb-1">
+                      Família *
+                    </label>
+                    <select
+                      value={nouArticle.familia}
+                      onChange={(e) => setNouArticle({ ...nouArticle, familia: e.target.value })}
+                      className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-semibold"
+                    >
+                      <option value="TUBERIA">Canonades i Tubs</option>
+                      <option value="VALVULERIA">Valvuleria</option>
+                      <option value="ACCESSORIS">Accessoris</option>
+                      <option value="EINES">Eines de Custòdia</option>
+                      <option value="GENERAL">General</option>
+                    </select>
+                  </div>
+                )}
+                {nouArticle.tipus_creacio === "EINA" && (
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-400 mb-1">
+                      Número de Sèrie *
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      placeholder="Ex: SN-9283749823"
+                      value={nouArticle.numero_serie}
+                      onChange={(e) => setNouArticle({ ...nouArticle, numero_serie: e.target.value })}
+                      className="w-full px-3 py-2 rounded-xl border border-blue-300 dark:border-blue-700 bg-blue-50 dark:bg-blue-900/30 text-xs font-mono font-bold"
+                    />
+                  </div>
+                )}
               </div>
 
-              <div>
-                <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-400 mb-1">
-                  Nom / Descripció de l'Article *
-                </label>
-                <input
-                  type="text"
-                  required
-                  placeholder="Ex: Colze Electrosoldable PE-100 90º Ø90"
-                  value={nouArticle.nom}
-                  onChange={(e) => setNouArticle({ ...nouArticle, nom: e.target.value })}
-                  className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-medium"
-                />
+              <div className="grid grid-cols-2 gap-3">
+                <div className={nouArticle.tipus_creacio === "MATERIAL" ? "col-span-2" : ""}>
+                  <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-400 mb-1">
+                    {nouArticle.tipus_creacio === "MATERIAL" ? "Nom / Descripció de l'Article *" : "Nom de la Màquina/Eina *"}
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    placeholder={nouArticle.tipus_creacio === "MATERIAL" ? "Ex: Colze Electrosoldable PE-100 90º Ø90" : "Ex: Martell Demolidor BOSCH"}
+                    value={nouArticle.nom}
+                    onChange={(e) => setNouArticle({ ...nouArticle, nom: e.target.value })}
+                    className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-medium"
+                  />
+                </div>
+                {nouArticle.tipus_creacio === "EINA" && (
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-400 mb-1">
+                      Model
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="Ex: GBH 5-40 DCE"
+                      value={nouArticle.model_eina}
+                      onChange={(e) => setNouArticle({ ...nouArticle, model_eina: e.target.value })}
+                      className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-medium"
+                    />
+                  </div>
+                )}
               </div>
 
               {nouArticle.tipus_creacio === "MATERIAL" && (
