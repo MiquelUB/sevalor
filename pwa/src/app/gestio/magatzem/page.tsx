@@ -27,6 +27,8 @@ interface Article {
   estoc_optim: number;
   estoc_minim: number;
   preu_cost: number;
+  descompte_proveidor: number;
+  marge_guanys: number;
   preu_venda: number;
   actiu?: boolean;
   es_lot_caducable?: boolean;
@@ -182,6 +184,8 @@ export default function GestioMagatzemPage() {
           estoc_optim: Number(articleEditant.estoc_optim),
           estoc_minim: Number(articleEditant.estoc_minim),
           preu_cost: Number(articleEditant.preu_cost),
+          descompte_proveidor: Number(articleEditant.descompte_proveidor),
+          marge_guanys: Number(articleEditant.marge_guanys),
           preu_venda: Number(articleEditant.preu_venda),
           es_lot_caducable: articleEditant.es_lot_caducable || false,
         }),
@@ -1054,19 +1058,54 @@ export default function GestioMagatzemPage() {
                           type="number"
                           step="0.01"
                           value={articleEditant.preu_cost}
-                          onChange={(e) => setArticleEditant({ ...articleEditant, preu_cost: Number(e.target.value) })}
+                          onChange={(e) => {
+                            const pc = Number(e.target.value) || 0;
+                            const costReal = pc * (1 - (articleEditant.descompte_proveidor / 100));
+                            const preuVendaCalculat = costReal * (1 + (articleEditant.marge_guanys / 100));
+                            setArticleEditant({ ...articleEditant, preu_cost: pc, preu_venda: parseFloat(preuVendaCalculat.toFixed(2)) });
+                          }}
                           className="w-full p-2 rounded-xl border border-indigo-200 dark:border-indigo-800 bg-white dark:bg-slate-900 text-xs"
                           required
                         />
                       </div>
                       <div>
-                        <label className="block text-xs font-bold text-slate-600 dark:text-slate-400 mb-1">Preu Venda (€)</label>
+                        <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-400 mb-1">Desc. Proveïdor (%)</label>
+                        <input
+                          type="number"
+                          step="0.01"
+                          value={articleEditant.descompte_proveidor}
+                          onChange={(e) => {
+                            const desc = Number(e.target.value) || 0;
+                            const costReal = articleEditant.preu_cost * (1 - (desc / 100));
+                            const preuVendaCalculat = costReal * (1 + (articleEditant.marge_guanys / 100));
+                            setArticleEditant({ ...articleEditant, descompte_proveidor: desc, preu_venda: parseFloat(preuVendaCalculat.toFixed(2)) });
+                          }}
+                          className="w-full p-2 rounded-xl border border-indigo-200 dark:border-indigo-800 bg-white dark:bg-slate-900 text-xs"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-400 mb-1">Marge Guanys (%)</label>
+                        <input
+                          type="number"
+                          step="0.01"
+                          value={articleEditant.marge_guanys}
+                          onChange={(e) => {
+                            const marge = Number(e.target.value) || 0;
+                            const costReal = articleEditant.preu_cost * (1 - (articleEditant.descompte_proveidor / 100));
+                            const preuVendaCalculat = costReal * (1 + (marge / 100));
+                            setArticleEditant({ ...articleEditant, marge_guanys: marge, preu_venda: parseFloat(preuVendaCalculat.toFixed(2)) });
+                          }}
+                          className="w-full p-2 rounded-xl border border-indigo-200 dark:border-indigo-800 bg-white dark:bg-slate-900 text-xs"
+                        />
+                      </div>
+                      <div className="col-span-2">
+                        <label className="block text-xs font-bold text-slate-600 dark:text-slate-400 mb-1">Preu Venda (€) (Càlcul P.V.P.)</label>
                         <input
                           type="number"
                           step="0.01"
                           value={articleEditant.preu_venda}
                           onChange={(e) => setArticleEditant({ ...articleEditant, preu_venda: Number(e.target.value) })}
-                          className="w-full p-2 rounded-xl border border-indigo-200 dark:border-indigo-800 bg-white dark:bg-slate-900 text-xs"
+                          className="w-full p-2 rounded-xl border border-indigo-300 dark:border-indigo-700 bg-indigo-50 dark:bg-indigo-900/40 font-bold text-indigo-700 dark:text-indigo-300 text-xs"
                           required
                         />
                       </div>

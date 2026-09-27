@@ -180,6 +180,8 @@ async def alta_article(
         estoc_minim=article.estoc_minim,
         es_lot_caducable=article.es_lot_caducable,
         preu_cost=article.preu_cost,
+        descompte_proveidor=article.descompte_proveidor,
+        marge_guanys=article.marge_guanys,
         preu_venda=article.preu_venda
     )
 
@@ -794,6 +796,8 @@ async def modificar_article(
     art_db.estoc_minim = article.estoc_minim
     art_db.es_lot_caducable = article.es_lot_caducable
     art_db.preu_cost = article.preu_cost
+    art_db.descompte_proveidor = article.descompte_proveidor
+    art_db.marge_guanys = article.marge_guanys
     art_db.preu_venda = article.preu_venda
 
     await db.commit()
@@ -875,6 +879,36 @@ async def checkin_eina(
         
     eina.estat = "DISPONIBLE"
     eina.custodiat_per_operari_id = None
+    await db.commit()
+    await db.refresh(eina)
+    return eina
+
+@router.put("/eines/{eina_id}", response_model=EinaResponse)
+async def modificar_eina(
+    eina_id: uuid.UUID,
+    payload: EinaCreate,
+    request: Request,
+    db: AsyncSession = Depends(get_db_with_tenant_context)
+):
+    empresa_id = getattr(request.state, "empresa_id", None) or request.headers.get("X-Empresa-ID")
+    if not empresa_id or empresa_id in ('undefined', 'null', 'None'):
+        raise HTTPException(status_code=401, detail="No identificat")
+    emp_uuid = valida_uuid(empresa_id)
+
+    stmt = select(EinaCustodia).where(EinaCustodia.id == eina_id, EinaCustodia.empresa_id == emp_uuid)
+    res = await db.execute(stmt)
+    eina = res.scalars().first()
+    if not eina:
+        raise HTTPException(status_code=404, detail="Eina no trobada")
+    
+    eina.referencia_fabricant = payload.referencia_fabricant
+    eina.nom = payload.nom
+    eina.model = payload.model
+    eina.numero_serie = payload.numero_serie
+    eina.data_fi_garantia = payload.data_fi_garantia
+    eina.observacions = payload.observacions
+    eina.incidencies = payload.incidencies
+
     await db.commit()
     await db.refresh(eina)
     return eina
