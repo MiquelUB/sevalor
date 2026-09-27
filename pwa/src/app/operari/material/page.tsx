@@ -92,7 +92,7 @@ export default function OperariMaterialPage() {
           await apiFetch(`/operari/picking/linies/${m.id}`, {
             method: "PUT",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ quantitat_carregada_pick_in: m.quantitat }),
+            body: JSON.stringify({ quantitat_carregada_pick_in: m.quantitat_programada }),
           });
         }
       }

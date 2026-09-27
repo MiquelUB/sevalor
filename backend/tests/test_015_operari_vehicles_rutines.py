@@ -4,7 +4,9 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from app.main import app
-from app.models.models import Empresa, Vehicle
+from app.models.models import Empresa, Vehicle, Usuari
+import jwt
+from app.core.config import settings
 
 
 @pytest.mark.asyncio
@@ -16,6 +18,24 @@ async def test_vehicle_checkin_checkout_repostatge(admin_session, headers, boss_
         id=uuid.UUID(empresa_id), nom='Test Flota', nif=boss_nif, subdomini='flota-' + str(uuid.uuid4())[:5], pla_subscripcio='STARTER', estat_pagament='ACTIU'
     ))
     await admin_session.flush()
+
+    # Create dummy user for the boss token to satisfy foreign keys
+    try:
+        decoded = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM], options={"verify_aud": False})
+        user_id = decoded["sub"]
+        admin_session.add(Usuari(
+            id=uuid.UUID(user_id),
+            empresa_id=uuid.UUID(empresa_id),
+            nom="Boss",
+            email="boss@test.local",
+            password_hash="pwd",
+            rol="BOSS",
+            nif="B" + str(uuid.uuid4())[:8].upper()
+        ))
+        await admin_session.flush()
+    except Exception as e:
+        print("Failed to decode token", e)
+
 
     # 1. Crear Vehicle
     vehicle = Vehicle(

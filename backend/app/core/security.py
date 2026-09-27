@@ -25,6 +25,7 @@ def get_current_user_claims(request: Request) -> Dict[str, Any]:
             algorithms=[settings.ALGORITHM],
             options={"verify_aud": False},
         )
+        request.state.user_id = payload.get("sub")
         return payload
     except jwt.ExpiredSignatureError:
         raise HTTPException(

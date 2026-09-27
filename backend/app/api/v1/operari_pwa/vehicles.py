@@ -110,7 +110,7 @@ async def vehicle_repostatge(
     db: AsyncSession = Depends(get_db_with_tenant_context)
 ):
     empresa_id = request.state.empresa_id
-    usuari_id = request.state.user_id # Assuming user_id is in state
+    usuari_id = getattr(request.state, "user_id", None) # Assuming user_id is in state
     if not usuari_id:
         # Fallback if state doesn't have it (for mock/tests)
         first_user = (await db.execute(select(Usuari).where(Usuari.empresa_id == uuid.UUID(empresa_id)))).scalars().first()
