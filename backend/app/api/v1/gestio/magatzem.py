@@ -97,10 +97,15 @@ async def llistar_articles(
     db: AsyncSession = Depends(get_db_with_tenant_context)
 ):
     empresa_id = request.headers.get("X-Empresa-ID") or getattr(request.state, "empresa_id", None)
-    if not empresa_id or empresa_id == 'undefined':
+    if not empresa_id or empresa_id in ('undefined', 'null', 'None'):
+        raise HTTPException(status_code=401, detail="No identificat")
+        
+    try:
+        empresa_uuid = uuid.UUID(str(empresa_id))
+    except ValueError:
         raise HTTPException(status_code=401, detail="No identificat")
 
-    stmt = select(Article).where(Article.empresa_id == uuid.UUID(empresa_id))
+    stmt = select(Article).where(Article.empresa_id == empresa_uuid)
 
     if q:
         search_term = f"%{q}%"
