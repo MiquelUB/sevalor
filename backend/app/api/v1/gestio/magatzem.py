@@ -712,17 +712,36 @@ async def confirmar_document(
         db.add(nou_albara)
 
         for linia in payload.linies:
+            nou_preu = float(linia.preu) * (1.0 - (float(linia.descompte_percent)/100.0))
+            
+            if linia.tipus == "EINA":
+                # Spec 004 RF-07: Les Eines es custodien per Serial Number i no sumen stock genèric d'Article
+                import uuid
+                quantitat = int(linia.quantitat) if linia.quantitat > 0 else 1
+                for _ in range(quantitat):
+                    eina_ocr = EinaCustodia(
+                        empresa_id=empresa_id,
+                        referencia_fabricant=linia.referencia,
+                        nom=linia.nom,
+                        model="OCR pendent revisió",
+                        numero_serie=f"PENDENT_SN_{uuid.uuid4().hex[:8].upper()}",
+                        estat="DISPONIBLE"
+                    )
+                    db.add(eina_ocr)
+                await db.flush()
+                # Les eines no sumen al moviment d'estoc de materials ni al preu PMP.
+                continue
+
             stmt_art = select(Article).where(Article.referencia_inventari == linia.referencia)
             article = (await db.execute(stmt_art)).scalars().first()
 
-            nou_preu = float(linia.preu) * (1.0 - (float(linia.descompte_percent)/100.0))
             if not article:
                 article = Article(
                     empresa_id=empresa_id,
                     referencia_inventari=linia.referencia,
                     nom=linia.nom,
                     unitat_mesura="UNITAT",
-                    familia="EINA" if linia.tipus == "EINA" else "GENERAL",
+                    familia="GENERAL",
                     preu_cost=nou_preu
                 )
                 db.add(article)
@@ -741,6 +760,7 @@ async def confirmar_document(
                     article.preu_cost = pmp
                 elif nou_preu > 0 and estoc_total_actual <= 0:
                     article.preu_cost = nou_preu
+            
             stmt_estoc = select(EstocMagatzem).where(EstocMagatzem.magatzem_id == magatzem.id, EstocMagatzem.article_id == article.id)
             estoc = (await db.execute(stmt_estoc)).scalars().first()
             if not estoc:

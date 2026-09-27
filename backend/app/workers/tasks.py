@@ -150,7 +150,26 @@ def processar_ocr_document_task(file_path: str, empresa_id: str):
             "email": ""
         },
         "numero_document": f"DOC-{nom_base}",
-        "tipus_document": "ALBARA"
+        "tipus_document": "ALBARA",
+        "data_document": "2024-01-01",
+        "linies": [
+            {
+                "referencia": "ART-OCR-MAT-01",
+                "nom": "Cable coure 1.5mm2",
+                "quantitat": 100,
+                "preu": 1.25,
+                "descompte_percent": 0.0,
+                "tipus": "MATERIAL"
+            },
+            {
+                "referencia": "BOSCH-GSB-18",
+                "nom": "Taladro Percutor Bosch 18V",
+                "quantitat": 2,
+                "preu": 180.50,
+                "descompte_percent": 15.0,
+                "tipus": "EINA"
+            }
+        ]
     }
 
 @celery_app.task(name="app.workers.tasks.transcriure_audio_task", queue="queue_media")
