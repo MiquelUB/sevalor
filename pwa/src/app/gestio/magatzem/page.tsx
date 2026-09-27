@@ -37,6 +37,7 @@ interface Article {
 
 export default function GestioMagatzemPage() {
   const { rolActiu } = useGestio();
+  const [vertical, setVertical] = useState<string>("SEVALOR");
   const [articles, setArticles] = useState<Article[]>([]);
   const [eines, setEines] = useState<any[]>([]);
   const [activeTab, setActiveTab] = useState<"MATERIALS" | "EINES">("MATERIALS");
@@ -993,13 +994,42 @@ export default function GestioMagatzemPage() {
                         onChange={(e) => setArticleEditant({ ...articleEditant, familia: e.target.value })}
                         className="w-full p-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs"
                       >
-                        <option value="TUBERIA">Canonades i Tubs</option>
-                        <option value="VALVULERIA">Valvuleria</option>
-                        <option value="ACCESSORIS">Accessoris</option>
-                        <option value="CABLES">Cables i Elèctric</option>
-                        <option value="GENERAL">General</option>
+                      {vertical === "ELECTRICPRO" ? (
+                        <>
+                          <option value="CABLES">Cables i Conducció</option>
+                          <option value="QUADRES">Quadres i Proteccions</option>
+                          <option value="ILLUMINACIO">Il·luminació</option>
+                          <option value="MECANISMES">Mecanismes</option>
+                        </>
+                      ) : vertical === "HYDROPRO" ? (
+                        <>
+                          <option value="TUBERIA">Canonades i Tubs</option>
+                          <option value="VALVULERIA">Valvuleria</option>
+                          <option value="SANITARIS">Sanitaris</option>
+                          <option value="AIXETES">Aixetes</option>
+                        </>
+                      ) : vertical === "BUILDINGPRO" ? (
+                        <>
+                          <option value="CIMENT">Ciment i Àrids</option>
+                          <option value="FUSTA">Fusta i Fusteria</option>
+                          <option value="PINTURA">Pintures i Acabats</option>
+                          <option value="AILLAMENTS">Aïllaments</option>
+                        </>
+                      ) : (
+                        <>
+                          <option value="TUBERIA">Canonades i Tubs</option>
+                          <option value="VALVULERIA">Valvuleria</option>
+                          <option value="ACCESSORIS">Accessoris</option>
+                          <option value="CABLES">Cables i Elèctric</option>
+                        </>
+                      )}
+                      <option value="GENERAL">General</option>
                         {/* Preserve existing family if it was custom */}
-                        {!["TUBERIA", "VALVULERIA", "ACCESSORIS", "CABLES", "GENERAL"].includes(articleEditant.familia) && (
+                        {![
+                          "TUBERIA", "VALVULERIA", "ACCESSORIS", "CABLES", "GENERAL",
+                          "QUADRES", "ILLUMINACIO", "MECANISMES", "SANITARIS", "AIXETES",
+                          "CIMENT", "FUSTA", "PINTURA", "AILLAMENTS"
+                        ].includes(articleEditant.familia) && (
                           <option value={articleEditant.familia}>{articleEditant.familia}</option>
                         )}
                       </select>

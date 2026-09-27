@@ -270,6 +270,7 @@ async def obtenir_dades_empresa(
         "id": str(empresa.id),
         "nom": empresa.nom,
         "nif": empresa.nif,
+        "vertical": empresa.vertical, 
         "adreca": empresa.adreca,
         "subdomini": empresa.subdomini,
         "primari_hsl": empresa.primari_hsl,
