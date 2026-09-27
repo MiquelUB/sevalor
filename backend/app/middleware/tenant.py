@@ -56,6 +56,13 @@ class TenantMiddleware(BaseHTTPMiddleware):
                 if len(parts) >= 3 and parts[0] not in ("www", "api", "app", "localhost"):
                     request.state.subdomain = parts[0]
 
+        if empresa_id:
+            import uuid
+            try:
+                empresa_id = str(uuid.UUID(str(empresa_id)))
+            except Exception:
+                empresa_id = None
+
         request.state.empresa_id = empresa_id
         request.state.is_superadmin = is_superadmin
 
