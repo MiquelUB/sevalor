@@ -57,6 +57,9 @@ export default function GestioMagatzemPage() {
     nom: "",
     numero_serie: "",
     model_eina: "",
+    data_fi_garantia: "",
+    observacions: "",
+    incidencies: "",
     unitat_mesura: "UNITAT",
     familia: "TUBERIA",
     estoc_optim: 10,
@@ -204,6 +207,9 @@ export default function GestioMagatzemPage() {
             nom: nouArticle.nom,
             numero_serie: nouArticle.numero_serie,
             model: nouArticle.model_eina,
+            data_fi_garantia: nouArticle.data_fi_garantia || null,
+            observacions: nouArticle.observacions || null,
+            incidencies: nouArticle.incidencies || null,
           }),
         });
       } else {
@@ -231,6 +237,9 @@ export default function GestioMagatzemPage() {
         nom: "",
         numero_serie: "",
         model_eina: "",
+        data_fi_garantia: "",
+        observacions: "",
+        incidencies: "",
         unitat_mesura: "UNITAT",
         familia: "TUBERIA",
         estoc_optim: 10,
@@ -656,6 +665,46 @@ export default function GestioMagatzemPage() {
                   </div>
                 )}
               </div>
+
+              {nouArticle.tipus_creacio === "EINA" && (
+                <div className="grid grid-cols-1 gap-3 border-t border-slate-200 dark:border-slate-800 pt-3">
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-400 mb-1">
+                      Data Fi Garantia Fabricant
+                    </label>
+                    <input
+                      type="date"
+                      value={nouArticle.data_fi_garantia}
+                      onChange={(e) => setNouArticle({ ...nouArticle, data_fi_garantia: e.target.value })}
+                      className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-medium"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-400 mb-1">
+                      Observacions (Ex: Reparacions realitzades)
+                    </label>
+                    <textarea
+                      rows={2}
+                      placeholder="Historial de reparacions, canvis de filtre, etc."
+                      value={nouArticle.observacions}
+                      onChange={(e) => setNouArticle({ ...nouArticle, observacions: e.target.value })}
+                      className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-medium"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-400 mb-1">
+                      Incidències Especials
+                    </label>
+                    <textarea
+                      rows={2}
+                      placeholder="Peces que fallen sovint, cops, etc."
+                      value={nouArticle.incidencies}
+                      onChange={(e) => setNouArticle({ ...nouArticle, incidencies: e.target.value })}
+                      className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-medium"
+                    />
+                  </div>
+                </div>
+              )}
 
               {nouArticle.tipus_creacio === "MATERIAL" && (
                 <div className="grid grid-cols-3 gap-3">

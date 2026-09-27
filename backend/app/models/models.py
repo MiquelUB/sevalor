@@ -303,6 +303,9 @@ class EinaCustodia(Base):
     magatzem_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("magatzems.id", ondelete="SET NULL"))
     data_ultima_calibracio: Mapped[Optional[date]] = mapped_column(Date)
     data_propera_calibracio: Mapped[Optional[date]] = mapped_column(Date)
+    data_fi_garantia: Mapped[Optional[date]] = mapped_column(Date)
+    observacions: Mapped[Optional[str]] = mapped_column(Text)
+    incidencies: Mapped[Optional[str]] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), server_default=text('now()'))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), server_default=text('now()'))
 

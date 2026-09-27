@@ -196,6 +196,9 @@ class EinaCreate(BaseModel):
     nom: str = Field(..., max_length=150)
     model: Optional[str] = None
     numero_serie: str = Field(..., max_length=100)
+    data_fi_garantia: Optional[date] = None
+    observacions: Optional[str] = None
+    incidencies: Optional[str] = None
 
 class EinaResponse(EinaCreate):
     id: uuid.UUID
@@ -218,6 +221,9 @@ async def crear_eina(
         nom=payload.nom,
         model=payload.model,
         numero_serie=payload.numero_serie,
+        data_fi_garantia=payload.data_fi_garantia,
+        observacions=payload.observacions,
+        incidencies=payload.incidencies,
         estat="DISPONIBLE"
     )
     db.add(nova_eina)
