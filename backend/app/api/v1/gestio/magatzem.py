@@ -127,13 +127,18 @@ async def llistar_articles(
         for article_id, qt in res_estocs.all():
             estocs_map[article_id] = float(qt or 0.0)
 
-    articles_resp = []
     for art in articles:
-        art_dict = {c.name: getattr(art, c.name) for c in art.__table__.columns}
-        art_dict["estoc_real"] = estocs_map.get(art.id, 0.0)
-        articles_resp.append(art_dict)
+        # Assignem estoc_real dinàmicament a l'objecte ORM
+        setattr(art, "estoc_real", estocs_map.get(art.id, 0.0))
+        
+        # Protecció per a camps que poden ser NULL a la BD per errors antics
+        if getattr(art, "estoc_optim") is None: setattr(art, "estoc_optim", 0.0)
+        if getattr(art, "estoc_minim") is None: setattr(art, "estoc_minim", 0.0)
+        if getattr(art, "preu_cost") is None: setattr(art, "preu_cost", 0.0)
+        if getattr(art, "preu_venda") is None: setattr(art, "preu_venda", 0.0)
+        if getattr(art, "familia") is None: setattr(art, "familia", "GENERAL")
 
-    return articles_resp
+    return articles
 
 @router.post("/articles", response_model=ArticleResponse, status_code=status.HTTP_201_CREATED)
 async def alta_article(

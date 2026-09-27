@@ -41,11 +41,11 @@ export function CrearOTModal({ onClose, onSuccess }: CrearOTModalProps) {
   useEffect(() => {
     // Load external data
     Promise.all([
-      apiFetch("/api/v1/gestio/clients"),
-      apiFetch("/api/v1/gestio/operaris"),
-      apiFetch("/api/v1/gestio/flota"),
-      apiFetch("/api/v1/gestio/planols"),
-      apiFetch("/api/v1/gestio/magatzem/articles")
+      apiFetch("/gestio/clients"),
+      apiFetch("/gestio/operaris"),
+      apiFetch("/gestio/flota"),
+      apiFetch("/gestio/planols"),
+      apiFetch("/gestio/magatzem/articles")
     ]).then(([clientsRes, operarisRes, flotaRes, planolsRes, articlesRes]) => {
       if (clientsRes.ok) clientsRes.json().then((data: any) => setClients(data.items || data || []));
       if (operarisRes.ok) operarisRes.json().then((data: any) => setOperaris(data || []));
@@ -58,7 +58,7 @@ export function CrearOTModal({ onClose, onSuccess }: CrearOTModalProps) {
   // When client changes, fetch fitxa360 to get finques
   useEffect(() => {
     if (formData.client_id) {
-      apiFetch(`/api/v1/gestio/clients/${formData.client_id}/fitxa360`)
+      apiFetch(`/gestio/clients/${formData.client_id}/fitxa360`)
         .then(res => res.json())
         .then(data => {
           setFinques(data.finques || []);
