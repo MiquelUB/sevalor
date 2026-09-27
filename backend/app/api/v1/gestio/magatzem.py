@@ -808,3 +808,17 @@ async def modificar_article(
     art_dict["estoc_real"] = float(estoc_real)
 
     return art_dict
+
+@router.get("/eines", response_model=List[EinaResponse])
+async def llistar_eines(
+    request: Request,
+    db: AsyncSession = Depends(get_db_with_tenant_context)
+):
+    empresa_id = getattr(request.state, "empresa_id", None) or request.headers.get("X-Empresa-ID")
+    if not empresa_id or empresa_id in ('undefined', 'null', 'None'):
+        raise HTTPException(status_code=401, detail="No identificat")
+    emp_uuid = valida_uuid(empresa_id)
+
+    stmt = select(EinaCustodia).where(EinaCustodia.empresa_id == emp_uuid)
+    res = await db.execute(stmt)
+    return res.scalars().all()
