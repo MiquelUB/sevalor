@@ -654,7 +654,8 @@ async def cridar_lm_studio_amb_tools(
     vertical: str,
     db: AsyncSession,
     empresa_id: uuid.UUID,
-    imatge_b64: Optional[str] = None
+    imatge_b64: Optional[str] = None,
+    agent_prompt_system: Optional[str] = None
 ) -> Tuple[Optional[str], Optional[str], Optional[dict], Optional[dict]]:
     """
     Executa el cicle d'Agent de Tool Calling amb LM Studio (OpenAI-compatible).
