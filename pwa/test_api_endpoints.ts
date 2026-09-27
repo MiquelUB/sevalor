@@ -1,7 +1,7 @@
 import assert from "node:assert";
 
 process.env.NEXT_PUBLIC_API_URL = "http://127.0.0.1:8015/api/v1";
-process.env.NODE_ENV = "test"; 
+(process.env as any).NODE_ENV = "test"; 
 
 const lsStore: Record<string, string> = {};
 global.localStorage = {
