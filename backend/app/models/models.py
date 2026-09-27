@@ -196,6 +196,8 @@ class Article(Base):
     es_lot_caducable: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text('false'))
     parent_material_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("articles.id", ondelete="SET NULL"))
     preu_cost: Mapped[float] = mapped_column(Numeric(10, 2), default=0.0, server_default=text('0'))
+    descompte_proveidor: Mapped[float] = mapped_column(Numeric(10, 2), default=0.0, server_default=text('0'))
+    marge_guanys: Mapped[float] = mapped_column(Numeric(10, 2), default=0.0, server_default=text('0'))
     preu_venda: Mapped[float] = mapped_column(Numeric(10, 2), default=0.0, server_default=text('0'))
     actiu: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text('true'))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), server_default=text('now()'))

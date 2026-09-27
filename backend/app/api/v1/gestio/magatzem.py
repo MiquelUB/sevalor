@@ -63,6 +63,8 @@ class ArticleCreate(BaseModel):
     estoc_minim: float = Field(0.0)
     es_lot_caducable: bool = Field(False)
     preu_cost: float = Field(0.0)
+    descompte_proveidor: float = Field(0.0)
+    marge_guanys: float = Field(0.0)
     preu_venda: float = Field(0.0)
 
 class ArticleResponse(ArticleCreate):
@@ -142,6 +144,8 @@ async def llistar_articles(
         if getattr(art, "estoc_minim") is None: setattr(art, "estoc_minim", 0.0)
         if getattr(art, "preu_cost") is None: setattr(art, "preu_cost", 0.0)
         if getattr(art, "preu_venda") is None: setattr(art, "preu_venda", 0.0)
+        if getattr(art, "descompte_proveidor", None) is None: setattr(art, "descompte_proveidor", 0.0)
+        if getattr(art, "marge_guanys", None) is None: setattr(art, "marge_guanys", 0.0)
         if getattr(art, "familia") is None: setattr(art, "familia", "GENERAL")
         if getattr(art, "unitat_mesura") is None: setattr(art, "unitat_mesura", "UNITAT")
         if getattr(art, "es_lot_caducable") is None: setattr(art, "es_lot_caducable", False)
@@ -183,6 +187,44 @@ async def alta_article(
     await db.commit()
 
     return nou_article
+
+from app.models.models import EinaCustodia
+
+class EinaCreate(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    referencia_fabricant: Optional[str] = None
+    nom: str = Field(..., max_length=150)
+    model: Optional[str] = None
+    numero_serie: str = Field(..., max_length=100)
+
+class EinaResponse(EinaCreate):
+    id: uuid.UUID
+    estat: str
+
+@router.post("/eines", response_model=EinaResponse, status_code=status.HTTP_201_CREATED)
+async def crear_eina(
+    request: Request,
+    payload: EinaCreate,
+    db: AsyncSession = Depends(get_db_with_tenant_context)
+):
+    empresa_id = getattr(request.state, "empresa_id", None) or request.headers.get("X-Empresa-ID")
+    if not empresa_id or empresa_id in ('undefined', 'null', 'None'):
+        raise HTTPException(status_code=401, detail="No identificat")
+    emp_uuid = valida_uuid(empresa_id)
+
+    nova_eina = EinaCustodia(
+        empresa_id=emp_uuid,
+        referencia_fabricant=payload.referencia_fabricant,
+        nom=payload.nom,
+        model=payload.model,
+        numero_serie=payload.numero_serie,
+        estat="DISPONIBLE"
+    )
+    db.add(nova_eina)
+    await db.commit()
+    await db.refresh(nova_eina)
+    return nova_eina
+
 
 
 @router.get("/magatzems/{magatzem_id}/estoc", response_model=List[EstocResponse])

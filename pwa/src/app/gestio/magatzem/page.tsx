@@ -52,6 +52,7 @@ export default function GestioMagatzemPage() {
 
   // Formulari nou article
   const [nouArticle, setNouArticle] = useState({
+    tipus_creacio: "MATERIAL", // MATERIAL o EINA
     referencia_inventari: "",
     nom: "",
     unitat_mesura: "UNITAT",
@@ -59,9 +60,20 @@ export default function GestioMagatzemPage() {
     estoc_optim: 10,
     estoc_minim: 2,
     preu_cost: 0,
+    descompte_proveidor: 0,
+    marge_guanys: 0,
     preu_venda: 0,
     es_lot_caducable: false,
   });
+
+  // Efecte per autocalcular el preu de venda
+  useEffect(() => {
+    if (nouArticle.tipus_creacio === "MATERIAL") {
+      const costReal = nouArticle.preu_cost * (1 - (nouArticle.descompte_proveidor / 100));
+      const preuVendaCalculat = costReal * (1 + (nouArticle.marge_guanys / 100));
+      setNouArticle(prev => ({ ...prev, preu_venda: parseFloat(preuVendaCalculat.toFixed(2)) }));
+    }
+  }, [nouArticle.preu_cost, nouArticle.descompte_proveidor, nouArticle.marge_guanys, nouArticle.tipus_creacio]);
 
   const carregarArticles = async () => {
     setLoading(true);
@@ -182,18 +194,37 @@ export default function GestioMagatzemPage() {
     setGuardant(true);
     setError(null);
     try {
-      await apiFetch<Article>("/gestio/magatzem/articles", {
-        method: "POST",
-        body: JSON.stringify({
-          ...nouArticle,
-          estoc_optim: Number(nouArticle.estoc_optim),
-          estoc_minim: Number(nouArticle.estoc_minim),
-          preu_cost: Number(nouArticle.preu_cost),
-          preu_venda: Number(nouArticle.preu_venda),
-        }),
-      });
+      if (nouArticle.tipus_creacio === "EINA") {
+        await apiFetch("/gestio/magatzem/eines", {
+          method: "POST",
+          body: JSON.stringify({
+            referencia_fabricant: nouArticle.referencia_inventari,
+            nom: nouArticle.nom,
+            numero_serie: "AUTO-" + Date.now().toString().slice(-6),
+            model: "General",
+          }),
+        });
+      } else {
+        await apiFetch<Article>("/gestio/magatzem/articles", {
+          method: "POST",
+          body: JSON.stringify({
+            referencia_inventari: nouArticle.referencia_inventari,
+            nom: nouArticle.nom,
+            unitat_mesura: nouArticle.unitat_mesura,
+            familia: nouArticle.familia,
+            es_lot_caducable: nouArticle.es_lot_caducable,
+            estoc_optim: Number(nouArticle.estoc_optim),
+            estoc_minim: Number(nouArticle.estoc_minim),
+            preu_cost: Number(nouArticle.preu_cost),
+            descompte_proveidor: Number(nouArticle.descompte_proveidor),
+            marge_guanys: Number(nouArticle.marge_guanys),
+            preu_venda: Number(nouArticle.preu_venda),
+          }),
+        });
+      }
       setModalNouArticle(false);
       setNouArticle({
+        tipus_creacio: "MATERIAL",
         referencia_inventari: "",
         nom: "",
         unitat_mesura: "UNITAT",
@@ -201,6 +232,8 @@ export default function GestioMagatzemPage() {
         estoc_optim: 10,
         estoc_minim: 2,
         preu_cost: 0,
+        descompte_proveidor: 0,
+        marge_guanys: 0,
         preu_venda: 0,
         es_lot_caducable: false,
       });
@@ -517,6 +550,30 @@ export default function GestioMagatzemPage() {
             </div>
 
             <form onSubmit={handleCrearArticle} className="p-5 space-y-4">
+              <div className="flex gap-4 p-3 bg-slate-50 dark:bg-slate-800 rounded-xl mb-4 border border-slate-200 dark:border-slate-700">
+                <label className="flex items-center gap-2 cursor-pointer text-xs font-bold text-slate-700 dark:text-slate-300">
+                  <input 
+                    type="radio" 
+                    name="tipus" 
+                    value="MATERIAL" 
+                    checked={nouArticle.tipus_creacio === "MATERIAL"}
+                    onChange={(e) => setNouArticle({...nouArticle, tipus_creacio: "MATERIAL"})}
+                    className="w-4 h-4 text-emerald-600"
+                  />
+                  Consumible (Material)
+                </label>
+                <label className="flex items-center gap-2 cursor-pointer text-xs font-bold text-slate-700 dark:text-slate-300">
+                  <input 
+                    type="radio" 
+                    name="tipus" 
+                    value="EINA" 
+                    checked={nouArticle.tipus_creacio === "EINA"}
+                    onChange={(e) => setNouArticle({...nouArticle, tipus_creacio: "EINA"})}
+                    className="w-4 h-4 text-emerald-600"
+                  />
+                  Eina de Custòdia (Màquina)
+                </label>
+              </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-400 mb-1">
@@ -563,11 +620,12 @@ export default function GestioMagatzemPage() {
                 />
               </div>
 
-              <div className="grid grid-cols-3 gap-3">
-                <div>
-                  <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-400 mb-1">
-                    Unitat Mesura *
-                  </label>
+              {nouArticle.tipus_creacio === "MATERIAL" && (
+                <div className="grid grid-cols-3 gap-3">
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-400 mb-1">
+                      Unitat Mesura *
+                    </label>
                   <select
                     value={nouArticle.unitat_mesura}
                     onChange={(e) => setNouArticle({ ...nouArticle, unitat_mesura: e.target.value })}
@@ -608,35 +666,55 @@ export default function GestioMagatzemPage() {
                   />
                 </div>
               </div>
+              )}
 
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-400 mb-1">
-                    Preu Cost (€)
-                  </label>
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    value={nouArticle.preu_cost}
-                    onChange={(e) => setNouArticle({ ...nouArticle, preu_cost: Number(e.target.value) })}
-                    className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-mono"
-                  />
-                </div>
-                <div>
-                  <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-400 mb-1">
-                    Preu Venda (€)
-                  </label>
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    value={nouArticle.preu_venda}
-                    onChange={(e) => setNouArticle({ ...nouArticle, preu_venda: Number(e.target.value) })}
-                    className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-mono"
-                  />
-                </div>
-              </div>
+              {nouArticle.tipus_creacio === "MATERIAL" && (
+                <>
+                  <div className="grid grid-cols-3 gap-3">
+                    <div>
+                      <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-400 mb-1">
+                        Preu Tarifa (€)
+                      </label>
+                      <input
+                        type="number"
+                        step="0.01"
+                        required
+                        value={nouArticle.preu_cost}
+                        onChange={(e) => setNouArticle({ ...nouArticle, preu_cost: parseFloat(e.target.value) || 0 })}
+                        className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-mono"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-400 mb-1">
+                        Descompte Prov. (%)
+                      </label>
+                      <input
+                        type="number"
+                        step="0.01"
+                        value={nouArticle.descompte_proveidor}
+                        onChange={(e) => setNouArticle({ ...nouArticle, descompte_proveidor: parseFloat(e.target.value) || 0 })}
+                        className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-mono"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-400 mb-1">
+                        Marge Guany (%)
+                      </label>
+                      <input
+                        type="number"
+                        step="0.01"
+                        value={nouArticle.marge_guanys}
+                        onChange={(e) => setNouArticle({ ...nouArticle, marge_guanys: parseFloat(e.target.value) || 0 })}
+                        className="w-full px-3 py-2 rounded-xl border border-emerald-300 bg-emerald-50 text-xs font-bold font-mono"
+                      />
+                    </div>
+                  </div>
+                  <div className="bg-slate-100 dark:bg-slate-800/60 p-3 rounded-xl border border-slate-200 dark:border-slate-700 flex justify-between items-center">
+                    <span className="text-xs font-bold text-slate-600 dark:text-slate-400">Preu Venda (Autocalculat)</span>
+                    <span className="text-lg font-black text-emerald-600 font-mono">{nouArticle.preu_venda} €</span>
+                  </div>
+                </>
+              )}
 
               <div className="pt-3 border-t border-slate-200 dark:border-slate-800 flex items-center justify-end gap-2">
                 <button
