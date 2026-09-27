@@ -52,6 +52,10 @@ async def llistar_proveidors(
     empresa_id = request.state.empresa_id
     if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401, detail="No identificat")
+    try:
+        parsed_empresa_id = uuid.UUID(str(empresa_id))
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"UUID invalid: {empresa_id}")
 
     stmt = select(Proveidor)
 
@@ -100,6 +104,10 @@ async def alta_proveidor(
     empresa_id = request.state.empresa_id
     if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401, detail="No identificat")
+    try:
+        parsed_empresa_id = uuid.UUID(str(empresa_id))
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"UUID invalid: {empresa_id}")
 
     stmt_nif = select(Proveidor).where(Proveidor.nif == proveidor.nif)
     result_nif = await db.execute(stmt_nif)
@@ -112,7 +120,7 @@ async def alta_proveidor(
         raise HTTPException(status_code=400, detail="El codi ja es troba registrat")
 
     nou_proveidor = Proveidor(
-        empresa_id=uuid.UUID(empresa_id),
+        empresa_id=parsed_empresa_id,
         codi=proveidor.codi,
         rao_social=proveidor.rao_social,
         nif=proveidor.nif,
@@ -145,7 +153,7 @@ async def obtenir_iban_proveidor(
         raise HTTPException(status_code=401)
 
     res = await db.execute(select(Proveidor).where(
-        Proveidor.id == proveidor_id, Proveidor.empresa_id == uuid.UUID(empresa_id)
+        Proveidor.id == proveidor_id, Proveidor.empresa_id == parsed_empresa_id
     ))
     prov = res.scalars().first()
     if not prov:
@@ -169,7 +177,7 @@ async def canviar_iban_proveidor(
         raise HTTPException(status_code=401)
 
     res = await db.execute(select(Proveidor).where(
-        Proveidor.id == proveidor_id, Proveidor.empresa_id == uuid.UUID(empresa_id)
+        Proveidor.id == proveidor_id, Proveidor.empresa_id == parsed_empresa_id
     ))
     prov = res.scalars().first()
     if not prov:
@@ -186,7 +194,7 @@ async def canviar_iban_proveidor(
     # validar l'existència de l'usuari o acceptar només usuaris registrats.
     await db.execute(
         RegistreEsdevenimentsSIF.__table__.insert().values(
-            empresa_id=uuid.UUID(empresa_id),
+            empresa_id=parsed_empresa_id,
             codi_esdeveniment="EV-05",
             usuari_id=None,
             descripcio=f"Canvi d'IBAN del proveïdor {prov.rao_social}",
@@ -212,6 +220,10 @@ async def editar_proveidor(
     empresa_id = request.state.empresa_id
     if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401, detail="No identificat")
+    try:
+        parsed_empresa_id = uuid.UUID(str(empresa_id))
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"UUID invalid: {empresa_id}")
 
     stmt = select(Proveidor).where(Proveidor.id == proveidor_id)
     result = await db.execute(stmt)

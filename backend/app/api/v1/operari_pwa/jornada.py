@@ -35,6 +35,10 @@ async def iniciar_jornada(
     empresa_id = request.state.empresa_id
     if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401, detail="No identificat")
+    try:
+        parsed_empresa_id = uuid.UUID(str(empresa_id))
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"UUID invalid: {empresa_id}")
 
     # L'usuari ha de ser extret del token JWT (el Subject)
     import jwt
@@ -48,7 +52,7 @@ async def iniciar_jornada(
 
     # Validar si ja té una jornada en curs
     stmt = select(RegistreJornadaLaboral).where(
-        RegistreJornadaLaboral.empresa_id == uuid.UUID(empresa_id),
+        RegistreJornadaLaboral.empresa_id == parsed_empresa_id,
         RegistreJornadaLaboral.usuari_id == uuid.UUID(usuari_id),
         RegistreJornadaLaboral.estat == "EN_CURS"
     )
@@ -57,7 +61,7 @@ async def iniciar_jornada(
         raise HTTPException(status_code=400, detail="Ja hi ha una jornada en curs")
 
     jornada = RegistreJornadaLaboral(
-        empresa_id=uuid.UUID(empresa_id),
+        empresa_id=parsed_empresa_id,
         usuari_id=uuid.UUID(usuari_id),
         geolocalitzacio_inici=payload.geolocalitzacio,
         estat="EN_CURS"
@@ -88,7 +92,7 @@ async def get_jornada_activa(
 
 
     stmt = select(RegistreJornadaLaboral).where(
-        RegistreJornadaLaboral.empresa_id == uuid.UUID(empresa_id),
+        RegistreJornadaLaboral.empresa_id == parsed_empresa_id,
         RegistreJornadaLaboral.usuari_id == uuid.UUID(usuari_id),
         RegistreJornadaLaboral.estat == "EN_CURS"
     )
@@ -115,7 +119,7 @@ async def finalitzar_jornada(
 
     stmt = select(RegistreJornadaLaboral).where(
         RegistreJornadaLaboral.id == jornada_id,
-        RegistreJornadaLaboral.empresa_id == uuid.UUID(empresa_id)
+        RegistreJornadaLaboral.empresa_id == parsed_empresa_id
     )
     result = await db.execute(stmt)
     jornada = result.scalars().first()
@@ -161,7 +165,7 @@ async def assignar_vehicle_a_jornada(
 
     # Obtenir vehicle
     from app.models.models import Usuari, Vehicle
-    v_res = await db.execute(select(Vehicle).where(Vehicle.id == payload.vehicle_id, Vehicle.empresa_id == uuid.UUID(empresa_id)))
+    v_res = await db.execute(select(Vehicle).where(Vehicle.id == payload.vehicle_id, Vehicle.empresa_id == parsed_empresa_id))
     vehicle = v_res.scalars().first()
     if not vehicle:
         raise HTTPException(status_code=404, detail="Vehicle no trobat")

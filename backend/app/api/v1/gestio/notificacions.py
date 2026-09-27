@@ -36,7 +36,7 @@ async def llistar_converses(
     empresa_id = request.state.empresa_id
     if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401)
-    stmt = select(ConversaNotificacio).where(ConversaNotificacio.empresa_id == uuid.UUID(empresa_id)).order_by(ConversaNotificacio.updated_at.desc())
+    stmt = select(ConversaNotificacio).where(ConversaNotificacio.empresa_id == parsed_empresa_id).order_by(ConversaNotificacio.updated_at.desc())
     result = await db.execute(stmt)
     return result.scalars().all()
 
@@ -49,11 +49,11 @@ async def crear_conversa(
     empresa_id = request.state.empresa_id
     if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401)
-    stmt_c = select(Client).where(Client.id == payload.client_id, Client.empresa_id == uuid.UUID(empresa_id))
+    stmt_c = select(Client).where(Client.id == payload.client_id, Client.empresa_id == parsed_empresa_id)
     if not (await db.execute(stmt_c)).scalars().first():
         raise HTTPException(status_code=404, detail="Client no trobat")
     nova_conversa = ConversaNotificacio(
-        empresa_id=uuid.UUID(empresa_id), client_id=payload.client_id,
+        empresa_id=parsed_empresa_id, client_id=payload.client_id,
         ordre_treball_id=payload.ordre_treball_id, titol=payload.titol, estat="BLAU_OBERT"
     )
     db.add(nova_conversa)
@@ -84,7 +84,7 @@ async def llistar_missatges(
         raise HTTPException(status_code=401)
     stmt = select(MissatgeNotificacio).where(
         MissatgeNotificacio.conversa_id == conversa_id,
-        MissatgeNotificacio.empresa_id == uuid.UUID(empresa_id),
+        MissatgeNotificacio.empresa_id == parsed_empresa_id,
     ).order_by(MissatgeNotificacio.created_at.asc())
     result = await db.execute(stmt)
     return result.scalars().all()
@@ -98,13 +98,13 @@ async def crear_missatge(
     if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401)
     conv_res = await db.execute(select(ConversaNotificacio).where(
-        ConversaNotificacio.id == conversa_id, ConversaNotificacio.empresa_id == uuid.UUID(empresa_id),
+        ConversaNotificacio.id == conversa_id, ConversaNotificacio.empresa_id == parsed_empresa_id,
     ))
     conversa = conv_res.scalars().first()
     if not conversa:
         raise HTTPException(status_code=404, detail="Conversa no trobada")
     nou_missatge = MissatgeNotificacio(
-        empresa_id=uuid.UUID(empresa_id), conversa_id=conversa_id,
+        empresa_id=parsed_empresa_id, conversa_id=conversa_id,
         remitent_tipus="OFICINA", contingut_text=payload.contingut_text,
         tipus_esdeveniment=payload.tipus_esdeveniment,
     )
@@ -123,7 +123,7 @@ async def canviar_estat_conversa(
     if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401)
     conv_res = await db.execute(select(ConversaNotificacio).where(
-        ConversaNotificacio.id == conversa_id, ConversaNotificacio.empresa_id == uuid.UUID(empresa_id),
+        ConversaNotificacio.id == conversa_id, ConversaNotificacio.empresa_id == parsed_empresa_id,
     ))
     conversa = conv_res.scalars().first()
     if not conversa:
@@ -145,7 +145,7 @@ async def generar_enllac_factura(
     if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401)
     conv_res = await db.execute(select(ConversaNotificacio).where(
-        ConversaNotificacio.id == conversa_id, ConversaNotificacio.empresa_id == uuid.UUID(empresa_id),
+        ConversaNotificacio.id == conversa_id, ConversaNotificacio.empresa_id == parsed_empresa_id,
     ))
     if not conv_res.scalars().first():
         raise HTTPException(status_code=404, detail="Conversa no trobada")
@@ -175,8 +175,12 @@ async def generar_invitacio_telegram(
     empresa_id = request.headers.get("X-Empresa-ID") or getattr(request.state, "empresa_id", None)
     if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401, detail="No identificat")
+    try:
+        parsed_empresa_id = uuid.UUID(str(empresa_id))
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"UUID invalid: {empresa_id}")
     conv_res = await db.execute(select(ConversaNotificacio).where(
-        ConversaNotificacio.id == conversa_id, ConversaNotificacio.empresa_id == uuid.UUID(empresa_id),
+        ConversaNotificacio.id == conversa_id, ConversaNotificacio.empresa_id == parsed_empresa_id,
     ))
     conversa = conv_res.scalars().first()
     if not conversa:

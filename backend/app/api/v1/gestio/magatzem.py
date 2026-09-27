@@ -99,8 +99,12 @@ async def llistar_articles(
     empresa_id = request.headers.get("X-Empresa-ID") or getattr(request.state, "empresa_id", None)
     if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401, detail="No identificat")
+    try:
+        parsed_empresa_id = uuid.UUID(str(empresa_id))
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"UUID invalid: {empresa_id}")
 
-    stmt = select(Article).where(Article.empresa_id == uuid.UUID(empresa_id))
+    stmt = select(Article).where(Article.empresa_id == parsed_empresa_id)
 
     if q:
         search_term = f"%{q}%"
@@ -155,6 +159,10 @@ async def alta_article(
     empresa_id = request.state.empresa_id
     if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401, detail="No identificat")
+    try:
+        parsed_empresa_id = uuid.UUID(str(empresa_id))
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"UUID invalid: {empresa_id}")
 
     stmt_ref = select(Article).where(Article.referencia_inventari == article.referencia_inventari)
     result_ref = await db.execute(stmt_ref)
@@ -162,7 +170,7 @@ async def alta_article(
         raise HTTPException(status_code=400, detail="La referència ja es troba registrada")
 
     nou_article = Article(
-        empresa_id=uuid.UUID(empresa_id),
+        empresa_id=parsed_empresa_id,
         referencia_inventari=article.referencia_inventari,
         nom=article.nom,
         unitat_mesura=article.unitat_mesura,
@@ -190,9 +198,13 @@ async def llistar_estoc_magatzem(
     empresa_id = request.state.empresa_id
     if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401, detail="No identificat")
+    try:
+        parsed_empresa_id = uuid.UUID(str(empresa_id))
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"UUID invalid: {empresa_id}")
 
     mag_res = await db.execute(select(Magatzem).where(
-        Magatzem.id == magatzem_id, Magatzem.empresa_id == uuid.UUID(empresa_id)
+        Magatzem.id == magatzem_id, Magatzem.empresa_id == parsed_empresa_id
     ))
     if not mag_res.scalars().first():
         raise HTTPException(status_code=404, detail="Magatzem no trobat")
@@ -201,7 +213,7 @@ async def llistar_estoc_magatzem(
         Article, Article.id == EstocMagatzem.article_id
     ).where(
         EstocMagatzem.magatzem_id == magatzem_id,
-        EstocMagatzem.empresa_id == uuid.UUID(empresa_id),
+        EstocMagatzem.empresa_id == parsed_empresa_id,
     )
     res = await db.execute(q)
     resultats = []
@@ -233,17 +245,21 @@ async def registrar_moviment_estoc(
     empresa_id = request.state.empresa_id
     if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401, detail="No identificat")
+    try:
+        parsed_empresa_id = uuid.UUID(str(empresa_id))
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"UUID invalid: {empresa_id}")
 
     # Verificar article pertany a l'empresa
     art_res = await db.execute(select(Article).where(
-        Article.id == payload.article_id, Article.empresa_id == uuid.UUID(empresa_id)
+        Article.id == payload.article_id, Article.empresa_id == parsed_empresa_id
     ))
     if not art_res.scalars().first():
         raise HTTPException(status_code=404, detail="Article no trobat")
 
     # Verificar magatzem de l'empresa
     mag_res = await db.execute(select(Magatzem).where(
-        Magatzem.id == magatzem_id, Magatzem.empresa_id == uuid.UUID(empresa_id)
+        Magatzem.id == magatzem_id, Magatzem.empresa_id == parsed_empresa_id
     ))
     if not mag_res.scalars().first():
         raise HTTPException(status_code=404, detail="Magatzem no trobat")
@@ -251,7 +267,7 @@ async def registrar_moviment_estoc(
     # Cercar estoc existent (amb FOR UPDATE per blocar la fila)
     estoc_res = await db.execute(
         select(EstocMagatzem).where(
-            EstocMagatzem.empresa_id == uuid.UUID(empresa_id),
+            EstocMagatzem.empresa_id == parsed_empresa_id,
             EstocMagatzem.article_id == payload.article_id,
             EstocMagatzem.magatzem_id == magatzem_id,
         ).with_for_update()
@@ -260,7 +276,7 @@ async def registrar_moviment_estoc(
 
     if estoc is None:
         estoc = EstocMagatzem(
-            empresa_id=uuid.UUID(empresa_id),
+            empresa_id=parsed_empresa_id,
             article_id=payload.article_id,
             magatzem_id=magatzem_id,
             quantitat_fisica=0.0,
@@ -345,13 +361,13 @@ async def crear_fulla_picking(
     # Verificar que l'ordre de treball pertany a l'empresa
     ot_res = await db.execute(select(OrdreTreball).where(
         OrdreTreball.id == payload.ordre_treball_id,
-        OrdreTreball.empresa_id == uuid.UUID(empresa_id),
+        OrdreTreball.empresa_id == parsed_empresa_id,
     ))
     if not ot_res.scalars().first():
         raise HTTPException(status_code=404, detail="Ordre de treball no trobada")
 
     fulla = FullaPicking(
-        empresa_id=uuid.UUID(empresa_id),
+        empresa_id=parsed_empresa_id,
         ordre_treball_id=payload.ordre_treball_id,
         vehicle_id=payload.vehicle_id,
         estat_picking="PENDENT",
@@ -382,7 +398,7 @@ async def afegir_linia_picking(
     # Verificar fulla
     fulla_res = await db.execute(select(FullaPicking).where(
         FullaPicking.id == picking_id,
-        FullaPicking.empresa_id == uuid.UUID(empresa_id),
+        FullaPicking.empresa_id == parsed_empresa_id,
     ))
     fulla = fulla_res.scalars().first()
     if not fulla:
@@ -391,7 +407,7 @@ async def afegir_linia_picking(
     # Bloqueig pessimista sobre l'estoc per evitar condicions de carrera
     estoc_res = await db.execute(
         select(EstocMagatzem).where(
-            EstocMagatzem.empresa_id == uuid.UUID(empresa_id),
+            EstocMagatzem.empresa_id == parsed_empresa_id,
             EstocMagatzem.article_id == payload.article_id,
         ).with_for_update()
     )
@@ -418,7 +434,7 @@ async def afegir_linia_picking(
         raise HTTPException(status_code=422, detail="Article sense estoc al magatzem")
 
     linia = LiniaPicking(
-        empresa_id=uuid.UUID(empresa_id),
+        empresa_id=parsed_empresa_id,
         picking_id=picking_id,
         article_id=payload.article_id,
         quantitat_prevista=payload.quantitat_prevista,
@@ -452,7 +468,7 @@ async def confirmar_pick_in(
 
     linia_res = await db.execute(select(LiniaPicking).where(
         LiniaPicking.id == linia_id,
-        LiniaPicking.empresa_id == uuid.UUID(empresa_id),
+        LiniaPicking.empresa_id == parsed_empresa_id,
     ))
     linia = linia_res.scalars().first()
     if not linia:
@@ -482,7 +498,7 @@ async def confirmar_devolucio(
 
     linia_res = await db.execute(select(LiniaPicking).where(
         LiniaPicking.id == linia_id,
-        LiniaPicking.empresa_id == uuid.UUID(empresa_id),
+        LiniaPicking.empresa_id == parsed_empresa_id,
     ))
     linia = linia_res.scalars().first()
     if not linia:
@@ -494,7 +510,7 @@ async def confirmar_devolucio(
     # Reintegrar els sobrants a l'estoc físic (restar la reserva virtual)
     estoc_res = await db.execute(
         select(EstocMagatzem).where(
-            EstocMagatzem.empresa_id == uuid.UUID(empresa_id),
+            EstocMagatzem.empresa_id == parsed_empresa_id,
             EstocMagatzem.article_id == linia.article_id,
         ).with_for_update()
     )
@@ -546,7 +562,7 @@ async def confirmar_document(
     payload: ConfirmarDocumentRequest,
     db: AsyncSession = Depends(get_db_with_tenant_context)
 ):
-    empresa_id = uuid.UUID(request.state.empresa_id)
+    empresa_id = parsed_empresa_id
 
     # 1. Buscar o crear Proveïdor
     stmt_prov = select(Proveidor).where(Proveidor.nif == payload.proveidor.nif)
@@ -726,6 +742,10 @@ async def modificar_article(
     empresa_id = request.state.empresa_id
     if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401, detail="No identificat")
+    try:
+        parsed_empresa_id = uuid.UUID(str(empresa_id))
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"UUID invalid: {empresa_id}")
 
     stmt = select(Article).where(Article.id == article_id)
     result = await db.execute(stmt)

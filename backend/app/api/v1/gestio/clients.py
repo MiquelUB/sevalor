@@ -61,8 +61,12 @@ async def llistar_clients(
     empresa_id = request.state.empresa_id
     if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401, detail="No identificat")
+    try:
+        parsed_empresa_id = uuid.UUID(str(empresa_id))
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"UUID invalid: {empresa_id}")
 
-    stmt = select(Client).where(Client.empresa_id == uuid.UUID(empresa_id))
+    stmt = select(Client).where(Client.empresa_id == parsed_empresa_id)
 
     if q:
         search_term = f"%{q}%"
@@ -89,19 +93,23 @@ async def alta_client(
     empresa_id = request.state.empresa_id
     if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401, detail="No identificat")
+    try:
+        parsed_empresa_id = uuid.UUID(str(empresa_id))
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"UUID invalid: {empresa_id}")
 
-    stmt_nif = select(Client).where(Client.empresa_id == uuid.UUID(empresa_id), Client.nif == client.nif)
+    stmt_nif = select(Client).where(Client.empresa_id == parsed_empresa_id, Client.nif == client.nif)
     result_nif = await db.execute(stmt_nif)
     if result_nif.scalars().first():
         raise HTTPException(status_code=400, detail="El NIF/CIF ja es troba registrat en el sistema")
 
-    stmt_codi = select(Client).where(Client.empresa_id == uuid.UUID(empresa_id), Client.codi == client.codi)
+    stmt_codi = select(Client).where(Client.empresa_id == parsed_empresa_id, Client.codi == client.codi)
     result_codi = await db.execute(stmt_codi)
     if result_codi.scalars().first():
         raise HTTPException(status_code=400, detail="El codi ja es troba registrat en el sistema")
 
     nou_client = Client(
-        empresa_id=uuid.UUID(empresa_id),
+        empresa_id=parsed_empresa_id,
         codi=client.codi,
         rao_social=client.rao_social,
         nif=client.nif,
@@ -131,8 +139,12 @@ async def obtenir_iban_client(
     empresa_id = request.headers.get("X-Empresa-ID") or getattr(request.state, "empresa_id", None)
     if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401, detail="No identificat")
+    try:
+        parsed_empresa_id = uuid.UUID(str(empresa_id))
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"UUID invalid: {empresa_id}")
     res = await db.execute(select(Client).where(
-        Client.id == client_id, Client.empresa_id == uuid.UUID(empresa_id)
+        Client.id == client_id, Client.empresa_id == parsed_empresa_id
     ))
     client = res.scalars().first()
     if not client:
@@ -150,8 +162,12 @@ async def canviar_iban_client(
     empresa_id = request.headers.get("X-Empresa-ID") or getattr(request.state, "empresa_id", None)
     if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401, detail="No identificat")
+    try:
+        parsed_empresa_id = uuid.UUID(str(empresa_id))
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"UUID invalid: {empresa_id}")
     res = await db.execute(select(Client).where(
-        Client.id == client_id, Client.empresa_id == uuid.UUID(empresa_id)
+        Client.id == client_id, Client.empresa_id == parsed_empresa_id
     ))
     client = res.scalars().first()
     if not client:
@@ -236,8 +252,12 @@ async def obtenir_fitxa_360_client(
     empresa_id = request.headers.get("X-Empresa-ID") or getattr(request.state, "empresa_id", None)
     if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401, detail="No identificat")
+    try:
+        parsed_empresa_id = uuid.UUID(str(empresa_id))
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"UUID invalid: {empresa_id}")
 
-    empresa_uuid = uuid.UUID(empresa_id)
+    empresa_uuid = parsed_empresa_id
 
     # 1. Verificar client
     res_client = await db.execute(

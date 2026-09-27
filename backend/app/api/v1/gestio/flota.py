@@ -44,8 +44,12 @@ async def llistar_flota(
     empresa_id = request.state.empresa_id
     if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401, detail="No identificat")
+    try:
+        parsed_empresa_id = uuid.UUID(str(empresa_id))
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"UUID invalid: {empresa_id}")
 
-    stmt = select(Vehicle).where(Vehicle.empresa_id == uuid.UUID(empresa_id))
+    stmt = select(Vehicle).where(Vehicle.empresa_id == parsed_empresa_id)
 
     if q:
         search_term = f"%{q}%"
@@ -73,14 +77,18 @@ async def alta_vehicle(
     empresa_id = request.state.empresa_id
     if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401, detail="No identificat")
+    try:
+        parsed_empresa_id = uuid.UUID(str(empresa_id))
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"UUID invalid: {empresa_id}")
 
-    stmt_mat = select(Vehicle).where(Vehicle.empresa_id == uuid.UUID(empresa_id), Vehicle.matricula == vehicle.matricula)
+    stmt_mat = select(Vehicle).where(Vehicle.empresa_id == parsed_empresa_id, Vehicle.matricula == vehicle.matricula)
     result_mat = await db.execute(stmt_mat)
     if result_mat.scalars().first():
         raise HTTPException(status_code=400, detail="La matrícula ja es troba registrada")
 
     nou_vehicle = Vehicle(
-        empresa_id=uuid.UUID(empresa_id),
+        empresa_id=parsed_empresa_id,
         matricula=vehicle.matricula,
         marca=vehicle.marca,
         model=vehicle.model,
@@ -140,8 +148,12 @@ async def llistar_vehicles_propers(
     empresa_id = request.headers.get("X-Empresa-ID") or getattr(request.state, "empresa_id", None)
     if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401, detail="No identificat")
+    try:
+        parsed_empresa_id = uuid.UUID(str(empresa_id))
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"UUID invalid: {empresa_id}")
 
-    empresa_uuid = uuid.UUID(empresa_id)
+    empresa_uuid = parsed_empresa_id
 
     # Obtenir vehicles de l'empresa
     stmt_v = select(Vehicle).where(Vehicle.empresa_id == empresa_uuid)
