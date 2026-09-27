@@ -383,3 +383,11 @@ RF-21 / RF-22
 EDGE-05
 	
 Aïllament PostgreSQL RLS per empresa_id; el Superadmin d'infraestructura té prohibit l'accés a dades corporatives.
+
+## 📝 Documentació d'Incidències Resoltess (Security & CORS)
+Durant el desenvolupament de l'Onboarding del Superadmin s'ha detectat un fenomen de seguretat anomenat 'Cross-Context Contamination'. Un token JWT generat pel mòdul `Superadmin` que quedi retingut al `localStorage` pot ser utilitzat accidentalment per obrir la PWA de `Gestió` (al compartir el mateix origin o domini arrel).
+
+Aquesta casuística dispara la matriu de bloquejos automàtics segons la lògica RBAC establerta:
+1. **Veto Corporatiu (HTTP 403)**: El `TenantMiddleware` delega els permisos a `validar_permisos_gestio()`. Aquesta funció fa un tall (short-circuit) si detecta el rol `SUPERADMIN`, retornant `HTTP 403 Forbidden` a l'intentar llegir `/configuracio/empresa`. Això blinda totalment les dades de facturació i paràmetres de l'empresa propietària davant l'Administrador del SaaS.
+2. **Prevenció de Fallback Invàlid (HTTP 401)**: Al denegar l'accés natural, el Frontend pot intentar compensar la falta de context de l'empresa enviant un domini (ex. `sevalor-sevalor-backend`) via la capçalera `X-Empresa-ID`. El backend filtra aquest `X-Empresa-ID` obligant a què sigui un UUID. Si falla la conversió, l'assignació cau a `None` i el sistema rebutja l'accés amb un `HTTP 401 Unauthorized`.
+3. **Bypass del CORS Middleware**: És crític que la funció de casteig de l'UUID (`valida_uuid`) contingui blocs `try/except` que capturin els `ValueErrors` i aixequin formalment un `HTTPException(400)`. D'aquesta manera es permet al framework injectar correctament les capçaleres de CORS per a dominis externs; altrament s'ocasionen errors 500 natius de Python que trenquen el protocol de CORS del navegador.
