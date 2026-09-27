@@ -332,14 +332,12 @@ export default function GestioMagatzemPage() {
           <select
             value={filtreFamilia}
             onChange={(e) => setFiltreFamilia(e.target.value)}
-            className="p-1.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs font-semibold"
+            className="p-1.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs font-semibold uppercase"
           >
-            <option value="TOTS">Totes les Famílies</option>
-            <option value="TUBERIA">Canonades i Tubs</option>
-            <option value="VALVULERIA">Valvuleria</option>
-            <option value="ACCESSORIS">Accessoris</option>
-            <option value="EINES">Eines de Custòdia</option>
-            <option value="GENERAL">General</option>
+            <option value="TOTS">TOTES LES FAMÍLIES</option>
+            {Array.from(new Set(articles.map(a => a.familia))).sort().map(fam => (
+              <option key={fam} value={fam}>{fam}</option>
+            ))}
           </select>
 
           <button
@@ -998,8 +996,12 @@ export default function GestioMagatzemPage() {
                         <option value="TUBERIA">Canonades i Tubs</option>
                         <option value="VALVULERIA">Valvuleria</option>
                         <option value="ACCESSORIS">Accessoris</option>
-                        <option value="EINES">Eines de Custòdia</option>
+                        <option value="CABLES">Cables i Elèctric</option>
                         <option value="GENERAL">General</option>
+                        {/* Preserve existing family if it was custom */}
+                        {!["TUBERIA", "VALVULERIA", "ACCESSORIS", "CABLES", "GENERAL"].includes(articleEditant.familia) && (
+                          <option value={articleEditant.familia}>{articleEditant.familia}</option>
+                        )}
                       </select>
                     </div>
                     <div>
