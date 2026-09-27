@@ -259,7 +259,7 @@ async def obtenir_dades_empresa(
     if empresa_id:
         await set_tenant_context(db, empresa_id)
 
-    res = await db.execute(select(Empresa).where(Empresa.id == parsed_empresa_id))
+    res = await db.execute(select(Empresa).where(Empresa.id == uuid.UUID(empresa_id)))
     empresa = res.scalar_one_or_none()
     if not empresa:
         raise HTTPException(status_code=404, detail="Empresa no trobada")
@@ -301,7 +301,7 @@ async def actualitzar_dades_empresa(
     if empresa_id:
         await set_tenant_context(db, empresa_id)
 
-    res = await db.execute(select(Empresa).where(Empresa.id == parsed_empresa_id))
+    res = await db.execute(select(Empresa).where(Empresa.id == uuid.UUID(empresa_id)))
     empresa = res.scalar_one_or_none()
     if not empresa:
         raise HTTPException(status_code=404, detail="Empresa no trobada")
@@ -333,12 +333,8 @@ async def obtenir_marca_camaleonica(
     empresa_id = claims.get("empresa_id")
     if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401, detail="No identificat")
-    try:
-        parsed_empresa_id = uuid.UUID(str(empresa_id))
-    except ValueError:
-        raise HTTPException(status_code=400, detail=f"UUID invalid: {empresa_id}")
 
-    res = await db.execute(select(Empresa).where(Empresa.id == parsed_empresa_id))
+    res = await db.execute(select(Empresa).where(Empresa.id == uuid.UUID(empresa_id)))
     empresa = res.scalar_one_or_none()
     if not empresa:
         raise HTTPException(status_code=404, detail="Empresa no trobada")
@@ -373,7 +369,7 @@ async def actualitzar_marca_camaleonica(
             detail=f"HTTP 422: El color primari presenta un ràtio de contrast de {contrast_primari:.2f}:1, inferior al mínim 4.5:1 exigit per WCAG 2.1 AA",
         )
 
-    res = await db.execute(select(Empresa).where(Empresa.id == parsed_empresa_id))
+    res = await db.execute(select(Empresa).where(Empresa.id == uuid.UUID(empresa_id)))
     empresa = res.scalar_one_or_none()
     if not empresa:
         raise HTTPException(status_code=404, detail="Empresa no trobada")
@@ -433,7 +429,7 @@ async def analitzar_adn_marca(
         }
 
     # Desar l'esborrany a l'empresa
-    res = await db.execute(select(Empresa).where(Empresa.id == parsed_empresa_id))
+    res = await db.execute(select(Empresa).where(Empresa.id == uuid.UUID(empresa_id)))
     empresa = res.scalar_one_or_none()
     if empresa:
         empresa.adn_paleta_proposta = paleta_proposta
@@ -468,7 +464,7 @@ async def aprovar_paleta_adn(
     # Validació de contrast WCAG
     validar_contrast_wcag(payload.primari_hsl)
 
-    res = await db.execute(select(Empresa).where(Empresa.id == parsed_empresa_id))
+    res = await db.execute(select(Empresa).where(Empresa.id == uuid.UUID(empresa_id)))
     empresa = res.scalar_one_or_none()
     if not empresa:
         raise HTTPException(status_code=404, detail="Empresa no trobada")
@@ -532,7 +528,7 @@ async def pujar_logotip_corporatiu(
         # En entorns d'assaig sense volum /docs muntat, conservem la traça de ruta sobirana
         pass
 
-    res = await db.execute(select(Empresa).where(Empresa.id == parsed_empresa_id))
+    res = await db.execute(select(Empresa).where(Empresa.id == uuid.UUID(empresa_id)))
     empresa = res.scalar_one_or_none()
     if empresa:
         empresa.logotip_path = dest_path
@@ -569,7 +565,7 @@ async def llistar_usuaris_administratius(
         Usuari.rol.in_(["BOSS", "SECRETARIA", "ENGINYER", "COMPTABILITAT"])
     )
     if empresa_id:
-        query = query.where(Usuari.empresa_id == parsed_empresa_id)
+        query = query.where(Usuari.empresa_id == uuid.UUID(empresa_id))
 
     res = await db.execute(query.order_by(Usuari.created_at.desc()))
     usuaris = res.scalars().all()
@@ -619,7 +615,7 @@ async def crear_usuari_administratiu(
     # Comprovar unicitat NIF
     res_nif = await db.execute(
         select(Usuari).where(
-            Usuari.empresa_id == parsed_empresa_id,
+            Usuari.empresa_id == uuid.UUID(empresa_id),
             Usuari.nif == payload.nif.strip().upper(),
         )
     )
@@ -634,7 +630,7 @@ async def crear_usuari_administratiu(
     secret_2fa_provisional = secrets.token_hex(16).upper()
 
     nou_usuari = Usuari(
-        empresa_id=parsed_empresa_id,
+        empresa_id=uuid.UUID(empresa_id),
         nif=payload.nif.strip().upper(),
         nom=payload.nom.strip(),
         cognoms=payload.cognoms.strip(),
@@ -681,7 +677,7 @@ async def actualitzar_usuari_administratiu(
     res = await db.execute(
         select(Usuari).where(
             Usuari.id == usuari_id,
-            Usuari.empresa_id == parsed_empresa_id,
+            Usuari.empresa_id == uuid.UUID(empresa_id),
         )
     )
     usuari = res.scalar_one_or_none()
@@ -692,7 +688,7 @@ async def actualitzar_usuari_administratiu(
     if (payload.rol and payload.rol.upper() != "BOSS" and usuari.rol == "BOSS") or (payload.estat == "INACTIU" and usuari.rol == "BOSS"):
         res_boss = await db.execute(
             select(func.count(Usuari.id)).where(
-                Usuari.empresa_id == parsed_empresa_id,
+                Usuari.empresa_id == uuid.UUID(empresa_id),
                 Usuari.rol == "BOSS",
                 Usuari.estat == "ACTIU",
             )
@@ -741,7 +737,7 @@ async def eliminar_usuari_administratiu(
     res = await db.execute(
         select(Usuari).where(
             Usuari.id == usuari_id,
-            Usuari.empresa_id == parsed_empresa_id,
+            Usuari.empresa_id == uuid.UUID(empresa_id),
         )
     )
     usuari = res.scalar_one_or_none()
@@ -752,7 +748,7 @@ async def eliminar_usuari_administratiu(
     if usuari.rol == "BOSS":
         res_boss = await db.execute(
             select(func.count(Usuari.id)).where(
-                Usuari.empresa_id == parsed_empresa_id,
+                Usuari.empresa_id == uuid.UUID(empresa_id),
                 Usuari.rol == "BOSS",
             )
         )
@@ -789,7 +785,7 @@ async def reiniciar_2fa_usuari(
     res = await db.execute(
         select(Usuari).where(
             Usuari.id == usuari_id,
-            Usuari.empresa_id == parsed_empresa_id,
+            Usuari.empresa_id == uuid.UUID(empresa_id),
         )
     )
     usuari = res.scalar_one_or_none()
@@ -879,7 +875,7 @@ async def llistar_slots_jornada(
         await set_tenant_context(db, empresa_id)
 
     res = await db.execute(
-        select(SlotJornada).where(SlotJornada.empresa_id == parsed_empresa_id).order_by(SlotJornada.nom)
+        select(SlotJornada).where(SlotJornada.empresa_id == uuid.UUID(empresa_id)).order_by(SlotJornada.nom)
     )
     slots = res.scalars().all()
 
@@ -954,7 +950,7 @@ async def crear_slot_jornada(
         return time(int(parts[0]), int(parts[1]))
 
     nou_slot = SlotJornada(
-        empresa_id=parsed_empresa_id,
+        empresa_id=uuid.UUID(empresa_id),
         nom=payload.nom.strip(),
         modalitat=payload.modalitat,
         hora_entrada_teorica=parse_t(payload.hora_entrada_teorica) or time(8, 0),
@@ -993,7 +989,7 @@ async def actualitzar_credencials_telegram(
     if empresa_id:
         await set_tenant_context(db, empresa_id)
 
-    res = await db.execute(select(Empresa).where(Empresa.id == parsed_empresa_id))
+    res = await db.execute(select(Empresa).where(Empresa.id == uuid.UUID(empresa_id)))
     empresa = res.scalar_one_or_none()
     if not empresa:
         raise HTTPException(status_code=404, detail="Empresa no trobada")
@@ -1020,7 +1016,7 @@ async def provar_connexio_telegram(
     if empresa_id:
         await set_tenant_context(db, empresa_id)
 
-    res = await db.execute(select(Empresa).where(Empresa.id == parsed_empresa_id))
+    res = await db.execute(select(Empresa).where(Empresa.id == uuid.UUID(empresa_id)))
     empresa = res.scalar_one_or_none()
     if not empresa or not empresa.telegram_bot_token:
         return {

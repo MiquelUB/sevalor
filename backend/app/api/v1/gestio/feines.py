@@ -43,12 +43,8 @@ async def llistar_feines(
     empresa_id = request.state.empresa_id
     if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401, detail="No identificat")
-    try:
-        parsed_empresa_id = uuid.UUID(str(empresa_id))
-    except ValueError:
-        raise HTTPException(status_code=400, detail=f"UUID invalid: {empresa_id}")
 
-    stmt = select(OrdreTreball).where(OrdreTreball.empresa_id == parsed_empresa_id)
+    stmt = select(OrdreTreball).where(OrdreTreball.empresa_id == uuid.UUID(empresa_id))
 
     if q:
         search_term = f"%{q}%"
@@ -75,13 +71,9 @@ async def alta_feina(
     empresa_id = request.state.empresa_id
     if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401, detail="No identificat")
-    try:
-        parsed_empresa_id = uuid.UUID(str(empresa_id))
-    except ValueError:
-        raise HTTPException(status_code=400, detail=f"UUID invalid: {empresa_id}")
 
     stmt_codi = select(OrdreTreball).where(
-        OrdreTreball.empresa_id == parsed_empresa_id,
+        OrdreTreball.empresa_id == uuid.UUID(empresa_id),
         OrdreTreball.codi == feina.codi
     )
     result_codi = await db.execute(stmt_codi)
@@ -89,7 +81,7 @@ async def alta_feina(
         raise HTTPException(status_code=400, detail="El codi de feina ja es troba registrat")
 
     nova_feina = OrdreTreball(
-        empresa_id=parsed_empresa_id,
+        empresa_id=uuid.UUID(empresa_id),
         codi=feina.codi,
         client_id=feina.client_id,
         finca_id=feina.finca_id,
@@ -128,16 +120,12 @@ async def llistar_feines_mapa(
     empresa_id = request.headers.get("X-Empresa-ID") or getattr(request.state, "empresa_id", None)
     if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401, detail="No identificat")
-    try:
-        parsed_empresa_id = uuid.UUID(str(empresa_id))
-    except ValueError:
-        raise HTTPException(status_code=400, detail=f"UUID invalid: {empresa_id}")
 
     stmt = (
         select(OrdreTreball, Client)
         .outerjoin(Client, OrdreTreball.client_id == Client.id)
         .where(
-            OrdreTreball.empresa_id == parsed_empresa_id,
+            OrdreTreball.empresa_id == uuid.UUID(empresa_id),
             OrdreTreball.estat.in_(["PENDENT", "EN_CURS", "BLOQUEJADA", "EN_OBRA", "EN_RUTA"])
         )
         .order_by(OrdreTreball.created_at.desc())
@@ -197,14 +185,10 @@ async def agendar_feina(
     empresa_id = request.headers.get("X-Empresa-ID") or getattr(request.state, "empresa_id", None)
     if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401, detail="No identificat")
-    try:
-        parsed_empresa_id = uuid.UUID(str(empresa_id))
-    except ValueError:
-        raise HTTPException(status_code=400, detail=f"UUID invalid: {empresa_id}")
 
     stmt = select(OrdreTreball).where(
         OrdreTreball.id == feina_id,
-        OrdreTreball.empresa_id == parsed_empresa_id
+        OrdreTreball.empresa_id == uuid.UUID(empresa_id)
     )
     result = await db.execute(stmt)
     ordre = result.scalars().first()
@@ -250,13 +234,9 @@ async def llistar_intervencions_actives(
     empresa_id = request.state.empresa_id
     if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401, detail="No identificat")
-    try:
-        parsed_empresa_id = uuid.UUID(str(empresa_id))
-    except ValueError:
-        raise HTTPException(status_code=400, detail=f"UUID invalid: {empresa_id}")
 
     stmt = select(OrdreTreball).where(
-        OrdreTreball.empresa_id == parsed_empresa_id,
+        OrdreTreball.empresa_id == uuid.UUID(empresa_id),
         OrdreTreball.estat.in_(["PENDENT", "EN_CURS", "BLOQUEJADA", "EN_OBRA", "EN_RUTA"])
     ).order_by(OrdreTreball.created_at.desc())
 

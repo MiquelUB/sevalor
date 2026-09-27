@@ -74,12 +74,8 @@ async def llistar_planols(
     empresa_id = request.state.empresa_id
     if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401, detail="No identificat")
-    try:
-        parsed_empresa_id = uuid.UUID(str(empresa_id))
-    except ValueError:
-        raise HTTPException(status_code=400, detail=f"UUID invalid: {empresa_id}")
 
-    stmt = select(PlanolBase).where(PlanolBase.empresa_id == parsed_empresa_id)
+    stmt = select(PlanolBase).where(PlanolBase.empresa_id == uuid.UUID(empresa_id))
 
     if carpeta_id:
         stmt = stmt.where(PlanolBase.carpeta_id == carpeta_id)
@@ -109,22 +105,18 @@ async def alta_planol(
     empresa_id = request.state.empresa_id
     if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401, detail="No identificat")
-    try:
-        parsed_empresa_id = uuid.UUID(str(empresa_id))
-    except ValueError:
-        raise HTTPException(status_code=400, detail=f"UUID invalid: {empresa_id}")
 
     # Comprovem que la carpeta existeix i pertany a l'empresa
     stmt_carp = select(CarpetaPlanol).where(
         CarpetaPlanol.id == planol.carpeta_id,
-        CarpetaPlanol.empresa_id == parsed_empresa_id
+        CarpetaPlanol.empresa_id == uuid.UUID(empresa_id)
     )
     res_carp = await db.execute(stmt_carp)
     if not res_carp.scalars().first():
         raise HTTPException(status_code=400, detail="Carpeta no vàlida o no pertany a l'empresa")
 
     stmt_codi = select(PlanolBase).where(
-        PlanolBase.empresa_id == parsed_empresa_id,
+        PlanolBase.empresa_id == uuid.UUID(empresa_id),
         PlanolBase.codi_referencia == planol.codi_referencia
     )
     result_codi = await db.execute(stmt_codi)
@@ -132,7 +124,7 @@ async def alta_planol(
         raise HTTPException(status_code=400, detail="El codi de plànol ja es troba registrat")
 
     nou_planol = PlanolBase(
-        empresa_id=parsed_empresa_id,
+        empresa_id=uuid.UUID(empresa_id),
         titol=planol.titol,
         codi_referencia=planol.codi_referencia,
         carpeta_id=planol.carpeta_id,
@@ -161,13 +153,9 @@ async def llistar_carpetes(
     empresa_id = request.state.empresa_id
     if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401, detail="No identificat")
-    try:
-        parsed_empresa_id = uuid.UUID(str(empresa_id))
-    except ValueError:
-        raise HTTPException(status_code=400, detail=f"UUID invalid: {empresa_id}")
 
     result = await db.execute(
-        select(CarpetaPlanol).where(CarpetaPlanol.empresa_id == parsed_empresa_id).order_by(CarpetaPlanol.nom)
+        select(CarpetaPlanol).where(CarpetaPlanol.empresa_id == uuid.UUID(empresa_id)).order_by(CarpetaPlanol.nom)
     )
     return result.scalars().all()
 
@@ -182,13 +170,9 @@ async def crear_carpeta(
     empresa_id = request.state.empresa_id
     if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401, detail="No identificat")
-    try:
-        parsed_empresa_id = uuid.UUID(str(empresa_id))
-    except ValueError:
-        raise HTTPException(status_code=400, detail=f"UUID invalid: {empresa_id}")
 
     nova = CarpetaPlanol(
-        empresa_id=parsed_empresa_id,
+        empresa_id=uuid.UUID(empresa_id),
         nom=payload.nom,
         categoria=payload.categoria,
         client_id=payload.client_id,
@@ -215,15 +199,11 @@ async def llistar_capes_planol(
     empresa_id = request.state.empresa_id
     if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401, detail="No identificat")
-    try:
-        parsed_empresa_id = uuid.UUID(str(empresa_id))
-    except ValueError:
-        raise HTTPException(status_code=400, detail=f"UUID invalid: {empresa_id}")
 
     result = await db.execute(
         select(CapaVectorial).where(
             CapaVectorial.planol_base_id == planol_id,
-            CapaVectorial.empresa_id == parsed_empresa_id,
+            CapaVectorial.empresa_id == uuid.UUID(empresa_id),
         )
     )
     return result.scalars().all()
@@ -240,21 +220,17 @@ async def crear_capa_planol(
     empresa_id = request.state.empresa_id
     if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401, detail="No identificat")
-    try:
-        parsed_empresa_id = uuid.UUID(str(empresa_id))
-    except ValueError:
-        raise HTTPException(status_code=400, detail=f"UUID invalid: {empresa_id}")
 
     # Verificar que el plànol pertany a l'empresa
     planol_res = await db.execute(select(PlanolBase).where(
         PlanolBase.id == planol_id,
-        PlanolBase.empresa_id == parsed_empresa_id,
+        PlanolBase.empresa_id == uuid.UUID(empresa_id),
     ))
     if not planol_res.scalars().first():
         raise HTTPException(status_code=404, detail="Plànol no trobat")
 
     nova_capa = CapaVectorial(
-        empresa_id=parsed_empresa_id,
+        empresa_id=uuid.UUID(empresa_id),
         planol_base_id=planol_id,
         nom=payload.nom,
         disciplina=payload.disciplina,
@@ -291,15 +267,11 @@ async def editar_capa_planol(
     empresa_id = request.state.empresa_id
     if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401, detail="No identificat")
-    try:
-        parsed_empresa_id = uuid.UUID(str(empresa_id))
-    except ValueError:
-        raise HTTPException(status_code=400, detail=f"UUID invalid: {empresa_id}")
 
     capa_res = await db.execute(select(CapaVectorial).where(
         CapaVectorial.id == capa_id,
         CapaVectorial.planol_base_id == planol_id,
-        CapaVectorial.empresa_id == parsed_empresa_id,
+        CapaVectorial.empresa_id == uuid.UUID(empresa_id),
     ))
     capa = capa_res.scalars().first()
     if not capa:
@@ -337,15 +309,11 @@ async def eliminar_capa_planol(
     empresa_id = request.state.empresa_id
     if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401, detail="No identificat")
-    try:
-        parsed_empresa_id = uuid.UUID(str(empresa_id))
-    except ValueError:
-        raise HTTPException(status_code=400, detail=f"UUID invalid: {empresa_id}")
 
     capa_res = await db.execute(select(CapaVectorial).where(
         CapaVectorial.id == capa_id,
         CapaVectorial.planol_base_id == planol_id,
-        CapaVectorial.empresa_id == parsed_empresa_id,
+        CapaVectorial.empresa_id == uuid.UUID(empresa_id),
     ))
     capa = capa_res.scalars().first()
     if not capa:
@@ -366,7 +334,7 @@ async def exportar_planol_pdf(
     db: AsyncSession = Depends(get_db_with_tenant_context)
 ):
     empresa_id = request.state.empresa_id
-    stmt = select(PlanolBase).where(PlanolBase.id == planol_id, PlanolBase.empresa_id == parsed_empresa_id)
+    stmt = select(PlanolBase).where(PlanolBase.id == planol_id, PlanolBase.empresa_id == uuid.UUID(empresa_id))
     planol = (await db.execute(stmt)).scalars().first()
     if not planol:
         raise HTTPException(status_code=404)
