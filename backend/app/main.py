@@ -75,6 +75,18 @@ app.include_router(operaris_router, prefix=settings.API_V1_STR)
 app.include_router(clients_router, prefix=settings.API_V1_STR)
 app.include_router(proveidors_router, prefix=settings.API_V1_STR)
 app.include_router(flota_router, prefix=settings.API_V1_STR)
+from fastapi.responses import JSONResponse
+from fastapi import Request
+import traceback
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    err = traceback.format_exc()
+    return JSONResponse(
+        status_code=400,
+        content={"detail": f"GLOBAL 500 CAUGHT: {str(exc)}", "traceback": err},
+    )
+
 app.include_router(magatzem_router, prefix=settings.API_V1_STR)
 app.include_router(telegram_webhook_router, prefix=settings.API_V1_STR)
 app.include_router(feines_router, prefix=settings.API_V1_STR)
