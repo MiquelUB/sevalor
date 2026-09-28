@@ -3,6 +3,10 @@ AVÍS D'ALINEACIÓ CONSTITUCIONAL I INTEGRACIÓ ARQUITECTÒNICA: Aquesta especif
 Es prohibeix taxativament l'ús de dades simulades o de prova (Zero Mock Data), partint d'un estat de "Dia 0" real i garantint de forma absoluta la sobirania de dades mitjançant l'emmagatzematge local/sobirà dels expedients de materials, plànols, albarans i inventaris en el servidor Hetzner de Falkenstein (Alemanya - UE), rebutjant completament qualsevol servei de núvol públic extern (com AWS S3) d'acord amb el compliment estricte de la LOPDGDD i el RGPD.
 De conformitat amb la Constitució i el criteri de QA unificat, es fa l'exclusió absoluta de codis QR per a la traçabilitat i transferència d'eines de camp (les quals es gestionen estrictament mitjançant el número de referència únic de fabricant, marca i model). Aquesta decisió de disseny de l'inventari convive en perfecta harmonia amb la permanència del codi QR legal i tributari requerit obligatòriament a totes les factures i albarans de lliurament oficials (Veri*factu).
 --------------------------------------------------------------------------------
+> [!IMPORTANT]
+> **Política Global: Alta Màgica OCR (Zero Data Entry)**
+> Tot el sistema implementa la funcionalitat d'Alta Màgica OCR, permetent l'alta d'entitats (Vehicles, Treballadors, Albarans, Factures, Contractes, Clients, Proveïdors) mitjançant l'anàlisi automatitzat de fotografies o PDFs, sense necessitat de picar les dades manualment.
+
 Context i Objectiu
 El mòdul de Magatzem i Inventari (/gestio/magatzem) és el pulmó operatiu, logístic i de control de materials de CampoPro Suite. Centralitza la supervisió de l'estoc de l'empresa, connectant directament l'entrada de subministraments dels proveïdors (Spec 003) amb la preparació de les furgonetes de camp pel picking matinal, el control d'equips en trànsit, les transferències d'eines entre treballadors i la imputació del material instal·lat a cada obra de client (Spec 001/002/005).
 Aquest mòdul resol els següents àmbits clau d'eficiència i resiliència:
@@ -137,9 +141,6 @@ Històries d'Usuari
 
 --------------------------------------------------------------------------------
 
-> [!IMPORTANT]
-> **Política Global: Alta Màgica OCR (Zero Data Entry)**
-> Tot el sistema implementa la funcionalitat d'Alta Màgica OCR, permetent l'alta d'entitats (Vehicles, Treballadors, Albarans, Factures, Contractes, Clients, Proveïdors) mitjançant l'anàlisi automatitzat de fotografies o PDFs, sense necessitat de picar les dades manualment.
 
 Requisits Funcionals (Notació EARS Estricta)
 Bloque 1: Directori General de Magatzem i Estat "Día 0"
@@ -452,9 +453,6 @@ Fora d'Abast (Out of Scope)
 Criteris de Finalització (Definition of Done) i Matriu de Traçabilitat
 
     Els 52 
-> [!IMPORTANT]
-> **Política Global: Alta Màgica OCR (Zero Data Entry)**
-> Tot el sistema implementa la funcionalitat d'Alta Màgica OCR, permetent l'alta d'entitats (Vehicles, Treballadors, Albarans, Factures, Contractes, Clients, Proveïdors) mitjançant l'anàlisi automatitzat de fotografies o PDFs, sense necessitat de picar les dades manualment.
 
 Requisits Funcionals (RF-01 al RF-52) i els 20 Casos Límit (EDGE-01 al EDGE-20) redactats amb sintaxi formal EARS estricta i sense errors, constituint el contracte de desenvolupament de CampoPro.
     Correspondència del 100% de la spec d'inventari amb una suite de proves d'integració automatitzada en verd, lliure de dades hardcodejades o simulades i amb PostgreSQL RLS actiu sota el tenant real.

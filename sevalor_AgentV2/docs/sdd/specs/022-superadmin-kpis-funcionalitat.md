@@ -2,6 +2,10 @@ Spec 022 — Mòdul de Superadmin: Salut del Sistema, KPIs Funcionals de Platafo
 AVÍS D'ALINEACIÓ CONSTITUCIONAL I INTEGRACIÓ ARQUITECTÒNICA: Aquesta especificació tècnica es regeix de forma innegociable pels principis de la Constitució de CampoPro Suite (v4.0) i s'integra de forma transversal amb el Dashboard i la Torre de Control Geogràfica (Spec 001 i Spec 005), el Mòdul de Magatzem i Inventari (Spec 004), el Mòdul de Flota i Vehicles de la PWA (Spec 015), el Mòdul de Treballadors/Operaris (Spec 008), el Mòdul Contable (Spec 007), i l'especificació d'Aprovisionament de Tenants (Spec 021).
 Es prohibeix taxativament l'ús de dades simulades o de prova (Zero Mock Data), partint d'un estat de "Dia 0" real i garantint de forma absoluta la sobirania de dades mitjançant l'emmagatzematge local/sobirà d'arxius i configs en el servidor Hetzner de Falkenstein (Alemanya - UE), rebutjant completament qualsevol servei de núvol públic extern (com AWS S3) d'acord amb el compliment estricte de la LOPDGDD i el RGPD.
 --------------------------------------------------------------------------------
+> [!IMPORTANT]
+> **Política Global: Alta Màgica OCR (Zero Data Entry)**
+> Tot el sistema implementa la funcionalitat d'Alta Màgica OCR, permetent l'alta d'entitats (Vehicles, Treballadors, Albarans, Factures, Contractes, Clients, Proveïdors) mitjançant l'anàlisi automatitzat de fotografies o PDFs, sense necessitat de picar les dades manualment.
+
 Context i Objectiu
 El mòdul de Superadmin (/superadmin) és la Torre de Control Tècnica, Funcional i de Governança de Plataforma de CampoPro Suite. Concebut sota el patró arquitectònic modern i d'alt rendiment de plataformes de referència com Twenty CRM, actua exclusivament com a quadre de comandament per a l'equip d'enginyeria de sistemes i la propietat del SaaS, amb l'objectiu de monitoritzar la disponibilitat, estabilitat, concurrència i compliment de llicències de tot el parc d'aplicacions.
 Aquest mòdul opera sota tres principis rectors innegociables:
@@ -93,9 +97,6 @@ Valida origen de petició
 ❌ PROHIBIT
 --------------------------------------------------------------------------------
 
-> [!IMPORTANT]
-> **Política Global: Alta Màgica OCR (Zero Data Entry)**
-> Tot el sistema implementa la funcionalitat d'Alta Màgica OCR, permetent l'alta d'entitats (Vehicles, Treballadors, Albarans, Factures, Contractes, Clients, Proveïdors) mitjançant l'anàlisi automatitzat de fotografies o PDFs, sense necessitat de picar les dades manualment.
 
 Requisits Funcionals (EARS Notation)
 Àmbit 1: Panell Central de Salut del Sistema, Disponibilitat i Latències
@@ -175,9 +176,6 @@ La petició es denega de forma fulminant a nivell de middleware/tallafocs abans 
 Criteris de Finalització (Definition of Done) i Matriu de Traçabilitat
 
     Els 20 
-> [!IMPORTANT]
-> **Política Global: Alta Màgica OCR (Zero Data Entry)**
-> Tot el sistema implementa la funcionalitat d'Alta Màgica OCR, permetent l'alta d'entitats (Vehicles, Treballadors, Albarans, Factures, Contractes, Clients, Proveïdors) mitjançant l'anàlisi automatitzat de fotografies o PDFs, sense necessitat de picar les dades manualment.
 
 Requisits Funcionals (RF-01 al RF-20) i els 4 Casos Límit redactats amb sintaxi formal EARS estricta en català i lliures d'ambigüitats.
     Segregació de dades de telemetria: les taules de KPIs d'uptime i traces d'error resideixen estrictament a l'esquema separat superadmin_telemetry de PostgreSQL, independent del tenant.

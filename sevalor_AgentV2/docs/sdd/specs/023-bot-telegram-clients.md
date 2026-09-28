@@ -2,6 +2,10 @@ Spec 023 — Microservei del Bot de Telegram per a Clients Finals (aiogram 3.x) 
 AVÍS D'ALINEACIÓ CONSTITUCIONAL I INTEGRACIÓ ARQUITECTÒNICA: Aquesta especificació tècnica es regeix de forma innegociable pels principis de la Constitució de CampoPro Suite (v4.0) i s'integra de forma transversal amb el Dashboard i la Torre de Control Geogràfica (Spec 001 i Spec 005), el Mòdul de Clients (Spec 002), el Mòdul de Magatzem i Inventari (Spec 004), el Mòdul de Flota (Spec 006), el Mòdul de Treballadors/Operaris (Spec 008), el Mòdul Contable (Spec 007), i el Mòdul de Plànols (Spec 010).
 Es prohibeix taxativament l'ús de dades simulades o de prova (Zero Mock Data), partint d'un estat de "Dia 0" real i garantint de forma absoluta la sobirania de dades mitjançant l'emmagatzematge local/sobirà d'arxius, tiquets, plànols i incidències en el servidor Hetzner de Falkenstein (Alemanya - UE), rebutjant completament qualsevol servei de núvol públic extern (com AWS S3) d'acord amb el compliment estricte de la LOPDGDD i el RGPD.
 --------------------------------------------------------------------------------
+> [!IMPORTANT]
+> **Política Global: Alta Màgica OCR (Zero Data Entry)**
+> Tot el sistema implementa la funcionalitat d'Alta Màgica OCR, permetent l'alta d'entitats (Vehicles, Treballadors, Albarans, Factures, Contractes, Clients, Proveïdors) mitjançant l'anàlisi automatitzat de fotografies o PDFs, sense necessitat de picar les dades manualment.
+
 Context i Objectiu
 El microservei del Bot de Telegram per a Clients Finals (023-bot-telegram-clients.md) constitueix el Canal Bidireccional Asíncron, Interactiu i sense Barreres d'Instal·lació de CampoPro Suite. Implementat com un servei independent en Python 3.12 utilitzant el framework asíncron aiogram 3.x, permet als clients de les empreses instal·ladores rebre avisos d'obra en temps real, aprovar pressupostos d'imprevistos a 1 clic, reportar incidències amb fotografies i consultar informació freqüent mitjançant IA local, sense necessitat de descarregar cap app ni memoritzar usuaris o contrasenyes.
 Aquest microservei s'articula sota els següents principis rectors:
@@ -104,9 +108,6 @@ Serveix PDF des de Hetzner
 Registra descàrrega
 --------------------------------------------------------------------------------
 
-> [!IMPORTANT]
-> **Política Global: Alta Màgica OCR (Zero Data Entry)**
-> Tot el sistema implementa la funcionalitat d'Alta Màgica OCR, permetent l'alta d'entitats (Vehicles, Treballadors, Albarans, Factures, Contractes, Clients, Proveïdors) mitjançant l'anàlisi automatitzat de fotografies o PDFs, sense necessitat de picar les dades manualment.
 
 Requisits Funcionals (EARS Notation)
 Àmbit 1: Arquitectura del Microservei, Webhooks i Aïllament Multi-Inquilí
@@ -190,9 +191,6 @@ El microservei aplica el timeout, demana disculpes indicant que un tècnic respo
 Criteris de Finalització (Definition of Done) i Matriu de Traçabilitat
 
     Els 23 
-> [!IMPORTANT]
-> **Política Global: Alta Màgica OCR (Zero Data Entry)**
-> Tot el sistema implementa la funcionalitat d'Alta Màgica OCR, permetent l'alta d'entitats (Vehicles, Treballadors, Albarans, Factures, Contractes, Clients, Proveïdors) mitjançant l'anàlisi automatitzat de fotografies o PDFs, sense necessitat de picar les dades manualment.
 
 Requisits Funcionals (RF-01 al RF-23) i els 4 Casos Límit redactats amb sintaxi formal EARS estricta en català i lliures d'ambigüitats.
     MIME & Double Extension validation: el programari compta amb proves pytest d'integració simulant atacs de format imatge amb injeccions de fitxers, blocant-los correctament.

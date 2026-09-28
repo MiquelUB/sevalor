@@ -3,6 +3,10 @@ AVÍS D'ALINEACIÓ CONSTITUCIONAL I INTEGRACIÓ ARQUITECTÒNICA: Aquesta especif
 Es prohibeix taxativament l'ús de dades simulades o de prova (Zero Mock Data), partint d'un estat de "Dia 0" real i garantint de forma absoluta la sobirania de dades mitjançant l'emmagatzematge local/sobirà dels tokens de dispositiu, claus d'IndexedDB i dades de camp en el servidor Hetzner de Falkenstein (Alemanya - UE), rebutjant completament qualsevol servei de núvol públic extern (com AWS S3) d'acord amb el compliment estricte de la LOPDGDD i el RGPD.
 De conformitat amb la Constitució i el criteri de QA unificat, es recorda que s'exclou l'ús de codis QR per a la traçabilitat i transferència d'eines de camp (les quals es gestionen i es custodien nominalment pel seu número de referència, marca, model i número de sèrie de fàbrica sota la Spec 004 i Spec 008). Aquesta exclusió tècnica de camp convive en perfecta harmonia amb la permanència del codi QR legal i tributari requerit obligatòriament a totes les factures i albarans de lliurament oficials (Veri*factu) emesos pel mòdul comptable. Per a la seguretat d'accés, s'autoritza de forma exclusiva l'ús de codis QR estàndard de configuració 2FA TOTP (Google Authenticator) durant el procés d'alta o enrolament exclusively per als usuaris d'oficina (Spec 011).
 --------------------------------------------------------------------------------
+> [!IMPORTANT]
+> **Política Global: Alta Màgica OCR (Zero Data Entry)**
+> Tot el sistema implementa la funcionalitat d'Alta Màgica OCR, permetent l'alta d'entitats (Vehicles, Treballadors, Albarans, Factures, Contractes, Clients, Proveïdors) mitjançant l'anàlisi automatitzat de fotografies o PDFs, sense necessitat de picar les dades manualment.
+
 Context i Objectiu
 El mòdul d'Autenticació de la PWA (/operari/login) és la porta d'accés segura, ultraràpida i resilient per als operaris tècnics i caps de colla que treballen en el terreny. Governat pel principi del "Flujo de los 30 segundos", elimina completament la fricció d'haver d'introduir correus electrònics o contrasenyes alfanumèriques complexes en dispositius mòbils de camp (ús amb guants, condicions climàtiques adverses o mobilitat extrema), oferint una experiència basada en un teclat numèric tàctil de gran format (numpad) i un codi PIN secret de 4 dígits.
 Aquest mòdul garanteix:
@@ -110,9 +114,6 @@ Sense accés
 Bloqueja la PWA si passa >5 minuts en segon pla (mantenint cronòmetres actius)
 --------------------------------------------------------------------------------
 
-> [!IMPORTANT]
-> **Política Global: Alta Màgica OCR (Zero Data Entry)**
-> Tot el sistema implementa la funcionalitat d'Alta Màgica OCR, permetent l'alta d'entitats (Vehicles, Treballadors, Albarans, Factures, Contractes, Clients, Proveïdors) mitjançant l'anàlisi automatitzat de fotografies o PDFs, sense necessitat de picar les dades manualment.
 
 Requisits Funcionals (EARS Notation)
 Àmbit 1: Disseny Camaleó, Teclat Numèric de Gran Format i Enrolament de Dispositiu
@@ -291,9 +292,6 @@ Criteris de Finalització (Definition of Done) i Matriu de Traçabilitat
 Per a poder certificar el tancament de la Spec 019 d'Autenticació i Sessió de camp i habilitar la seva fase de programació, s'ha de verificar el compliment estricte de la següent matriu de traçabilitat:
 
     Els 24 
-> [!IMPORTANT]
-> **Política Global: Alta Màgica OCR (Zero Data Entry)**
-> Tot el sistema implementa la funcionalitat d'Alta Màgica OCR, permetent l'alta d'entitats (Vehicles, Treballadors, Albarans, Factures, Contractes, Clients, Proveïdors) mitjançant l'anàlisi automatitzat de fotografies o PDFs, sense necessitat de picar les dades manualment.
 
 Requisits Funcionals (RF-01 al RF-24) i els 10 Casos Límit (EDGE-01 al EDGE-10) redactats amb sintaxi formal EARS estricta en català i lliures d'ambigüitats tècniques o dades de prova fictícies sota l'estat Dia 0.
     Correspondència del 100% de la spec d'autenticació de la PWA amb una suite de proves d'integració automatitzada en verd amb PostgreSQL RLS actiu sota el tenant real.

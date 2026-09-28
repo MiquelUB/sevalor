@@ -3,6 +3,10 @@ AVÍS D'ALINEACIÓ CONSTITUCIONAL I INTEGRACIÓ ARQUITECTÒNICA: Aquesta especif
 De conformitat amb la Constitució i el criteri de QA unificat, es fa l'exclusió absoluta de codis QR per a la traçabilitat i transferència d'eines de camp (les quals es gestionen i custodien estrictament mitjançant el número de referència, marca, model i número de sèrie de fabricant sota la Spec 004 / Spec 008). Aquesta exclusió tècnica convive en perfecta harmonia amb la permanència del codi QR legal i tributari requerit obligatòriament a totes les factures i albarans de lliurament oficials (Veri*factu) emesos des del mòdul comptable.
 Es prohibeix taxativament l'ús de dades simulades o de prova (Zero Mock Data), partint d'un estat de "Dia 0" real i garantint de forma absoluta la sobirania de dades mitjançant l'emmagatzematge local/sobirà dels fitxers vectorials CAD, raster PDF/TIFF i registres d'incidències en el servidor Hetzner de Falkenstein (Alemanya - UE), rebutjant completament qualsevol servei de núvol públic extern (com AWS S3) d'acord amb el compliment estricte de la LOPDGDD i el RGPD.
 --------------------------------------------------------------------------------
+> [!IMPORTANT]
+> **Política Global: Alta Màgica OCR (Zero Data Entry)**
+> Tot el sistema implementa la funcionalitat d'Alta Màgica OCR, permetent l'alta d'entitats (Vehicles, Treballadors, Albarans, Factures, Contractes, Clients, Proveïdors) mitjançant l'anàlisi automatitzat de fotografies o PDFs, sense necessitat de picar les dades manualment.
+
 Context i Objectiu
 El mòdul de Plànols, Xarxes Tècniques i Arquitectura de Capes (/gestio/planols) és el Visor Tècnic Cartogràfic, Biblioteca de Projectes i Registre Pericial d'Instal·lacions de CampoPro Suite. Centralitza la custòdia, consulta, edició gràfica i gestió documental de la infraestructura física (canonades de reg, xarxes de baixa tensió, rases, instal·lacions hidràuliques i edificacions) intervinguda per les empreses de serveis tècnics sobre el terreny.
 Aquest mòdul no pretén ser un modelador BIM 3D ni un programari d'animació complex, sinó una eina àgil d'enginyeria cartogràfica i d'obra 2D que:
@@ -163,9 +167,6 @@ Denegat
 Denegat
 --------------------------------------------------------------------------------
 
-> [!IMPORTANT]
-> **Política Global: Alta Màgica OCR (Zero Data Entry)**
-> Tot el sistema implementa la funcionalitat d'Alta Màgica OCR, permetent l'alta d'entitats (Vehicles, Treballadors, Albarans, Factures, Contractes, Clients, Proveïdors) mitjançant l'anàlisi automatitzat de fotografies o PDFs, sense necessitat de picar les dades manualment.
 
 Requisits Funcionals (Notació EARS Estricta)
 Bloque 1: Estructura de la Biblioteca i Organització per Carpetes
@@ -334,9 +335,6 @@ Fora d'Abast (Out of Scope)
 Criteris de Finalització (Definition of Done) i Matriu de Traçabilitat
 
     Els 26 
-> [!IMPORTANT]
-> **Política Global: Alta Màgica OCR (Zero Data Entry)**
-> Tot el sistema implementa la funcionalitat d'Alta Màgica OCR, permetent l'alta d'entitats (Vehicles, Treballadors, Albarans, Factures, Contractes, Clients, Proveïdors) mitjançant l'anàlisi automatitzat de fotografies o PDFs, sense necessitat de picar les dades manualment.
 
 Requisits Funcionals (RF-01 al RF-26) i els 10 Casos Límit (EDGE-01 al EDGE-10) redactats amb sintaxi formal EARS estricta en català i lliures d'ambigüitats tècniques o dades de prova fictícies sota l'estat Dia 0.
     Correspondència del 100% de la spec de plànols amb una suite de proves d'integració automatitzada en verd amb PostgreSQL RLS actiu sota el tenant real d'empresa.

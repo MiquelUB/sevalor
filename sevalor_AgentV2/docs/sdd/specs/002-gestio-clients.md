@@ -3,6 +3,10 @@ AVÍS D'ALINEACIÓ CONSTITUCIONAL I INTEGRACIÓ ARQUITECTÒNICA: Aquesta especif
 Es prohibeix taxativament l'ús de dades simulades o de prova (Zero Mock Data), garantint la sobirania de dades mitjançant l'emmagatzematge de documents i historials en el servidor local/sobirà d'Hetzner a Alemanya (UE), rebutjant serveis cloud com AWS S3 per a estricte compliment del RGPD.
 De conformitat amb la Constitució, s'estableix que qualsevol codi QR generat o llegit pel sistema pertany de forma exclusiva a l'àmbit de la facturació legal i tributària (Veri*factu) i a la descàrrega d'albarans i factures de clients, quedant formalment exclòs l'ús de codis QR corporatius per a la traçabilitat de les eines de treball en camp (les quals es gestionen unívocament pel seu número de referència, marca, model i número de sèrie de fabricant sota la Spec 004).
 --------------------------------------------------------------------------------
+> [!IMPORTANT]
+> **Política Global: Alta Màgica OCR (Zero Data Entry)**
+> Tot el sistema implementa la funcionalitat d'Alta Màgica OCR, permetent l'alta d'entitats (Vehicles, Treballadors, Albarans, Factures, Contractes, Clients, Proveïdors) mitjançant l'anàlisi automatitzat de fotografies o PDFs, sense necessitat de picar les dades manualment.
+
 Context i Objectiu
 El mòdul de Gestió de Clients és el directori mestre de les entitats contractants (particulars, empreses, comunitats de regants o explotacions agrícoles) i el registre central de les seves instal·lacions, finques geolocalitzades i expedient històric d'obres.
 Resoldrà la necessitat de governar amb precisió tècnica, fiscal i operativa tant la seu o domicili social del client com les seves múltiples finques rústiques i escomeses (SIGPAC i coordenades GPS), els seus plànols tècnics, el seu canal de comunicació bidireccional (Bot de Telegram o canals tradicionals de correu/SMS), el seu historial de feines realitzades amb evidències fotogràfiques i el seu slot de factures tècniques sanititzades.
@@ -105,9 +109,6 @@ Bloqueig Total (403)
 Sense accés
 --------------------------------------------------------------------------------
 
-> [!IMPORTANT]
-> **Política Global: Alta Màgica OCR (Zero Data Entry)**
-> Tot el sistema implementa la funcionalitat d'Alta Màgica OCR, permetent l'alta d'entitats (Vehicles, Treballadors, Albarans, Factures, Contractes, Clients, Proveïdors) mitjançant l'anàlisi automatitzat de fotografies o PDFs, sense necessitat de picar les dades manualment.
 
 Requisits Funcionals (Notació EARS Estricta)
 Bloque 1: Directori Principal (/gestio/clients) i Estat "Día 0"
@@ -264,9 +265,6 @@ Requisits No Funcionals (RNF)
 Criteris de Finalització (Definition of Done) i Matriu de Traçabilitat
 
     Els 22 
-> [!IMPORTANT]
-> **Política Global: Alta Màgica OCR (Zero Data Entry)**
-> Tot el sistema implementa la funcionalitat d'Alta Màgica OCR, permetent l'alta d'entitats (Vehicles, Treballadors, Albarans, Factures, Contractes, Clients, Proveïdors) mitjançant l'anàlisi automatitzat de fotografies o PDFs, sense necessitat de picar les dades manualment.
 
 Requisits Funcionals (RF-01 al RF-22) i els 10 Casos Límit (EDGE-01 al EDGE-10) redactats amb sintaxi formal EARS estricta en català i lliures de dades mock o simulades.
     Correspondència del 100% de la spec de clients amb una suite de proves d'integració automatitzada en verd amb PostgreSQL RLS actiu sota el tenant real.

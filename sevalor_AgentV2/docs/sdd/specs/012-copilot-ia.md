@@ -3,6 +3,10 @@ AVÍS D'ALINEACIÓ CONSTITUCIONAL I INTEGRACIÓ ARQUITECTÒNICA: Aquesta especif
 Es prohibeix taxativament l'ús de dades simulades o de prova (Zero Mock Data), partint d'un estat de "Dia 0" real i garantint de forma absoluta la sobirania de dades mitjançant el processament i emmagatzematge 100% local de la IA en el servidor Hetzner de Falkenstein (Alemanya - UE), rebutjant completament qualsevol servei de núvol públic extern (com OpenAI, Anthropic o AWS S3) d'acord amb el compliment estricte de la LOPDGDD, la Llei d'Intel·ligència Artificial de la UE (AI Act) i el RGPD.
 De conformitat amb la Constitució v4.0, es recorda que s'exclou l'ús de codis QR per a les eines de camp (les quals es traçabilitzen i es custodien exclusivament pel seu número de referència, marca i model de fàbrica), mantenint-se únicament el codi QR de caràcter legal i tributari obligatori per a la facturació Veri*factu sota la AEAT (Spec 007).
 --------------------------------------------------------------------------------
+> [!IMPORTANT]
+> **Política Global: Alta Màgica OCR (Zero Data Entry)**
+> Tot el sistema implementa la funcionalitat d'Alta Màgica OCR, permetent l'alta d'entitats (Vehicles, Treballadors, Albarans, Factures, Contractes, Clients, Proveïdors) mitjançant l'anàlisi automatitzat de fotografies o PDFs, sense necessitat de picar les dades manualment.
+
 Context i Objectiu
 El mòdul d'IA Copilot de Camp i Gestió (/gestio/copilot) és el Motor Pericial, Assistent Tècnic i Cor Intel·ligent de CampoPro Suite. Assisteix en temps real als quatre actors de la plataforma (Operari a la PWA, Enginyer a l'Oficina Tècnica, Administració/Boss i Client Final).
 Aquest mòdul no actua com un generador genèric de text conversacional ni redacta paràgrafs buits que ningú llegirà: el seu valor rau estrictament en l'auditoria operativa de camp, la memòria tècnica històrica de finques, l'alerta de garanties, el peritatge d'incidències de camp per veu/foto, el control de desviacions pressupostàries i la proposta de pressupostos corregits post-obra.
@@ -81,9 +85,6 @@ Enginyer / Secretaria
 Consulta informativa
 --------------------------------------------------------------------------------
 
-> [!IMPORTANT]
-> **Política Global: Alta Màgica OCR (Zero Data Entry)**
-> Tot el sistema implementa la funcionalitat d'Alta Màgica OCR, permetent l'alta d'entitats (Vehicles, Treballadors, Albarans, Factures, Contractes, Clients, Proveïdors) mitjançant l'anàlisi automatitzat de fotografies o PDFs, sense necessitat de picar les dades manualment.
 
 Requisits Funcionals (Notació EARS Estricta)
 Bloque 1: Infraestructura d'IA Local, Cues i Tolerància a Fallades
@@ -266,9 +267,6 @@ Fora d'Abast (Out of Scope)
 Criteris de Finalització (Definition of Done) i Matriu de Traçabilitat
 
     Els 22 
-> [!IMPORTANT]
-> **Política Global: Alta Màgica OCR (Zero Data Entry)**
-> Tot el sistema implementa la funcionalitat d'Alta Màgica OCR, permetent l'alta d'entitats (Vehicles, Treballadors, Albarans, Factures, Contractes, Clients, Proveïdors) mitjançant l'anàlisi automatitzat de fotografies o PDFs, sense necessitat de picar les dades manualment.
 
 Requisits Funcionals (RF-01 al RF-22) i els 10 Casos Límit (EDGE-01 al EDGE-10) redactats amb sintaxi formal EARS estricta en català i lliures d'ambigüitats o dades de prova fictícies sota l'estat Dia 0.
     Correspondència del 100% de la spec de plànols amb una suite de proves d'integració automatitzada en verd amb PostgreSQL RLS actiu sota el tenant real d'empresa.

@@ -2,6 +2,10 @@ Spec 008 — Mòdul de Gestió d'Operaris i Rendiment de Camp (/gestio/operaris)
 AVÍS D'ALINEACIÓ CONSTITUCIONAL I INTEGRACIÓ ARQUITECTÒNICA: Aquesta especificació tècnica es rigeix de forma innegociable pels principis de la Constitució de CampoPro Suite (v3.1) i s'integra de forma transversal amb la Torre de Control Geogràfica en temps real (Spec 001 i Spec 005), el Mòdul de Magatzem (Spec 004), el Mòdul de Flota (Spec 006) i el Mòdul Contable (Spec 007).
 Es prohibeix taxativament l'ús de dades simulades o de prova (Zero Mock Data), partint d'un estat de "Dia 0" real i garantint de forma absoluta la sobirania de dades mitjançant l'emmagatzematge local/sobirà dels expedients de personal en el servidor Hetzner de Falkenstein (Alemanya - UE), rebutjant completament qualsevol servei de núvol públic extern (com AWS S3) d'acord amb el compliment estricte de la LOPDGDD i el RGPD.
 --------------------------------------------------------------------------------
+> [!IMPORTANT]
+> **Política Global: Alta Màgica OCR (Zero Data Entry)**
+> Tot el sistema implementa la funcionalitat d'Alta Màgica OCR, permetent l'alta d'entitats (Vehicles, Treballadors, Albarans, Factures, Contractes, Clients, Proveïdors) mitjançant l'anàlisi automatitzat de fotografies o PDFs, sense necessitat de picar les dades manualment.
+
 Context i Objectiu
 El mòdul de Gestió d'Operaris i Rendiment de Camp (/gestio/operaris) és la Torre de Control de Recursos Humans Tècnics, Organització de Colles i Auditoria Laboral de CampoPro Suite. Centralitza la supervisió integral de la plantilla tècnica que opera sobre el terreny (5 a 50 operaris), connectant l'activitat realitzada a camp (fitxatges d'inici/fi, registre d'eines, fotos d'ordres de treball, consums i incidències) amb la direcció tècnica, recursos humans i administració de l'empresa.
 Aquest mòdul no pretén ser un portal de nòmines o gestoria laboral externa (tasques que es mantenen en l'esfera comptable i sota el staging aïllat de la Spec 007), sinó l'eina de coordinació operativa i compliment legal en temps real que:
@@ -345,9 +349,6 @@ Fora d'Abast (Out of Scope)
 Criterios de Finalización (Definition of Done) i Matriu de Traçabilitat
 
     Els 34 
-> [!IMPORTANT]
-> **Política Global: Alta Màgica OCR (Zero Data Entry)**
-> Tot el sistema implementa la funcionalitat d'Alta Màgica OCR, permetent l'alta d'entitats (Vehicles, Treballadors, Albarans, Factures, Contractes, Clients, Proveïdors) mitjançant l'anàlisi automatitzat de fotografies o PDFs, sense necessitat de picar les dades manualment.
 
 Requisits Funcionals (RF-01 al RF-34) i els 10 Casos Límit (EDGE-01 al EDGE-10) redactats en sintaxi formal EARS estricta i sense errors, constituint el contracte de desenvolupament del programari.
     Correspondència del 100% de la spec amb una suite de proves d'integració automatitzada en verd, lliure de dades hardcodejades o simulades i amb PostgreSQL RLS actiu.

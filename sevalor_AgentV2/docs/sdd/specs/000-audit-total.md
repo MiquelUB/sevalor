@@ -1,5 +1,10 @@
 # Informe d'Auditoria Total: SEVALOR V2
 
+> [!IMPORTANT]
+> **Política Global: Alta Màgica OCR (Zero Data Entry)**
+> Tot el sistema implementa la funcionalitat d'Alta Màgica OCR, permetent l'alta d'entitats (Vehicles, Treballadors, Albarans, Factures, Contractes, Clients, Proveïdors) mitjançant l'anàlisi automatitzat de fotografies o PDFs, sense necessitat de picar les dades manualment.
+
+
 **Data:** 24/09/2026
 **Agent:** Antigravity (Auditor Executiu)
 **Metodologia:** Spec-Driven Development (Spec-Kit)
@@ -70,6 +75,3 @@ La base arquitectònica és d'una immensa qualitat i el "Sistema Operatiu Empres
 **Resolució:** Instal·lació directa via `npm install -D fake-indexeddb` sota l'ecosistema de la PWA.
 
 
-> [!IMPORTANT]
-> **Política Global: Alta Màgica OCR (Zero Data Entry)**
-> Tot el sistema implementa la funcionalitat d'Alta Màgica OCR, permetent l'alta d'entitats (Vehicles, Treballadors, Albarans, Factures, Contractes, Clients, Proveïdors) mitjançant l'anàlisi automatitzat de fotografies o PDFs, sense necessitat de picar les dades manualment.

@@ -2,6 +2,10 @@ Spec 021 — Mòdul de Superadmin: Aprovisionament de Tenants, Onboarding i Cicl
 AVÍS D'ALINEACIÓ CONSTITUCIONAL I INTEGRACIÓ ARQUITECTÒNICA: Aquesta especificació tècnica es regeix de forma innegociable pels principis de la Constitució de CampoPro Suite (v4.0) i s'integra de forma transversal amb el Dashboard i la Torre de Control Geogràfica (Spec 001 i Spec 005), el Mòdul de Clients (Spec 002), el Mòdul de Magatzem i Inventari (Spec 004), el Mòdul d'Operaris (Spec 008), el Mòdul Contable (Spec 007), el Mòdul d'IA Copilot i RAG (Spec 012), i el Mòdul de Plànols de Camp (Spec 017).
 Es prohibeix taxativament l'ús de dades simulades o de prova (Zero Mock Data), partint d'un estat de "Dia 0" real i garantint de forma absoluta la sobirania de dades mitjançant l'emmagatzematge local/sobirà en el servidor Hetzner de Falkenstein (Alemanya - UE), rebutjant completament qualsevol servei de núvol públic extern (com AWS S3) d'acord amb el compliment estricte de la LOPDGDD i el RGPD.
 --------------------------------------------------------------------------------
+> [!IMPORTANT]
+> **Política Global: Alta Màgica OCR (Zero Data Entry)**
+> Tot el sistema implementa la funcionalitat d'Alta Màgica OCR, permetent l'alta d'entitats (Vehicles, Treballadors, Albarans, Factures, Contractes, Clients, Proveïdors) mitjançant l'anàlisi automatitzat de fotografies o PDFs, sense necessitat de picar les dades manualment.
+
 Context i Objectiu
 El mòdul d'Aprovisionament de Tenants, Onboarding i Cicle de Vida SaaS (/superadmin/tenants) constitueix el Motor de Governança Multi-Inquilí i Creixement Corporatiu de CampoPro Suite. Ubicat sota la ruta protegida /superadmin/tenants i dissenyat amb el patró d'alta densitat de Twenty CRM, permet a l'equip d'enginyeria i operacions de la plataforma donar d'alta, configurar, mantenir i gestionar el cicle de vida complet de cada empresa instal·ladora que contracta el servei.
 Aquest mòdul materialitza la separació estricta entre la governança de la infraestructura SaaS i la privacitat del negoci dels clients:
@@ -92,9 +96,6 @@ Filtra per empresa_id
 ✅ Aïllament inviolable
 --------------------------------------------------------------------------------
 
-> [!IMPORTANT]
-> **Política Global: Alta Màgica OCR (Zero Data Entry)**
-> Tot el sistema implementa la funcionalitat d'Alta Màgica OCR, permetent l'alta d'entitats (Vehicles, Treballadors, Albarans, Factures, Contractes, Clients, Proveïdors) mitjançant l'anàlisi automatitzat de fotografies o PDFs, sense necessitat de picar les dades manualment.
 
 Requisits Funcionals (EARS Notation)
 Àmbit 1: Assistent d'Alta i Provisionament d'un Nou Tenant (Onboarding Wizard)
@@ -191,9 +192,6 @@ La tasca asíncrona de Celery Beat rep l'error, fa reintent amb backoff, i en ca
 Criteris de Finalització (Definition of Done) i Matriu de Traçabilitat
 
     Els 22 
-> [!IMPORTANT]
-> **Política Global: Alta Màgica OCR (Zero Data Entry)**
-> Tot el sistema implementa la funcionalitat d'Alta Màgica OCR, permetent l'alta d'entitats (Vehicles, Treballadors, Albarans, Factures, Contractes, Clients, Proveïdors) mitjançant l'anàlisi automatitzat de fotografies o PDFs, sense necessitat de picar les dades manualment.
 
 Requisits Funcionals (RF-01 al RF-22) i els 6 Casos Límit redactats amb sintaxi formal EARS estricta en català i lliures de dades mock o simulades.
     Aïllament PostgreSQL RLS provat unítariament: un supervisor o Superadmin de la plataforma té estrictament prohibit realitzar SELECT sobre dades d'altres inquilins (empresa_id).

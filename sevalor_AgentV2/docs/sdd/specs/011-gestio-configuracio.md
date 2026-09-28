@@ -3,6 +3,10 @@ AVÍS D'ALINEACIÓ CONSTITUCIONAL I INTEGRACIÓ ARQUITECTÒNICA: Aquesta especif
 Es prohibeix taxativament l'ús de dades simulades o de prova (Zero Mock Data), partint d'un estat de "Dia 0" real i garantint de forma absoluta la sobirania de dades mitjançant l'emmagatzematge local/sobirà dels perfils d'usuaris, dades de personal, logs de control horari, registres d'activitat i claus criptogràfiques de marca en el servidor Hetzner de Falkenstein (Alemanya - UE), rebutjant completament qualsevol servei de núvol públic extern (com AWS S3) d'acord amb el compliment estricte de la LOPDGDD i el RGPD.
 De conformitat amb la Constitució i el criteri de QA unificat, es fa l'exclusió absoluta de codis QR per a la traçabilitat i transferència d'eines de camp (les quals es gestionen unívocament pel seu número de referència, marca, model i número de sèrie de fàbrica sota la Spec 004 / Spec 008). Aquesta decisió de disseny de l'inventari convive en perfecta harmonia amb la permanència del codi QR legal i tributari requerit obligatòriament a totes les factures i albarans de lliurament oficials (Veri*factu). Per a la seguretat d'accés, s'autoritza de forma exclusiva l'ús de codis QR estàndard de configuració 2FA TOTP (Google Authenticator) durant el procés d'alta o enrolament de l'usuari d'oficina.
 --------------------------------------------------------------------------------
+> [!IMPORTANT]
+> **Política Global: Alta Màgica OCR (Zero Data Entry)**
+> Tot el sistema implementa la funcionalitat d'Alta Màgica OCR, permetent l'alta d'entitats (Vehicles, Treballadors, Albarans, Factures, Contractes, Clients, Proveïdors) mitjançant l'anàlisi automatitzat de fotografies o PDFs, sense necessitat de picar les dades manualment.
+
 Context i Objectiu
 El mòdul de Configuració de l'Empresa, Jornada Laboral, Marca Camaleònica i Rols (/gestio/configuracio) és el Panell d'Ajustos Estratègics, Identitat Corporativa i Governança Laboral de CampoPro Suite. Centralitza els paràmetres estructurals que regeixen el funcionament operatiu, la seguretat d'accés dels usuaris administratius d'oficina i l'aspecte visual camaleònic de la instància de l'empresa instal·ladora.
 Seguint la decisió de disseny arquitectònic d'unificar totes les APIs financeres sota un mateix sostre, es trasllada tota la gestió de tresoreria (comptes IBAN, passarel·la Bizum, tiquets de despeses de camp i targetes corporatives) al mòdul de Comptabilitat (/gestio/comptabilitat - Spec 007), concentrant /gestio/configuracio exclusivament en:
@@ -130,9 +134,6 @@ Reubicat Spec 007
 Reubicat Spec 007
 --------------------------------------------------------------------------------
 
-> [!IMPORTANT]
-> **Política Global: Alta Màgica OCR (Zero Data Entry)**
-> Tot el sistema implementa la funcionalitat d'Alta Màgica OCR, permetent l'alta d'entitats (Vehicles, Treballadors, Albarans, Factures, Contractes, Clients, Proveïdors) mitjançant l'anàlisi automatitzat de fotografies o PDFs, sense necessitat de picar les dades manualment.
 
 Requisits Funcionals (Notació EARS Estricta)
 Àmbit 1: Gestió de Personal Administratiu i Rols Web
@@ -307,9 +308,6 @@ Fora d'Abast (Out of Scope)
 Criteris de Finalització (Definition of Done) i Matriu de Traçabilitat
 
     Els 22 
-> [!IMPORTANT]
-> **Política Global: Alta Màgica OCR (Zero Data Entry)**
-> Tot el sistema implementa la funcionalitat d'Alta Màgica OCR, permetent l'alta d'entitats (Vehicles, Treballadors, Albarans, Factures, Contractes, Clients, Proveïdors) mitjançant l'anàlisi automatitzat de fotografies o PDFs, sense necessitat de picar les dades manualment.
 
 Requisits Funcionals (RF-01 al RF-22) i els 10 Casos Límit (EDGE-01 al EDGE-10) redactats amb sintaxi formal EARS estricta en català i lliures d'ambigüitats o condicions d'errors desateses.
     Correspondència del 100% de la spec de configuració amb una suite de proves d'integració automatitzada en verd amb PostgreSQL RLS actiu sota el tenant real.
