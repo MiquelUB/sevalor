@@ -395,7 +395,10 @@ async def execute_tool_get_vehicle_info(db: AsyncSession, empresa_id: uuid.UUID,
         "data_caducitat_asseguranca": v.data_caducitat_asseguranca.isoformat() if v.data_caducitat_asseguranca else None,
         "companyia_asseguradora": v.companyia_asseguradora,
         "carnet_necessari": v.carnet_necessari,
-        "historial_reparacions": v.historial_reparacions
+        "historial_reparacions": v.historial_reparacions,
+        "regim_adquisicio": v.regim_adquisicio,
+        "renting_limit_km": v.renting_limit_km,
+        "consum_l_100km": v.consum_l_100km
     }
 
 
@@ -884,6 +887,8 @@ async def executar_agent_local(
                     f"ITV: {tool_res.get('estat_itv')} (Propera: {tool_res.get('data_proxima_itv') or 'Pendent'}). "
                     f"Assegurança: {tool_res.get('companyia_asseguradora') or 'No consta'} (Caduca: {tool_res.get('data_caducitat_asseguranca') or 'No consta'}). "
                     f"Carnet Requerit: {tool_res.get('carnet_necessari')}. "
+                    f"Règim: {tool_res.get('regim_adquisicio')} (Límit: {tool_res.get('renting_limit_km') or 'N/A'} km). "
+                    f"Consum: {tool_res.get('consum_l_100km') or 'N/A'} L/100km. "
                     f"Odòmetre: {tool_res['odometre_acumulat']} km."
                 )
             else:

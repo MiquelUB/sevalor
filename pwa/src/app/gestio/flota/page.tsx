@@ -219,7 +219,7 @@ export default function GestioFlotaPage() {
     if (!novaMatricula || !novaMarca || !nouModel) return;
 
     try {
-      const res = await apiFetch("/gestio/flota/vehicles", {
+      const res = await apiFetch("/gestio/flota", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -231,6 +231,11 @@ export default function GestioFlotaPage() {
           odometre_acumulat: nouOdometre,
           regim_adquisicio: nouRegim,
           renting_limit_km: nouLimitKm,
+          estat_itv: nouEstatItv,
+          data_proxima_itv: novaDataItv || null,
+          data_caducitat_asseguranca: novaDataAsseguranca || null,
+          companyia_asseguradora: novaCompanyiaAsseguranca || null,
+          carnet_necessari: nouCarnet
         }),
       });
 
@@ -238,44 +243,11 @@ export default function GestioFlotaPage() {
         setModalNouVehicleObert(false);
         fetchVehicles();
       } else {
-        // Fallback optimista per a entorn local
-        const nouItem: VehicleItem = {
-          id: `veh-${Date.now()}`,
-          matricula: novaMatricula.toUpperCase(),
-          marca: novaMarca,
-          model: nouModel,
-          tipus: nouTipus,
-          distintiu_ambiental: nouDistintiu,
-          estat: "OPERATIU",
-          odometre_acumulat: nouOdometre,
-          horometre_acumulat: 0,
-          conductor_habitual_id: null,
-          conductor_nom: "Sense conductor assignat",
-          data_proxima_itv: null,
-          dies_propera_itv: null,
-          alerta_itv_cadena: "OK",
-          regim_adquisicio: nouRegim,
-          renting_limit_km: nouLimitKm,
-          renting_ocupacio_percent: Math.round((nouOdometre / nouLimitKm) * 100),
-          renting_alerta: (nouOdometre / nouLimitKm) >= 0.9,
-          renting_nivell_alerta: (nouOdometre / nouLimitKm) >= 0.9 ? "90%" : "NOMINAL",
-          consum_format: nouTipus === "REMOLC" ? "N/A (Exempt)" : "8.2 L/100km",
-          consum_l_100km: 8.2,
-          consum_mitjana_historica: 8.0,
-          consum_adblue_litres: 0,
-          anomalia_consum: false,
-          anomalia_descartada: false,
-          estat_itv: nouEstatItv,
-          data_caducitat_asseguranca: novaDataAsseguranca || null,
-          companyia_asseguradora: novaCompanyiaAsseguranca || null,
-          carnet_necessari: nouCarnet,
-          historial_reparacions: null
-        };
-        setVehicles((prev) => [nouItem, ...prev]);
-        setModalNouVehicleObert(false);
+        const errorData = await res.json();
+        alert("Error al crear el vehicle: " + (errorData.detail || "Error desconegut"));
       }
-    } catch {
-      setModalNouVehicleObert(false);
+    } catch (err) {
+      alert("Excepció de xarxa: " + err);
     }
   };
 

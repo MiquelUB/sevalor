@@ -32,11 +32,22 @@ class VehicleCreate(BaseModel):
     companyia_asseguradora: Optional[str] = Field(None, max_length=100)
     carnet_necessari: str = Field("B", max_length=10)
     historial_reparacions: Optional[str] = None
+    regim_adquisicio: str = Field("PROPIETAT", max_length=30)
+    renting_limit_km: Optional[int] = None
+    tacograf_necessari: bool = False
+    data_propera_descarrega_tacograf: Optional[date] = None
+    capacitat_bateria_kwh: Optional[float] = None
+    soh_bateria: Optional[float] = None
+    places: int = 5
+    pes_maxim_autoritzat: int = 3500
 
 class VehicleResponse(VehicleCreate):
     id: uuid.UUID
     horometre_acumulat: float
     odometre_acumulat: int
+    consum_l_100km: Optional[float] = None
+    consum_mitjana_historica: Optional[float] = None
+    consum_adblue_litres: float = 0.0
 
 @router.get("", response_model=List[VehicleResponse])
 async def llistar_flota(
@@ -97,7 +108,15 @@ async def alta_vehicle(
         data_caducitat_asseguranca=vehicle.data_caducitat_asseguranca,
         companyia_asseguradora=vehicle.companyia_asseguradora,
         carnet_necessari=vehicle.carnet_necessari,
-        historial_reparacions=vehicle.historial_reparacions
+        historial_reparacions=vehicle.historial_reparacions,
+        regim_adquisicio=vehicle.regim_adquisicio,
+        renting_limit_km=vehicle.renting_limit_km,
+        tacograf_necessari=vehicle.tacograf_necessari,
+        data_propera_descarrega_tacograf=vehicle.data_propera_descarrega_tacograf,
+        capacitat_bateria_kwh=vehicle.capacitat_bateria_kwh,
+        soh_bateria=vehicle.soh_bateria,
+        places=vehicle.places,
+        pes_maxim_autoritzat=vehicle.pes_maxim_autoritzat
     )
 
     db.add(nou_vehicle)
@@ -134,6 +153,14 @@ async def editar_vehicle(
     v_db.companyia_asseguradora = vehicle.companyia_asseguradora
     v_db.carnet_necessari = vehicle.carnet_necessari
     v_db.historial_reparacions = vehicle.historial_reparacions
+    v_db.regim_adquisicio = vehicle.regim_adquisicio
+    v_db.renting_limit_km = vehicle.renting_limit_km
+    v_db.tacograf_necessari = vehicle.tacograf_necessari
+    v_db.data_propera_descarrega_tacograf = vehicle.data_propera_descarrega_tacograf
+    v_db.capacitat_bateria_kwh = vehicle.capacitat_bateria_kwh
+    v_db.soh_bateria = vehicle.soh_bateria
+    v_db.places = vehicle.places
+    v_db.pes_maxim_autoritzat = vehicle.pes_maxim_autoritzat
 
     await db.commit()
     await db.refresh(v_db)
