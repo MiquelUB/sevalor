@@ -285,14 +285,17 @@ import os
 
 @router.post("/{vehicle_id}/documents", status_code=201)
 async def pujar_document_flota(
+    request: Request,
     vehicle_id: uuid.UUID,
     tipus_document: str = Form(...),
     file: UploadFile = File(...),
-    db: AsyncSession = Depends(get_db),
-    tenant: dict = Depends(valida_uuid),
-    current_user: dict = Depends(get_current_user_gestio)
+    db: AsyncSession = Depends(get_db_with_tenant_context)
 ):
-    empresa_id = tenant["empresa_id"]
+    empresa_id = request.state.empresa_id
+    if not empresa_id: raise HTTPException(status_code=401)
+    empresa_id = uuid.UUID(empresa_id)
+    # TODO current_user can be from state or skip for now
+    current_user_id = None
     
     # Comprovar vehicle
     stmt = select(Vehicle).where(Vehicle.id == vehicle_id, Vehicle.empresa_id == empresa_id)
@@ -315,7 +318,7 @@ async def pujar_document_flota(
         tipus_document=tipus_document,
         nom_arxiu=file.filename,
         ruta_arxiu=file_path,
-        creat_per_id=uuid.UUID(current_user["sub"])
+        creat_per_id=None
     )
     db.add(doc)
     await db.commit()
@@ -332,11 +335,13 @@ async def pujar_document_flota(
 
 @router.get("/{vehicle_id}/documents")
 async def llistar_documents_flota(
+    request: Request,
     vehicle_id: uuid.UUID,
-    db: AsyncSession = Depends(get_db),
-    tenant: dict = Depends(valida_uuid)
+    db: AsyncSession = Depends(get_db_with_tenant_context)
 ):
-    empresa_id = tenant["empresa_id"]
+    empresa_id = request.state.empresa_id
+    if not empresa_id: raise HTTPException(status_code=401)
+    empresa_id = uuid.UUID(empresa_id)
     stmt = select(DocumentFlota).where(DocumentFlota.vehicle_id == vehicle_id, DocumentFlota.empresa_id == empresa_id)
     res = await db.execute(stmt)
     docs = res.scalars().all()
