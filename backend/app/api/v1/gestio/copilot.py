@@ -381,9 +381,17 @@ async def execute_tool_get_vehicle_info(db: AsyncSession, empresa_id: uuid.UUID,
             "matricula_cercada": matricula,
             "missatge": f"No s'ha trobat cap vehicle amb la matrícula '{matricula}'."
         }
+    
+    from app.models.models import DocumentFlota
+    stmt_docs = select(DocumentFlota).where(DocumentFlota.vehicle_id == v.id, DocumentFlota.empresa_id == empresa_id)
+    res_docs = await db.execute(stmt_docs)
+    docs = res_docs.scalars().all()
+    docs_list = [{"tipus": d.tipus_document, "nom_arxiu": d.nom_arxiu, "data": d.data_document.isoformat() if d.data_document else None} for d in docs]
+    
     return {
         "trobat": True,
         "vehicle_id": str(v.id),
+        "documents": docs_list,
         "matricula": v.matricula,
         "marca": v.marca,
         "model": v.model,
@@ -889,7 +897,9 @@ async def executar_agent_local(
                     f"Carnet Requerit: {tool_res.get('carnet_necessari')}. "
                     f"Règim: {tool_res.get('regim_adquisicio')} (Límit: {tool_res.get('renting_limit_km') or 'N/A'} km). "
                     f"Consum: {tool_res.get('consum_l_100km') or 'N/A'} L/100km. "
-                    f"Odòmetre: {tool_res['odometre_acumulat']} km."
+                    f"Odòmetre: {tool_res['odometre_acumulat']} km. "
+                    f"Pòlissa Assegurança: {tool_res.get('polissa_asseguranca', 'Desconeguda')}. "
+                    f"Documents Registrats: {len(tool_res.get('documents', []))} arxius."
                 )
             else:
                 resposta = tool_res.get("missatge", f"No s'ha trobat informació per la matrícula {target_mat}.")

@@ -30,6 +30,7 @@ class VehicleCreate(BaseModel):
     estat_itv: str = Field("FAVORABLE", max_length=50)
     data_caducitat_asseguranca: Optional[date] = None
     companyia_asseguradora: Optional[str] = Field(None, max_length=100)
+    polissa_asseguranca: Optional[str] = Field(None, max_length=100)
     carnet_necessari: str = Field("B", max_length=10)
     historial_reparacions: Optional[str] = None
     regim_adquisicio: str = Field("PROPIETAT", max_length=30)
@@ -107,6 +108,7 @@ async def alta_vehicle(
         estat_itv=vehicle.estat_itv,
         data_caducitat_asseguranca=vehicle.data_caducitat_asseguranca,
         companyia_asseguradora=vehicle.companyia_asseguradora,
+        polissa_asseguranca=vehicle.polissa_asseguranca,
         carnet_necessari=vehicle.carnet_necessari,
         historial_reparacions=vehicle.historial_reparacions,
         regim_adquisicio=vehicle.regim_adquisicio,
@@ -151,6 +153,7 @@ async def editar_vehicle(
     v_db.estat_itv = vehicle.estat_itv
     v_db.data_caducitat_asseguranca = vehicle.data_caducitat_asseguranca
     v_db.companyia_asseguradora = vehicle.companyia_asseguradora
+    v_db.polissa_asseguranca = vehicle.polissa_asseguranca
     v_db.carnet_necessari = vehicle.carnet_necessari
     v_db.historial_reparacions = vehicle.historial_reparacions
     v_db.regim_adquisicio = vehicle.regim_adquisicio
@@ -274,3 +277,75 @@ async def llistar_vehicles_propers(
 
     return resultats[:limit]
 
+
+from fastapi import UploadFile, File, Form
+from app.models.models import DocumentFlota
+import shutil
+import os
+
+@router.post("/{vehicle_id}/documents", status_code=201)
+async def pujar_document_flota(
+    vehicle_id: uuid.UUID,
+    tipus_document: str = Form(...),
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+    tenant: dict = Depends(valida_uuid),
+    current_user: dict = Depends(get_current_user_gestio)
+):
+    empresa_id = tenant["empresa_id"]
+    
+    # Comprovar vehicle
+    stmt = select(Vehicle).where(Vehicle.id == vehicle_id, Vehicle.empresa_id == empresa_id)
+    res = await db.execute(stmt)
+    v_db = res.scalars().first()
+    if not v_db:
+        raise HTTPException(status_code=404, detail="Vehicle no trobat")
+
+    # Guardar disc local
+    docs_dir = f"/docs/{empresa_id}/flota/{vehicle_id}"
+    os.makedirs(docs_dir, exist_ok=True)
+    file_path = os.path.join(docs_dir, file.filename)
+    
+    with open(file_path, "wb") as buffer:
+        shutil.copyfileobj(file.file, buffer)
+        
+    doc = DocumentFlota(
+        empresa_id=empresa_id,
+        vehicle_id=vehicle_id,
+        tipus_document=tipus_document,
+        nom_arxiu=file.filename,
+        ruta_arxiu=file_path,
+        creat_per_id=uuid.UUID(current_user["sub"])
+    )
+    db.add(doc)
+    await db.commit()
+    await db.refresh(doc)
+    
+    # Executar OCR asíncron
+    try:
+        from app.workers.tasks import processar_ocr_document_task
+        processar_ocr_document_task.delay(file_path, str(empresa_id))
+    except:
+        pass
+        
+    return {"missatge": "Document pujat i en procés d'OCR", "id": str(doc.id)}
+
+@router.get("/{vehicle_id}/documents")
+async def llistar_documents_flota(
+    vehicle_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    tenant: dict = Depends(valida_uuid)
+):
+    empresa_id = tenant["empresa_id"]
+    stmt = select(DocumentFlota).where(DocumentFlota.vehicle_id == vehicle_id, DocumentFlota.empresa_id == empresa_id)
+    res = await db.execute(stmt)
+    docs = res.scalars().all()
+    
+    return [
+        {
+            "id": str(d.id),
+            "tipus": d.tipus_document,
+            "nom_arxiu": d.nom_arxiu,
+            "data": d.data_document.isoformat() if d.data_document else None
+        } for d in docs
+    ]

@@ -260,6 +260,7 @@ class Vehicle(Base):
     estat_itv: Mapped[str] = mapped_column(String(50), default="FAVORABLE", server_default="FAVORABLE")
     data_caducitat_asseguranca: Mapped[Optional[date]] = mapped_column(Date)
     companyia_asseguradora: Mapped[Optional[str]] = mapped_column(String(100))
+    polissa_asseguranca: Mapped[Optional[str]] = mapped_column(String(100))
     carnet_necessari: Mapped[str] = mapped_column(String(10), default="B", server_default="B")
     historial_reparacions: Mapped[Optional[str]] = mapped_column(Text)
     
@@ -905,3 +906,16 @@ class TiquetCombustible(Base):
     ruta_arxiu_pwa: Mapped[Optional[str]] = mapped_column(String(500))
     creat_per_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("usuaris.id", ondelete="SET NULL"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), server_default=text('now()'))
+
+class DocumentFlota(Base):
+    __tablename__ = "documents_flota"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, server_default=text("gen_random_uuid()"))
+    empresa_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("empreses.id", ondelete="CASCADE"), nullable=False)
+    vehicle_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("vehicles.id", ondelete="CASCADE"), nullable=False)
+    tipus_document: Mapped[str] = mapped_column(String(50), nullable=False) # ITV, ASSEGURANCA, REPARACIO, CONTRACTE, FITXA_TECNICA
+    nom_arxiu: Mapped[str] = mapped_column(String(255), nullable=False)
+    ruta_arxiu: Mapped[str] = mapped_column(String(500), nullable=False)
+    contingut_extret: Mapped[Optional[str]] = mapped_column(Text) # Text extret via OCR per al Copilot
+    data_document: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), server_default=text('now()'))
+    creat_per_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("usuaris.id", ondelete="SET NULL"))

@@ -104,6 +104,10 @@ export default function GestioFlotaPage() {
   const [nouEstatItv, setNouEstatItv] = useState<string>("FAVORABLE");
   const [novaDataItv, setNovaDataItv] = useState<string>("");
   const [novaDataAsseguranca, setNovaDataAsseguranca] = useState<string>("");
+  const [novaPolissaAsseguranca, setNovaPolissaAsseguranca] = useState<string>("");
+  const [arxiuAsseguranca, setArxiuAsseguranca] = useState<File | null>(null);
+  const [arxiuITV, setArxiuITV] = useState<File | null>(null);
+  const [arxiuReparacio, setArxiuReparacio] = useState<File | null>(null);
   const [novaCompanyiaAsseguranca, setNovaCompanyiaAsseguranca] = useState<string>("");
   const [nouCarnet, setNouCarnet] = useState<string>("B");
 
@@ -235,6 +239,7 @@ export default function GestioFlotaPage() {
           data_proxima_itv: novaDataItv || null,
           data_caducitat_asseguranca: novaDataAsseguranca || null,
           companyia_asseguradora: novaCompanyiaAsseguranca || null,
+          polissa_asseguranca: novaPolissaAsseguranca || null,
           carnet_necessari: nouCarnet
         }),
       });
