@@ -358,8 +358,7 @@ async def llistar_documents_flota(
 @router.post("/ocr-draft")
 async def ocr_vehicle_draft(
     request: Request,
-    file: UploadFile = File(...),
-    tenant: dict = Depends(valida_uuid)
+    file: UploadFile = File(...)
 ):
     """
     (RF-00 Alta Màgica OCR) Simula el processament de la Fitxa Tècnica / Permís de Circulació / Pòlissa
