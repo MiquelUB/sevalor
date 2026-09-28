@@ -1,5 +1,5 @@
 "use client";
-import { apiFetch } from "@/lib/api";
+import { apiFetch, getApiBaseUrl } from "@/lib/api";
 
 
 import React, { useState, useEffect } from "react";
@@ -84,6 +84,7 @@ export default function GestioProveidorsPage() {
 
   // Estat Modal Alta Proveïdor
   const [modalAltaObert, setModalAltaObert] = useState<boolean>(false);
+  const [ocrLoading, setOcrLoading] = useState(false);
   const [novaRaoSocial, setNovaRaoSocial] = useState<string>("");
   const [nouNif, setNouNif] = useState<string>("");
   const [nouTelefon, setNouTelefon] = useState<string>("");
@@ -122,6 +123,45 @@ export default function GestioProveidorsPage() {
 
 
   // Carregar proveïdors des del backend
+  const handleOcrUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    
+    setOcrLoading(true);
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      const token = localStorage.getItem("sevalor_auth_token") ? JSON.parse(localStorage.getItem("sevalor_auth_token")!).token : "";
+      
+      const res = await fetch(`${getApiBaseUrl()}/gestio/proveidors/ocr-draft`, {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${token}`,
+          "X-Empresa-ID": localStorage.getItem("sevalor_tenant_id") || ""
+        },
+        body: formData
+      });
+      
+      if (res.ok) {
+        const data = await res.json();
+        setNouNif(data.nif || "");
+        setNovaRaoSocial(data.rao_social || "");
+        setNouEmail(data.email || "");
+        setNouTelefon(data.telefon || "");
+        if (data.iban) setNouIban(data.iban);
+        
+        setModalAltaObert(true);
+      } else {
+        alert("Error processant OCR del Proveïdor");
+      }
+    } catch (err) {
+      alert("Error de xarxa OCR: " + err);
+    } finally {
+      setOcrLoading(false);
+      e.target.value = "";
+    }
+  };
+
   const fetchProveidors = async () => {
     setCarregant(true);
     try {
@@ -327,19 +367,27 @@ export default function GestioProveidorsPage() {
             <RefreshCw className={`w-3.5 h-3.5 ${carregant ? "animate-spin text-emerald-500" : ""}`} />
             <span>Refrescar</span>
           </button>
-          <button
-            onClick={() => {
-              setNovaRaoSocial("");
-              setNouNif("");
-              setNouTelefon("");
-              setNouEmail("");
-              setModalAltaObert(true);
-            }}
-            className="px-3.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-mono font-bold flex items-center gap-1.5 shadow transition-colors"
-          >
-            <PlusCircle className="w-4 h-4" />
-            <span>Alta Nou Proveïdor</span>
-          </button>
+          <div className="flex items-center gap-2">
+            <label className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-mono font-bold bg-indigo-600 text-white hover:bg-indigo-700 shadow-sm cursor-pointer transition-all ${ocrLoading ? 'opacity-50 pointer-events-none' : ''}`}>
+              {ocrLoading ? <span className="animate-spin text-lg leading-none">⚙</span> : <span className="text-lg leading-none">✨</span>}
+              <span>{ocrLoading ? 'Processant IA...' : 'Alta OCR'}</span>
+              <input type="file" className="hidden" accept="image/*,.pdf" onChange={handleOcrUpload} />
+            </label>
+            <button
+              onClick={() => {
+                setNovaRaoSocial("");
+                setNouNif("");
+                setNouTelefon("");
+                setNouEmail("");
+                setNouIban("");
+                setModalAltaObert(true);
+              }}
+              className="px-3.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-mono font-bold flex items-center gap-1.5 shadow transition-colors"
+            >
+              <PlusCircle className="w-4 h-4" />
+              <span>Alta Nou Proveïdor</span>
+            </button>
+          </div>
         </div>
       </div>
 
