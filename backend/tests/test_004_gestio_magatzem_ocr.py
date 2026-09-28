@@ -75,6 +75,6 @@ async def test_albara_ocr_i_confirmacio(admin_session, headers, boss_token):
         payload_factura["numero_albarans_vinculats"] = [mock_numero]
 
         res_fac = await ac.post("/api/v1/gestio/magatzem/albara/confirmar", json=payload_factura, headers=headers)
-        assert res_fac.status_code == 201
+        assert res_fac.status_code == 201, res_fac.json()
         data_fac = res_fac.json()
         assert data_fac["estat"] == "OK"

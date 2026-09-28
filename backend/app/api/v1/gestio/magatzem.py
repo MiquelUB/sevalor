@@ -1,5 +1,5 @@
-import os
 import uuid
+import os
 from datetime import date
 from typing import List, Optional
 
@@ -585,7 +585,6 @@ async def processar_document_ocr(
         raise HTTPException(status_code=401)
 
     import os
-    import uuid
 
     from app.workers.tasks import processar_ocr_document_task
 
@@ -671,7 +670,8 @@ async def confirmar_document(
             moviments_albara = (await db.execute(stmt_movs)).scalars().all()
             quantitat_total_albarans += sum([float(m.quantitat) for m in moviments_albara])
 
-        quantitat_factura = sum([float(l.quantitat) for l in payload.linies])
+        # Com que les eines no generen MovimentEstoc, només sumem les quantitats de MATERIALS de la factura per quadrar-ho
+        quantitat_factura = sum([float(l.quantitat) for l in payload.linies if l.tipus != "EINA"])
 
         if abs(quantitat_total_albarans - quantitat_factura) > 0.01:
             raise HTTPException(status_code=400, detail="DISCORDÀNCIA: Les quantitats de la factura no quadren amb la suma dels albarans vinculats. Revisa-ho manualment.")
@@ -716,7 +716,6 @@ async def confirmar_document(
             
             if linia.tipus == "EINA":
                 # Spec 004 RF-07: Les Eines es custodien per Serial Number i no sumen stock genèric d'Article
-                import uuid
                 quantitat = int(linia.quantitat) if linia.quantitat > 0 else 1
                 for _ in range(quantitat):
                     eina_ocr = EinaCustodia(
