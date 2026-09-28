@@ -45,6 +45,11 @@ interface VehicleItem {
   conductor_habitual_id: string | null;
   conductor_nom: string;
   data_proxima_itv: string | null;
+  estat_itv: string;
+  data_caducitat_asseguranca: string | null;
+  companyia_asseguradora: string | null;
+  carnet_necessari: string;
+  historial_reparacions: string | null;
   dies_propera_itv: number | null;
   alerta_itv_cadena: string;
   regim_adquisicio: string;
@@ -95,6 +100,12 @@ export default function GestioFlotaPage() {
   const [nouOdometre, setNouOdometre] = useState<number>(0);
   const [nouRegim, setNouRegim] = useState<string>("PROPIETAT");
   const [nouLimitKm, setNouLimitKm] = useState<number>(100000);
+  
+  const [nouEstatItv, setNouEstatItv] = useState<string>("FAVORABLE");
+  const [novaDataItv, setNovaDataItv] = useState<string>("");
+  const [novaDataAsseguranca, setNovaDataAsseguranca] = useState<string>("");
+  const [novaCompanyiaAsseguranca, setNovaCompanyiaAsseguranca] = useState<string>("");
+  const [nouCarnet, setNouCarnet] = useState<string>("B");
 
   // Carregar vehicles des del backend
   const fetchVehicles = async () => {
@@ -254,6 +265,11 @@ export default function GestioFlotaPage() {
           consum_adblue_litres: 0,
           anomalia_consum: false,
           anomalia_descartada: false,
+          estat_itv: nouEstatItv,
+          data_caducitat_asseguranca: novaDataAsseguranca || null,
+          companyia_asseguradora: novaCompanyiaAsseguranca || null,
+          carnet_necessari: nouCarnet,
+          historial_reparacions: null
         };
         setVehicles((prev) => [nouItem, ...prev]);
         setModalNouVehicleObert(false);
@@ -709,6 +725,69 @@ export default function GestioFlotaPage() {
               )}
 
               {/* Botons d'acció */}
+
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <label className="font-bold text-slate-700 dark:text-slate-300">Assegurança (Companyia):</label>
+                  <input
+                    type="text"
+                    placeholder="Ex: Mapfre, Allianz"
+                    value={novaCompanyiaAsseguranca}
+                    onChange={(e) => setNovaCompanyiaAsseguranca(e.target.value)}
+                    className="w-full p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-slate-100 font-mono text-xs focus:outline-none"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="font-bold text-slate-700 dark:text-slate-300">Caducitat Assegurança:</label>
+                  <input
+                    type="date"
+                    value={novaDataAsseguranca}
+                    onChange={(e) => setNovaDataAsseguranca(e.target.value)}
+                    className="w-full p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-slate-100 font-mono text-xs focus:outline-none"
+                  />
+                </div>
+              </div>
+              
+              <div className="grid grid-cols-3 gap-3">
+                <div className="space-y-1">
+                  <label className="font-bold text-slate-700 dark:text-slate-300">Estat ITV actual:</label>
+                  <select
+                    value={nouEstatItv}
+                    onChange={(e) => setNouEstatItv(e.target.value)}
+                    className="w-full p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-slate-100 font-mono text-xs focus:outline-none"
+                  >
+                    <option value="FAVORABLE">Favorable Neta</option>
+                    <option value="FAVORABLE_LEUS">Favorable amb Def. Lleus</option>
+                    <option value="DESFAVORABLE">Desfavorable</option>
+                    <option value="NEGATIVA">Negativa</option>
+                  </select>
+                </div>
+                <div className="space-y-1">
+                  <label className="font-bold text-slate-700 dark:text-slate-300">Data propera ITV:</label>
+                  <input
+                    type="date"
+                    value={novaDataItv}
+                    onChange={(e) => setNovaDataItv(e.target.value)}
+                    className="w-full p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-slate-100 font-mono text-xs focus:outline-none"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="font-bold text-slate-700 dark:text-slate-300">Carnet Requerit:</label>
+                  <select
+                    value={nouCarnet}
+                    onChange={(e) => setNouCarnet(e.target.value)}
+                    className="w-full p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-slate-100 font-mono text-xs focus:outline-none"
+                  >
+                    <option value="B">B (Turismes/Furgonetes)</option>
+                    <option value="B+E">B+E (Remolc)</option>
+                    <option value="C">C (Camions rígids)</option>
+                    <option value="C+E">C+E (Tràilers)</option>
+                    <option value="AM">AM / A1 (Motos)</option>
+                    <option value="N/A">Maquinària exempta</option>
+                  </select>
+                </div>
+              </div>
+
               <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-200 dark:border-slate-800">
                 <button
                   type="button"
@@ -781,6 +860,69 @@ export default function GestioFlotaPage() {
                   onChange={(e) => setObservacionsDescarte(e.target.value)}
                   className="w-full p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-slate-100 font-mono text-xs focus:outline-none"
                 />
+              </div>
+
+
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <label className="font-bold text-slate-700 dark:text-slate-300">Assegurança (Companyia):</label>
+                  <input
+                    type="text"
+                    placeholder="Ex: Mapfre, Allianz"
+                    value={novaCompanyiaAsseguranca}
+                    onChange={(e) => setNovaCompanyiaAsseguranca(e.target.value)}
+                    className="w-full p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-slate-100 font-mono text-xs focus:outline-none"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="font-bold text-slate-700 dark:text-slate-300">Caducitat Assegurança:</label>
+                  <input
+                    type="date"
+                    value={novaDataAsseguranca}
+                    onChange={(e) => setNovaDataAsseguranca(e.target.value)}
+                    className="w-full p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-slate-100 font-mono text-xs focus:outline-none"
+                  />
+                </div>
+              </div>
+              
+              <div className="grid grid-cols-3 gap-3">
+                <div className="space-y-1">
+                  <label className="font-bold text-slate-700 dark:text-slate-300">Estat ITV actual:</label>
+                  <select
+                    value={nouEstatItv}
+                    onChange={(e) => setNouEstatItv(e.target.value)}
+                    className="w-full p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-slate-100 font-mono text-xs focus:outline-none"
+                  >
+                    <option value="FAVORABLE">Favorable Neta</option>
+                    <option value="FAVORABLE_LEUS">Favorable amb Def. Lleus</option>
+                    <option value="DESFAVORABLE">Desfavorable</option>
+                    <option value="NEGATIVA">Negativa</option>
+                  </select>
+                </div>
+                <div className="space-y-1">
+                  <label className="font-bold text-slate-700 dark:text-slate-300">Data propera ITV:</label>
+                  <input
+                    type="date"
+                    value={novaDataItv}
+                    onChange={(e) => setNovaDataItv(e.target.value)}
+                    className="w-full p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-slate-100 font-mono text-xs focus:outline-none"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="font-bold text-slate-700 dark:text-slate-300">Carnet Requerit:</label>
+                  <select
+                    value={nouCarnet}
+                    onChange={(e) => setNouCarnet(e.target.value)}
+                    className="w-full p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-slate-100 font-mono text-xs focus:outline-none"
+                  >
+                    <option value="B">B (Turismes/Furgonetes)</option>
+                    <option value="B+E">B+E (Remolc)</option>
+                    <option value="C">C (Camions rígids)</option>
+                    <option value="C+E">C+E (Tràilers)</option>
+                    <option value="AM">AM / A1 (Motos)</option>
+                    <option value="N/A">Maquinària exempta</option>
+                  </select>
+                </div>
               </div>
 
               <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-200 dark:border-slate-800">
@@ -940,6 +1082,69 @@ export default function GestioFlotaPage() {
                     onChange={(e) => setNouLimitKm(Number(e.target.value))}
                     className="w-full p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-slate-100 font-mono text-xs focus:outline-none"
                   />
+                </div>
+              </div>
+
+
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <label className="font-bold text-slate-700 dark:text-slate-300">Assegurança (Companyia):</label>
+                  <input
+                    type="text"
+                    placeholder="Ex: Mapfre, Allianz"
+                    value={novaCompanyiaAsseguranca}
+                    onChange={(e) => setNovaCompanyiaAsseguranca(e.target.value)}
+                    className="w-full p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-slate-100 font-mono text-xs focus:outline-none"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="font-bold text-slate-700 dark:text-slate-300">Caducitat Assegurança:</label>
+                  <input
+                    type="date"
+                    value={novaDataAsseguranca}
+                    onChange={(e) => setNovaDataAsseguranca(e.target.value)}
+                    className="w-full p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-slate-100 font-mono text-xs focus:outline-none"
+                  />
+                </div>
+              </div>
+              
+              <div className="grid grid-cols-3 gap-3">
+                <div className="space-y-1">
+                  <label className="font-bold text-slate-700 dark:text-slate-300">Estat ITV actual:</label>
+                  <select
+                    value={nouEstatItv}
+                    onChange={(e) => setNouEstatItv(e.target.value)}
+                    className="w-full p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-slate-100 font-mono text-xs focus:outline-none"
+                  >
+                    <option value="FAVORABLE">Favorable Neta</option>
+                    <option value="FAVORABLE_LEUS">Favorable amb Def. Lleus</option>
+                    <option value="DESFAVORABLE">Desfavorable</option>
+                    <option value="NEGATIVA">Negativa</option>
+                  </select>
+                </div>
+                <div className="space-y-1">
+                  <label className="font-bold text-slate-700 dark:text-slate-300">Data propera ITV:</label>
+                  <input
+                    type="date"
+                    value={novaDataItv}
+                    onChange={(e) => setNovaDataItv(e.target.value)}
+                    className="w-full p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-slate-100 font-mono text-xs focus:outline-none"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="font-bold text-slate-700 dark:text-slate-300">Carnet Requerit:</label>
+                  <select
+                    value={nouCarnet}
+                    onChange={(e) => setNouCarnet(e.target.value)}
+                    className="w-full p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-slate-100 font-mono text-xs focus:outline-none"
+                  >
+                    <option value="B">B (Turismes/Furgonetes)</option>
+                    <option value="B+E">B+E (Remolc)</option>
+                    <option value="C">C (Camions rígids)</option>
+                    <option value="C+E">C+E (Tràilers)</option>
+                    <option value="AM">AM / A1 (Motos)</option>
+                    <option value="N/A">Maquinària exempta</option>
+                  </select>
                 </div>
               </div>
 

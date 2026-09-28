@@ -390,7 +390,12 @@ async def execute_tool_get_vehicle_info(db: AsyncSession, empresa_id: uuid.UUID,
         "tipus": v.tipus,
         "estat": v.estat,
         "data_proxima_itv": v.data_proxima_itv.isoformat() if v.data_proxima_itv else None,
-        "odometre_acumulat": v.odometre_acumulat
+        "odometre_acumulat": v.odometre_acumulat,
+        "estat_itv": v.estat_itv,
+        "data_caducitat_asseguranca": v.data_caducitat_asseguranca.isoformat() if v.data_caducitat_asseguranca else None,
+        "companyia_asseguradora": v.companyia_asseguradora,
+        "carnet_necessari": v.carnet_necessari,
+        "historial_reparacions": v.historial_reparacions
     }
 
 
@@ -875,7 +880,10 @@ async def executar_agent_local(
             if tool_res.get("trobat"):
                 resposta = (
                     f"Vehicle {tool_res['matricula']} ({tool_res['marca']} {tool_res['model']}): "
-                    f"Estat: {tool_res['estat']}. Data propera ITV: {tool_res.get('data_proxima_itv') or 'Pendent'}. "
+                    f"Estat: {tool_res['estat']}. "
+                    f"ITV: {tool_res.get('estat_itv')} (Propera: {tool_res.get('data_proxima_itv') or 'Pendent'}). "
+                    f"Assegurança: {tool_res.get('companyia_asseguradora') or 'No consta'} (Caduca: {tool_res.get('data_caducitat_asseguranca') or 'No consta'}). "
+                    f"Carnet Requerit: {tool_res.get('carnet_necessari')}. "
                     f"Odòmetre: {tool_res['odometre_acumulat']} km."
                 )
             else:

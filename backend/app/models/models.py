@@ -257,6 +257,11 @@ class Vehicle(Base):
     conductor_habitual_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("usuaris.id", ondelete="SET NULL"))
     magatzem_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("magatzems.id", ondelete="SET NULL"))
     data_proxima_itv: Mapped[Optional[date]] = mapped_column(Date)
+    estat_itv: Mapped[str] = mapped_column(String(50), default="FAVORABLE", server_default="FAVORABLE")
+    data_caducitat_asseguranca: Mapped[Optional[date]] = mapped_column(Date)
+    companyia_asseguradora: Mapped[Optional[str]] = mapped_column(String(100))
+    carnet_necessari: Mapped[str] = mapped_column(String(10), default="B", server_default="B")
+    historial_reparacions: Mapped[Optional[str]] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), server_default=text('now()'))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), server_default=text('now()'))
 
