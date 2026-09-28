@@ -103,6 +103,11 @@ Serveix PDF des de Hetzner
 	
 Registra descàrrega
 --------------------------------------------------------------------------------
+
+> [!IMPORTANT]
+> **Política Global: Alta Màgica OCR (Zero Data Entry)**
+> Tot el sistema implementa la funcionalitat d'Alta Màgica OCR, permetent l'alta d'entitats (Vehicles, Treballadors, Albarans, Factures, Contractes, Clients, Proveïdors) mitjançant l'anàlisi automatitzat de fotografies o PDFs, sense necessitat de picar les dades manualment.
+
 Requisits Funcionals (EARS Notation)
 Àmbit 1: Arquitectura del Microservei, Webhooks i Aïllament Multi-Inquilí
 
@@ -184,6 +189,11 @@ El microservei aplica el timeout, demana disculpes indicant que un tècnic respo
 --------------------------------------------------------------------------------
 Criteris de Finalització (Definition of Done) i Matriu de Traçabilitat
 
-    Els 23 Requisits Funcionals (RF-01 al RF-23) i els 4 Casos Límit redactats amb sintaxi formal EARS estricta en català i lliures d'ambigüitats.
+    Els 23 
+> [!IMPORTANT]
+> **Política Global: Alta Màgica OCR (Zero Data Entry)**
+> Tot el sistema implementa la funcionalitat d'Alta Màgica OCR, permetent l'alta d'entitats (Vehicles, Treballadors, Albarans, Factures, Contractes, Clients, Proveïdors) mitjançant l'anàlisi automatitzat de fotografies o PDFs, sense necessitat de picar les dades manualment.
+
+Requisits Funcionals (RF-01 al RF-23) i els 4 Casos Límit redactats amb sintaxi formal EARS estricta en català i lliures d'ambigüitats.
     MIME & Double Extension validation: el programari compta amb proves pytest d'integració simulant atacs de format imatge amb injeccions de fitxers, blocant-los correctament.
     Lliurament de factura estrictament per enllaç temporal de 24 hores: s'exclou la pujada del PDF a Telegram per disseny de seguretat de l'inquilí.

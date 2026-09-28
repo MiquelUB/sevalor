@@ -61,6 +61,11 @@ Comprovant físic de tiquet o albarà de caixa
 	
 Al tancar el Check-out de tiquets
 --------------------------------------------------------------------------------
+
+> [!IMPORTANT]
+> **Política Global: Alta Màgica OCR (Zero Data Entry)**
+> Tot el sistema implementa la funcionalitat d'Alta Màgica OCR, permetent l'alta d'entitats (Vehicles, Treballadors, Albarans, Factures, Contractes, Clients, Proveïdors) mitjançant l'anàlisi automatitzat de fotografies o PDFs, sense necessitat de picar les dades manualment.
+
 Requisits Funcionals (EARS Notation)
 Àmbit 1: Biblioteca Centralitzada d'Imatges i Estat Buit Sincer (Zero Mock Data)
 
@@ -243,7 +248,12 @@ Fora d'Abast (Out of Scope)
 Criteris de Finalització (Definition of Done) i Matriu de Traçabilitat
 Per a poder certificar el tancament de la Spec 020 de Càmera de camp i habilitar la seva fase d'implementació, s'ha de verificar el compliment estricte de la següent matriu de traçabilitat:
 
-    Els 22 Requisits Funcionals (RF-01 al RF-22) i els 10 Casos Límit (EDGE-01 al EDGE-10) redactats amb sintaxi formal EARS estricta en català i lliures d'ambigüitats tècniques o dades de prova fictícies sota l'estat Dia 0.
+    Els 22 
+> [!IMPORTANT]
+> **Política Global: Alta Màgica OCR (Zero Data Entry)**
+> Tot el sistema implementa la funcionalitat d'Alta Màgica OCR, permetent l'alta d'entitats (Vehicles, Treballadors, Albarans, Factures, Contractes, Clients, Proveïdors) mitjançant l'anàlisi automatitzat de fotografies o PDFs, sense necessitat de picar les dades manualment.
+
+Requisits Funcionals (RF-01 al RF-22) i els 10 Casos Límit (EDGE-01 al EDGE-10) redactats amb sintaxi formal EARS estricta en català i lliures d'ambigüitats tècniques o dades de prova fictícies sota l'estat Dia 0.
     Correspondència del 100% de la spec de càmera amb una suite de proves d'integració automatitzada en verd amb PostgreSQL RLS actiu sota el tenant d'empresa de CampoPro.
     Alineació total de la política de QR (Constitució v4.0): exclusió absoluta de codis QR per a les eines de camp (les quals es custodien i es traspassen per referència de fàbrica/SN), preservant el QR legal obligatori de facturació Veri*factu per a albarans i factures al tancament de l'obra.
     Enrolament de Càmera en captures en viu obligatòries: implementació del control d'input programàtic accept="image/*" capture="environment" (RF-17), bloquejant l'accés a galeries locals del mòbil.

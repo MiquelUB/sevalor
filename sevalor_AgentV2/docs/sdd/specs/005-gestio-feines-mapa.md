@@ -44,6 +44,11 @@ Historias de usuario
     H8: Como Secretaria o Boss, quiero que toda incidencia quede registrada automáticamente a nivel técnico (hoja de tarea, historial del vehículo), pero que cualquier anotación disciplinaria laboral o expediente en RRHH dependa estrictamente de una decisión humana explícita y objetiva (conductor real del siniestro vial según atestado oficial; encargado de almacén ante omisión de picking; o capataz en faltas colectivas).
 
 --------------------------------------------------------------------------------
+
+> [!IMPORTANT]
+> **Política Global: Alta Màgica OCR (Zero Data Entry)**
+> Tot el sistema implementa la funcionalitat d'Alta Màgica OCR, permetent l'alta d'entitats (Vehicles, Treballadors, Albarans, Factures, Contractes, Clients, Proveïdors) mitjançant l'anàlisi automatitzat de fotografies o PDFs, sense necessitat de picar les dades manualment.
+
 Requisitos Funcionales (Notación EARS Estricta)
 Bloque 1: Arquitectura Cartográfica Open Source, Capas y Redes Propias
 
@@ -357,7 +362,12 @@ Fuera de Alcance (Lo que NO hace este módulo)
 --------------------------------------------------------------------------------
 Criterios de Finalización (Definition of Done)
 
-    Todos los Requisitos Funcionales (RF-01 al RF-34) y todas las cláusulas de Casos Límite (EDGE-01 a EDGE-10) redactados en sintaxis formal EARS respondiendo fielmente al QUÉ y al POR QUÉ de la operativa real.
+    Todos los 
+> [!IMPORTANT]
+> **Política Global: Alta Màgica OCR (Zero Data Entry)**
+> Tot el sistema implementa la funcionalitat d'Alta Màgica OCR, permetent l'alta d'entitats (Vehicles, Treballadors, Albarans, Factures, Contractes, Clients, Proveïdors) mitjançant l'anàlisi automatitzat de fotografies o PDFs, sense necessitat de picar les dades manualment.
+
+Requisitos Funcionales (RF-01 al RF-34) y todas las cláusulas de Casos Límite (EDGE-01 a EDGE-10) redactados en sintaxis formal EARS respondiendo fielmente al QUÉ y al POR QUÉ de la operativa real.
     Correspondencia del 100% de los requisitos funcionales y casos límite con una suite de pruebas automatizada, ejecutada en verde contra base de datos PostgreSQL real con RLS activo y sin datos simulados (Zero-Mock Policy).
     Arquitectura cartográfica 100% Open Source basada en Leaflet / MapLibre GL con capas OpenStreetMap y PNOA Ortofoto sin dependencias comerciales de API.
     Capa vectorial propia de infraestructura técnica integrable mediante GeoJSON/KML local en /docs/<empresa_id>/planols/vectorials/.\

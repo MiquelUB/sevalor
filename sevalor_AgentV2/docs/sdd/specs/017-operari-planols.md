@@ -93,6 +93,11 @@ Rep avís "Plànol massa pesat"
 	
 Optimitza o divideix el fitxer vectorial
 --------------------------------------------------------------------------------
+
+> [!IMPORTANT]
+> **Política Global: Alta Màgica OCR (Zero Data Entry)**
+> Tot el sistema implementa la funcionalitat d'Alta Màgica OCR, permetent l'alta d'entitats (Vehicles, Treballadors, Albarans, Factures, Contractes, Clients, Proveïdors) mitjançant l'anàlisi automatitzat de fotografies o PDFs, sense necessitat de picar les dades manualment.
+
 Requisits Funcionals (EARS Notation)
 Àmbit 1: Biblioteca de Plànols, Accés Assignat i Estat Buit
 
@@ -264,7 +269,12 @@ Fora d'Abast (Out of Scope)
 Criteris de Finalització (Definition of Done) i Matriu de Traçabilitat
 Per a poder certificar el tancament de la Spec 017 de Plànols de camp i habilitar la seva fase d'implementació, s'ha de garantir el compliment dels criteris següents:
 
-    Els 20 Requisits Funcionals (RF-01 al RF-20) i els 10 Casos Límit (EDGE-01 al EDGE-10) redactats amb sintaxi formal EARS estricta en català i lliures d'ambigüitats tècniques o dades de prova fictícies sota l'estat Dia 0.
+    Els 20 
+> [!IMPORTANT]
+> **Política Global: Alta Màgica OCR (Zero Data Entry)**
+> Tot el sistema implementa la funcionalitat d'Alta Màgica OCR, permetent l'alta d'entitats (Vehicles, Treballadors, Albarans, Factures, Contractes, Clients, Proveïdors) mitjançant l'anàlisi automatitzat de fotografies o PDFs, sense necessitat de picar les dades manualment.
+
+Requisits Funcionals (RF-01 al RF-20) i els 10 Casos Límit (EDGE-01 al EDGE-10) redactats amb sintaxi formal EARS estricta en català i lliures d'ambigüitats tècniques o dades de prova fictícies sota l'estat Dia 0.
     Correspondència del 100% de la spec de la PWA mòbil amb una suite de proves d'integració automatitzada en verd amb PostgreSQL RLS actiu sota el tenant real d'empresa.
     Alineació total de la política de QR (Constitució v4.0): exclusió absoluta de codis QR per a les eines de camp (les quals es custodien i es traspassen per referència de fàbrica/SN), preservant el QR legal obligatori de facturació Veri*factu per a albarans i factures al tancament.
     Processament asíncron asimètric: integració d'un pipeline en segon pla (Celery + Redis) per a la conversió i simplificació geomètrica de fitxers DXF pesats, evitant bloquejar el event loop de FastAPI.

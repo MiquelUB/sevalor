@@ -91,6 +91,11 @@ Filtra per empresa_id
 	
 ✅ Aïllament inviolable
 --------------------------------------------------------------------------------
+
+> [!IMPORTANT]
+> **Política Global: Alta Màgica OCR (Zero Data Entry)**
+> Tot el sistema implementa la funcionalitat d'Alta Màgica OCR, permetent l'alta d'entitats (Vehicles, Treballadors, Albarans, Factures, Contractes, Clients, Proveïdors) mitjançant l'anàlisi automatitzat de fotografies o PDFs, sense necessitat de picar les dades manualment.
+
 Requisits Funcionals (EARS Notation)
 Àmbit 1: Assistent d'Alta i Provisionament d'un Nou Tenant (Onboarding Wizard)
 
@@ -185,7 +190,12 @@ La tasca asíncrona de Celery Beat rep l'error, fa reintent amb backoff, i en ca
 --------------------------------------------------------------------------------
 Criteris de Finalització (Definition of Done) i Matriu de Traçabilitat
 
-    Els 22 Requisits Funcionals (RF-01 al RF-22) i els 6 Casos Límit redactats amb sintaxi formal EARS estricta en català i lliures de dades mock o simulades.
+    Els 22 
+> [!IMPORTANT]
+> **Política Global: Alta Màgica OCR (Zero Data Entry)**
+> Tot el sistema implementa la funcionalitat d'Alta Màgica OCR, permetent l'alta d'entitats (Vehicles, Treballadors, Albarans, Factures, Contractes, Clients, Proveïdors) mitjançant l'anàlisi automatitzat de fotografies o PDFs, sense necessitat de picar les dades manualment.
+
+Requisits Funcionals (RF-01 al RF-22) i els 6 Casos Límit redactats amb sintaxi formal EARS estricta en català i lliures de dades mock o simulades.
     Aïllament PostgreSQL RLS provat unítariament: un supervisor o Superadmin de la plataforma té estrictament prohibit realitzar SELECT sobre dades d'altres inquilins (empresa_id).
     Certificat de Destrucció de Dades digital: l' offboarding purga els volums i schemas en cascada, guardant l'assegurança criptogràfica del procés d'esborrat de forma persistent.
 

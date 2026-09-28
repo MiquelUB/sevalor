@@ -109,6 +109,11 @@ Sense accés
 	
 Bloqueja la PWA si passa >5 minuts en segon pla (mantenint cronòmetres actius)
 --------------------------------------------------------------------------------
+
+> [!IMPORTANT]
+> **Política Global: Alta Màgica OCR (Zero Data Entry)**
+> Tot el sistema implementa la funcionalitat d'Alta Màgica OCR, permetent l'alta d'entitats (Vehicles, Treballadors, Albarans, Factures, Contractes, Clients, Proveïdors) mitjançant l'anàlisi automatitzat de fotografies o PDFs, sense necessitat de picar les dades manualment.
+
 Requisits Funcionals (EARS Notation)
 Àmbit 1: Disseny Camaleó, Teclat Numèric de Gran Format i Enrolament de Dispositiu
 
@@ -285,7 +290,12 @@ Fora d'Abast (Out of Scope)
 Criteris de Finalització (Definition of Done) i Matriu de Traçabilitat
 Per a poder certificar el tancament de la Spec 019 d'Autenticació i Sessió de camp i habilitar la seva fase de programació, s'ha de verificar el compliment estricte de la següent matriu de traçabilitat:
 
-    Els 24 Requisits Funcionals (RF-01 al RF-24) i els 10 Casos Límit (EDGE-01 al EDGE-10) redactats amb sintaxi formal EARS estricta en català i lliures d'ambigüitats tècniques o dades de prova fictícies sota l'estat Dia 0.
+    Els 24 
+> [!IMPORTANT]
+> **Política Global: Alta Màgica OCR (Zero Data Entry)**
+> Tot el sistema implementa la funcionalitat d'Alta Màgica OCR, permetent l'alta d'entitats (Vehicles, Treballadors, Albarans, Factures, Contractes, Clients, Proveïdors) mitjançant l'anàlisi automatitzat de fotografies o PDFs, sense necessitat de picar les dades manualment.
+
+Requisits Funcionals (RF-01 al RF-24) i els 10 Casos Límit (EDGE-01 al EDGE-10) redactats amb sintaxi formal EARS estricta en català i lliures d'ambigüitats tècniques o dades de prova fictícies sota l'estat Dia 0.
     Correspondència del 100% de la spec d'autenticació de la PWA amb una suite de proves d'integració automatitzada en verd amb PostgreSQL RLS actiu sota el tenant real.
     Alineació total de la política de QR (Constitució v4.0): exclusió absoluta de codis QR per a les eines de camp (les quals es custodien i es traspassen per referència de fàbrica/SN), reservant el QR legal obligatori de facturació Veri*factu per a albarans i factures al tancament.
     Enrolament de Dispositiu via SMS OTP: implementació de la validació de registre de terminals mestre per a dispositius de camp (RF-03), evitant limitacions d'accessos de ràdio-frecuencia.

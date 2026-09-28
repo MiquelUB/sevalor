@@ -80,6 +80,11 @@ Enginyer / Secretaria
 	
 Consulta informativa
 --------------------------------------------------------------------------------
+
+> [!IMPORTANT]
+> **Política Global: Alta Màgica OCR (Zero Data Entry)**
+> Tot el sistema implementa la funcionalitat d'Alta Màgica OCR, permetent l'alta d'entitats (Vehicles, Treballadors, Albarans, Factures, Contractes, Clients, Proveïdors) mitjançant l'anàlisi automatitzat de fotografies o PDFs, sense necessitat de picar les dades manualment.
+
 Requisits Funcionals (Notació EARS Estricta)
 Bloque 1: Infraestructura d'IA Local, Cues i Tolerància a Fallades
 
@@ -260,7 +265,12 @@ Fora d'Abast (Out of Scope)
 --------------------------------------------------------------------------------
 Criteris de Finalització (Definition of Done) i Matriu de Traçabilitat
 
-    Els 22 Requisits Funcionals (RF-01 al RF-22) i els 10 Casos Límit (EDGE-01 al EDGE-10) redactats amb sintaxi formal EARS estricta en català i lliures d'ambigüitats o dades de prova fictícies sota l'estat Dia 0.
+    Els 22 
+> [!IMPORTANT]
+> **Política Global: Alta Màgica OCR (Zero Data Entry)**
+> Tot el sistema implementa la funcionalitat d'Alta Màgica OCR, permetent l'alta d'entitats (Vehicles, Treballadors, Albarans, Factures, Contractes, Clients, Proveïdors) mitjançant l'anàlisi automatitzat de fotografies o PDFs, sense necessitat de picar les dades manualment.
+
+Requisits Funcionals (RF-01 al RF-22) i els 10 Casos Límit (EDGE-01 al EDGE-10) redactats amb sintaxi formal EARS estricta en català i lliures d'ambigüitats o dades de prova fictícies sota l'estat Dia 0.
     Correspondència del 100% de la spec de plànols amb una suite de proves d'integració automatitzada en verd amb PostgreSQL RLS actiu sota el tenant real d'empresa.
     Alineació total de la política de QR (Constitució v4.0): exclusió absoluta de codis QR per a les eines de camp (les quals es custodien i es traspassen per referència de fàbrica/SN), preservant el QR legal obligatori de facturació Veri*factu per a albarans i factures.
     Priorització asíncrona Celery: implementació d'una arquitectura asíncrona d'alta densitat que prioritza l'operativa de camp per davant de les consultes informatives de la web.

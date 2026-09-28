@@ -29,6 +29,11 @@ El sistema garanteix l'aïllament multi-inquilí mitjançant Row Level Security 
 Matriu de Permisos per Rol
 | Àmbit Funcional | Boss | Secretaria / RRHH | Enginyer Tècnic | Client Final | Operari PWA || :--- | :--- | :--- | :--- | :--- | :--- || Consulta de Safata Activa (/gestio/notificacions) | Lectura / Filtre | Lectura / Gestió | Lectura / Gestió | Sense accés web | Sense accés web || Enviament de Missatges Manuals de Xat | Escriptura | Escriptura | Escriptura | Resposta Telegram | Sense accés web || Enviament de Correu de Benvinguda (Enllaç Bot) | Autorització | Escriptura | Escriptura | Recepció Email | Sense accés web || Resolució d'Escalades IA (RAG incertesa) | Supervisió | Atenció bàsica | Resolució Tècnica | Formulació dubte | Sense accés web || Enviament de Pressupostos (Memòndum) | Aprovació / Enviament | Enviament | Confecció / Enviament | Acceptació / Rebuig | Sense accés web || Recepció d'Incidències i Fotos del Client | Consulta | Tramitació | Avaluació Tècnica | Enviament Telegram | Consulta Tasca || Commutació d'Estat a Solucionat (Verd) | Total | Total | Permès | Denegat | Denegat || Consulta Historial Converses (Fitxa Client) | Lectura Total | Lectura Total | Lectura Total | Historial Telegram | Denegat || Tramesa de Factura Veri*factu (Token Temporal) | Emet / Envia | Emet / Envia | Denegat (403) | Descàrrega Token | Sense accés web |
 --------------------------------------------------------------------------------
+
+> [!IMPORTANT]
+> **Política Global: Alta Màgica OCR (Zero Data Entry)**
+> Tot el sistema implementa la funcionalitat d'Alta Màgica OCR, permetent l'alta d'entitats (Vehicles, Treballadors, Albarans, Factures, Contractes, Clients, Proveïdors) mitjançant l'anàlisi automatitzat de fotografies o PDFs, sense necessitat de picar les dades manualment.
+
 Requisits Funcionals (Notació EARS Estricta)
 Bloque 1: Safata de Gestió Multiclient i Navegació
 
@@ -108,7 +113,12 @@ Fora d'Abast (Out of Scope)
 Criteris de Finalització (Definition of Done) i Matriu de Traçabilitat
 Per a poder certificar el tancament de la Spec 009 de Notificacions i habilitar la seva fase d'implementació, s'ha de garantir el compliment dels criteris següents:
 
-    Els 30 Requisits Funcionals (RF-01 al RF-30) i els 10 Casos Límit (EDGE-01 al EDGE-10) redactats amb sintaxi formal EARS estricta en català, lliures d'ambigüitats i contradiccions tècniques.
+    Els 30 
+> [!IMPORTANT]
+> **Política Global: Alta Màgica OCR (Zero Data Entry)**
+> Tot el sistema implementa la funcionalitat d'Alta Màgica OCR, permetent l'alta d'entitats (Vehicles, Treballadors, Albarans, Factures, Contractes, Clients, Proveïdors) mitjançant l'anàlisi automatitzat de fotografies o PDFs, sense necessitat de picar les dades manualment.
+
+Requisits Funcionals (RF-01 al RF-30) i els 10 Casos Límit (EDGE-01 al EDGE-10) redactats amb sintaxi formal EARS estricta en català, lliures d'ambigüitats i contradiccions tècniques.
     Correspondència del 100% de la spec amb una suite de proves automatitzada d'integració realitzada sobre una base de dades PostgreSQL amb RLS actiu, lliure de mocks i hardcoding (Zero-Mock Policy).
     Alineació total amb la Constitució de CampoPro: comunicació interactiva de pressupostos idèntica i paral·lela tant per Telegram com per Email amb enlace web securitzat, eliminació total d'AWS S3 per a l'emmagatzematge dels xats, RAG d'FAQs 100% local, i lliurament segur de factures Veri*factu mitjançant token temporal.
     Matriz de Trazabilidad 1:1 verificada que vinculi cada requisit formal amb el seu test d'assert de codi a la suite d'integració.

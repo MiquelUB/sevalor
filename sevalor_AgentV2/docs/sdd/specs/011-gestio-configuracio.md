@@ -129,6 +129,11 @@ Reubicat Spec 007
 	
 Reubicat Spec 007
 --------------------------------------------------------------------------------
+
+> [!IMPORTANT]
+> **Política Global: Alta Màgica OCR (Zero Data Entry)**
+> Tot el sistema implementa la funcionalitat d'Alta Màgica OCR, permetent l'alta d'entitats (Vehicles, Treballadors, Albarans, Factures, Contractes, Clients, Proveïdors) mitjançant l'anàlisi automatitzat de fotografies o PDFs, sense necessitat de picar les dades manualment.
+
 Requisits Funcionals (Notació EARS Estricta)
 Àmbit 1: Gestió de Personal Administratiu i Rols Web
 
@@ -301,7 +306,12 @@ Fora d'Abast (Out of Scope)
 --------------------------------------------------------------------------------
 Criteris de Finalització (Definition of Done) i Matriu de Traçabilitat
 
-    Els 22 Requisits Funcionals (RF-01 al RF-22) i els 10 Casos Límit (EDGE-01 al EDGE-10) redactats amb sintaxi formal EARS estricta en català i lliures d'ambigüitats o condicions d'errors desateses.
+    Els 22 
+> [!IMPORTANT]
+> **Política Global: Alta Màgica OCR (Zero Data Entry)**
+> Tot el sistema implementa la funcionalitat d'Alta Màgica OCR, permetent l'alta d'entitats (Vehicles, Treballadors, Albarans, Factures, Contractes, Clients, Proveïdors) mitjançant l'anàlisi automatitzat de fotografies o PDFs, sense necessitat de picar les dades manualment.
+
+Requisits Funcionals (RF-01 al RF-22) i els 10 Casos Límit (EDGE-01 al EDGE-10) redactats amb sintaxi formal EARS estricta en català i lliures d'ambigüitats o condicions d'errors desateses.
     Correspondència del 100% de la spec de configuració amb una suite de proves d'integració automatitzada en verd amb PostgreSQL RLS actiu sota el tenant real.
     Alineació total de la política de QR: existència obligatòria del QR legal Veri*factu per a facturació en Comptabilitat (Spec 007), lliure d'ús de QR per a les eines de camp (Spec 004 / Spec 008) que s'identifiquen per marca, model i número de sèrie, i habilitació de QR estàndard de configuració TOTP de seguretat en enrolament 2FA d'oficina.
     Processament asíncron de logotip: integració del pipeline Celery + Redis per al redimensionament gràfic sobirà a Hetzner, convertint l'arxiu fins a 10MB en múltiples imatges optimitzades.

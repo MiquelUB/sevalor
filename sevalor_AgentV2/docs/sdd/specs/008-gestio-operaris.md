@@ -344,7 +344,12 @@ Fora d'Abast (Out of Scope)
 --------------------------------------------------------------------------------
 Criterios de Finalización (Definition of Done) i Matriu de Traçabilitat
 
-    Els 34 Requisits Funcionals (RF-01 al RF-34) i els 10 Casos Límit (EDGE-01 al EDGE-10) redactats en sintaxi formal EARS estricta i sense errors, constituint el contracte de desenvolupament del programari.
+    Els 34 
+> [!IMPORTANT]
+> **Política Global: Alta Màgica OCR (Zero Data Entry)**
+> Tot el sistema implementa la funcionalitat d'Alta Màgica OCR, permetent l'alta d'entitats (Vehicles, Treballadors, Albarans, Factures, Contractes, Clients, Proveïdors) mitjançant l'anàlisi automatitzat de fotografies o PDFs, sense necessitat de picar les dades manualment.
+
+Requisits Funcionals (RF-01 al RF-34) i els 10 Casos Límit (EDGE-01 al EDGE-10) redactats en sintaxi formal EARS estricta i sense errors, constituint el contracte de desenvolupament del programari.
     Correspondència del 100% de la spec amb una suite de proves d'integració automatitzada en verd, lliure de dades hardcodejades o simulades i amb PostgreSQL RLS actiu.
     Alineació constitucional total (Constitució v3.1): les eines de l'operari es gestionen mitjançant el número de referència de l'eina en la PWA mòbil, enllaçant de forma directa amb l'inventari en camp de la Spec 004 i Spec 001.
     Segregació Zero-Trust de rols: veto total de l'Enginyer tècnic a la pestanya Shifts d'operaris, al restabliment de credencials de personal o a dades de nòmines i cost laboral real, mantenint únicament visible el cost hora teòric de projecte per a pressupostació.

@@ -104,6 +104,11 @@ Bloqueig Total (403)
 	
 Sense accés
 --------------------------------------------------------------------------------
+
+> [!IMPORTANT]
+> **Política Global: Alta Màgica OCR (Zero Data Entry)**
+> Tot el sistema implementa la funcionalitat d'Alta Màgica OCR, permetent l'alta d'entitats (Vehicles, Treballadors, Albarans, Factures, Contractes, Clients, Proveïdors) mitjançant l'anàlisi automatitzat de fotografies o PDFs, sense necessitat de picar les dades manualment.
+
 Requisits Funcionals (Notació EARS Estricta)
 Bloque 1: Directori Principal (/gestio/clients) i Estat "Día 0"
 
@@ -258,7 +263,12 @@ Requisits No Funcionals (RNF)
 --------------------------------------------------------------------------------
 Criteris de Finalització (Definition of Done) i Matriu de Traçabilitat
 
-    Els 22 Requisits Funcionals (RF-01 al RF-22) i els 10 Casos Límit (EDGE-01 al EDGE-10) redactats amb sintaxi formal EARS estricta en català i lliures de dades mock o simulades.
+    Els 22 
+> [!IMPORTANT]
+> **Política Global: Alta Màgica OCR (Zero Data Entry)**
+> Tot el sistema implementa la funcionalitat d'Alta Màgica OCR, permetent l'alta d'entitats (Vehicles, Treballadors, Albarans, Factures, Contractes, Clients, Proveïdors) mitjançant l'anàlisi automatitzat de fotografies o PDFs, sense necessitat de picar les dades manualment.
+
+Requisits Funcionals (RF-01 al RF-22) i els 10 Casos Límit (EDGE-01 al EDGE-10) redactats amb sintaxi formal EARS estricta en català i lliures de dades mock o simulades.
     Correspondència del 100% de la spec de clients amb una suite de proves d'integració automatitzada en verd amb PostgreSQL RLS actiu sota el tenant real.
     Alineació total de la política de QR: l'escut de visualització de codis QR s'exclou per a eines (Spec 004) i es consagra de forma obligatòria per a factures i albarans legals Veri*factu sota la AEAT.
 

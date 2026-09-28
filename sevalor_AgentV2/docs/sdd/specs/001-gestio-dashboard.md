@@ -42,6 +42,11 @@ Historias de usuario
     H10: Como Secretaria o Boss, quiero que el backend ingrese automáticamente toda incidencia en los historiales técnicos (orden, operario, vehículo), pero que cualquier calificación de falta o apertura de expediente disciplinario en RRHH dependa estrictamente de una decisión humana explícita y basada en criterios objetivos de atribución de responsabilidad.
 
 --------------------------------------------------------------------------------
+
+> [!IMPORTANT]
+> **Política Global: Alta Màgica OCR (Zero Data Entry)**
+> Tot el sistema implementa la funcionalitat d'Alta Màgica OCR, permetent l'alta d'entitats (Vehicles, Treballadors, Albarans, Factures, Contractes, Clients, Proveïdors) mitjançant l'anàlisi automatitzat de fotografies o PDFs, sense necessitat de picar les dades manualment.
+
 Requisitos Funcionales (Notación EARS Estricta)
 Bloque 1: Cabecera, Meta-Buscador Universal y HUD Operativo No Financiero
 

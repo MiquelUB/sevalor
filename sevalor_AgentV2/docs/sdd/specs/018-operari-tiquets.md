@@ -82,6 +82,11 @@ Determinada per Administració
 	
 Revisada cas per cas pel Boss
 --------------------------------------------------------------------------------
+
+> [!IMPORTANT]
+> **Política Global: Alta Màgica OCR (Zero Data Entry)**
+> Tot el sistema implementa la funcionalitat d'Alta Màgica OCR, permetent l'alta d'entitats (Vehicles, Treballadors, Albarans, Factures, Contractes, Clients, Proveïdors) mitjançant l'anàlisi automatitzat de fotografies o PDFs, sense necessitat de picar les dades manualment.
+
 Requisits Funcionals (EARS Notation)
 Àmbit 1: Interfície de Captura, Tipologies de Despesa i Estat Buit (Zero-Mock)
 
@@ -255,7 +260,12 @@ Fora d'Abast (Out of Scope)
 Criteris de Finalització (Definition of Done) i Matriu de Traçabilitat
 Per a poder certificar el tancament de la Spec 018 de Tiquets de camp i habilitar la seva fase d'implementació, s'ha de garantir el compliment dels criteris següents:
 
-    Els 21 Requisits Funcionals (RF-01 al RF-21) i els 10 Casos Límit (EDGE-01 al EDGE-10) redactats amb sintaxi formal EARS estricta en català i lliures d'ambigüitats tècniques o dades de prova fictícies sota l'estat Dia 0.
+    Els 21 
+> [!IMPORTANT]
+> **Política Global: Alta Màgica OCR (Zero Data Entry)**
+> Tot el sistema implementa la funcionalitat d'Alta Màgica OCR, permetent l'alta d'entitats (Vehicles, Treballadors, Albarans, Factures, Contractes, Clients, Proveïdors) mitjançant l'anàlisi automatitzat de fotografies o PDFs, sense necessitat de picar les dades manualment.
+
+Requisits Funcionals (RF-01 al RF-21) i els 10 Casos Límit (EDGE-01 al EDGE-10) redactats amb sintaxi formal EARS estricta en català i lliures d'ambigüitats tècniques o dades de prova fictícies sota l'estat Dia 0.
     Correspondència del 100% de la spec de tiquets de la PWA amb una suite de proves d'integració automatitzada en verd amb PostgreSQL RLS actiu sota el tenant d'empresa.
     Alineació total de la política de QR (Constitució v4.0): exclusió absoluta de codis QR per a les eines de camp (les quals es custodien i es traspassen per referència de fàbrica/SN), preservant el QR legal obligatori de facturació Veri*factu per a albarans i factures al tancament de l'obra.
     Doble fotografia obligatòria de repostatge: implementació de la restricció de la RF-05, bloquejant de forma incondicional el desat si es tracta de carburant i manca la segona imatge de l'odòmetre.

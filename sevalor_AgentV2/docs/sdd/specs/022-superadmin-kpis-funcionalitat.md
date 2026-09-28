@@ -92,6 +92,11 @@ Valida origen de petició
 	
 ❌ PROHIBIT
 --------------------------------------------------------------------------------
+
+> [!IMPORTANT]
+> **Política Global: Alta Màgica OCR (Zero Data Entry)**
+> Tot el sistema implementa la funcionalitat d'Alta Màgica OCR, permetent l'alta d'entitats (Vehicles, Treballadors, Albarans, Factures, Contractes, Clients, Proveïdors) mitjançant l'anàlisi automatitzat de fotografies o PDFs, sense necessitat de picar les dades manualment.
+
 Requisits Funcionals (EARS Notation)
 Àmbit 1: Panell Central de Salut del Sistema, Disponibilitat i Latències
 
@@ -169,6 +174,11 @@ La petició es denega de forma fulminant a nivell de middleware/tallafocs abans 
 --------------------------------------------------------------------------------
 Criteris de Finalització (Definition of Done) i Matriu de Traçabilitat
 
-    Els 20 Requisits Funcionals (RF-01 al RF-20) i els 4 Casos Límit redactats amb sintaxi formal EARS estricta en català i lliures d'ambigüitats.
+    Els 20 
+> [!IMPORTANT]
+> **Política Global: Alta Màgica OCR (Zero Data Entry)**
+> Tot el sistema implementa la funcionalitat d'Alta Màgica OCR, permetent l'alta d'entitats (Vehicles, Treballadors, Albarans, Factures, Contractes, Clients, Proveïdors) mitjançant l'anàlisi automatitzat de fotografies o PDFs, sense necessitat de picar les dades manualment.
+
+Requisits Funcionals (RF-01 al RF-20) i els 4 Casos Límit redactats amb sintaxi formal EARS estricta en català i lliures d'ambigüitats.
     Segregació de dades de telemetria: les taules de KPIs d'uptime i traces d'error resideixen estrictament a l'esquema separat superadmin_telemetry de PostgreSQL, independent del tenant.
     Verificació de CPU-only: optimització asíncrona de Whisper amb faster-whisper a CPU INT8 per sota de 8 segons de cua, sense al·lucinacions.

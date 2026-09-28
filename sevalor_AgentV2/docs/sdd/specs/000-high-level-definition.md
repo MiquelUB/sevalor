@@ -112,3 +112,4 @@ Com a responsable de magatzem, vull que el sistema creui els pròxims treballs p
 - **FR-007**: El sistema MUST tenir capacitat **Multimodal** per processar imatges de plaques i avaries (OCR i anàlisi visual).
 - **FR-008**: Totes les accions destructives o que canviïn dades operatives generades per l'Agent (assignar, tancar feina, moure stock) MUST requerir un pas explícit de confirmació humana (`PROPUESTA -> CONFIRMACIÓN -> ACCIÓN`).
 - **FR-009**: L'Agent IA MUST executar-se de manera local (Appliance Local 32GB/64GB) per garantir la sobirania absoluta de les dades del client.
+- **FR-010**: El sistema MUST suportar "Alta Màgica OCR (Zero Data Entry)" com a política global. Totes les entitats principals (Vehicles, Treballadors, Albarans, Factures, Contractes) han de permetre la creació a partir de l'anàlisi automatitzat de fotografies o PDFs documentals.

@@ -136,6 +136,11 @@ Històries d'Usuari
     H8: Com a Supervisor, quan dues quadrilles a camp es traspassin una eina o material a tajo rural sense cobertura, vull que es registri a la PWA mitjançant el seu número de referència, canviant de forma bilateral la custòdia i reconciliant el moviment síncron al recuperar xarxa.
 
 --------------------------------------------------------------------------------
+
+> [!IMPORTANT]
+> **Política Global: Alta Màgica OCR (Zero Data Entry)**
+> Tot el sistema implementa la funcionalitat d'Alta Màgica OCR, permetent l'alta d'entitats (Vehicles, Treballadors, Albarans, Factures, Contractes, Clients, Proveïdors) mitjançant l'anàlisi automatitzat de fotografies o PDFs, sense necessitat de picar les dades manualment.
+
 Requisits Funcionals (Notació EARS Estricta)
 Bloque 1: Directori General de Magatzem i Estat "Día 0"
 
@@ -446,7 +451,12 @@ Fora d'Abast (Out of Scope)
 --------------------------------------------------------------------------------
 Criteris de Finalització (Definition of Done) i Matriu de Traçabilitat
 
-    Els 52 Requisits Funcionals (RF-01 al RF-52) i els 20 Casos Límit (EDGE-01 al EDGE-20) redactats amb sintaxi formal EARS estricta i sense errors, constituint el contracte de desenvolupament de CampoPro.
+    Els 52 
+> [!IMPORTANT]
+> **Política Global: Alta Màgica OCR (Zero Data Entry)**
+> Tot el sistema implementa la funcionalitat d'Alta Màgica OCR, permetent l'alta d'entitats (Vehicles, Treballadors, Albarans, Factures, Contractes, Clients, Proveïdors) mitjançant l'anàlisi automatitzat de fotografies o PDFs, sense necessitat de picar les dades manualment.
+
+Requisits Funcionals (RF-01 al RF-52) i els 20 Casos Límit (EDGE-01 al EDGE-20) redactats amb sintaxi formal EARS estricta i sense errors, constituint el contracte de desenvolupament de CampoPro.
     Correspondència del 100% de la spec d'inventari amb una suite de proves d'integració automatitzada en verd, lliure de dades hardcodejades o simulades i amb PostgreSQL RLS actiu sota el tenant real.
     Alineació total de la política de QR: exclusió absoluta de codis QR per a les eines de camp (les quals es custodien i es traspassen per referència de fàbrica/SN), preservant el QR legal obligatori d'alta Veri*factu per a albarans i factures.
     Implementació del bloqueig pesimista de stock mitjançant la transacció SQL SELECT FOR UPDATE per garantir la consistència relacional davant planificacions d'obres concurrents.

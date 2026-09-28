@@ -68,3 +68,8 @@ La base arquitectònica és d'una immensa qualitat i el "Sistema Operatiu Empres
 **Error:** El test `test_pwa_dexie.ts` fallava perquè no trobava el paquet encarregat d'emular IndexedDB a Node.js.
 **Motiu:** S'havia requerit al codi amb un `import` però no constava en les dependències de `package.json`.
 **Resolució:** Instal·lació directa via `npm install -D fake-indexeddb` sota l'ecosistema de la PWA.
+
+
+> [!IMPORTANT]
+> **Política Global: Alta Màgica OCR (Zero Data Entry)**
+> Tot el sistema implementa la funcionalitat d'Alta Màgica OCR, permetent l'alta d'entitats (Vehicles, Treballadors, Albarans, Factures, Contractes, Clients, Proveïdors) mitjançant l'anàlisi automatitzat de fotografies o PDFs, sense necessitat de picar les dades manualment.
