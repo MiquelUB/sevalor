@@ -26,7 +26,7 @@ async def setup_concurrency(admin_session, boss_token):
 
     # 1. Crear client
     client_id = str(uuid.uuid4())
-    admin_session.add(Client(id=uuid.UUID(client_id), empresa_id=uuid.UUID(empresa_id), codi='CLI-CONCURRENCY', rao_social='C', nif='NIFC'))
+    admin_session.add(Client(id=uuid.UUID(client_id), empresa_id=uuid.UUID(empresa_id), codi='CLI-CONCURRENCY', rao_social='C', nif='B12345678'))
 
     # 2. Crear dues Ordres de Treball
     ot1_id = str(uuid.uuid4())

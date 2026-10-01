@@ -44,9 +44,12 @@ def require_roles(allowed_roles: List[str]) -> Callable:
     def role_checker(claims: Dict[str, Any] = Depends(get_current_user_claims)) -> Dict[str, Any]:
         user_role = claims.get("rol", "").upper()
 
-        # El rol SUPERADMIN té accés de bypass en entorns autoritzats
-        if user_role == "SUPERADMIN":
-            return claims
+        # El rol SUPERADMIN no té accés a dades de gestió, excepte per rutes específiques
+        if user_role == "SUPERADMIN" and "SUPERADMIN" not in [r.upper() for r in allowed_roles]:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="El SUPERADMIN no pot accedir a les dades de gestió del tenant.",
+            )
 
         if user_role not in [r.upper() for r in allowed_roles]:
             raise HTTPException(
@@ -59,4 +62,7 @@ def require_roles(allowed_roles: List[str]) -> Callable:
 
 
 # Veto d'Enginyer: Només BOSS, SECRETARIA o COMPTABILITAT poden accedir a dades financeres
-require_financial_access = require_roles(["BOSS", "SECRETARIA", "COMPTABILITAT"])
+veto_enginyer_finances = require_roles(["BOSS", "SECRETARIA", "COMPTABILITAT"])
+require_financial_access = veto_enginyer_finances
+require_boss = require_roles(["BOSS"])
+require_enginyer_or_boss = require_roles(["BOSS", "ENGINYER"])

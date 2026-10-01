@@ -156,3 +156,77 @@ async def enviar_pressupost_via_telegram(
         "numero": pressupost.numero,
         "chat_id": resultat.get("chat_id"),
     }
+
+
+@router.post("/{pressupost_id}/aprovar", response_model=PressupostResponse)
+async def aprovar_pressupost(
+    pressupost_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+    claims: Dict[str, Any] = Depends(get_current_user_claims),
+):
+    """Aprova un pressupost, canviant el seu estat a APROVAT."""
+    empresa_id_str = claims.get("empresa_id")
+    if not empresa_id_str:
+        raise HTTPException(status_code=400, detail="Falta el tenant al token.")
+    empresa_id = uuid.UUID(empresa_id_str)
+
+    stmt = select(Pressupost).where(Pressupost.id == pressupost_id, Pressupost.empresa_id == empresa_id)
+    res = await db.execute(stmt)
+    pressupost = res.scalars().first()
+    if not pressupost:
+        raise HTTPException(status_code=404, detail="Pressupost no trobat.")
+
+    if pressupost.estat != "PENDENT":
+        raise HTTPException(status_code=400, detail="Només es poden aprovar pressupostos en estat PENDENT.")
+
+    pressupost.estat = "APROVAT"
+    await db.commit()
+    await db.refresh(pressupost)
+    return pressupost
+
+
+@router.post("/{pressupost_id}/rebutjar", response_model=PressupostResponse)
+async def rebutjar_pressupost(
+    pressupost_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+    claims: Dict[str, Any] = Depends(get_current_user_claims),
+):
+    """Rebutja un pressupost, canviant el seu estat a REBUTJAT."""
+    empresa_id_str = claims.get("empresa_id")
+    if not empresa_id_str:
+        raise HTTPException(status_code=400, detail="Falta el tenant al token.")
+    empresa_id = uuid.UUID(empresa_id_str)
+
+    stmt = select(Pressupost).where(Pressupost.id == pressupost_id, Pressupost.empresa_id == empresa_id)
+    res = await db.execute(stmt)
+    pressupost = res.scalars().first()
+    if not pressupost:
+        raise HTTPException(status_code=404, detail="Pressupost no trobat.")
+
+    if pressupost.estat != "PENDENT":
+        raise HTTPException(status_code=400, detail="Només es poden rebutjar pressupostos en estat PENDENT.")
+
+    pressupost.estat = "REBUTJAT"
+    await db.commit()
+    await db.refresh(pressupost)
+    return pressupost
+
+
+@router.post("/generar-ia")
+async def generar_pressupost_ia(
+    prompt: str = Query(..., description="Descripció del pressupost per a la IA"),
+    claims: Dict[str, Any] = Depends(get_current_user_claims),
+):
+    """Genera una proposta de pressupost utilitzant IA (Copilot)."""
+    # Simulate LLM call returning structured JSON budget lines.
+    return {
+        "status": "PENDENT_AUDITORIA",
+        "draft": {
+            "titol": f"Pressupost generat per IA",
+            "linies": [
+                {"concepte": f"Generat des de: {prompt[:30]}", "quantitat": 1, "preu_unitari": 100.0, "total": 100.0}
+            ],
+            "total_estimat": 100.0
+        },
+        "missatge": "Proposta PENDENT_AUDITORIA generada correctament."
+    }

@@ -49,7 +49,7 @@ async def test_fitxatge_jornada(setup_jornada_test):
     headers = {"Authorization": f"Bearer {token}"}
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-        res_inici = await ac.post("/api/v1/operari/jornada/inici", json={"geolocalitzacio": "41.3851,2.1734"}, headers=headers)
+        res_inici = await ac.post("/api/v1/operari/jornada/inici", json={"latitud": 41.3851, "longitud": 2.1734}, headers=headers)
         assert res_inici.status_code == 201
         jornada = res_inici.json()
         assert jornada["estat"] == "EN_CURS"
@@ -58,6 +58,6 @@ async def test_fitxatge_jornada(setup_jornada_test):
         assert res_activa.status_code == 200
         assert res_activa.json()["id"] == jornada["id"]
 
-        res_fi = await ac.post(f"/api/v1/operari/jornada/{jornada['id']}/fi", json={"geolocalitzacio": "41.3851,2.1734"}, headers=headers)
+        res_fi = await ac.post(f"/api/v1/operari/jornada/{jornada['id']}/fi", json={"latitud": 41.3851, "longitud": 2.1734}, headers=headers)
         assert res_fi.status_code == 200
         assert res_fi.json()["estat"] == "COMPLERT"

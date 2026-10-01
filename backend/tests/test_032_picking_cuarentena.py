@@ -28,7 +28,7 @@ async def setup_cuarentena(admin_session, boss_token):
 
     # 1. Crear client, OT i Magatzem
     client_id = str(uuid.uuid4())
-    admin_session.add(Client(id=uuid.UUID(client_id), empresa_id=uuid.UUID(empresa_id), codi='CLI-CUAR', rao_social='C', nif='NIFC'))
+    admin_session.add(Client(id=uuid.UUID(client_id), empresa_id=uuid.UUID(empresa_id), codi='CLI-CUAR', rao_social='C', nif='B12345678'))
     ot_id = str(uuid.uuid4())
     admin_session.add(OrdreTreball(id=uuid.UUID(ot_id), empresa_id=uuid.UUID(empresa_id), codi='OT-C', client_id=uuid.UUID(client_id), titol='OT1', estat='PENDENT', adreca='C1'))
 

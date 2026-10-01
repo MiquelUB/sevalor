@@ -19,6 +19,7 @@ import {
 } from "lucide-react";
 import { CAMERA_LIVE_INPUT_PROPS, compressImageToWebP } from "@/lib/media";
 import { apiFetch } from "@/lib/api";
+import { BarcodeScanner } from "@/components/operari/BarcodeScanner";
 
 interface MaterialItem {
   id: string;
@@ -112,17 +113,16 @@ export default function OperariMaterialPage() {
   // Afegir material extra de furgoneta (Spec 014 RF-14, sense QR)
   const handleAfegirDeFurgoneta = async () => {
     try {
-      const nouItem: MaterialItem = await apiFetch("/materials/afegir-de-furgoneta", {
-        method: "POST",
-        body: JSON.stringify({ ordre_camp_id: null }),
+      const { addToSyncQueue } = await import('@/lib/offline/sync');
+      await addToSyncQueue('USE_MATERIAL_FROM_VAN', {
+          ordre_camp_id: null, // Specify order ID in a real scenario
+          timestamp: Date.now()
       });
-      setMaterials((prev) => [...prev, { ...nouItem, carregat_pick_in: true, retornat_pick_out: 0 }]);
       alert(
-        "Material afegit directament des de la dotació del vehicle. Es generarà reposició vespertina automàtica (Spec 014 RF-15)."
+        "Acció registrada a la cua de sincronització offline. El material s'afegirà a l'ordre i es descomptarà de la furgoneta un cop hi hagi connexió (T020)."
       );
     } catch {
-      // Fallback: si el backend no està disponible, no afegir res
-      alert("No s'ha pogut contactar amb el backend per afegir material de furgoneta.");
+      alert("Error en registrar a la cua de sincronització.");
     }
   };
 
@@ -242,6 +242,18 @@ export default function OperariMaterialPage() {
                 {materials.filter((m) => m.carregat_pick_in).length}/{materials.length} marcats
               </span>
             </div>
+
+            <BarcodeScanner 
+                onScan={(codi) => {
+                    const item = materials.find(m => m.referencia === codi || m.id === codi);
+                    if (item) {
+                        handleToggleCheck(item.id);
+                        alert(`Material ${item.nom} marcat!`);
+                    } else {
+                        alert("Codi de barres no trobat en aquesta llista.");
+                    }
+                }}
+            />
 
             {desquadramentNau && (
               <div className="p-3.5 rounded-xl bg-rose-50 dark:bg-rose-950/50 border border-rose-300 dark:border-rose-900 text-rose-900 dark:text-rose-200 text-xs flex items-start gap-2.5">
@@ -404,6 +416,7 @@ export default function OperariMaterialPage() {
                             type="number"
                             min="0"
                             max={m.quantitat_programada}
+                            step={m.format_continu ? "0.01" : "1"}
                             value={retornat}
                             onChange={(e) =>
                               handleRetornCanvi(m.id, parseFloat(e.target.value) || 0)

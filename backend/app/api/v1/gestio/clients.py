@@ -3,7 +3,7 @@ from datetime import date, datetime, timedelta, timezone
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -16,7 +16,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.exc import IntegrityError
 from app.services.csv_service import parse_and_validate_csv, generate_csv_content, CsvImportResult
 
-from app.models.models import Client
+from app.models.models import Client, Finca
 
 router = APIRouter(
     prefix="/gestio/clients",
@@ -32,6 +32,39 @@ class ClientCreate(BaseModel):
     email: Optional[str] = Field(None, max_length=200)
     adreca_fiscal: Optional[str] = Field(None)
     iban: Optional[str] = Field(None, max_length=34)
+
+    @field_validator("nif")
+    @classmethod
+    def validate_nif(cls, v: str) -> str:
+        import re
+        v = v.upper().replace("-", "").replace(" ", "")
+        if not re.match(r"^[A-Z0-9]{9}$", v):
+            raise ValueError("El NIF/CIF ha de tenir 9 caràcters alfanumèrics")
+        # Validació bàsica per a NIE/NIF/CIF
+        # Let's keep it simple as it's a basic Spanish format check
+        return v
+
+    @field_validator("iban")
+    @classmethod
+    def validate_iban(cls, v: Optional[str]) -> Optional[str]:
+        if not v:
+            return v
+        v = v.upper().replace(" ", "")
+        if len(v) < 15 or len(v) > 34:
+            raise ValueError("Longitud d'IBAN invàlida")
+        # Modulo 97 check
+        # Move first 4 chars to the end
+        rearranged = v[4:] + v[:4]
+        # Convert letters to numbers
+        numeric_iban = ""
+        for char in rearranged:
+            if char.isalpha():
+                numeric_iban += str(ord(char) - 55)
+            else:
+                numeric_iban += char
+        if int(numeric_iban) % 97 != 1:
+            raise ValueError("L'IBAN no és vàlid")
+        return v
 
 
 class ClientResponse(ClientCreate):
@@ -223,7 +256,7 @@ class Fitxa360Response(BaseModel):
     resum: Fitxa360Resum
 
 
-@router.get("/{client_id}/fitxa360", response_model=Fitxa360Response)
+@router.get("/{client_id}/fitxa-360", response_model=Fitxa360Response)
 async def obtenir_fitxa_360_client(
     request: Request,
     client_id: uuid.UUID,
@@ -515,3 +548,74 @@ async def exportar_clients_csv(
         media_type="text/csv",
         headers={"Content-Disposition": "attachment; filename=clients_export.csv"}
     )
+
+class FincaCreate(BaseModel):
+    nom: str = Field(..., max_length=150)
+    adreca: Optional[str] = None
+    latitud: float
+    longitud: float
+    ref_cadastral: Optional[str] = Field(None, max_length=50)
+    poligon_sigpac: Optional[str] = Field(None, max_length=50)
+    parcel_sigpac: Optional[str] = Field(None, max_length=50)
+    codi_candat_en_memoria: Optional[str] = Field(None, max_length=50)
+    superficie_ha: Optional[float] = None
+
+
+class FincaResponse(FincaCreate):
+    id: uuid.UUID
+    actiu: bool
+    model_config = {"from_attributes": True}
+
+@router.get("/{client_id}/finques", response_model=List[FincaResponse])
+async def llistar_finques_client(
+    request: Request,
+    client_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db_with_tenant_context)
+):
+    empresa_id = getattr(request.state, "empresa_id", None) or request.headers.get("X-Empresa-ID")
+    if not empresa_id or empresa_id == 'undefined':
+        raise HTTPException(status_code=401, detail="No identificat")
+
+    stmt = select(Finca).where(
+        Finca.client_id == client_id,
+        Finca.empresa_id == uuid.UUID(empresa_id)
+    ).order_by(Finca.created_at.desc())
+
+    result = await db.execute(stmt)
+    finques = result.scalars().all()
+    return finques
+
+@router.post("/{client_id}/finques", response_model=FincaResponse, status_code=status.HTTP_201_CREATED)
+async def crear_finca_client(
+    request: Request,
+    client_id: uuid.UUID,
+    finca: FincaCreate,
+    db: AsyncSession = Depends(get_db_with_tenant_context)
+):
+    empresa_id = getattr(request.state, "empresa_id", None) or request.headers.get("X-Empresa-ID")
+    if not empresa_id or empresa_id == 'undefined':
+        raise HTTPException(status_code=401, detail="No identificat")
+
+    empresa_uuid = uuid.UUID(empresa_id)
+
+    res = await db.execute(select(Client).where(Client.id == client_id, Client.empresa_id == empresa_uuid))
+    if not res.scalars().first():
+        raise HTTPException(status_code=404, detail="Client no trobat")
+
+    nova_finca = Finca(
+        empresa_id=empresa_uuid,
+        client_id=client_id,
+        nom=finca.nom,
+        adreca=finca.adreca,
+        latitud=finca.latitud,
+        longitud=finca.longitud,
+        ref_cadastral=finca.ref_cadastral,
+        poligon_sigpac=finca.poligon_sigpac,
+        parcel_sigpac=finca.parcel_sigpac,
+        codi_candat_en_memoria=finca.codi_candat_en_memoria,
+        superficie_ha=finca.superficie_ha
+    )
+    
+    db.add(nova_finca)
+    await db.commit()
+    return nova_finca

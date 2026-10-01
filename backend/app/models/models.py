@@ -32,6 +32,7 @@ class Empresa(Base):
     nif: Mapped[str] = mapped_column(String(20), nullable=False, unique=True)
     adreca: Mapped[Optional[str]] = mapped_column(Text)
     subdomini: Mapped[Optional[str]] = mapped_column(String(63), unique=True)
+    domini_custom: Mapped[Optional[str]] = mapped_column(String(100), unique=True)
     primari_hsl: Mapped[str] = mapped_column(String(30), default="210 100% 15%", server_default="210 100% 15%")
     secundari_hsl: Mapped[str] = mapped_column(String(30), default="38 92% 50%", server_default="38 92% 50%")
     accent_hsl: Mapped[str] = mapped_column(String(30), default="190 90% 50%", server_default="190 90% 50%")
@@ -190,8 +191,10 @@ class Article(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, server_default=text("gen_random_uuid()"))
     empresa_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("empreses.id", ondelete="CASCADE"), nullable=False)
     referencia_inventari: Mapped[str] = mapped_column(String(50), nullable=False)
+    codi_barres: Mapped[Optional[str]] = mapped_column(String(100), unique=True)
     nom: Mapped[str] = mapped_column(String(150), nullable=False)
     unitat_mesura: Mapped[str] = mapped_column(String(30), default="UNITAT", server_default="UNITAT")
+    es_material_continu: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text('false'))
     familia: Mapped[str] = mapped_column(String(50), default="GENERAL", server_default="GENERAL")
     estoc_optim: Mapped[float] = mapped_column(Numeric(12, 3), default=0.0, server_default=text('0'))
     estoc_minim: Mapped[float] = mapped_column(Numeric(12, 3), default=0.0, server_default=text('0'))
@@ -309,6 +312,11 @@ class Finca(Base):
     client_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("clients.id", ondelete="CASCADE"), nullable=False)
     nom: Mapped[str] = mapped_column(String(150), nullable=False)
     adreca: Mapped[Optional[str]] = mapped_column(Text)
+    latitud: Mapped[Optional[float]] = mapped_column(Numeric(9, 6))
+    longitud: Mapped[Optional[float]] = mapped_column(Numeric(9, 6))
+    ref_cadastral: Mapped[Optional[str]] = mapped_column(String(50))
+    poligon_sigpac: Mapped[Optional[str]] = mapped_column(String(50))
+    parcel_sigpac: Mapped[Optional[str]] = mapped_column(String(50))
     codi_candat_en_memoria: Mapped[Optional[str]] = mapped_column(String(50))
     dades_sigpac: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default=text("'{}'"))
     superficie_ha: Mapped[Optional[float]] = mapped_column(Numeric(10, 4))
@@ -346,11 +354,11 @@ class TiquetCarburant(Base):
     vehicle_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("vehicles.id", ondelete="CASCADE"), nullable=False)
     operari_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("usuaris.id", ondelete="CASCADE"), nullable=False)
     tiquet_foto_path: Mapped[str] = mapped_column(String(500), nullable=False)
-    odometre_foto_path: Mapped[str] = mapped_column(String(500), nullable=False)
-    litres: Mapped[float] = mapped_column(Numeric(8, 2), nullable=False)
-    import_: Mapped[float] = mapped_column("import", Numeric(10, 2), nullable=False)
+    odometre_foto_path: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    litres: Mapped[Optional[float]] = mapped_column(Numeric(8, 2), nullable=True)
+    import_: Mapped[Optional[float]] = mapped_column("import", Numeric(10, 2), nullable=True)
     data_repostatge: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), server_default=text('now()'))
-    odometre_valor: Mapped[int] = mapped_column(Integer, nullable=False)
+    odometre_valor: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     estat_ocr: Mapped[str] = mapped_column(String(30), default="PENDENT_AUDITORIA", server_default="PENDENT_AUDITORIA")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), server_default=text('now()'))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), server_default=text('now()'))
@@ -434,14 +442,16 @@ class OrdreTreball(Base):
     data_planificacio: Mapped[date] = mapped_column(Date, default=date.today, server_default=text('CURRENT_DATE'))
     hora_inici_prevista: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     hora_fi_prevista: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
-    version_id: Mapped[int] = mapped_column(Integer, default=1, server_default="1", nullable=False)
+    versio: Mapped[int] = mapped_column(Integer, default=1, server_default="1", nullable=False)
+    latitud: Mapped[Optional[float]] = mapped_column(Numeric(9, 6))
+    longitud: Mapped[Optional[float]] = mapped_column(Numeric(9, 6))
     cap_de_colla_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("usuaris.id", ondelete="SET NULL"))
     vehicle_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("vehicles.id", ondelete="SET NULL"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), server_default=text('now()'))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), server_default=text('now()'))
 
     __mapper_args__ = {
-        "version_id_col": version_id
+        "version_id_col": versio
     }
 
 
@@ -570,6 +580,7 @@ class CarpetaPlanol(Base):
     nom: Mapped[str] = mapped_column(String(100), nullable=False)
     categoria: Mapped[str] = mapped_column(String(30), nullable=False)
     client_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("clients.id", ondelete="SET NULL"))
+    finca_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("finques.id", ondelete="CASCADE"))
     municipi: Mapped[Optional[str]] = mapped_column(String(100))
     descripcio: Mapped[Optional[str]] = mapped_column(Text)
     parent_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("carpetes_planols.id", ondelete="CASCADE"))
@@ -587,6 +598,7 @@ class PlanolBase(Base):
     empresa_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("empreses.id", ondelete="CASCADE"), nullable=False)
     carpeta_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("carpetes_planols.id", ondelete="CASCADE"), nullable=False)
     client_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("clients.id", ondelete="SET NULL"))
+    finca_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("finques.id", ondelete="CASCADE"))
     titol: Mapped[str] = mapped_column(String(150), nullable=False)
     codi_referencia: Mapped[str] = mapped_column(String(50), nullable=False)
     tipus_fitxer: Mapped[str] = mapped_column(String(20), nullable=False)
@@ -646,6 +658,7 @@ class ExportacioPdfPlanol(Base):
     planol_base_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("planols_base.id", ondelete="CASCADE"), nullable=False)
     titol_report: Mapped[str] = mapped_column(String(200), nullable=False)
     client_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("clients.id", ondelete="SET NULL"))
+    finca_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("finques.id", ondelete="CASCADE"))
     capes_incloses_ids: Mapped[List[uuid.UUID]] = mapped_column(ARRAY(UUID(as_uuid=True)), nullable=False)
     escala_grafica: Mapped[str] = mapped_column(String(30), default="1:500", server_default="1:500")
     pdf_generat_path: Mapped[Optional[str]] = mapped_column(String(500))
@@ -842,6 +855,7 @@ class AlbaraProveidor(Base):
     proveidor_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("proveidors.id", ondelete="CASCADE"), nullable=False)
     numero_albara: Mapped[str] = mapped_column(String(100), nullable=False)
     data_albara: Mapped[date] = mapped_column(Date, nullable=False)
+    estat: Mapped[str] = mapped_column(String(30), default="PENDENT_AUDITORIA", server_default="PENDENT_AUDITORIA")
     fitxer_path: Mapped[Optional[str]] = mapped_column(String(500))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), server_default=text('now()'))
 
@@ -886,9 +900,26 @@ class HistorialAssignacioVehicle(Base):
     conductor_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("usuaris.id", ondelete="CASCADE"), nullable=False)
     data_inici: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     data_fi: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    odometre_inici: Mapped[Optional[int]] = mapped_column(Integer)
+    odometre_fi: Mapped[Optional[int]] = mapped_column(Integer)
     motiu: Mapped[Optional[str]] = mapped_column(String(255))
     creat_per_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("usuaris.id", ondelete="SET NULL"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), server_default=text('now()'))
+
+class MantenimentVehicle(Base):
+    __tablename__ = "manteniments_vehicles"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, server_default=text("gen_random_uuid()"))
+    empresa_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("empreses.id", ondelete="CASCADE"), nullable=False)
+    vehicle_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("vehicles.id", ondelete="CASCADE"), nullable=False)
+    data_manteniment: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    tipus: Mapped[str] = mapped_column(String(50), nullable=False) # PREVENTIU, CORRECTIU
+    descripcio: Mapped[str] = mapped_column(Text, nullable=False)
+    taller: Mapped[Optional[str]] = mapped_column(String(255))
+    cost_euros: Mapped[Optional[float]] = mapped_column(Numeric(10, 2))
+    creat_per_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("usuaris.id", ondelete="SET NULL"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), server_default=text('now()'))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), server_default=text('now()'), onupdate=lambda: datetime.now(timezone.utc))
 
 class TiquetCombustible(Base):
     __tablename__ = "tiquets_combustible"

@@ -122,8 +122,27 @@ export default function OperariVehiclesPage() {
   const carregarEstoc = async () => {
     setLoadingEstoc(true);
     try {
-      const data = await apiFetch("/estoc-furgoneta/operari");
-      setEstocFurgoneta(Array.isArray(data) ? data : []);
+      let dades = [];
+      if (navigator.onLine) {
+          dades = await apiFetch("/operari_pwa/vehicles/stock") || [];
+          if (!Array.isArray(dades)) dades = [];
+          
+          // Clear and cache in Dexie
+          if (typeof window !== "undefined") {
+              const { db } = await import("@/lib/offline/db");
+              await db.vehicle_stock.clear();
+              if (dades.length > 0) {
+                  await db.vehicle_stock.bulkAdd(dades);
+              }
+          }
+      } else {
+          // Fallback offline
+          if (typeof window !== "undefined") {
+              const { db } = await import("@/lib/offline/db");
+              dades = await db.vehicle_stock.toArray();
+          }
+      }
+      setEstocFurgoneta(dades);
     } catch {
       setEstocFurgoneta([]);
     } finally {

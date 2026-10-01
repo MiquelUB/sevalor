@@ -1,16 +1,16 @@
+import os
+import secrets
 import uuid
 from datetime import datetime
 from typing import List, Optional
 
-import jwt
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.config import settings
 from app.core.db import get_db_with_tenant_context
-from app.core.security import require_roles
+from app.core.security import get_current_user_claims, require_roles
 from app.models.models import TiquetCarburant, Vehicle
 
 router = APIRouter(
@@ -21,21 +21,21 @@ router = APIRouter(
 
 class TiquetCarburantCreate(BaseModel):
     vehicle_id: Optional[uuid.UUID] = None
-    tiquet_foto_path: str = Field("/docs/tiquets/default_ticket.webp", max_length=500)
-    odometre_foto_path: str = Field("/docs/tiquets/default_odometre.webp", max_length=500)
-    litres: float = Field(..., gt=0)
-    import_euros: float = Field(..., gt=0)
-    odometre_valor: int = Field(..., ge=0)
+    tiquet_foto_path: str = Field(..., max_length=500)
+    odometre_foto_path: Optional[str] = Field(None, max_length=500)
+    litres: Optional[float] = None
+    import_euros: Optional[float] = None
+    odometre_valor: Optional[int] = None
 
 class TiquetCarburantResponse(BaseModel):
     id: uuid.UUID
     vehicle_id: Optional[uuid.UUID]
     operari_id: uuid.UUID
     tiquet_foto_path: str
-    odometre_foto_path: str
-    litres: float
-    import_euros: float
-    odometre_valor: int
+    odometre_foto_path: Optional[str]
+    litres: Optional[float]
+    import_euros: Optional[float]
+    odometre_valor: Optional[int]
     estat_ocr: str
     created_at: Optional[datetime] = None
 
@@ -48,12 +48,8 @@ async def llistar_tiquets_operari(
     if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401, detail="Tenant context missing")
 
-    auth_header = request.headers.get("Authorization")
-    if not auth_header:
-        raise HTTPException(status_code=401, detail="Authorization missing")
-    token = auth_header.split(" ")[1]
-    decoded = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM], options={"verify_aud": False})
-    usuari_id = decoded.get("sub")
+    claims = get_current_user_claims(request)
+    usuari_id = claims.get("sub")
 
     stmt = select(TiquetCarburant).where(
         TiquetCarburant.empresa_id == uuid.UUID(empresa_id),
@@ -70,8 +66,8 @@ async def llistar_tiquets_operari(
             operari_id=t.operari_id,
             tiquet_foto_path=t.tiquet_foto_path,
             odometre_foto_path=t.odometre_foto_path,
-            litres=float(t.litres),
-            import_euros=float(t.import_),
+            litres=float(t.litres) if t.litres is not None else None,
+            import_euros=float(t.import_) if t.import_ is not None else None,
             odometre_valor=t.odometre_valor,
             estat_ocr=t.estat_ocr,
             created_at=t.created_at,
@@ -89,12 +85,8 @@ async def registrar_tiquet_carburant(
     if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401, detail="Tenant context missing")
 
-    auth_header = request.headers.get("Authorization")
-    if not auth_header:
-        raise HTTPException(status_code=401, detail="Authorization missing")
-    token = auth_header.split(" ")[1]
-    decoded = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM], options={"verify_aud": False})
-    usuari_id = decoded.get("sub")
+    claims = get_current_user_claims(request)
+    usuari_id = claims.get("sub")
 
     # Si no es passa vehicle_id, buscar o assignar el primer vehicle del tenant
     v_id = payload.vehicle_id
@@ -104,17 +96,7 @@ async def registrar_tiquet_carburant(
         if v:
             v_id = v.id
         else:
-            # Crear vehicle dummy per defecte del tenant si no n'hi ha cap
-            nou_v = Vehicle(
-                empresa_id=uuid.UUID(empresa_id),
-                matricula="SENSE-VEHICLE",
-                marca="Flota",
-                model="Defecte",
-                estat="OPERATIU"
-            )
-            db.add(nou_v)
-            await db.flush()
-            v_id = nou_v.id
+            raise HTTPException(status_code=400, detail="No hi ha cap vehicle registrat al tenant. Doneu-ne d'alta un primer.")
 
     nou_tiquet = TiquetCarburant(
         empresa_id=uuid.UUID(empresa_id),
@@ -138,17 +120,13 @@ async def registrar_tiquet_carburant(
         operari_id=nou_tiquet.operari_id,
         tiquet_foto_path=nou_tiquet.tiquet_foto_path,
         odometre_foto_path=nou_tiquet.odometre_foto_path,
-        litres=float(nou_tiquet.litres),
-        import_euros=float(nou_tiquet.import_),
+        litres=float(nou_tiquet.litres) if nou_tiquet.litres is not None else None,
+        import_euros=float(nou_tiquet.import_) if nou_tiquet.import_ is not None else None,
         odometre_valor=nou_tiquet.odometre_valor,
         estat_ocr=nou_tiquet.estat_ocr,
         created_at=nou_tiquet.created_at,
     )
 
-import os
-import secrets
-
-from fastapi import File, Form, UploadFile
 
 
 @router.post("/tiquets/ocr", response_model=dict, status_code=status.HTTP_200_OK)
@@ -163,15 +141,8 @@ async def pujar_tiquet_ocr(
     if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401, detail="Tenant context missing")
 
-    auth_header = request.headers.get("Authorization")
-    if not auth_header:
-        raise HTTPException(status_code=401, detail="Authorization missing")
-    token = auth_header.split(" ")[1]
-    try:
-        decoded = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM], options={"verify_aud": False})
-        usuari_id = decoded.get("sub")
-    except Exception:
-        raise HTTPException(status_code=401, detail="Invalid token")
+    claims = get_current_user_claims(request)
+    usuari_id = claims.get("sub")
 
     v_id = None
     if vehicle_id:
@@ -186,16 +157,7 @@ async def pujar_tiquet_ocr(
         if v:
             v_id = v.id
         else:
-            nou_v = Vehicle(
-                empresa_id=uuid.UUID(empresa_id),
-                matricula="SENSE-VEHICLE",
-                marca="Flota",
-                model="Defecte",
-                estat="OPERATIU"
-            )
-            db.add(nou_v)
-            await db.flush()
-            v_id = nou_v.id
+            raise HTTPException(status_code=400, detail="No hi ha cap vehicle registrat al tenant. Doneu-ne d'alta un primer.")
 
     # Desa el fitxer (Simulació guardat sobiran)
     base_dir = os.getenv("SOVEREIGN_DATA_PATH", "/tmp/data")
@@ -205,25 +167,24 @@ async def pujar_tiquet_ocr(
     file_ext = file.filename.split(".")[-1] if file.filename else "jpg"
     safe_name = f"ocr_{secrets.token_hex(8)}.{file_ext}"
     file_path = f"{save_dir}/{safe_name}"
-
+    
+    file_bytes = await file.read()
     with open(file_path, "wb") as f:
-        f.write(await file.read())
+        f.write(file_bytes)
 
-    # Simulació extracció OCR (Mock de visió artificial)
-    litres_mock = 50.5
-    import_mock = 75.25
-    odometre_mock = 125000
+    from app.services.ocr_service import processar_tiquet_ocr
+    ocr_result = await processar_tiquet_ocr(file_bytes)
 
     nou_tiquet = TiquetCarburant(
         empresa_id=uuid.UUID(empresa_id),
         operari_id=uuid.UUID(usuari_id),
         vehicle_id=v_id,
         tiquet_foto_path=file_path,
-        odometre_foto_path="/docs/tiquets/default_odometre.webp", # Fake pendent de càmera dual
-        litres=litres_mock,
-        import_=import_mock,
-        odometre_valor=odometre_mock,
-        estat_ocr="EXTRET_AUTOMATIC",
+        odometre_foto_path=None,
+        litres=ocr_result.get("litres"),
+        import_=ocr_result.get("import_euros"),
+        odometre_valor=None,
+        estat_ocr=ocr_result.get("status", "PENDENT_AUDITORIA"),
     )
 
     db.add(nou_tiquet)
@@ -233,7 +194,9 @@ async def pujar_tiquet_ocr(
     return {
         "status": "OK",
         "id": str(nou_tiquet.id),
-        "litres_extrets": litres_mock,
-        "import_extret": import_mock,
-        "missatge": "Extracció OCR simulada amb èxit i tiquet registrat."
+        "litres_extrets": nou_tiquet.litres,
+        "import_extret": nou_tiquet.import_,
+        "odometre_valor": nou_tiquet.odometre_valor,
+        "estat_ocr": nou_tiquet.estat_ocr,
+        "missatge": "Tiquet pujat amb processament OCR automàtic."
     }

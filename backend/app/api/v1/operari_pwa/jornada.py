@@ -18,7 +18,8 @@ router = APIRouter(
 )
 
 class JornadaInici(BaseModel):
-    geolocalitzacio: Optional[str] = None
+    latitud: float
+    longitud: float
 
 class JornadaResponse(BaseModel):
     id: uuid.UUID
@@ -59,7 +60,7 @@ async def iniciar_jornada(
     jornada = RegistreJornadaLaboral(
         empresa_id=uuid.UUID(empresa_id),
         usuari_id=uuid.UUID(usuari_id),
-        geolocalitzacio_inici=payload.geolocalitzacio,
+        geolocalitzacio_inici=f"{payload.latitud},{payload.longitud}",
         estat="EN_CURS"
     )
 
@@ -127,7 +128,7 @@ async def finalitzar_jornada(
         raise HTTPException(status_code=400, detail="La jornada ja està tancada")
 
     jornada.hora_fi = datetime.now(timezone.utc)
-    jornada.geolocalitzacio_fi = payload.geolocalitzacio
+    jornada.geolocalitzacio_fi = f"{payload.latitud},{payload.longitud}"
     jornada.estat = "COMPLERT"
 
     await db.commit()

@@ -9,18 +9,7 @@
 
 import Dexie, { Table } from "dexie";
 
-export interface LocalOrdreTreball {
-  id: string;
-  empresa_id: string;
-  codi: string;
-  titol: string;
-  descripcio?: string;
-  estat: "PENDENT" | "EN_TRAMIT" | "PAUSADA" | "COMPLETADA";
-  client_nom: string;
-  coords_gps?: [number, number]; // [lat, lng]
-  data_planificacio: string;
-  updated_at: string;
-}
+import { OrdreTreballLocal } from "./types/operari";
 
 export interface LocalTiquetDespesa {
   id: string;
@@ -57,15 +46,15 @@ export interface SyncQueueItem {
 }
 
 export class SevalorLocalDatabase extends Dexie {
-  ordres!: Table<LocalOrdreTreball, string>;
+  ordres!: Table<OrdreTreballLocal, string>;
   tiquets!: Table<LocalTiquetDespesa, string>;
   incidencies!: Table<LocalIncidencia, string>;
   sync_queue!: Table<SyncQueueItem, string>;
 
   constructor() {
     super("SevalorFieldDB");
-    this.version(1).stores({
-      ordres: "id, empresa_id, estat, data_planificacio",
+    this.version(2).stores({
+      ordres: "id, empresa_id, estat_local, data_programada",
       tiquets: "id, empresa_id, categoria, estat_sync",
       incidencies: "id, empresa_id, tipus, estat_sync",
       sync_queue: "id, bloc_uuid, timestamp, intents",

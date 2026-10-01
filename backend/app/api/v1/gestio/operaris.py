@@ -129,3 +129,75 @@ async def reset_pin_operari(
         "pin_bloquejat": usuari.pin_bloquejat,
         "intents_pin_fallits": usuari.intents_pin_fallits
     }
+
+from fastapi import UploadFile, File
+from app.services.ocr_service import processar_dni_ocr
+from app.models.models import RegistreJornadaLaboral
+from app.api.v1.operari_pwa.jornada import JornadaInici
+from datetime import datetime, timezone
+
+@router.post("/alta-dni-ocr")
+async def alta_dni_ocr(
+    request: Request,
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+    claims: dict = Depends(require_roles(["BOSS", "SECRETARIA"])),
+):
+    empresa_id = await verificar_permisos_boss(request)
+    content = await file.read()
+    data = await processar_dni_ocr(content)
+    return data
+
+@router.post("/{operari_id}/fitxar")
+async def fitxar_operari_gestio(
+    request: Request,
+    operari_id: uuid.UUID,
+    payload: JornadaInici,
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+    claims: dict = Depends(require_roles(["BOSS", "SECRETARIA"])),
+):
+    empresa_id = await verificar_permisos_boss(request)
+    
+    stmt = select(RegistreJornadaLaboral).where(
+        RegistreJornadaLaboral.empresa_id == uuid.UUID(empresa_id),
+        RegistreJornadaLaboral.usuari_id == operari_id,
+        RegistreJornadaLaboral.estat == "EN_CURS"
+    )
+    result = await db.execute(stmt)
+    jornada = result.scalars().first()
+
+    if jornada:
+        jornada.hora_fi = datetime.now(timezone.utc)
+        jornada.geolocalitzacio_fi = f"{payload.latitud},{payload.longitud}"
+        jornada.estat = "COMPLERT"
+        await db.commit()
+        return {"estat": "COMPLERT", "jornada_id": jornada.id}
+    else:
+        nova_jornada = RegistreJornadaLaboral(
+            empresa_id=uuid.UUID(empresa_id),
+            usuari_id=operari_id,
+            geolocalitzacio_inici=f"{payload.latitud},{payload.longitud}",
+            estat="EN_CURS"
+        )
+        db.add(nova_jornada)
+        await db.commit()
+        return {"estat": "EN_CURS", "jornada_id": nova_jornada.id}
+
+from app.core.security import veto_enginyer_finances
+
+@router.get("/{operari_id}/control-horari")
+async def get_control_horari(
+    request: Request,
+    operari_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+    claims: dict = Depends(veto_enginyer_finances),
+):
+    empresa_id = await verificar_permisos_boss(request)
+    stmt = select(RegistreJornadaLaboral).where(
+        RegistreJornadaLaboral.empresa_id == uuid.UUID(empresa_id),
+        RegistreJornadaLaboral.usuari_id == operari_id
+    ).order_by(RegistreJornadaLaboral.hora_inici.desc())
+    result = await db.execute(stmt)
+    jornades = result.scalars().all()
+    return jornades
+

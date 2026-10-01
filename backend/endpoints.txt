@@ -1,0 +1,10 @@
+/openapi.json {'HEAD', 'GET'}
+/docs {'HEAD', 'GET'}
+/docs/oauth2-redirect {'HEAD', 'GET'}
+/redoc {'HEAD', 'GET'}
+/ {'GET'}
+/openapi.json {'HEAD', 'GET'}
+/docs {'HEAD', 'GET'}
+/docs/oauth2-redirect {'HEAD', 'GET'}
+/redoc {'HEAD', 'GET'}
+/ {'GET'}

@@ -20,7 +20,7 @@ async def setup_comptabilitat_test(admin_session):
     ))
     await admin_session.flush()
     admin_session.add(Client(
-        id=uuid.UUID(client_id), empresa_id=uuid.UUID(empresa_id), codi='CLI-1', rao_social='C', nif='NIFC'
+        id=uuid.UUID(client_id), empresa_id=uuid.UUID(empresa_id), codi='CLI-1', rao_social='C', nif='B12345678'
     ))
     await admin_session.flush()
     await admin_session.flush()

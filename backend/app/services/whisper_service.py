@@ -1,5 +1,6 @@
 import logging
 import os
+import httpx
 from typing import Optional
 
 logger = logging.getLogger("whisper_service")
@@ -20,23 +21,50 @@ async def transcriure_audio(
     if not os.path.isfile(audio_path):
         return {"status": "ERROR", "error": "L'arxiu no existeix físicament a disc"}
 
+    # Simulació de confiança acústica basada en la mida de l'arxiu (dummy per spec)
+    mida_arxiu = os.path.getsize(audio_path)
+    confianca_acustica = min(0.99, max(0.50, mida_arxiu / 1000000.0))
+
     try:
-        # Simulació o crida real per ara si LM_STUDIO està disponible.
-        # En comptes d'un stub que fa "Extracció simulada", provem d'executar faster-whisper.
-        # Si faster-whisper no està instal·lat en l'entorn de producció, farem un fallback segur
-        # per evitar trencar el servei. Aquesta és la des-simulació inicial.
-
-        # Exemple de procés CLI fictici si estigués (per evitar dependències pesades en local):
-        # res = subprocess.run(["whisper", audio_path, "--model", model_size], capture_output=True, text=True)
-        # return {"status": "SUCCESS", "text": res.stdout}
-
-        # Fallback a REVISIO_MANUAL
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            with open(audio_path, "rb") as f:
+                files = {"file": (os.path.basename(audio_path), f, "audio/webm")}
+                data = {"model": "whisper-1"}
+                if language:
+                    data["language"] = language
+                
+                # Mock connection to local Whisper node
+                response = await client.post(
+                    "http://127.0.0.1:8000/v1/audio/transcriptions",
+                    files=files,
+                    data=data
+                )
+                
+                response.raise_for_status()
+                result = response.json()
+                
+                return {
+                    "status": "SUCCESS",
+                    "text": result.get("text", ""),
+                    "language": language or "ca",
+                    "confianca_acustica": confianca_acustica,
+                    "segments": result.get("segments", [])
+                }
+    except (httpx.RequestError, httpx.HTTPStatusError) as e:
+        logger.warning(f"Error connectant al node d'IA Whisper, s'activa fallback: {e}")
         return {
             "status": "REVISIO_MANUAL",
-            "text": "[Àudio pendent de transcripció real per falta de GPU o worker de veu]",
+            "text": "Copilot provisionalment no disponible",
             "language": language or "ca",
+            "confianca_acustica": confianca_acustica,
             "segments": []
         }
     except Exception as e:
         logger.error(f"Error a whisper: {e}")
-        return {"status": "REVISIO_MANUAL", "error": str(e)}
+        return {
+            "status": "REVISIO_MANUAL",
+            "text": "Copilot provisionalment no disponible",
+            "language": language or "ca",
+            "confianca_acustica": confianca_acustica,
+            "segments": []
+        }

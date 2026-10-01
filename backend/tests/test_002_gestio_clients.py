@@ -77,7 +77,7 @@ async def test_rls_clients(admin_session, headers, boss_token):
     await admin_session.flush()
     client_id_1 = str(uuid.uuid4())
     admin_session.add(Client(
-        id=uuid.UUID(client_id_1), empresa_id=uuid.UUID(empresa_id_1), codi='CLI-1', rao_social='Client Emp 1', nif='NIF111'
+        id=uuid.UUID(client_id_1), empresa_id=uuid.UUID(empresa_id_1), codi='CLI-1', rao_social='Client Emp 1', nif='B12345678'
     ))
     await admin_session.flush()
 
@@ -90,7 +90,7 @@ async def test_rls_clients(admin_session, headers, boss_token):
     await admin_session.flush()
     client_id_2 = str(uuid.uuid4())
     admin_session.add(Client(
-        id=uuid.UUID(client_id_2), empresa_id=uuid.UUID(empresa_id_2), codi='CLI-2', rao_social='Client Emp 2', nif='NIF222'
+        id=uuid.UUID(client_id_2), empresa_id=uuid.UUID(empresa_id_2), codi='CLI-2', rao_social='Client Emp 2', nif='B23456789'
     ))
     await admin_session.flush()
     await admin_session.flush()

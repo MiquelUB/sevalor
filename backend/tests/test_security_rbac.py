@@ -80,10 +80,10 @@ async def test_operari_cannot_access_gestio_clients(client_autenticat_operari: A
     assert response.status_code == status.HTTP_403_FORBIDDEN
 
 @pytest.mark.asyncio
-async def test_superadmin_has_bypass_access(client_autenticat_superadmin: AsyncClient):
-    """El superadmin té bypass autoritzat per administració del sistema (by design)."""
+async def test_superadmin_cannot_access_gestio_data(client_autenticat_superadmin: AsyncClient):
+    """El superadmin no té accés a les dades de gestió del tenant."""
     response = await client_autenticat_superadmin.get("/api/v1/gestio/comptabilitat/factures")
-    assert response.status_code == status.HTTP_200_OK
+    assert response.status_code == status.HTTP_403_FORBIDDEN
 
 @pytest.mark.asyncio
 async def test_operari_cannot_close_others_jornada(client_autenticat_altre_operari: AsyncClient):
@@ -92,3 +92,15 @@ async def test_operari_cannot_close_others_jornada(client_autenticat_altre_opera
     dummy_jornada_id = str(uuid.uuid4())
     res_fi = await client_autenticat_altre_operari.post(f"/api/v1/operari/jornada/{dummy_jornada_id}/fi", json={"geolocalitzacio": "0,0"})
     assert res_fi.status_code == status.HTTP_404_NOT_FOUND or res_fi.status_code == status.HTTP_403_FORBIDDEN
+
+@pytest.mark.asyncio
+async def test_enginyer_cannot_access_economia_dashboard(client_autenticat_enginyer: AsyncClient):
+    """L'enginyer no pot veure el quadre de comandament econòmic (T038/T039)."""
+    response = await client_autenticat_enginyer.get("/api/v1/gestio/economia/dashboard")
+    assert response.status_code == status.HTTP_403_FORBIDDEN
+
+@pytest.mark.asyncio
+async def test_operari_cannot_access_economia_dashboard(client_autenticat_operari: AsyncClient):
+    """L'operari no pot veure el quadre de comandament econòmic (T038/T039)."""
+    response = await client_autenticat_operari.get("/api/v1/gestio/economia/dashboard")
+    assert response.status_code == status.HTTP_403_FORBIDDEN

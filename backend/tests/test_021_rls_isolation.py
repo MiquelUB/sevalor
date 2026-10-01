@@ -59,3 +59,13 @@ async def test_rls_database_isolation(admin_session: AsyncSession, db_session: A
     rows_v = res_vehicles.fetchall()
     assert len(rows_v) == 1
     assert str(rows_v[0].empresa_id) == str(tenant_a_id)
+
+@pytest.mark.asyncio
+async def test_celery_worker_session_rls():
+    from app.workers.tasks import get_worker_session
+    empresa_id = str(uuid.uuid4())
+    async with get_worker_session(empresa_id) as session:
+        # Check that the config is correctly set
+        res = await session.execute(text("SHOW app.current_empresa_id;"))
+        current_empresa_id = res.scalar()
+        assert current_empresa_id == empresa_id

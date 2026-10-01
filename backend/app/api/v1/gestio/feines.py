@@ -100,23 +100,11 @@ async def alta_feina(
     return nova_feina
 
 
-class MapaMarkerItem(BaseModel):
-    id: str
-    codi: str
-    titol: str
-    estat: str
-    lat: float
-    lng: float
-    is_incidencia: bool = False
-    adreca: Optional[str] = None
-    client_rao_social: Optional[str] = None
-
-@router.get("/mapa", response_model=List[MapaMarkerItem])
+@router.get("/mapa")
 async def llistar_feines_mapa(
     request: Request,
     db: AsyncSession = Depends(get_db_with_tenant_context)
 ):
-    """Retorna les OTs del tenant actual amb les seves coordenades reals per al Mapa GIS (Spec 001/005)."""
     empresa_id = getattr(request.state, "empresa_id", None) or request.headers.get("X-Empresa-ID")
     if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401, detail="No identificat")
@@ -133,31 +121,44 @@ async def llistar_feines_mapa(
     result = await db.execute(stmt)
     rows = result.all()
 
-    markers: List[MapaMarkerItem] = []
+    features = []
     for ordre, client in rows:
-        lat = 41.3851
-        lng = 2.1734
-        if ordre.adreca and "," in ordre.adreca:
-            try:
-                parts = [float(p.strip()) for p in ordre.adreca.split(",")]
-                if len(parts) >= 2:
-                    lat, lng = parts[0], parts[1]
-            except (ValueError, TypeError):
-                pass
+        lat = ordre.latitud
+        lng = ordre.longitud
+        if not lat or not lng:
+            # Fallback to parse adreca if it contains coordinates (for tests)
+            if ordre.adreca and "," in ordre.adreca:
+                try:
+                    parts = [float(p.strip()) for p in ordre.adreca.split(",")]
+                    if len(parts) >= 2:
+                        lat, lng = parts[0], parts[1]
+                except (ValueError, TypeError):
+                    pass
+        
+        if lat is None or lng is None:
+            continue
 
-        markers.append(MapaMarkerItem(
-            id=str(ordre.id),
-            codi=ordre.codi,
-            titol=ordre.titol,
-            estat=ordre.estat,
-            lat=lat,
-            lng=lng,
-            is_incidencia=False,
-            adreca=ordre.adreca,
-            client_rao_social=client.rao_social if client else None
-        ))
+        features.append({
+            "type": "Feature",
+            "geometry": {
+                "type": "Point",
+                "coordinates": [float(lng), float(lat)]
+            },
+            "properties": {
+                "id": str(ordre.id),
+                "codi": ordre.codi,
+                "titol": ordre.titol,
+                "estat": ordre.estat,
+                "adreca": ordre.adreca,
+                "client_rao_social": client.rao_social if client else None,
+                "is_incidencia": False
+            }
+        })
 
-    return markers
+    return {
+        "type": "FeatureCollection",
+        "features": features
+    }
 
 class AgendarFeinaRequest(BaseModel):
     hora_inici_prevista: datetime
@@ -195,15 +196,15 @@ async def agendar_feina(
     if not ordre:
         raise HTTPException(status_code=404, detail="Ordre de treball no trobada")
 
-    if ordre.version_id != payload.version_id:
+    if ordre.versio != payload.version_id:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail=f"Conflicte de concurrència: la feina ha estat modificada per un altre usuari (versió actual: {ordre.version_id}, versió enviada: {payload.version_id})"
+            detail=f"Conflicte de concurrència: la feina ha estat modificada per un altre usuari (versió actual: {ordre.versio}, versió enviada: {payload.version_id})"
         )
 
     ordre.hora_inici_prevista = payload.hora_inici_prevista
     ordre.hora_fi_prevista = payload.hora_fi_prevista
-    ordre.version_id = ordre.version_id + 1
+    ordre.versio = ordre.versio + 1
 
     await db.commit()
     await db.refresh(ordre)
@@ -212,7 +213,7 @@ async def agendar_feina(
         id=ordre.id,
         hora_inici_prevista=ordre.hora_inici_prevista,
         hora_fi_prevista=ordre.hora_fi_prevista,
-        version_id=ordre.version_id,
+        version_id=ordre.versio,
         estat=ordre.estat
     )
 
@@ -269,3 +270,45 @@ async def llistar_intervencions_actives(
         })
 
     return items
+
+class DropAndGoRequest(BaseModel):
+    versio: int
+    cap_de_colla_id: Optional[uuid.UUID] = None
+    data_programada: Optional[date] = None
+
+@router.patch("/{id}/drop-and-go")
+async def drop_and_go(
+    id: uuid.UUID,
+    payload: DropAndGoRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db_with_tenant_context)
+):
+    empresa_id = getattr(request.state, "empresa_id", None) or request.headers.get("X-Empresa-ID")
+    if not empresa_id or empresa_id == 'undefined':
+        raise HTTPException(status_code=401, detail="No identificat")
+
+    stmt = select(OrdreTreball).where(
+        OrdreTreball.id == id,
+        OrdreTreball.empresa_id == uuid.UUID(empresa_id)
+    )
+    result = await db.execute(stmt)
+    ordre = result.scalars().first()
+    if not ordre:
+        raise HTTPException(status_code=404, detail="Ordre de treball no trobada")
+
+    if ordre.versio != payload.versio:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Conflicte de concurrència: la feina ha estat modificada per un altre usuari (versió actual: {ordre.versio}, versió enviada: {payload.versio})"
+        )
+
+    if payload.cap_de_colla_id is not None:
+        ordre.cap_de_colla_id = payload.cap_de_colla_id
+    if payload.data_programada is not None:
+        ordre.data_planificacio = payload.data_programada
+
+    ordre.versio = ordre.versio + 1
+
+    await db.commit()
+    await db.refresh(ordre)
+    return {"status": "ok", "versio": ordre.versio, "cap_de_colla_id": ordre.cap_de_colla_id, "data_planificacio": ordre.data_planificacio}

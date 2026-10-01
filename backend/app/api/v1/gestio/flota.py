@@ -1,17 +1,30 @@
 import math
+import os
 import re
 import uuid
-from datetime import date
+from datetime import date, datetime, timezone
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+import filetype
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Query,
+    Request,
+    UploadFile,
+    status,
+)
 from pydantic import BaseModel, Field
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db_with_tenant_context
 from app.core.security import require_roles
-from app.models.models import OrdreTreball, Vehicle
+from app.models.models import DocumentFlota, OrdreTreball, Vehicle, HistorialAssignacioVehicle, Usuari, MantenimentVehicle
+from app.services.ocr_service import processar_ocr_document_vehicle
 
 router = APIRouter(
     prefix="/gestio/flota",
@@ -142,7 +155,7 @@ async def editar_vehicle(
     v_db = result.scalars().first()
     if not v_db:
         raise HTTPException(status_code=404, detail="Vehicle no trobat")
-        
+
     v_db.matricula = vehicle.matricula
     v_db.marca = vehicle.marca
     v_db.model = vehicle.model
@@ -167,7 +180,7 @@ async def editar_vehicle(
 
     await db.commit()
     await db.refresh(v_db)
-    
+
     return v_db
 
 
@@ -241,7 +254,7 @@ async def llistar_vehicles_propers(
 
     for v in vehicles:
         # Coordenades per defecte si no té OT activa
-        v_lat, v_lng = 41.3851, 2.1734
+        v_lat, v_lng = None, None
         ot_associada = vehicle_ot_map.get(v.id)
 
         if ot_associada and ot_associada.adreca:
@@ -256,7 +269,7 @@ async def llistar_vehicles_propers(
                 except (ValueError, TypeError):
                     pass
 
-        dist = calcular_distancia_haversine(lat, lng, v_lat, v_lng)
+        dist = calcular_distancia_haversine(lat, lng, v_lat, v_lng) if v_lat is not None and v_lng is not None else None
 
         resultats.append(VehicleProperItem(
             vehicle_id=v.id,
@@ -273,15 +286,14 @@ async def llistar_vehicles_propers(
         ))
 
     # Ordenar pel vehicle més proper
-    resultats.sort(key=lambda x: x.distancia_km)
+    resultats.sort(key=lambda x: x.distancia_km if x.distancia_km is not None else float('inf'))
 
     return resultats[:limit]
 
 
-from fastapi import UploadFile, File, Form
-from app.models.models import DocumentFlota
-import shutil
-import os
+
+
+
 
 @router.post("/{vehicle_id}/documents", status_code=201)
 async def pujar_document_flota(
@@ -292,11 +304,11 @@ async def pujar_document_flota(
     db: AsyncSession = Depends(get_db_with_tenant_context)
 ):
     empresa_id = request.state.empresa_id
-    if not empresa_id: raise HTTPException(status_code=401)
+    if not empresa_id:
+        raise HTTPException(status_code=401)
     empresa_id = uuid.UUID(empresa_id)
     # TODO current_user can be from state or skip for now
-    current_user_id = None
-    
+
     # Comprovar vehicle
     stmt = select(Vehicle).where(Vehicle.id == vehicle_id, Vehicle.empresa_id == empresa_id)
     res = await db.execute(stmt)
@@ -305,32 +317,39 @@ async def pujar_document_flota(
         raise HTTPException(status_code=404, detail="Vehicle no trobat")
 
     # Guardar disc local
+    file_bytes = await file.read()
+    kind = filetype.guess(file_bytes)
+    if not kind:
+        raise HTTPException(status_code=400, detail="Tipus de fitxer invàlid")
+    file_ext = kind.extension
+
     docs_dir = f"/docs/{empresa_id}/flota/{vehicle_id}"
     os.makedirs(docs_dir, exist_ok=True)
-    file_path = os.path.join(docs_dir, file.filename)
-    
+    safe_name = f"{uuid.uuid4()}.{file_ext}"
+    file_path = os.path.join(docs_dir, safe_name)
+
     with open(file_path, "wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
-        
+        buffer.write(file_bytes)
+
     doc = DocumentFlota(
         empresa_id=empresa_id,
         vehicle_id=vehicle_id,
         tipus_document=tipus_document,
-        nom_arxiu=file.filename,
+        nom_arxiu=safe_name,
         ruta_arxiu=file_path,
         creat_per_id=None
     )
     db.add(doc)
     await db.commit()
     await db.refresh(doc)
-    
+
     # Executar OCR asíncron
     try:
         from app.workers.tasks import processar_ocr_document_task
         processar_ocr_document_task.delay(file_path, str(empresa_id))
-    except:
+    except Exception:
         pass
-        
+
     return {"missatge": "Document pujat i en procés d'OCR", "id": str(doc.id)}
 
 @router.get("/{vehicle_id}/documents")
@@ -340,12 +359,13 @@ async def llistar_documents_flota(
     db: AsyncSession = Depends(get_db_with_tenant_context)
 ):
     empresa_id = request.state.empresa_id
-    if not empresa_id: raise HTTPException(status_code=401)
+    if not empresa_id:
+        raise HTTPException(status_code=401)
     empresa_id = uuid.UUID(empresa_id)
     stmt = select(DocumentFlota).where(DocumentFlota.vehicle_id == vehicle_id, DocumentFlota.empresa_id == empresa_id)
     res = await db.execute(stmt)
     docs = res.scalars().all()
-    
+
     return [
         {
             "id": str(d.id),
@@ -360,44 +380,166 @@ async def ocr_vehicle_draft(
     request: Request,
     file: UploadFile = File(...)
 ):
-    """
-    (RF-00 Alta Màgica OCR) Simula el processament de la Fitxa Tècnica / Permís de Circulació / Pòlissa
-    per extreure estructuradament les dades i fer un "Zero Data Entry".
-    """
     empresa_id = request.state.empresa_id
-    if not empresa_id: raise HTTPException(status_code=401)
+    if not empresa_id:
+        raise HTTPException(status_code=401)
+
+    file_bytes = await file.read()
+    kind = filetype.guess(file_bytes)
+    if not kind:
+        raise HTTPException(status_code=400, detail="Tipus de fitxer invàlid")
+    file_ext = kind.extension
+
+    docs_dir = f"/docs/{empresa_id}/flota/ocr"
+    os.makedirs(docs_dir, exist_ok=True)
+    safe_name = f"{uuid.uuid4()}.{file_ext}"
+    file_path = os.path.join(docs_dir, safe_name)
+
+    with open(file_path, "wb") as buffer:
+        buffer.write(file_bytes)
+
+    resultat = await processar_ocr_document_vehicle(file_path)
+    return resultat
+
+class AssignarVehicleRequest(BaseModel):
+    usuari_id: uuid.UUID
+    odometre: Optional[int] = None
+    motiu: Optional[str] = None
+
+@router.post("/{id}/assignar")
+async def assignar_vehicle(
+    request: Request,
+    id: uuid.UUID,
+    data: AssignarVehicleRequest,
+    db: AsyncSession = Depends(get_db_with_tenant_context)
+):
+    empresa_id = uuid.UUID(request.state.empresa_id)
     
-    # Simulem que la IA llegeix el fitxer (podria ser un PDF, JPG...)
-    # Retornem un esborrany JSON compatible amb el frontend de Flota
-    # Normalment cridaríem de forma asíncrona a GPT-4V o a la llibreria local LLaVA/Tesseract
-    
-    nom_arxiu = file.filename.lower()
-    
-    # Mock bàsic segons el nom del fitxer (o genèric)
-    matricula = "0000XXX"
-    marca = "Marca Detectada"
-    model = "Model OCR"
-    
-    if "renault" in nom_arxiu or "kangoo" in nom_arxiu:
-        matricula = "2468KNG"
-        marca = "Renault"
-        model = "Kangoo Z.E."
-    elif "toyota" in nom_arxiu:
-        matricula = "1357TYT"
-        marca = "Toyota"
-        model = "Proace"
+    # Check vehicle
+    v = await db.scalar(select(Vehicle).where(Vehicle.id == id, Vehicle.empresa_id == empresa_id))
+    if not v:
+        raise HTTPException(status_code=404, detail="Vehicle no trobat")
         
-    return {
-        "matricula": matricula,
-        "marca": marca,
-        "model": model,
-        "tipus": "EV",
-        "distintiu_ambiental": "ZERO",
-        "places": 2,
-        "pes_maxim_autoritzat": 2000,
-        "regim_adquisicio": "RENTING",
-        "renting_limit_km": 80000,
-        "companyia_asseguradora": "Mapfre",
-        "polissa_asseguranca": f"POL-OCR-{matricula}",
-        "carnet_necessari": "B"
-    }
+    # Check usuari
+    u = await db.scalar(select(Usuari).where(Usuari.id == data.usuari_id, Usuari.empresa_id == empresa_id))
+    if not u:
+        raise HTTPException(status_code=404, detail="Usuari no trobat")
+        
+    v.estat = "ASSIGNAT"
+    u.vehicle_assignat_id = v.id
+    
+    historial = HistorialAssignacioVehicle(
+        empresa_id=empresa_id,
+        vehicle_id=v.id,
+        conductor_id=u.id,
+        data_inici=datetime.now(timezone.utc),
+        odometre_inici=data.odometre,
+        motiu=data.motiu
+    )
+    db.add(historial)
+    await db.commit()
+    return {"status": "ok", "missatge": "Vehicle assignat correctament"}
+
+class RevocarVehicleRequest(BaseModel):
+    odometre: Optional[int] = None
+    motiu: Optional[str] = None
+
+@router.post("/{id}/revocar")
+async def revocar_vehicle(
+    request: Request,
+    id: uuid.UUID,
+    data: RevocarVehicleRequest,
+    db: AsyncSession = Depends(get_db_with_tenant_context)
+):
+    empresa_id = uuid.UUID(request.state.empresa_id)
+    
+    v = await db.scalar(select(Vehicle).where(Vehicle.id == id, Vehicle.empresa_id == empresa_id))
+    if not v:
+        raise HTTPException(status_code=404, detail="Vehicle no trobat")
+        
+    # Update usuari
+    usuaris = await db.execute(select(Usuari).where(Usuari.vehicle_assignat_id == v.id, Usuari.empresa_id == empresa_id))
+    for u in usuaris.scalars().all():
+        u.vehicle_assignat_id = None
+        
+    v.estat = "DISPONIBLE"
+    
+    # Close historial
+    hist = await db.scalar(select(HistorialAssignacioVehicle).where(HistorialAssignacioVehicle.vehicle_id == v.id, HistorialAssignacioVehicle.data_fi.is_(None)).order_by(HistorialAssignacioVehicle.data_inici.desc()))
+    if hist:
+        hist.data_fi = datetime.now(timezone.utc)
+        hist.odometre_fi = data.odometre
+        
+    await db.commit()
+    return {"status": "ok", "missatge": "Assignació revocada"}
+
+class MantenimentCreate(BaseModel):
+    data_manteniment: date
+    tipus: str = Field(..., max_length=50)
+    descripcio: str
+    taller: Optional[str] = None
+    cost_euros: Optional[float] = None
+
+@router.post("/{vehicle_id}/manteniments", status_code=201)
+async def crear_manteniment(
+    request: Request,
+    vehicle_id: uuid.UUID,
+    manteniment: MantenimentCreate,
+    db: AsyncSession = Depends(get_db_with_tenant_context)
+):
+    empresa_id = uuid.UUID(request.state.empresa_id)
+    
+    v = await db.scalar(select(Vehicle).where(Vehicle.id == vehicle_id, Vehicle.empresa_id == empresa_id))
+    if not v:
+        raise HTTPException(status_code=404, detail="Vehicle no trobat")
+        
+    mant = MantenimentVehicle(
+        empresa_id=empresa_id,
+        vehicle_id=vehicle_id,
+        data_manteniment=datetime.combine(manteniment.data_manteniment, datetime.min.time(), tzinfo=timezone.utc),
+        tipus=manteniment.tipus,
+        descripcio=manteniment.descripcio,
+        taller=manteniment.taller,
+        cost_euros=manteniment.cost_euros
+    )
+    db.add(mant)
+    await db.commit()
+    await db.refresh(mant)
+    return {"id": str(mant.id), "missatge": "Manteniment registrat"}
+
+@router.get("/{vehicle_id}/manteniments")
+async def llistar_manteniments(
+    request: Request,
+    vehicle_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db_with_tenant_context)
+):
+    empresa_id = uuid.UUID(request.state.empresa_id)
+    mants = await db.execute(select(MantenimentVehicle).where(MantenimentVehicle.vehicle_id == vehicle_id, MantenimentVehicle.empresa_id == empresa_id).order_by(MantenimentVehicle.data_manteniment.desc()))
+    return mants.scalars().all()
+
+@router.post("/ocr-document")
+async def ocr_document_vehicle(
+    request: Request,
+    file: UploadFile = File(...)
+):
+    empresa_id = request.state.empresa_id
+    if not empresa_id:
+        raise HTTPException(status_code=401)
+        
+    file_bytes = await file.read()
+    kind = filetype.guess(file_bytes)
+    if not kind:
+        raise HTTPException(status_code=400, detail="Tipus de fitxer invàlid")
+    file_ext = kind.extension
+    
+    docs_dir = f"/docs/{empresa_id}/flota/ocr"
+    os.makedirs(docs_dir, exist_ok=True)
+    safe_name = f"{uuid.uuid4()}.{file_ext}"
+    file_path = os.path.join(docs_dir, safe_name)
+    
+    with open(file_path, "wb") as buffer:
+        buffer.write(file_bytes)
+        
+    resultat = await processar_ocr_document_vehicle(file_path)
+    return resultat
+

@@ -30,6 +30,14 @@ celery_app.conf.update(
     worker_concurrency=4,  # Optimitzat per Hetzner CPX21
     task_acks_late=True,  # Reassignar tasca si el worker cau
     task_reject_on_worker_lost=True,  # Rebutjar si worker es perd
+    task_create_missing_queues=True,
+    task_queues={
+        "queue_critical": {"exchange": "queue_critical"},
+        "queue_documents": {"exchange": "queue_documents"},
+        "queue_sync": {"exchange": "queue_sync"},
+        "queue_media": {"exchange": "queue_media"},
+        "queue_periodic": {"exchange": "queue_periodic"},
+    },
     task_routes={
         "app.workers.tasks.generar_pdf_factura_task": {"queue": "queue_documents"},
         "app.workers.tasks.executar_backup_setmanal_task": {"queue": "queue_periodic"},

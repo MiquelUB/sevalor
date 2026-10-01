@@ -1,0 +1,1 @@
+sevalor_AgentV2/docs/sdd/architecture.md

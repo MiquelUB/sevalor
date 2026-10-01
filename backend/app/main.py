@@ -11,12 +11,16 @@ from slowapi.middleware import SlowAPIMiddleware
 from slowapi.util import get_remote_address
 
 from app.api.v1.auth import router as auth_router
+from app.api.v1.gestio.dashboard import router as dashboard_router
+from app.api.v1.gestio.ws import router as ws_router
 from app.api.v1.gestio.cerca import router as cerca_router
 from app.api.v1.gestio.cerca import spotlight_router
 from app.api.v1.gestio.clients import router as clients_router
 from app.api.v1.gestio.comptabilitat import router as comptabilitat_router
+from app.api.v1.gestio.economia import router as economia_router
 from app.api.v1.gestio.configuracio import router as configuracio_router
 from app.api.v1.gestio.copilot import router as copilot_router
+from app.api.v1.gestio.ia import router as ia_router
 from app.api.v1.gestio.feines import intervencions_router
 from app.api.v1.gestio.feines import router as feines_router
 from app.api.v1.gestio.flota import router as flota_router
@@ -43,7 +47,16 @@ from app.api.v1.workers import router as workers_router
 from app.core.config import settings
 from app.middleware.tenant import TenantMiddleware
 
-limiter = Limiter(key_func=get_remote_address, default_limits=["100/minute"])
+from limits.storage import RedisStorage
+from app.core.config import settings
+import os
+
+redis_url = os.getenv("REDIS_URL", "redis://:sevalor_redis_pass@127.0.0.1:6380/0")
+limiter = Limiter(
+    key_func=get_remote_address,
+    default_limits=["100/minute"],
+    storage_uri=redis_url if os.getenv("TESTING") != "1" else "memory://"
+)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
@@ -70,7 +83,9 @@ app.add_middleware(TenantMiddleware)
 app.add_middleware(SlowAPIMiddleware)
 
 app.include_router(health_router, prefix=settings.API_V1_STR)
+from app.api.v1.superadmin.empreses import router as empreses_router
 app.include_router(tenants_router, prefix=settings.API_V1_STR)
+app.include_router(empreses_router, prefix=settings.API_V1_STR)
 app.include_router(operaris_router, prefix=settings.API_V1_STR)
 app.include_router(clients_router, prefix=settings.API_V1_STR)
 app.include_router(proveidors_router, prefix=settings.API_V1_STR)
@@ -89,10 +104,13 @@ async def global_exception_handler(request: Request, exc: Exception):
 
 app.include_router(magatzem_router, prefix=settings.API_V1_STR)
 app.include_router(telegram_webhook_router, prefix=settings.API_V1_STR)
+app.include_router(dashboard_router, prefix=settings.API_V1_STR)
+app.include_router(ws_router, prefix=settings.API_V1_STR)
 app.include_router(feines_router, prefix=settings.API_V1_STR)
 app.include_router(planols_router, prefix=settings.API_V1_STR)
 app.include_router(pressupostos_router, prefix=settings.API_V1_STR)
 app.include_router(comptabilitat_router, prefix=settings.API_V1_STR)
+app.include_router(economia_router, prefix=settings.API_V1_STR)
 app.include_router(notificacions_router, prefix=settings.API_V1_STR)
 app.include_router(operari_auth_router, prefix=settings.API_V1_STR)
 app.include_router(auth_router, prefix=settings.API_V1_STR + "/auth", tags=["Autenticació Oficina"])
@@ -119,6 +137,7 @@ compat_config_router.add_api_route("/empresa", obtenir_dades_empresa, methods=["
 compat_config_router.add_api_route("/empresa/marca", obtenir_marca_camaleonica, methods=["GET"])
 app.include_router(compat_config_router, prefix=settings.API_V1_STR)
 app.include_router(copilot_router, prefix=settings.API_V1_STR)
+app.include_router(ia_router, prefix=settings.API_V1_STR)
 app.include_router(telemetria_router, prefix=settings.API_V1_STR)
 app.include_router(workers_router, prefix=settings.API_V1_STR + "/workers", tags=["Workers Celery"])
 

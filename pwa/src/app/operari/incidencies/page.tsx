@@ -18,6 +18,9 @@ import {
 import { apiFetch } from "@/lib/api";
 import { CAMERA_LIVE_INPUT_PROPS, compressImageToWebP } from "@/lib/media";
 
+import { db } from "@/lib/offline/db";
+import { addToSyncQueue } from "@/lib/offline/sync";
+
 interface IncidenciaItem {
   id: string;
   ambit: string;
@@ -37,6 +40,7 @@ export default function OperariIncidenciesPage() {
 
   // Llista d'incidències prèvies de l'operari
   const [historial, setHistorial] = useState<IncidenciaItem[]>([]);
+  const [pendingOffline, setPendingOffline] = useState<any[]>([]);
   const [loadingHistorial, setLoadingHistorial] = useState(false);
 
   const carregarHistorial = async () => {
@@ -48,6 +52,16 @@ export default function OperariIncidenciesPage() {
       setHistorial([]);
     } finally {
       setLoadingHistorial(false);
+    }
+    
+    // Offline queries
+    if (typeof window !== "undefined") {
+      try {
+        const queue = await db.sync_queue.filter(i => i.action === 'REPORTAR_INCIDENCIA').toArray();
+        setPendingOffline(queue);
+      } catch (e) {
+        console.error("Error reading offline queue:", e);
+      }
     }
   };
 
@@ -85,17 +99,16 @@ export default function OperariIncidenciesPage() {
     setEnviant(true);
     setErrorValidacio(null);
 
+    const payload = {
+      ambit: tipus,
+      estat: "VERMELL",
+      text_observacions: descripcio.trim() || (audioGravat ? "Nota de veu gravada en camp" : "Fotografia d'avaria aportada"),
+      audio_path: audioGravat ? "/docs/audio/incidencia_live.webm" : null,
+      foto_path: fotoPujada ? "/docs/fotos/incidencia_live.webp" : null,
+    };
+
     try {
-      await apiFetch<IncidenciaItem>("/operari/incidencies", {
-        method: "POST",
-        body: JSON.stringify({
-          ambit: tipus,
-          estat: "VERMELL",
-          text_observacions: descripcio.trim() || (audioGravat ? "Nota de veu gravada en camp" : "Fotografia d'avaria aportada"),
-          audio_path: audioGravat ? "/docs/audio/incidencia_live.webm" : null,
-          foto_path: fotoPujada ? "/docs/fotos/incidencia_live.webp" : null,
-        }),
-      });
+      await addToSyncQueue("REPORTAR_INCIDENCIA", payload);
       setEnviatExit(true);
       await carregarHistorial();
     } catch (err: any) {
@@ -256,9 +269,9 @@ export default function OperariIncidenciesPage() {
             </button>
           </div>
 
-          {loadingHistorial && historial.length === 0 ? (
+          {loadingHistorial && historial.length === 0 && pendingOffline.length === 0 ? (
             <p className="text-xs text-slate-400 py-4 text-center">Carregant incidències...</p>
-          ) : historial.length === 0 ? (
+          ) : historial.length === 0 && pendingOffline.length === 0 ? (
             <div className="text-center py-6 text-slate-400">
               <CheckCircle2 className="w-8 h-8 mx-auto text-emerald-500/50 mb-1" />
               <p className="text-xs font-bold text-slate-600 dark:text-slate-400">Cap incidència activa</p>
@@ -266,6 +279,24 @@ export default function OperariIncidenciesPage() {
             </div>
           ) : (
             <div className="space-y-2">
+              {pendingOffline.map((item) => (
+                <div
+                  key={`offline-${item.id}`}
+                  className="p-3 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-900 flex items-start justify-between"
+                >
+                  <div>
+                    <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-300">
+                      {item.payload.ambit}
+                    </span>
+                    <p className="text-xs font-medium text-slate-800 dark:text-slate-200 mt-1">
+                      {item.payload.text_observacions}
+                    </p>
+                  </div>
+                  <span className="text-[9px] font-mono text-amber-600 dark:text-amber-400">
+                    PENDENT DE SYNC
+                  </span>
+                </div>
+              ))}
               {historial.map((item) => (
                 <div
                   key={item.id}

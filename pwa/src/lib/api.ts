@@ -60,7 +60,7 @@ export function extractTenantId(): string | null {
  */
 export function getAuthToken(): string | null {
   if (typeof window === "undefined") return null;
-  const raw = localStorage.getItem("sevalor_auth_token");
+  const raw = null; // localStorage.getItem("sevalor_auth_token");
   if (raw) {
     try {
       const data = JSON.parse(raw);
@@ -85,7 +85,7 @@ export function getAuthToken(): string | null {
 export function setAuthToken(token: string): void {
   if (typeof window === "undefined") return;
   const data = { token, timestamp: Date.now() };
-  localStorage.setItem("sevalor_auth_token", JSON.stringify(data));
+  // localStorage.setItem("sevalor_auth_token", JSON.stringify(data));
   if (typeof document !== "undefined") {
     const isHttps = window.location.protocol === "https:";
     document.cookie = `sevalor_access_token=${token}; path=/; max-age=86400; SameSite=Lax${isHttps ? "; Secure" : ""}`;

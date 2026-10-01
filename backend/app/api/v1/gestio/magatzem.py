@@ -63,8 +63,10 @@ class ConfirmarDocumentRequest(BaseModel):
 class ArticleCreate(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     referencia_inventari: str = Field(..., max_length=50)
+    codi_barres: Optional[str] = Field(None, max_length=100)
     nom: str = Field(..., max_length=150)
     unitat_mesura: str = Field("UNITAT", max_length=30)
+    es_material_continu: bool = Field(False)
     familia: str = Field("GENERAL", max_length=50)
     estoc_optim: float = Field(0.0)
     estoc_minim: float = Field(0.0)
@@ -577,30 +579,46 @@ async def confirmar_devolucio(
 @router.post("/albara/ocr", response_model=dict, status_code=status.HTTP_202_ACCEPTED)
 async def processar_document_ocr(
     request: Request,
-    fitxer: UploadFile = File(...)
+    fitxer: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db_with_tenant_context)
 ):
-    """Processa un document PDF o imatge via OCR d'IA per extreure dades d'albarà o factura en BACKGROUND."""
     empresa_id = request.state.empresa_id
     if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401)
+    
+    empresa_uuid = uuid.UUID(empresa_id)
 
-    import os
+    file_bytes = await fitxer.read()
+    
+    from app.services.ocr_service import processar_albara_ocr
+    ocr_result = await processar_albara_ocr(file_bytes)
+    
+    # Proveidor dummy per l'esborrany (l'usuari ho confirmarà després)
+    stmt_prov = select(Proveidor).where(Proveidor.nif == "PENDENT_AUDITORIA", Proveidor.empresa_id == empresa_uuid)
+    prov = (await db.execute(stmt_prov)).scalars().first()
+    if not prov:
+        prov = Proveidor(
+            empresa_id=empresa_uuid,
+            codi=f"PRV-{str(uuid.uuid4())[:6].upper()}",
+            rao_social="PENDENT_AUDITORIA",
+            nif="PENDENT_AUDITORIA",
+            especialitat="MATERIALS"
+        )
+        db.add(prov)
+        await db.flush()
 
-    from app.workers.tasks import processar_ocr_document_task
+    nou_albara = AlbaraProveidor(
+        empresa_id=empresa_uuid,
+        proveidor_id=prov.id,
+        numero_albara=f"OCR_{uuid.uuid4().hex[:8].upper()}",
+        data_albara=date.today(),
+        estat="PENDENT_AUDITORIA"
+    )
+    db.add(nou_albara)
+    await db.commit()
 
-    # 1. Guardem temporalment l'arxiu pujat per poder processar-lo asíncronament
-    temp_dir = f"/tmp/docs/{empresa_id}/ocr_inbox"
-    os.makedirs(temp_dir, exist_ok=True)
-    temp_path = f"{temp_dir}/{uuid.uuid4()}_{fitxer.filename}"
+    return {"task_id": str(nou_albara.id), "status": "PROCESSING", "ocr_data": ocr_result}
 
-    with open(temp_path, "wb") as f:
-        f.write(await fitxer.read())
-
-    # 2. Despatxa la tasca a Celery (queue_media segons Spec 024 RF-10)
-    task = processar_ocr_document_task.delay(temp_path, str(empresa_id))
-
-    # 3. Retorna immediatament
-    return {"task_id": task.id, "status": "PROCESSING"}
 @router.post("/albara/confirmar", status_code=status.HTTP_201_CREATED)
 async def confirmar_document(
     request: Request,
@@ -938,3 +956,88 @@ async def modificar_eina(
     await db.commit()
     await db.refresh(eina)
     return eina
+
+@router.post("/ocr-albara")
+async def ocr_albara(
+    request: Request,
+    fitxer: UploadFile = File(...)
+):
+    empresa_id = request.state.empresa_id
+    if not empresa_id or empresa_id == 'undefined':
+        raise HTTPException(status_code=401, detail="No identificat")
+    
+    from app.services.ocr_service import processar_albara_ocr
+    file_bytes = await fitxer.read()
+    result = await processar_albara_ocr(file_bytes)
+    return result
+
+class TraspasRequest(BaseModel):
+    article_id: uuid.UUID
+    origen_magatzem_id: uuid.UUID
+    desti_magatzem_id: uuid.UUID
+    quantitat: float
+
+@router.post("/traspas")
+async def traspas_estoc(
+    request: Request,
+    payload: TraspasRequest,
+    db: AsyncSession = Depends(get_db_with_tenant_context)
+):
+    empresa_id = request.state.empresa_id
+    if not empresa_id or empresa_id == 'undefined':
+        raise HTTPException(status_code=401, detail="No identificat")
+
+    if payload.quantitat <= 0:
+        raise HTTPException(status_code=400, detail="La quantitat ha de ser superior a 0")
+
+    # Lock source and dest rows to prevent race conditions
+    stmt_origen = select(EstocMagatzem).where(
+        EstocMagatzem.magatzem_id == payload.origen_magatzem_id,
+        EstocMagatzem.article_id == payload.article_id
+    ).with_for_update()
+    
+    origen = (await db.execute(stmt_origen)).scalars().first()
+    if not origen or float(origen.quantitat_fisica) < payload.quantitat:
+        raise HTTPException(status_code=400, detail="No hi ha prou estoc a l'origen per fer el traspàs")
+
+    stmt_desti = select(EstocMagatzem).where(
+        EstocMagatzem.magatzem_id == payload.desti_magatzem_id,
+        EstocMagatzem.article_id == payload.article_id
+    ).with_for_update()
+    
+    desti = (await db.execute(stmt_desti)).scalars().first()
+    if not desti:
+        desti = EstocMagatzem(
+            empresa_id=uuid.UUID(str(empresa_id)),
+            magatzem_id=payload.desti_magatzem_id,
+            article_id=payload.article_id,
+            quantitat_fisica=0.0
+        )
+        db.add(desti)
+        await db.flush()
+
+    origen.quantitat_fisica = float(origen.quantitat_fisica) - payload.quantitat
+    desti.quantitat_fisica = float(desti.quantitat_fisica) + payload.quantitat
+
+    # Registrar els moviments
+    mov_sortida = MovimentEstoc(
+        empresa_id=uuid.UUID(str(empresa_id)),
+        magatzem_id=payload.origen_magatzem_id,
+        article_id=payload.article_id,
+        tipus_moviment="SORTIDA",
+        quantitat=payload.quantitat,
+        notes=f"Traspàs a {payload.desti_magatzem_id}"
+    )
+    mov_entrada = MovimentEstoc(
+        empresa_id=uuid.UUID(str(empresa_id)),
+        magatzem_id=payload.desti_magatzem_id,
+        article_id=payload.article_id,
+        tipus_moviment="ENTRADA",
+        quantitat=payload.quantitat,
+        notes=f"Traspàs des de {payload.origen_magatzem_id}"
+    )
+    db.add(mov_sortida)
+    db.add(mov_entrada)
+
+    await db.commit()
+    return {"estat": "OK", "missatge": "Traspàs completat amb èxit."}

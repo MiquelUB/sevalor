@@ -16,6 +16,7 @@ import {
   Volume2,
 } from "lucide-react";
 import CopilotWidget from "@/components/CopilotWidget";
+import NotificationCenter from "@/components/operari/NotificationCenter";
 
 export default function OperariLayout({
   children,
@@ -128,6 +129,9 @@ export default function OperariLayout({
             </div>
           </div>
         )}
+
+        {/* Notificacions Offline/Sync */}
+        <NotificationCenter />
 
         {/* Contingut de la Pàgina */}
         <div className="flex-1 flex flex-col">{children}</div>

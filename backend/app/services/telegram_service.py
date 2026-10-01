@@ -35,6 +35,26 @@ class TelegramService:
                 logger.error(f"Error enviant missatge Telegram: {e}")
                 return False
 
+    async def edit_message_reply_markup(self, chat_id: int, message_id: int, reply_markup: dict = None) -> bool:
+        if not self.bot_token or self.bot_token == "DUMMY_TOKEN":
+            logger.info(f"[TELEGRAM DISPATCH] Eliminat teclat a {chat_id}, missatge {message_id}")
+            return True
+            
+        payload = {"chat_id": chat_id, "message_id": message_id}
+        if reply_markup:
+            payload["reply_markup"] = reply_markup
+            
+        async with httpx.AsyncClient() as client:
+            try:
+                res = await client.post(
+                    f"{self.api_url}/editMessageReplyMarkup",
+                    json=payload
+                )
+                return res.status_code == 200
+            except Exception as e:
+                logger.error(f"Error editant missatge Telegram: {e}")
+                return False
+
     async def processar_comanda_start(self, db: AsyncSession, chat_id: int, payload_text: str) -> str:
         parts = payload_text.split(" ")
         if len(parts) < 2:
@@ -239,8 +259,8 @@ class TelegramService:
         reply_markup = {
             "inline_keyboard": [
                 [
-                    {"text": "✅ Aprovar Pressupost", "callback_data": f"aprovar_pressupost:{pressupost.id}"},
-                    {"text": "❌ Rebutjar Pressupost", "callback_data": f"rebutjar_pressupost:{pressupost.id}"},
+                    {"text": "✅ Acceptar Pressupost", "callback_data": f"aprovar_pressupost:{pressupost.id}"},
+                    {"text": "❌ Demanar Canvis", "callback_data": f"rebutjar_pressupost:{pressupost.id}"},
                 ]
             ]
         }

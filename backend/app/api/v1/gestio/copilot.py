@@ -1269,7 +1269,7 @@ async def validar_memorandum_enginyer(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Memoràndum tècnic no trobat.")
 
     if dades.accio.upper() == "APROVAR":
-        memo.estat = "APROVAT"
+        memo.estat = "APROVAT_ENGINYER"
         memo.validat_per_enginyer = True
     elif dades.accio.upper() == "REBUTJAR":
         memo.estat = "REBUTJAT"
@@ -1745,7 +1745,7 @@ async def llistar_alertes_copilot(
     ]
 
 
-@router.post("/rag", status_code=status.HTTP_201_CREATED)
+@router.post("/rag/document", status_code=status.HTTP_201_CREATED)
 async def afegir_document_rag(
     dades: DocumentRagIn,
     db: AsyncSession = Depends(get_db_with_tenant_context),
@@ -1766,7 +1766,7 @@ async def afegir_document_rag(
 
     return {"estat": "OK", "missatge": "Document afegit a la base de coneixement de la IA."}
 
-@router.get("/rag")
+@router.get("/rag/document")
 async def llistar_documents_rag(
     db: AsyncSession = Depends(get_db_with_tenant_context),
     claims: Dict[str, Any] = Depends(get_current_user_claims)

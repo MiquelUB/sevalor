@@ -2,7 +2,7 @@
 
 import unittest
 
-from bot.security import RedisRateLimiter, detectar_doble_extensio, validar_magic_bytes
+from app.bot.security import RedisRateLimiter, detectar_doble_extensio, validar_magic_bytes
 BOT_DISPONIBLE = True
 
 
@@ -141,6 +141,30 @@ class TestBotTelegram(unittest.TestCase):
         self.assertEqual(res_modificar["status"], "DEMANA_CANVIS")
         self.assertIn("canvis", res_modificar["text_actualitzat"].lower())
 
+
+    def test_enllac_efimer(self):
+        """Spec 023 RF-03: Generació i validació d'enllaç efímer 24h."""
+        from app.bot.security import generar_enllac_efimer, validar_enllac_efimer
+        import urllib.parse
+        url = generar_enllac_efimer("https://hetzner.sevalor.com", "fact-001")
+        
+        parsed = urllib.parse.urlparse(url)
+        params = urllib.parse.parse_qs(parsed.query)
+        
+        self.assertIn("signature", params)
+        self.assertIn("expires", params)
+        
+        sig = params["signature"][0]
+        exp = int(params["expires"][0])
+        
+        # Valid signature
+        self.assertTrue(validar_enllac_efimer("fact-001", exp, sig))
+        
+        # Invalid doc_id
+        self.assertFalse(validar_enllac_efimer("fact-002", exp, sig))
+        
+        # Expired
+        self.assertFalse(validar_enllac_efimer("fact-001", exp - 100000, sig))
 
 if __name__ == "__main__":
     unittest.main()

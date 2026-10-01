@@ -93,7 +93,7 @@ async def f2_eval_setup(admin_session: AsyncSession):
         titol="Instal·lació comptador general de reg",
         adreca="41.4036, 2.1744",
         estat="PENDENT",
-        version_id=1
+        versio=1
     )
     admin_session.add(ot)
     await admin_session.flush()
@@ -178,11 +178,16 @@ async def test_f2_01_mapa_serveix_dades_reals(f2_eval_setup):
         # GET /gestio/feines/mapa
         map_res = await client.get("/gestio/feines/mapa", headers=headers_a)
         assert map_res.status_code == 200
-        markers = map_res.json()
-        assert len(markers) >= 1
-
+        geojson = map_res.json()
+        assert geojson['type'] == 'FeatureCollection'
+        features = geojson['features']
+        assert len(features) >= 1
         # Trobar el marcador de la nostra OT
-        ot_marker = next((m for m in markers if m["id"] == setup["ot_id"]), None)
+        ot_feature = next((f for f in features if f['properties']['id'] == setup['ot_id']), None)
+        ot_marker = ot_feature['properties'] if ot_feature else None
+        if ot_feature:
+            ot_marker['lat'] = ot_feature['geometry']['coordinates'][1]
+            ot_marker['lng'] = ot_feature['geometry']['coordinates'][0]
         assert ot_marker is not None
         assert ot_marker["codi"] == setup["ot_codi"]
         assert ot_marker["lat"] == pytest.approx(41.4036, abs=0.001)
@@ -250,7 +255,7 @@ async def test_f2_03_rls_mapa_aillament(f2_eval_setup):
         map_b = await client.get("/gestio/feines/mapa", headers=headers_b)
         assert map_b.status_code == 200
         # Ha de retornar llista buida [] per a l'Empresa B
-        assert map_b.json() == []
+        assert map_b.json() == {'type': 'FeatureCollection', 'features': []}
 
 
 @pytest.mark.asyncio
@@ -268,8 +273,8 @@ async def test_f2_04_fitxa_360_client(f2_eval_setup):
 
         client_id = setup["client_a_id"]
 
-        # GET /gestio/clients/{client_id}/fitxa360
-        res = await client.get(f"/gestio/clients/{client_id}/fitxa360", headers=headers_a)
+        # GET /gestio/clients/{client_id}/fitxa-360
+        res = await client.get(f"/gestio/clients/{client_id}/fitxa-360", headers=headers_a)
         assert res.status_code == 200, f"Error fitxa 360: {res.text}"
         data = res.json()
 

@@ -29,7 +29,7 @@ async def setup_backorder(admin_session, boss_token):
 
     # Client & OT
     client_id = str(uuid.uuid4())
-    admin_session.add(Client(id=uuid.UUID(client_id), empresa_id=uuid.UUID(empresa_id), codi='CLI-BACK', rao_social='C', nif='NIFC'))
+    admin_session.add(Client(id=uuid.UUID(client_id), empresa_id=uuid.UUID(empresa_id), codi='CLI-BACK', rao_social='C', nif='B12345678'))
     ot_id = str(uuid.uuid4())
     admin_session.add(OrdreTreball(id=uuid.UUID(ot_id), empresa_id=uuid.UUID(empresa_id), codi='OT-B', client_id=uuid.UUID(client_id), titol='OT1', estat='PENDENT', adreca='C1'))
 

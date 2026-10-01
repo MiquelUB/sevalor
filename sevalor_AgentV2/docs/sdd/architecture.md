@@ -1,8 +1,10 @@
 # AGENTS.md — Sevalor Suite (Manual Suprem de Desenvolupament i Regles de l'Agent)
 
 > **NORMA SUPREMA:**  
-> **LLEGEIX OBLIGATÒRIAMENT `constitution.md` I LA `spec.md` ACTIVA ABANS DE PROPOSAR O TOCAR CODI.**  
-> Si detectes qualsevol contradicció entre el codi existent i l'especificació o la constitució, **l'especificació i la constitució SEMPRE prevalen.**
+> **1. LLEGEIX OBLIGATÒRIAMENT `constitution.md`, LA `spec.md` ACTIVA, EL `plan.md` I LES `tasks.md` ESPECÍFIQUES DE CADA SPEC ABANS DE PROPOSAR O TOCAR CODI.**  
+> Si detectes qualsevol contradicció entre el codi existent i l'especificació o la constitució, **l'especificació i la constitució SEMPRE prevalen.**  
+> **2. REALITZACIÓ I VALIDACIÓ NETA DE TESTS (MANDATORI):** És obligatori executar tots els tests de la fase o mòdul i passar-los al 100% nets (sense falsos positius, sense mocks prohibits, sense errors d'event loop i verificant RLS) abans de donar cap tasca per tancada.  
+> **3. ACTIVACIÓ MANDATÒRIA DE SKILLS:** És mandatori carregar i aplicar la skill especialitzada corresponent (`frontend-design`, `systematic-debugging`, `security-and-hardening`, `security-review`, `supabase-postgres-best-practices`) segons el tipus de tasca abans de tocar codi (veure §8).
 
 ---
 
@@ -102,8 +104,8 @@
 
 ## 📜 4. Reglas Innegociables de Desarrollo
 
-1. **Protocolo Previo de Lectura:**
-   - Lee `constitution.md` y la `spec.md` correspondiente antes de tocar o generar código.
+1. **Protocol Previ de Lectura i Tasques:**
+   - Lee `constitution.md`, la `spec.md` correspondiente, `plan.md` y el fichero `tasks.md` de cada especificación antes de tocar o generar código.
    - Si vas a resolver un bug, consulta previamente la documentación en `docs/errors/ERRORS.md`.
 2. **ZERO MOCK DATA (Tolerancia Cero a Datos Ficticios):**
    - **PROHIBIDO introducir datos hardcodeados o "dummy" en componentes o endpoints.**
@@ -155,9 +157,9 @@ npm run build
 ## 🏁 6. Definición de Hecho (Definition of Done)
 
 Para que el agente pueda dar por concluida cualquier tarea:
-- [ ] La especificación activa (`spec.md`) se cumple en su totalidad según la notación EARS.
+- [ ] La especificación activa (`spec.md`), `plan.md` y `tasks.md` se cumplen en su totalidad según la notación EARS.
 - [ ] Se cumple estrictamente la regla *Zero Mock Data* (sin datos ficticios).
-- [ ] Todos los tests unitarios y de integración están en verde (`pytest -v`).
+- [ ] **TESTS NETS MANDATORIS:** Todos los tests unitarios y de integración se han ejecutado y están 100% en verde (`pytest -v`), sin warnings de event loop y con aislamiento RLS certificado según la normativa de la Fase 0.
 - [ ] `ruff check .` y `mypy app/` no arrojan advertencias ni errores.
 - [ ] `npm run build` en el frontend compila sin errores.
 - [ ] Se respetan el aislamiento RLS y el cifrado de tokens para modo offline.
@@ -172,3 +174,41 @@ D'acord amb la resolució de la Fase 0 (Auditoria Zero Mock), queda establerta l
 **Al finalitzar qualsevol fase i ABANS de procedir a l'execució i validació dels tests automatitzats (Pytest / Playwright), TENS L'OBLIGACIÓ ABSOLUTA de llegir el document `sdd_sevalor/Auditoria_i_Normativa_Tests_Backend.md`.**
 
 Aquesta lectura prèvia garantirà que no es tornin a tolerar falsos positius, emmascaraments d'errors de connexió asíncrona (event loops) i vulneracions de la regla *Zero Mock* o *RLS*. Si no es compleix aquesta normativa, la validació de la fase serà nul·la.
+
+---
+
+## 🧩 8. Matriu d'Activació Mandatòria de Skills per Tipus de Tasca
+
+Per garantir la màxima excel·lència tècnica, seguretat i coherència arquitectònica, l'agent té l'OBLIGACIÓ d'activar i seguir els procediments de la skill especialitzada corresponent en cadascun dels següents escenaris:
+
+| Tipus de Tasca d'Implementació | Skill Mandatòria | Ruta del recurs | Objectiu i Protocol Obligatori |
+| :--- | :--- | :--- | :--- |
+| **Disseny, Maquetació o Redisseny de Frontend (PWA / Dashboard / Superadmin)** | `frontend-design` | [`.agents/skills/frontend-design/SKILL.md`](file:///.agents/skills/frontend-design/SKILL.md) | **Prohibició d'estètica genèrica d'IA.** Aplicar el disseny camaleònic amb tokens HSL (`--color-primary`), tipografia intencional, ritme vertical i micro-interaccions deliberades. Estats buits reals obligatoris. |
+| **Resolució de Bugs, Fallades de Tests o Comportaments Inesperats** | `systematic-debugging` | [`.agents/skills/systematic-debugging/SKILL.md`](file:///.agents/skills/systematic-debugging/SKILL.md) | **Llei de Ferro: "NO FIXES WITHOUT ROOT CAUSE".** Prohibit aplicar pegats superficials o pal·liar símptomes. Cal aïllar científicament la causa arrel, documentar la hipòtesi i arreglar d'arrel abans de tocar codi. |
+| **Autenticació, Sessions, Criptografia, Pujada d'Arxius i Endpoints Sensibles** | `security-and-hardening` | [`.agents/skills/security-and-hardening/SKILL.md`](file:///.agents/skills/security-and-hardening/SKILL.md) | **Blindatge preventiu Zero-Trust.** Xifratge AES-GCM 256 bits a IndexedDB (derivat per PBKDF2 del PIN), llista negra Redis per JWT, validació estricta de fitxers (magic bytes, doble extensió) i prevenció d'injecció. |
+| **Auditoria de Codi, Control d'Accessos i Verificació de Vulnerabilitats** | `security-review` | [`.agents/skills/security-review/SKILL.md`](file:///.agents/skills/security-review/SKILL.md) | **Checklist sistemàtic OWASP Top 10.** Verificació de blindatge RBAC per rols (Boss vs. Enginyer vs. Operari) i aïllament d'endpoints financers. |
+| **Modelat de Base de Dades, Migracions Alembic i Polítiques RLS de PostgreSQL** | `supabase-postgres-best-practices` | [`.agents/skills/supabase-postgres-best-practices/SKILL.md`](file:///.agents/skills/supabase-postgres-best-practices/SKILL.md) | **PostgreSQL 16 & RLS segur.** Disseny idempotent de taules, regles RLS multi-tenant infranquejables (`economics_boss_only`), ús correcte de bloquejos concurrents (`SELECT FOR UPDATE`) i prevenció de deadlocks. |
+
+> **Regla d'or:** Abans d'iniciar qualsevol tasca de `tasks.md`, l'agent ha d'identificar quina d'aquestes skills governa la intervenció, consultar el seu `SKILL.md` i executar el desenvolupament sota les seves directrius.
+
+---
+
+## 🔌 9. Eines MCP per a la Validació Zero Mock en Viu
+
+Per fer complir de manera implacable la **Regla d'Or Zero Mock**, l'agent disposa i ha d'utilitzar els següents servidors MCP integrats a la plataforma:
+
+1. **`chrome-devtools` (Google Chrome Headless + PWA):**
+   - **Objectiu:** Provar en navegador real (no simulat) la interfície web i PWA de Sevalor (`/operari`, `/gestio`, `/superadmin`).
+   - **Casos d'ús obligatoris:**
+     - Validar fluxos de login reals (PIN de 4 dígits per a operaris, contrasenya + 2FA per a gestió).
+     - Comprovar formularis crítics com les entrades a magatzem, creació d'albarans, assignació d'ordres de treball i fitxatge.
+     - Inspeccionar les peticions de xarxa en viu (`list_network_requests`) per verificar que les dades viatgen contra l'API FastAPI real i no provenen d'objectes mock.
+     - Detectar errors de JavaScript a la consola (`list_console_messages`) i validar el renderitzat visual del Chameleon UI (`take_screenshot`).
+
+2. **`postgres` (PostgreSQL 15/16 Multi-Tenant):**
+   - **Objectiu:** Accés directe en viu a la instància PostgreSQL (`postgresql://postgres:postgres@127.0.0.1:5433/sevalor`).
+   - **Casos d'ús obligatoris:**
+     - Comprovar que les dades creades a través de la UI o de l'API s'han persistit físicament i amb la integritat referencial esperada.
+     - Validar que les regles RLS bloquegen l'accés creuat entre empreses executant consultes amb `SET LOCAL app.current_empresa_id = '<uuid>';`.
+     - Confirmar que els *Empty States* del frontend reflecteixen l'estat real d'una taula buida a la base de dades.
+
