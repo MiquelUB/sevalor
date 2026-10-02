@@ -44,7 +44,7 @@ class ErrorTraceCreateRequest(BaseModel):
     detall: Optional[str] = None
 
 
-@router.get("/kpis", response_model=Dict[str, Any])
+@router.get("/global", response_model=Dict[str, Any])
 async def get_system_kpis(db: AsyncSession = Depends(get_db_with_tenant_context)) -> Dict[str, Any]:
     """Retorna els KPIs de disponibilitat, microserveis, cues i IA local sota CPU-only (Spec 022)."""
     db_ok = True

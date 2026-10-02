@@ -66,6 +66,19 @@ class TenantMiddleware(BaseHTTPMiddleware):
         request.state.empresa_id = empresa_id
         request.state.is_superadmin = is_superadmin
 
+        if is_superadmin:
+            path = request.url.path
+            if path.startswith("/api/v1/") and not (
+                path.startswith("/api/v1/superadmin") or
+                path.startswith("/api/v1/auth") or
+                path.startswith("/api/v1/health")
+            ):
+                from fastapi.responses import JSONResponse
+                return JSONResponse(
+                    status_code=403,
+                    content={"detail": "Zero-Trust Segregation: SUPERADMIN no pot accedir a rutes operatives de negoci."}
+                )
+
         from app.core.context import tenant_context, superadmin_context
         token_tenant = tenant_context.set(empresa_id)
         token_superadmin = superadmin_context.set(is_superadmin)

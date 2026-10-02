@@ -19,6 +19,7 @@ from app.api.v1.gestio.clients import router as clients_router
 from app.api.v1.gestio.comptabilitat import router as comptabilitat_router
 from app.api.v1.gestio.economia import router as economia_router
 from app.api.v1.gestio.configuracio import router as configuracio_router
+from app.api.v1.gestio.contractes import router as contractes_router
 from app.api.v1.gestio.copilot import router as copilot_router
 from app.api.v1.gestio.ia import router as ia_router
 from app.api.v1.gestio.feines import intervencions_router
@@ -115,6 +116,7 @@ app.include_router(planols_router, prefix=settings.API_V1_STR)
 app.include_router(pressupostos_router, prefix=settings.API_V1_STR)
 app.include_router(comptabilitat_router, prefix=settings.API_V1_STR)
 app.include_router(economia_router, prefix=settings.API_V1_STR)
+app.include_router(contractes_router, prefix=settings.API_V1_STR)
 app.include_router(notificacions_router, prefix=settings.API_V1_STR)
 app.include_router(operari_auth_router, prefix=settings.API_V1_STR)
 app.include_router(auth_router, prefix=settings.API_V1_STR + "/auth", tags=["Autenticació Oficina"])

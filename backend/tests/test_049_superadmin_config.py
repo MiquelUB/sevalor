@@ -13,6 +13,8 @@ def superadmin_token():
     payload = {
         "sub": str(uuid.uuid4()),
         "rol": "SUPERADMIN",
+        "totp_activat": True,
+        "ip_allowlist": ["*"],
         "exp": datetime.now(timezone.utc) + timedelta(minutes=15),
     }
     return jwt.encode(payload, settings.SECRET_KEY, algorithm=settings.ALGORITHM)

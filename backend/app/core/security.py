@@ -25,6 +25,25 @@ def get_current_user_claims(request: Request) -> Dict[str, Any]:
             algorithms=[settings.ALGORITHM],
             options={"verify_aud": False},
         )
+        
+        # Zero-Trust checks for SUPERADMIN
+        if payload.get("rol", "").upper() == "SUPERADMIN":
+            # Check TOTP
+            if not payload.get("totp_activat", False):
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="El SUPERADMIN ha de tenir el TOTP activat.",
+                )
+            
+            # Check IP Allowlist
+            client_ip = request.client.host if request.client else None
+            ip_allowlist = payload.get("ip_allowlist") or []
+            if client_ip and client_ip not in ip_allowlist and "*" not in ip_allowlist:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Accés denegat: IP no permesa per a SUPERADMIN.",
+                )
+
         request.state.user_id = payload.get("sub")
         return payload
     except jwt.ExpiredSignatureError:
@@ -32,6 +51,8 @@ def get_current_user_claims(request: Request) -> Dict[str, Any]:
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="El token d'accés ha expirat.",
         )
+    except HTTPException:
+        raise
     except (jwt.PyJWTError, Exception) as exc:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -63,6 +84,16 @@ def require_roles(allowed_roles: List[str]) -> Callable:
 
 # Veto d'Enginyer: Només BOSS, SECRETARIA o COMPTABILITAT poden accedir a dades financeres
 veto_enginyer_finances = require_roles(["BOSS", "SECRETARIA", "COMPTABILITAT"])
-require_financial_access = veto_enginyer_finances
+
+def require_financial_access_checker(request: Request, claims: Dict[str, Any] = Depends(veto_enginyer_finances)) -> Dict[str, Any]:
+    """Assegura l'accés financer i restringeix a només lectura si és una sessió d'impersonació."""
+    if claims.get("is_impersonation") and request.method not in ("GET", "HEAD", "OPTIONS"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Les sessions d'impersonació tenen accés de només lectura a dades financeres.",
+        )
+    return claims
+
+require_financial_access = require_financial_access_checker
 require_boss = require_roles(["BOSS"])
 require_enginyer_or_boss = require_roles(["BOSS", "ENGINYER"])

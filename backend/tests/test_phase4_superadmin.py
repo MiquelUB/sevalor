@@ -17,6 +17,8 @@ def superadmin_headers():
     token_payload = {
         "sub": str(uuid.uuid4()),
         "rol": "SUPERADMIN",
+        "totp_activat": True,
+        "ip_allowlist": ["*"],
         "empresa_id": str(uuid.uuid4()),
     }
     token = jwt.encode(token_payload, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
@@ -97,10 +99,10 @@ async def test_superadmin_llistar_tenants(superadmin_headers):
 
 @pytest.mark.asyncio
 async def test_superadmin_telemetria_kpis(superadmin_headers):
-    """Verifica l'endpoint de telemetria i salut del sistema a /superadmin/telemetria/kpis."""
+    """Verifica l'endpoint de telemetria i salut del sistema a /superadmin/telemetria/global."""
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test/api/v1") as client:
-        res = await client.get("/superadmin/telemetria/kpis", headers=superadmin_headers)
+        res = await client.get("/superadmin/telemetria/global", headers=superadmin_headers)
         assert res.status_code == 200
         kpis = res.json()
         assert "uptime_percent" in kpis

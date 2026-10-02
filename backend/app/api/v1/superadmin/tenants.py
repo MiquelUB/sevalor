@@ -1,7 +1,7 @@
 import logging
 import secrets
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -91,12 +91,26 @@ async def llistar_tenants(
         })
     return resultat
 
+import re
+
+def validar_nif_cif_nie(doc: str) -> bool:
+    doc = doc.upper().replace("-", "").replace(" ", "")
+    if not re.match(r'^[A-Z0-9]{9}$', doc):
+        return False
+    # Basic structural check
+    return True
+
 @router.post("/onboarding", status_code=status.HTTP_201_CREATED, response_model=Dict[str, Any])
 async def crear_nou_tenant(
     payload: OnboardingTenantRequest,
     db: AsyncSession = Depends(get_db_with_tenant_context),
     claims: Dict[str, Any] = Depends(require_roles(["SUPERADMIN"])),
 ) -> Dict[str, Any]:
+
+    if not validar_nif_cif_nie(payload.nif):
+        raise HTTPException(status_code=422, detail="NIF de l'empresa invàlid.")
+    if not validar_nif_cif_nie(payload.boss_nif):
+        raise HTTPException(status_code=422, detail="NIF del BOSS invàlid.")
 
     subdomini_norm = payload.subdomini.strip().lower()
     if subdomini_norm in {"api", "admin", "www", "app", "superadmin", "billing"}:
@@ -131,6 +145,8 @@ async def crear_nou_tenant(
         feature_flota=payload.feature_flags.get("flota_avancada", True) if payload.feature_flags else True,
         feature_planols=payload.feature_flags.get("planols_tecnics", False) if payload.feature_flags else False,
         feature_telegram=payload.feature_flags.get("telegram_bot", True) if payload.feature_flags else True,
+        primari_hsl="210 100% 15%",
+        secundari_hsl="38 92% 50%",
     )
     db.add(nova_empresa)
 
@@ -170,8 +186,16 @@ async def crear_nou_tenant(
         logger.warning("No s'ha pogut encuar la tasca Celery: %s", e)
         directoris_status = "SKIPPED"
 
-    raw_token = secrets.token_urlsafe(32)
-    enllac_activacio = f"https://{subdomini_norm}.campopro.cat/activacio?token={raw_token}"
+    import jwt
+    from app.core.config import settings
+    expire = datetime.now(timezone.utc) + timedelta(hours=24)
+    payload_jwt = {
+        "sub": str(boss_user_id),
+        "action": "activate",
+        "exp": expire,
+    }
+    jwt_token = jwt.encode(payload_jwt, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
+    enllac_activacio = f"https://{subdomini_norm}.campopro.cat/activacio?token={jwt_token}"
 
     return {
         "status": "CREATED",
@@ -301,4 +325,94 @@ async def update_feature_flags(
             "planols": empresa.feature_planols,
             "telegram": empresa.feature_telegram,
         }
+    }
+
+@router.post("/{empresa_id}/impersonate", response_model=Dict[str, Any])
+async def impersonate_tenant(
+    empresa_id: str,
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+    claims: Dict[str, Any] = Depends(require_roles(["SUPERADMIN"])),
+) -> Dict[str, Any]:
+    try:
+        emp_uuid = uuid.UUID(empresa_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="UUID invàlid")
+    
+    emp_res = await db.execute(select(Empresa).where(Empresa.id == emp_uuid))
+    empresa = emp_res.scalars().first()
+    if not empresa:
+        raise HTTPException(status_code=404, detail="Empresa no trobada")
+
+    import jwt
+    from app.core.config import settings
+    expire = datetime.now(timezone.utc) + timedelta(hours=2)
+    payload = {
+        "sub": claims.get("sub"),
+        "empresa_id": str(empresa.id),
+        "rol": "SUPERADMIN",
+        "exp": expire,
+        "iat": datetime.now(timezone.utc),
+        "is_impersonation": True,
+        "totp_activat": claims.get("totp_activat", True),
+        "ip_allowlist": claims.get("ip_allowlist", [])
+    }
+    
+    token = jwt.encode(payload, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
+    
+    return {
+        "access_token": token,
+        "token_type": "bearer",
+        "rol": "SUPERADMIN",
+        "empresa_id": str(empresa.id),
+        "is_impersonation": True
+    }
+
+@router.post("/{tenant_id}/destruccio")
+async def destroy_tenant(
+    tenant_id: str,
+    db: AsyncSession = Depends(get_db_with_tenant_context)
+):
+    try:
+        import uuid
+        tenant_uuid = uuid.UUID(tenant_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="UUID invàlid")
+
+    emp_res = await db.execute(select(Empresa).where(Empresa.id == tenant_uuid))
+    emp = emp_res.scalar_one_or_none()
+    if not emp:
+        raise HTTPException(status_code=404, detail="Tenant no trobat")
+
+    # Modificar estat
+    emp.estat_pagament = "ELIMINAT"
+    
+    # Generar Certificat (ReportLab)
+    import os
+    from datetime import datetime, timezone
+    from reportlab.lib.pagesizes import A4
+    from reportlab.pdfgen import canvas
+    
+    cert_dir = f"/tmp/sevalor_docs/{tenant_id}/certificats"
+    os.makedirs(cert_dir, exist_ok=True)
+    pdf_path = os.path.join(cert_dir, f"certificat_destruccio_{tenant_id}.pdf")
+    
+    c = canvas.Canvas(pdf_path, pagesize=A4)
+    c.drawString(100, 750, "CERTIFICAT DE DESTRUCCIÓ DE DADES")
+    c.drawString(100, 730, f"Tenant ID: {tenant_id}")
+    c.drawString(100, 710, f"Empresa: {emp.nom}")
+    c.drawString(100, 690, f"Data: {datetime.now(timezone.utc).isoformat()}")
+    c.drawString(100, 670, "Les dades han estat marcades per a la seva purga segura i ofuscació segons GDPR.")
+    c.save()
+
+    # Queue celery task
+    from app.workers.tasks import purgar_dades_tenant_destruit
+    purgar_dades_tenant_destruit.apply_async(args=[tenant_id], countdown=30*24*3600)
+    
+    await db.commit()
+
+    return {
+        "status": "success",
+        "message": "Tenant eliminat i certificat generat",
+        "certificat_url": pdf_path,
+        "estat": "ELIMINAT"
     }

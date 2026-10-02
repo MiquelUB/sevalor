@@ -37,6 +37,8 @@ def crear_token(rol: str, empresa_id: str, sub: str | None = None) -> str:
     payload = {
         "sub": sub or str(uuid.uuid4()),
         "rol": rol,
+        "totp_activat": True if rol == "SUPERADMIN" else False,
+        "ip_allowlist": ["*"] if rol == "SUPERADMIN" else [],
         "empresa_id": empresa_id,
         "exp": 9999999999,
     }
@@ -696,7 +698,7 @@ class TestFluxSuperadminRLS:
         await admin_session.flush()
         sa_tok = crear_token("SUPERADMIN", eid)
         h = {"Authorization": f"Bearer {sa_tok}", "X-Empresa-ID": eid}
-        resp = await async_client.get("/superadmin/telemetria/kpis", headers=h)
+        resp = await async_client.get("/superadmin/telemetria/global", headers=h)
         assert resp.status_code in (200, 429), f"Telemetria KPIs: {resp.status_code} {resp.text}"
         if resp.status_code == 200:
             data = resp.json()
@@ -708,5 +710,5 @@ class TestFluxSuperadminRLS:
         await admin_session.flush()
         op_tok = crear_token("OPERARI", eid)
         h = {"Authorization": f"Bearer {op_tok}", "X-Empresa-ID": eid}
-        resp = await async_client.get("/superadmin/telemetria/kpis", headers=h)
+        resp = await async_client.get("/superadmin/telemetria/global", headers=h)
         assert resp.status_code in (403, 429), f"RBAC telemetria: {resp.status_code}"

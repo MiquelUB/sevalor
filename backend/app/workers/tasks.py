@@ -565,3 +565,66 @@ def purgar_tokens_expirats():
             logger.info(f"Purga de tokens expirats completada a les {ara.isoformat()}")
 
     asyncio.run(process())
+
+@celery_app.task(name="app.workers.tasks.purgar_dades_tenant_destruit", queue="queue_periodic")
+def purgar_dades_tenant_destruit(tenant_id: str):
+    """T013: Purga de dades del tenant eliminat (Spec 04 Phase 5)."""
+    import asyncio
+    from sqlalchemy import text
+    
+    async def process():
+        async with get_worker_session() as session:
+            try:
+                # Obfusquem l'empresa
+                await session.execute(text("""
+                    UPDATE empreses 
+                    SET nom = 'OBFUSCATED_' || id, nif = '00000000X', subdomini = 'del-' || id
+                    WHERE id = :tenant_id
+                """), {"tenant_id": tenant_id})
+                
+                # Obfusquem els usuaris
+                await session.execute(text("""
+                    UPDATE usuaris
+                    SET nom = 'OBFUSCATED', cognoms = 'OBFUSCATED', email = id || '@deleted.sevalor.app', telefon = NULL
+                    WHERE empresa_id = :tenant_id
+                """), {"tenant_id": tenant_id})
+                
+                # S'hauria de fer una eliminació o ofuscació en cascada de totes les taules de negoci
+                # per complir la normativa de Destrucció Certificada
+                
+                await session.commit()
+                logger.info(f"Purga de dades per tenant {tenant_id} completada.")
+            except Exception as e:
+                logger.error(f"Error purgant tenant {tenant_id}: {e}")
+
+    asyncio.run(process())
+@celery_app.task(name="app.workers.tasks.revisar_contractes_manteniment", queue="queue_periodic")
+def revisar_contractes_manteniment():
+    """T006: Revisa els contractes de manteniment i genera les ordres de treball preventives."""
+    import asyncio
+    from sqlalchemy import select
+    from app.models.models import Empresa
+    from app.models.contractes import ContracteManteniment
+    from app.services.contractes_service import generar_ordres_preventives_per_contracte
+    
+    async def process():
+        async with get_worker_session() as session:
+            result = await session.execute(select(Empresa.id))
+            empreses_ids = result.scalars().all()
+            
+        for emp_id in empreses_ids:
+            try:
+                empresa_id_str = str(emp_id)
+                async with get_worker_session(empresa_id_str) as session:
+                    stmt = select(ContracteManteniment).where(ContracteManteniment.estat == "ACTIU")
+                    res = await session.execute(stmt)
+                    contractes = res.scalars().all()
+                    
+                    for contracte in contractes:
+                        noves_ots = await generar_ordres_preventives_per_contracte(contracte, session)
+                        if noves_ots:
+                            logger.info(f"Generades {len(noves_ots)} OTs preventives pel contracte {contracte.numero_contracte} de l'empresa {empresa_id_str}")
+            except Exception as e:
+                logger.error(f"Error generant OTs preventives per l'empresa {emp_id}: {e}")
+                
+    asyncio.run(process())

@@ -19,6 +19,8 @@ def create_token(rol: str, empresa_id: str, secret: str):
     payload = {
         "sub": "00000000-0000-0000-0000-000000000000",
         "rol": rol,
+        "totp_activat": True if rol == "SUPERADMIN" else False,
+        "ip_allowlist": ["*"] if rol == "SUPERADMIN" else [],
         "empresa_id": empresa_id,
         "exp": datetime.now(timezone.utc) + timedelta(minutes=15)
     }

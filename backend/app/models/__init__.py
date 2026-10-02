@@ -23,6 +23,11 @@ from app.models.models import (
     Usuari,
     Vehicle,
 )
+from app.models.contractes import (
+    ContracteManteniment,
+    ContractesMantenimentFinques,
+    RevisionsContracte,
+)
 
 __all__ = [
     "Empresa",
@@ -48,4 +53,7 @@ __all__ = [
     "FacturaCapcalera",
     "FacturaLinia",
     "OutboxEnviamentAEAT",
+    "ContracteManteniment",
+    "ContractesMantenimentFinques",
+    "RevisionsContracte",
 ]

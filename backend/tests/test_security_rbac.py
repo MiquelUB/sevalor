@@ -14,6 +14,8 @@ def crear_token(rol: str, empresa_id: str, sub: str = None) -> str:
     payload = {
         "sub": sub or str(uuid.uuid4()),
         "rol": rol,
+        "totp_activat": True if rol == "SUPERADMIN" else False,
+        "ip_allowlist": ["*"] if rol == "SUPERADMIN" else [],
         "empresa_id": empresa_id,
         "exp": 9999999999,
     }

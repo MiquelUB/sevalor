@@ -15,7 +15,9 @@ def superadmin_token():
         "sub": "00000000-0000-0000-0000-000000000000",
         "rol": "SUPERADMIN",
         "empresa_id": None,
-        "exp": datetime.now(timezone.utc) + timedelta(minutes=15)
+        "exp": datetime.now(timezone.utc) + timedelta(minutes=15),
+        "totp_activat": True,
+        "ip_allowlist": ["testclient", "127.0.0.1", "localhost", "*"]
     }
     return jwt.encode(payload, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
 

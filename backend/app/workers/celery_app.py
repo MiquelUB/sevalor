@@ -48,9 +48,15 @@ celery_app.conf.update(
         "app.workers.tasks.transcriure_audio_task": {"queue": "queue_media"},
         "app.workers.tasks.generar_informe_setmanal": {"queue": "queue_documents"},
         "app.workers.tasks.purgar_tokens_expirats": {"queue": "queue_periodic"},
+        "app.workers.tasks.revisar_contractes_manteniment": {"queue": "queue_periodic"},
     },
-    # ── T047-T050 + T041: Celery Beat Schedules ───────────────────────────────
+    # ── T047-T050 + T041 + Contractes: Celery Beat Schedules ───────────────────────────────
     beat_schedule={
+        # Contractes: Revisar contractes de manteniment i generar OTs - cada dia a les 04:00 UTC
+        "revisar-contractes-manteniment-diaria": {
+            "task": "app.workers.tasks.revisar_contractes_manteniment",
+            "schedule": crontab(hour=4, minute=0),
+        },
         # T047: Alerta Matinal de Flota — cada dia a les 06:00 UTC
         "alerta-matinal-flota-diaria": {
             "task": "app.workers.tasks.revisar_itv_asseguranca",
