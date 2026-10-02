@@ -152,7 +152,7 @@ async def test_cross_01_fluxe_complet_camp_a_oficina(admin_session):
         )
         assert res_mapa.status_code == 200
         feines_mapa = res_mapa.json()
-        codis = [f["codi"] for f in feines_mapa]
+        codis = [f["properties"]["codi"] for f in feines_mapa.get("features", [])]
         assert "OT-CROSS-001" in codis
 
 
@@ -255,15 +255,20 @@ async def test_cross_02_rls_transversal(admin_session):
             "/api/v1/gestio/magatzem/articles",
             "/api/v1/gestio/feines/mapa",
             "/api/v1/gestio/pressupostos",
-            "/api/v1/gestio/copilot/rag",
+            "/api/v1/gestio/copilot/rag/document",
         ]
 
         for ep in endpoints_a_verificar:
             res = await ac.get(ep, headers=headers_b)
             assert res.status_code == 200, f"Error a l'endpoint {ep}: {res.text}"
             data = res.json()
-            assert isinstance(data, list)
-            assert len(data) == 0, f"Filtració RLS detectada a {ep}: conté dades de l'altra empresa!"
+            if "mapa" in ep:
+                assert isinstance(data, dict)
+                assert data["type"] == "FeatureCollection"
+                assert len(data.get("features", [])) == 0, f"Filtració RLS a {ep}"
+            else:
+                assert isinstance(data, list)
+                assert len(data) == 0, f"Filtració RLS detectada a {ep}: conté dades de l'altra empresa!"
 
 
 @pytest.mark.asyncio

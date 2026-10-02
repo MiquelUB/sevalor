@@ -159,7 +159,7 @@ async def test_f1_02_fitxatge_gps_i_timestamp(operari_f1_setup):
         # Iniciar Jornada
         res_inici = await client.post(
             "/operari/jornada/inici",
-            json={"geolocalitzacio": "41.3879,2.1699"},
+            json={"latitud": 41.3879, "longitud": 2.1699},
             headers=headers
         )
         assert res_inici.status_code == 201
@@ -171,7 +171,7 @@ async def test_f1_02_fitxatge_gps_i_timestamp(operari_f1_setup):
         j_id = jornada_data["id"]
         res_fi = await client.post(
             f"/operari/jornada/{j_id}/fi",
-            json={"geolocalitzacio": "41.3880,2.1700"},
+            json={"latitud": 41.3880, "longitud": 2.1700},
             headers=headers
         )
         assert res_fi.status_code == 200

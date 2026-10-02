@@ -90,7 +90,7 @@ async def test_operari_cannot_close_others_jornada(client_autenticat_altre_opera
     """Un operari no pot tancar la jornada d'un altre operari."""
     # Intentem tancar una jornada dummy amb el token de l'altre operari
     dummy_jornada_id = str(uuid.uuid4())
-    res_fi = await client_autenticat_altre_operari.post(f"/api/v1/operari/jornada/{dummy_jornada_id}/fi", json={"geolocalitzacio": "0,0"})
+    res_fi = await client_autenticat_altre_operari.post(f"/api/v1/operari/jornada/{dummy_jornada_id}/fi", json={"latitud": 0.0, "longitud": 0.0})
     assert res_fi.status_code == status.HTTP_404_NOT_FOUND or res_fi.status_code == status.HTTP_403_FORBIDDEN
 
 @pytest.mark.asyncio

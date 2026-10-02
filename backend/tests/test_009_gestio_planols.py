@@ -25,7 +25,7 @@ async def test_crear_y_listar_anotacions(admin_session, headers, boss_token):
     admin_session.add(finca_nova)
     await admin_session.flush()
     
-    ot_nova = OrdreTreball(empresa_id=uuid.UUID(empresa_id), finca_id=finca_nova.id, titol="OT Planols", codi="OT-001")
+    ot_nova = OrdreTreball(empresa_id=uuid.UUID(empresa_id), finca_id=finca_nova.id, titol="OT Planols", codi="OT-001", client_id=client_nou.id, adreca="Adreça test")
     admin_session.add(ot_nova)
     await admin_session.flush()
     

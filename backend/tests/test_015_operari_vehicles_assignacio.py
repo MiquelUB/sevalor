@@ -26,7 +26,7 @@ async def test_operari_assigna_vehicle_i_reporta_danys(admin_session):
     headers = {"Authorization": f"Bearer {token}", "X-Empresa-ID": str(emp_id)}
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-        res_inici = await ac.post("/api/v1/operari/jornada/inici", json={"geolocalitzacio": "0,0"}, headers=headers)
+        res_inici = await ac.post("/api/v1/operari/jornada/inici", json={"latitud": 0.0, "longitud": 0.0}, headers=headers)
         assert res_inici.status_code in [200, 201]
         jornada_id = res_inici.json()["id"]
 

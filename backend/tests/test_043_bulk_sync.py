@@ -1,25 +1,32 @@
-import uuid
-
 import pytest
-import pytest_asyncio
+import uuid
 from httpx import ASGITransport, AsyncClient
-
 from app.main import app
-from app.models.models import Empresa
+from app.models.models import Empresa, Usuari
 
-
-@pytest_asyncio.fixture
+@pytest.fixture(scope="function")
 async def setup_sync(admin_session, boss_token):
     token, empresa_id = boss_token
 
-    # 0. Crear empresa
+    # 0. Crear empresa i usuari per satisfer FKs
     boss_nif = "B" + str(uuid.uuid4())[:8].upper()
-    admin_session.add(Empresa(id=uuid.UUID(empresa_id), nom='Test Sync', nif=boss_nif, subdomini='sync-' + str(uuid.uuid4())[:5], pla_subscripcio='STARTER', estat_pagament='ACTIU'))
+    import jwt
+    from app.core.config import settings
+    payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+    user_id = payload["sub"]
+
+    empresa = Empresa(id=uuid.UUID(empresa_id), nom='Test Sync', nif=boss_nif, subdomini='sync-' + str(uuid.uuid4())[:5], pla_subscripcio='STARTER', estat_pagament='ACTIU')
+    admin_session.add(empresa)
+    await admin_session.flush()
+
+    usuari = Usuari(id=uuid.UUID(user_id), empresa_id=empresa.id, nif=str(uuid.uuid4())[:9], email=f"user_{user_id}@test.com", nom="Operari", password_hash="pass", rol="OPERARI", estat="ACTIU")
+    admin_session.add(usuari)
     await admin_session.commit()
 
     return {
         "empresa_id": empresa_id,
-        "token": token
+        "token": token,
+        "user_id": user_id
     }
 
 @pytest.mark.asyncio
@@ -32,7 +39,7 @@ async def test_bulk_sync_push(setup_sync):
             {
                 "id": str(uuid.uuid4()),
                 "accio": "FITXAR_JORNADA",
-                "payload": {"tipus": "ENTRADA", "coords": [41.0, 2.0]}
+                "payload": {"tipus": "ENTRADA", "latitud": 41.0, "longitud": 2.0}
             },
             {
                 "id": str(uuid.uuid4()),

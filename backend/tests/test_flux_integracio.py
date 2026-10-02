@@ -596,7 +596,7 @@ class TestFluxOperari:
 
         # Iniciar jornada
         resp = await async_client.post("/operari/inici", headers=op_h, json={
-            "geolocalitzacio": "41.38,2.18",
+            "latitud": 41.38, "longitud": 2.18,
         })
         assert resp.status_code in (200, 201), f"Inici jornada: {resp.status_code} {resp.text}"
         data = resp.json()
@@ -610,7 +610,7 @@ class TestFluxOperari:
         # Tancar jornada
         if jid:
             resp = await async_client.post(f"/operari/{jid}/fi", headers=op_h, json={
-                "geolocalitzacio": "41.39,2.19",
+                "latitud": 41.39, "longitud": 2.19,
             })
             assert resp.status_code in (200, 404), f"Tancar jornada: {resp.status_code} {resp.text}"
 
