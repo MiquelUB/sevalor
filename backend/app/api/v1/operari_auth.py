@@ -67,15 +67,17 @@ async def login_operari(
                 empresa_uuid = emp.id
 
     if not empresa_uuid:
+        from app.core.db import AsyncSessionLocal
         # Fallback de conveniència per a la PWA quan s'accedeix sense subdomini/header
-        stmt_nif = select(Usuari).where(
-            func.upper(Usuari.nif) == login_data.nif.upper(),
-            Usuari.rol.in_(["OPERARI", "CAP_DE_COLLA", "ADMIN", "SUPERADMIN"])
-        )
-        res_nif = await db.execute(stmt_nif)
-        usuari_pre = res_nif.scalars().first()
-        if usuari_pre:
-            empresa_uuid = usuari_pre.empresa_id
+        async with AsyncSessionLocal() as sudo_session:
+            stmt_nif = select(Usuari).where(
+                func.upper(Usuari.nif) == login_data.nif.upper(),
+                Usuari.rol.in_(["OPERARI", "CAP_DE_COLLA", "ADMIN", "SUPERADMIN"])
+            )
+            res_nif = await sudo_session.execute(stmt_nif)
+            usuari_pre = res_nif.scalars().first()
+            if usuari_pre:
+                empresa_uuid = usuari_pre.empresa_id
 
     if not empresa_uuid:
         raise HTTPException(status_code=400, detail="Tenant context missing")

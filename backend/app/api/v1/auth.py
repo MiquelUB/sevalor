@@ -48,12 +48,14 @@ async def login_oficina(
     db: AsyncSession = Depends(get_db)
 ):
     try:
-        # We don't have tenant context yet, we search by email
-        stmt = select(Usuari).where(
-            func.lower(Usuari.email) == login_data.email.lower()
-        )
-        result = await db.execute(stmt)
-        usuari = result.scalars().first()
+        from app.core.db import AsyncSessionLocal
+        # Use a fresh sudo session to bypass RLS, since we don't have tenant context yet
+        async with AsyncSessionLocal() as sudo_session:
+            stmt = select(Usuari).where(
+                func.lower(Usuari.email) == login_data.email.lower()
+            )
+            result = await sudo_session.execute(stmt)
+            usuari = result.scalars().first()
 
         if not usuari:
             raise HTTPException(
