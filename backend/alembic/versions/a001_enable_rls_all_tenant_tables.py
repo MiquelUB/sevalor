@@ -74,6 +74,17 @@ TABLES_WITH_EMPRESA_ID = [
 
 def upgrade() -> None:
     """Enable RLS, create tenant isolation policy, and grant DML to sevalor_app."""
+    op.execute(
+        """
+        DO $$
+        BEGIN
+            IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'sevalor_app') THEN
+                CREATE ROLE sevalor_app NOLOGIN;
+            END IF;
+        END
+        $$;
+        """
+    )
     for table in TABLES_WITH_EMPRESA_ID:
         if table in ALREADY_ENABLED:
             # Already has RLS enabled and policy — only ensure FORCE and grants.

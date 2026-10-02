@@ -41,19 +41,17 @@ async function run() {
 
   assert.strictEqual(getAuthToken(), fakeToken, "getAuthToken should return set token");
   assert(document.cookie.includes(`sevalor_access_token=${fakeToken}`), "Cookie must have sevalor_access_token");
-  assert(localStorage.getItem("sevalor_auth_token")?.includes(fakeToken), "LocalStorage must have token");
-  console.log("  ✅ setAuthToken sincronitza localStorage I document.cookie");
+  console.log("  ✅ setAuthToken sincronitza només document.cookie per seguretat (Spec 02 Criptografia)");
 
-  // Test fallback to cookie if localStorage cleared
-  localStorage.removeItem("sevalor_auth_token");
-  assert.strictEqual(getAuthToken(), fakeToken, "getAuthToken should read from cookie fallback");
-  console.log("  ✅ getAuthToken recupera de la cookie si es perd localStorage");
+  // Test fallback to cookie works seamlessly
+  assert.strictEqual(getAuthToken(), fakeToken, "getAuthToken should read from cookie");
+  console.log("  ✅ getAuthToken recupera de la cookie perfectament");
 
   // Test clearAuthToken
   clearAuthToken();
   assert.strictEqual(getAuthToken(), null, "getAuthToken should be null after clearAuthToken");
   assert(!document.cookie.includes(fakeToken), "Cookie must be cleared after clearAuthToken");
-  console.log("  ✅ clearAuthToken neteja tant localStorage com cookie");
+  console.log("  ✅ clearAuthToken neteja la cookie correctament");
 
   console.log("\n=== TOTS ELS TESTS DE SINCRONITZACIÓ PASSATS ✅ ===");
 }
