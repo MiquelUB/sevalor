@@ -25,7 +25,9 @@ async def seed():
 
     async with AsyncSessionLocal() as session:
         # 1. Empresa Principal
-        stmt = select(Empresa).where(Empresa.subdomini == "admin")
+        stmt = select(Empresa).where(
+            (Empresa.subdomini == "admin") | (Empresa.nif == "B12345678")
+        )
         res = await session.execute(stmt)
         empresa = res.scalars().first()
 
