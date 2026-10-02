@@ -63,7 +63,9 @@ async def seed():
                 password_hash=pass_hash,
                 pin_hash=pin_h,
                 rol="SUPERADMIN",
-                estat="ACTIU"
+                estat="ACTIU",
+                totp_activat=True,
+                ip_allowlist=["*"]
             )
             session.add(superadmin)
             print("👑 Superadmin creat: admin@sevalor.com")
@@ -72,6 +74,8 @@ async def seed():
             superadmin.pin_hash = pin_h
             superadmin.rol = "SUPERADMIN"
             superadmin.estat = "ACTIU"
+            superadmin.totp_activat = True
+            superadmin.ip_allowlist = ["*"]
             print("👑 Superadmin actualitzat: admin@sevalor.com")
 
         # 3. Gestió / Oficina (/gestio/login)
