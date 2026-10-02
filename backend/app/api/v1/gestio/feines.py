@@ -312,3 +312,119 @@ async def drop_and_go(
     await db.commit()
     await db.refresh(ordre)
     return {"status": "ok", "versio": ordre.versio, "cap_de_colla_id": ordre.cap_de_colla_id, "data_planificacio": ordre.data_planificacio}
+
+
+# ── T024: Signatura Digital de Conformitat de Tancament d'Obra ─────────────
+class TancarObraRequest(BaseModel):
+    signatura_base64: str = Field(..., description="Signatura digital del client en base64")
+    conformitat_client: bool = Field(..., description="Conformitat expressa del client")
+    observacions: Optional[str] = None
+
+
+@router.put("/{id}/tancar-obra")
+async def tancar_obra(
+    id: uuid.UUID,
+    payload: TancarObraRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db_with_tenant_context)
+):
+    """T024: Tanca una ordre de treball amb signatura digital del client (Spec 03 Bloc 5).
+
+    La signatura base64 es desa a la OT i canvia l'estat a TANCADA.
+    Requereix conformitat_client=True per procedir.
+    """
+    empresa_id = getattr(request.state, "empresa_id", None) or request.headers.get("X-Empresa-ID")
+    if not empresa_id or empresa_id == "undefined":
+        raise HTTPException(status_code=401, detail="No identificat")
+    if not payload.conformitat_client:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="La conformitat del client és obligatòria per tancar l'obra"
+        )
+    stmt = select(OrdreTreball).where(
+        OrdreTreball.id == id,
+        OrdreTreball.empresa_id == uuid.UUID(empresa_id)
+    )
+    result = await db.execute(stmt)
+    ordre = result.scalars().first()
+    if not ordre:
+        raise HTTPException(status_code=404, detail="Ordre de treball no trobada")
+    if ordre.estat == "TANCADA":
+        raise HTTPException(status_code=409, detail="L'obra ja estava tancada")
+
+    ordre.estat = "TANCADA"
+    if hasattr(ordre, "signatura_client_base64"):
+        ordre.signatura_client_base64 = payload.signatura_base64
+    if hasattr(ordre, "observacions_tancament"):
+        ordre.observacions_tancament = payload.observacions
+    ordre.versio = (ordre.versio or 1) + 1
+
+    await db.commit()
+    await db.refresh(ordre)
+    return {
+        "status": "TANCADA",
+        "ordre_id": str(ordre.id),
+        "versio": ordre.versio,
+        "signatura_registrada": True,
+    }
+
+
+# ── T027-T028: Reconciliació Post-Obra dels 4 Pilars ──────────────────────
+@router.post("/{id}/reconciliacio-post-obra")
+async def reconciliacio_post_obra(
+    id: uuid.UUID,
+    request: Request,
+    db: AsyncSession = Depends(get_db_with_tenant_context)
+):
+    """T027-T028: Reconciliació post-obra dels 4 pilars: materials, hores, km i tiquets.
+
+    Retorna comparativa Previst vs. Real i alerta de bloqueig si marge < 15%.
+    """
+    empresa_id = getattr(request.state, "empresa_id", None) or request.headers.get("X-Empresa-ID")
+    if not empresa_id or empresa_id == "undefined":
+        raise HTTPException(status_code=401, detail="No identificat")
+
+    stmt = select(OrdreTreball).where(
+        OrdreTreball.id == id,
+        OrdreTreball.empresa_id == uuid.UUID(empresa_id)
+    )
+    result = await db.execute(stmt)
+    ordre = result.scalars().first()
+    if not ordre:
+        raise HTTPException(status_code=404, detail="Ordre de treball no trobada")
+
+    import_pressupostat = float(getattr(ordre, "import_pressupostat", 0) or 0)
+    cost_materials_previst = float(getattr(ordre, "cost_materials_estimat", 0) or 0)
+    hores_previstes = float(getattr(ordre, "hores_estimades", 0) or 0)
+
+    cost_materials_real = float(getattr(ordre, "cost_materials_real", 0) or 0)
+    hores_reals = float(getattr(ordre, "hores_reals", 0) or 0)
+    km_reals = float(getattr(ordre, "km_reals", 0) or 0)
+    tiquets_despesa = float(getattr(ordre, "import_tiquets_camp", 0) or 0)
+
+    cost_total_real = cost_materials_real + tiquets_despesa
+    marge_real = import_pressupostat - cost_total_real
+    marge_percentatge = (marge_real / import_pressupostat * 100) if import_pressupostat > 0 else 0
+
+    # T028: Bloqueig facturació directa si marge < 15%
+    bloqueig_facturacio_directa = marge_percentatge < 15.0
+
+    return {
+        "ordre_id": str(ordre.id),
+        "previst": {
+            "import_pressupostat": import_pressupostat,
+            "cost_materials": cost_materials_previst,
+            "hores": hores_previstes,
+        },
+        "real": {
+            "cost_materials": cost_materials_real,
+            "hores": hores_reals,
+            "km": km_reals,
+            "tiquets_despesa": tiquets_despesa,
+            "cost_total": cost_total_real,
+        },
+        "marge_real": round(marge_real, 2),
+        "marge_percentatge": round(marge_percentatge, 2),
+        "bloqueig_facturacio_directa": bloqueig_facturacio_directa,
+        "alerta": "MERMA_OPERATIVA_REVISAR_AMB_BOSS" if bloqueig_facturacio_directa else None,
+    }

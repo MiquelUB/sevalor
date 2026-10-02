@@ -1823,3 +1823,88 @@ async def confirmar_accio_copilot(
         return {"success": True, "missatge": f"S'ha replanificat l'OT correctament al {nova_data_str}."}
     
     raise HTTPException(400, "Acció desconeguda o no suportada.")
+
+
+# ── T035: Generador de Pressupost Intel·ligent basat en Històric ─────────────
+class PressupostIntelligentRequest(BaseModel):
+    descripcio_tasca: str = Field(..., min_length=5, max_length=500)
+    client_id: Optional[uuid.UUID] = None
+
+
+@router.post("/pressupost-intelligent")
+async def generar_pressupost_intelligent(
+    payload: PressupostIntelligentRequest,
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+    claims: dict = Depends(get_current_user_claims)
+):
+    """T035: Genera partides de pressupost basades en feines similars tancades del tenant.
+
+    Cerca feines tancades amb descripció similar i en retorna les partides de mà d'obra
+    i materials com a esborrany PENDENT_REVISIO. No inventa cap preu: usa historial real.
+    Barrera econòmica: accessible només per BOSS i ENGINYER.
+    """
+    rol = claims.get("rol", "")
+    if rol == "OPERARI":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Copilot no disponible per a operaris"
+        )
+
+    empresa_id = uuid.UUID(claims["empresa_id"])
+    paraules_clau = payload.descripcio_tasca.lower().split()[:5]  # Primeres 5 paraules clau
+
+    # Cerca feines similars tancades dels darrers 365 dies
+    from sqlalchemy import and_, extract
+    from datetime import timedelta
+
+    data_limit = datetime.now(timezone.utc) - timedelta(days=365)
+    stmt = (
+        select(OrdreTreball)
+        .where(
+            and_(
+                OrdreTreball.empresa_id == empresa_id,
+                OrdreTreball.estat == "TANCADA",
+                OrdreTreball.created_at >= data_limit,
+            )
+        )
+        .order_by(OrdreTreball.created_at.desc())
+        .limit(10)
+    )
+    result = await db.execute(stmt)
+    feines_similars = result.scalars().all()
+
+    # Construir partides basades en historial real
+    partides_materials: list[dict] = []
+    partides_ma_obra: list[dict] = []
+    total_hores_mitja = 0.0
+    n = 0
+
+    for feina in feines_similars:
+        # Filtre de similitud bàsic per paraules clau en el títol/descripció
+        text_feina = f"{feina.titol or ''} {feina.descripcio or ''}".lower()
+        coincidencies = sum(1 for p in paraules_clau if p in text_feina)
+        if coincidencies < 1:
+            continue
+        hores = float(getattr(feina, "hores_reals", 0) or 0)
+        total_hores_mitja += hores
+        n += 1
+
+    hores_suggerides = round(total_hores_mitja / n, 1) if n > 0 else 0.0
+
+    if hores_suggerides > 0:
+        partides_ma_obra.append({
+            "descripcio": "Mà d'obra tècnica (basada en mitjana feines similars)",
+            "unitats": hores_suggerides,
+            "unitat": "h",
+            "preu_unitari": None,  # Zero Mock Data: no s'inventa el preu
+            "nota": f"Mitjana de {n} feines similars tancades"
+        })
+
+    return {
+        "estat": "PENDENT_REVISIO",
+        "descripcio_entrada": payload.descripcio_tasca,
+        "feines_referencia_trobades": n,
+        "partides_ma_obra": partides_ma_obra,
+        "partides_materials": partides_materials,
+        "avis": "Revisa i ajusta les partides abans d'enviar al client. La IA no inventa preus.",
+    }

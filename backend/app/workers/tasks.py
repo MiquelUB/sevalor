@@ -462,3 +462,106 @@ def generar_miniatura_webp_task(image_path: str, table_name: str, record_id: str
                 return {"status": "error", "error": "db_update_failed"}
 
     return asyncio.run(update_db())
+
+
+# ── T041: Generador d'Informe Setmanal Automàtic (Boss Only) ─────────────────
+@celery_app.task(name="app.workers.tasks.generar_informe_setmanal", queue="queue_documents")
+def generar_informe_setmanal():
+    """T041: Genera KPIs setmanals per empresa i desa informe a /docs/<empresa_id>/informes/.
+
+    S'executa dilluns a les 08:00 UTC via Celery Beat.
+    Reservat exclusivament al rol BOSS.
+    """
+    import asyncio
+    import os
+    from datetime import datetime, timedelta, timezone
+
+    async def process():
+        from sqlalchemy import select, text
+        from app.models.models import Empresa, OrdreTreball
+
+        async with get_worker_session() as session:
+            # Obtenir totes les empreses actives
+            result = await session.execute(select(Empresa).where(Empresa.activa == True))  # noqa: E712
+            empreses = result.scalars().all()
+
+        for empresa in empreses:
+            try:
+                empresa_id = str(empresa.id)
+                async with get_worker_session(empresa_id) as session:
+                    now_utc = datetime.now(timezone.utc)
+                    fa_7_dies = now_utc - timedelta(days=7)
+
+                    # KPIs: ordres tancades, ordres obertes, hores totals
+                    stmt = text("""
+                        SELECT
+                            COUNT(*) FILTER (WHERE estat = 'TANCADA') AS tancades,
+                            COUNT(*) FILTER (WHERE estat != 'TANCADA') AS obertes,
+                            COALESCE(SUM(hores_reals), 0) AS hores_totals
+                        FROM ordres_treball
+                        WHERE empresa_id = :eid
+                          AND created_at >= :data_inici
+                    """)
+                    res = await session.execute(stmt, {"eid": empresa_id, "data_inici": fa_7_dies})
+                    row = res.fetchone()
+                    tancades = row[0] if row else 0
+                    obertes = row[1] if row else 0
+                    hores = float(row[2]) if row else 0.0
+
+                # Desar informe al directori sobirà
+                informe_dir = f"/docs/{empresa_id}/informes/"
+                os.makedirs(informe_dir, exist_ok=True)
+                nom_fitxer = f"informe_setmanal_{now_utc.strftime('%Y%m%d')}.txt"
+                with open(os.path.join(informe_dir, nom_fitxer), "w") as f:
+                    f.write(f"Informe Setmanal Sevalor — {now_utc.strftime('%Y-%m-%d')}\n")
+                    f.write(f"Empresa: {empresa_id}\n\n")
+                    f.write(f"OTs tancades: {tancades}\n")
+                    f.write(f"OTs en curs/pendent: {obertes}\n")
+                    f.write(f"Hores totals treballades: {hores:.1f}h\n")
+                logger.info(f"Informe setmanal generat per empresa {empresa_id}: {nom_fitxer}")
+            except Exception as exc:
+                logger.error(f"Error generant informe setmanal per empresa {empresa.id}: {exc}")
+
+    asyncio.run(process())
+
+
+# ── T049: Purga de Tokens Temporals Expirats de 24 Hores ─────────────────────
+@celery_app.task(name="app.workers.tasks.purgar_tokens_expirats", queue="queue_periodic")
+def purgar_tokens_expirats():
+    """T049: Elimina tokens d'invitació de Telegram i tokens efímers de descàrrega expirats.
+
+    S'executa cada hora via Celery Beat (crontab minute=0).
+    Neteja Redis (claus TTL expirades s'eliminen automàticament) i PostgreSQL.
+    """
+    import asyncio
+    from datetime import datetime, timedelta, timezone
+    from sqlalchemy import text
+
+    async def process():
+        async with get_worker_session() as session:
+            ara = datetime.now(timezone.utc)
+            fa_24h = ara - timedelta(hours=24)
+
+            # Eliminar tokens d'invitació de Telegram expirats (>24h)
+            try:
+                await session.execute(text("""
+                    DELETE FROM tokens_invitacio_telegram
+                    WHERE created_at < :cutoff OR usat = TRUE
+                """), {"cutoff": fa_24h})
+            except Exception:
+                # Taula pot no existir en totes les versions
+                pass
+
+            # Eliminar tokens efímers de descàrrega expirats
+            try:
+                await session.execute(text("""
+                    DELETE FROM tokens_descarrega_efimers
+                    WHERE expires_at < :ara
+                """), {"ara": ara})
+            except Exception:
+                pass
+
+            await session.commit()
+            logger.info(f"Purga de tokens expirats completada a les {ara.isoformat()}")
+
+    asyncio.run(process())
