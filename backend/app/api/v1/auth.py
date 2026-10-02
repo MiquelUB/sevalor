@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, EmailStr
 from slowapi import Limiter
 from slowapi.util import get_remote_address
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -48,14 +48,20 @@ async def login_oficina(
     db: AsyncSession = Depends(get_db)
 ):
     try:
-        from app.core.db import AsyncSessionLocal
-        # Use a fresh sudo session to bypass RLS, since we don't have tenant context yet
-        async with AsyncSessionLocal() as sudo_session:
+        # Guardem el rol actual per no trencar les transaccions de test
+        res_role = await db.execute(text("SELECT current_user;"))
+        current_role = res_role.scalar()
+
+        await db.execute(text("RESET ROLE;"))
+        try:
             stmt = select(Usuari).where(
                 func.lower(Usuari.email) == login_data.email.lower()
             )
-            result = await sudo_session.execute(stmt)
+            result = await db.execute(stmt)
             usuaris = result.scalars().all()
+        finally:
+            if current_role:
+                await db.execute(text(f'SET ROLE "{current_role}";'))
 
         if len(usuaris) > 1:
             raise HTTPException(
