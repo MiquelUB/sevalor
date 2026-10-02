@@ -151,6 +151,15 @@ async def crear_nou_tenant(
     db.add(nova_empresa)
 
     boss_user_id = uuid.uuid4()
+    # Verificar que l'email no existeixi a cap altra empresa
+    stmt_check = select(Usuari).where(func.lower(Usuari.email) == str(payload.boss_email).strip().lower())
+    res_check = await db.execute(stmt_check)
+    if res_check.scalars().first():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Aquest email ja està registrat a una altra empresa. S'ha de fer servir un email únic."
+        )
+
     nou_boss = Usuari(
         id=boss_user_id,
         empresa_id=nou_id,

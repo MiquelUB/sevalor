@@ -55,7 +55,15 @@ async def login_oficina(
                 func.lower(Usuari.email) == login_data.email.lower()
             )
             result = await sudo_session.execute(stmt)
-            usuari = result.scalars().first()
+            usuaris = result.scalars().all()
+
+        if len(usuaris) > 1:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Error de consistència: L'email està duplicat a diferents empreses. L'accés ha estat bloquejat per seguretat."
+            )
+
+        usuari = usuaris[0] if usuaris else None
 
         if not usuari:
             raise HTTPException(
