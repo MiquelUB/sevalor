@@ -13,7 +13,7 @@ import {
   Sun,
   Moon,
   Bell,
-  Volume2,
+  Volume2, QrCode,
 } from "lucide-react";
 import CopilotWidget from "@/components/CopilotWidget";
 import NotificationCenter from "@/components/operari/NotificationCenter";
@@ -80,6 +80,7 @@ export default function OperariLayout({
     { label: "Material", href: "/operari/material", icon: Package },
     { label: "Vehicles", href: "/operari/vehicles", icon: Truck },
     { label: "Plànols", href: "/operari/planols", icon: Layers },
+    { label: "ID/CAE", href: "/operari/identificacio", icon: QrCode },
     { label: "Tiquets", href: "/operari/tiquets", icon: Receipt },
     { label: "SOS", href: "/operari/incidencies", icon: AlertTriangle, isSos: true },
   ];

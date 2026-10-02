@@ -90,6 +90,10 @@ app.include_router(operaris_router, prefix=settings.API_V1_STR)
 app.include_router(clients_router, prefix=settings.API_V1_STR)
 app.include_router(proveidors_router, prefix=settings.API_V1_STR)
 app.include_router(flota_router, prefix=settings.API_V1_STR)
+
+from app.api.v1.public_docs import router as public_docs_router
+app.include_router(public_docs_router, prefix=settings.API_V1_STR)
+
 from fastapi.responses import JSONResponse
 from fastapi import Request
 import traceback
