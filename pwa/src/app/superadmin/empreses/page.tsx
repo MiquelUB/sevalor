@@ -4,6 +4,7 @@ import React, { useState, useEffect } from "react";
 import Link from "next/link";
 import { Server, Activity, ArrowRight, ShieldAlert, Zap, Edit } from "lucide-react";
 import { getAuthHeader } from "@/lib/auth";
+import { getApiBaseUrl } from "@/lib/api";
 
 interface Tenant {
   id: string;
@@ -29,7 +30,7 @@ export default function EmpresesPage() {
 
   const fetchTenants = async () => {
     try {
-      const res = await fetch("http://localhost:8000/api/v1/superadmin/tenants", {
+      const res = await fetch(getApiBaseUrl() + "/api/v1/superadmin/tenants", {
         headers: getAuthHeader(),
       });
       if (!res.ok) throw new Error("Error fetching tenants");

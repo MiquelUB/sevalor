@@ -4,6 +4,7 @@ import React, { useState, useEffect } from "react";
 import Link from "next/link";
 import { ArrowLeft, Save, AlertTriangle, ShieldCheck, PowerOff, Zap } from "lucide-react";
 import { getAuthHeader } from "@/lib/auth";
+import { getApiBaseUrl } from "@/lib/api";
 
 export default function EmpresaDetailPage({ params }: { params: { id: string } }) {
   const [tenant, setTenant] = useState<any>(null);
@@ -25,7 +26,7 @@ export default function EmpresaDetailPage({ params }: { params: { id: string } }
 
   const fetchTenant = async () => {
     try {
-      const res = await fetch("http://localhost:8000/api/v1/superadmin/tenants", {
+      const res = await fetch(getApiBaseUrl() + "/api/v1/superadmin/tenants", {
         headers: getAuthHeader(),
       });
       const data = await res.json();

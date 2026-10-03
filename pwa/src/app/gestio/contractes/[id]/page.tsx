@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ArrowLeft, Save, AlertTriangle, FileText, Calendar, DollarSign, XCircle, FilePlus, RefreshCcw } from "lucide-react";
 import { getAuthHeader } from "@/lib/auth";
+import { getApiBaseUrl } from "@/lib/api";
 
 export default function ContracteDetailPage({ params }: { params: { id: string } }) {
   const router = useRouter();

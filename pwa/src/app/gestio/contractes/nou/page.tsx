@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Briefcase, ArrowLeft, Save, User, FileText, Calendar, DollarSign, Repeat, MapPin } from "lucide-react";
 import { getAuthHeader } from "@/lib/auth";
+import { getApiBaseUrl } from "@/lib/api";
 
 export default function NouContractePage() {
   const router = useRouter();
@@ -26,7 +27,7 @@ export default function NouContractePage() {
   useEffect(() => {
     const fetchClients = async () => {
       try {
-        const res = await fetch("http://localhost:8000/api/v1/gestio/clients", {
+        const res = await fetch(getApiBaseUrl() + "/api/v1/gestio/clients", {
           headers: getAuthHeader(),
         });
         if (res.ok) {
@@ -71,7 +72,7 @@ export default function NouContractePage() {
         import_anual: Number(formData.import_anual)
       };
       
-      const res = await fetch("http://localhost:8000/api/v1/gestio/contractes", {
+      const res = await fetch(getApiBaseUrl() + "/api/v1/gestio/contractes", {
         method: "POST",
         headers: {
           ...getAuthHeader(),

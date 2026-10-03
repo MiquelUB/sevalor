@@ -4,6 +4,7 @@ import React, { useState, useEffect } from "react";
 import Link from "next/link";
 import { Briefcase, AlertCircle, Plus, Calendar, FileText, ChevronRight } from "lucide-react";
 import { getAuthHeader } from "@/lib/auth";
+import { getApiBaseUrl } from "@/lib/api";
 
 interface Contracte {
   id: string;
@@ -37,9 +38,9 @@ export default function ContractesPage() {
   const fetchData = async () => {
     try {
       const [resC, resA, resM] = await Promise.all([
-        fetch("http://localhost:8000/api/v1/gestio/contractes", { headers: getAuthHeader() }),
-        fetch("http://localhost:8000/api/v1/gestio/contractes/alertes/venciments", { headers: getAuthHeader() }),
-        fetch("http://localhost:8000/api/v1/gestio/contractes/kpis/mrr", { headers: getAuthHeader() })
+        fetch(getApiBaseUrl() + "/api/v1/gestio/contractes", { headers: getAuthHeader() }),
+        fetch(getApiBaseUrl() + "/api/v1/gestio/contractes/alertes/venciments", { headers: getAuthHeader() }),
+        fetch(getApiBaseUrl() + "/api/v1/gestio/contractes/kpis/mrr", { headers: getAuthHeader() })
       ]);
       if (resC.ok) setContractes(await resC.json());
       if (resA.ok) setAlertes(await resA.json());
