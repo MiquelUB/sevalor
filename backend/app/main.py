@@ -83,6 +83,23 @@ app.add_middleware(
 app.add_middleware(TenantMiddleware)
 app.add_middleware(SlowAPIMiddleware)
 
+
+@app.middleware("http")
+async def metrics_middleware(request, call_next):  # type: ignore[no-untyped-def]
+    """Mesura durada i codi d'estat reals de cada petició (només metadades, cap dada de negoci)."""
+    import time as _time
+
+    from app.core import metrics as _metrics
+
+    inici = _time.perf_counter()
+    status_code = 500
+    try:
+        response = await call_next(request)
+        status_code = response.status_code
+        return response
+    finally:
+        _metrics.record((_time.perf_counter() - inici) * 1000.0, status_code)
+
 app.include_router(health_router, prefix=settings.API_V1_STR)
 from app.api.v1.superadmin.empreses import router as empreses_router
 app.include_router(tenants_router, prefix=settings.API_V1_STR)

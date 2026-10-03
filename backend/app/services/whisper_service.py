@@ -1,7 +1,8 @@
 import logging
 import os
-import httpx
 from typing import Optional
+
+import httpx
 
 logger = logging.getLogger("whisper_service")
 
@@ -21,34 +22,30 @@ async def transcriure_audio(
     if not os.path.isfile(audio_path):
         return {"status": "ERROR", "error": "L'arxiu no existeix físicament a disc"}
 
-    # Simulació de confiança acústica basada en la mida de l'arxiu (dummy per spec)
-    mida_arxiu = os.path.getsize(audio_path)
-    confianca_acustica = min(0.99, max(0.50, mida_arxiu / 1000000.0))
-
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
             with open(audio_path, "rb") as f:
                 files = {"file": (os.path.basename(audio_path), f, "audio/webm")}
-                data = {"model": "whisper-1"}
+                data = {"model": "whisper-1", "response_format": "verbose_json"}
                 if language:
                     data["language"] = language
-                
-                # Mock connection to local Whisper node
+
                 response = await client.post(
                     "http://127.0.0.1:8000/v1/audio/transcriptions",
                     files=files,
                     data=data
                 )
-                
+
                 response.raise_for_status()
                 result = response.json()
-                
+                segments = result.get("segments", [])
+
                 return {
                     "status": "SUCCESS",
                     "text": result.get("text", ""),
                     "language": language or "ca",
-                    "confianca_acustica": confianca_acustica,
-                    "segments": result.get("segments", [])
+                    "confianca_acustica": _confianca_des_de_segments(segments),
+                    "segments": segments
                 }
     except (httpx.RequestError, httpx.HTTPStatusError) as e:
         logger.warning(f"Error connectant al node d'IA Whisper, s'activa fallback: {e}")
@@ -56,7 +53,7 @@ async def transcriure_audio(
             "status": "REVISIO_MANUAL",
             "text": "Copilot provisionalment no disponible",
             "language": language or "ca",
-            "confianca_acustica": confianca_acustica,
+            "confianca_acustica": 0.0,
             "segments": []
         }
     except Exception as e:
@@ -65,6 +62,20 @@ async def transcriure_audio(
             "status": "REVISIO_MANUAL",
             "text": "Copilot provisionalment no disponible",
             "language": language or "ca",
-            "confianca_acustica": confianca_acustica,
+            "confianca_acustica": 0.0,
             "segments": []
         }
+
+
+def _confianca_des_de_segments(segments: list) -> float:
+    """Confiança acústica real: mitjana de exp(avg_logprob) dels segments (0.0 si no n'hi ha)."""
+    import math
+
+    valors = [
+        math.exp(s["avg_logprob"])
+        for s in segments
+        if isinstance(s, dict) and isinstance(s.get("avg_logprob"), (int, float))
+    ]
+    if not valors:
+        return 0.0
+    return round(min(1.0, max(0.0, sum(valors) / len(valors))), 4)

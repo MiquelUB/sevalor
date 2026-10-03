@@ -1,13 +1,14 @@
 import uuid
 from datetime import datetime, timedelta, timezone
+
 import jwt
 import pytest
-from httpx import AsyncClient, ASGITransport
+from httpx import ASGITransport, AsyncClient
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.main import app
 from app.models.models import Empresa, Usuari
-from sqlalchemy.ext.asyncio import AsyncSession
 
 pytestmark = pytest.mark.asyncio
 
@@ -75,3 +76,33 @@ async def test_quota_guard_downgrade(superadmin_token_headers, db_session: Async
         )
         assert response.status_code == 200
         assert response.json()["quota_operaris"] == 15
+
+
+async def test_telemetry_kpis_route_real_i_sense_valors_inventats(superadmin_token_headers):
+    """La UI crida /kpis (abans 404 silenciós). Les mètriques no mesurables han de ser null, mai inventades."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test", headers=superadmin_token_headers) as client:
+        response = await client.get("/api/v1/superadmin/telemetria/kpis")
+        assert response.status_code == 200
+        data = response.json()
+
+        # No es pot afirmar disponibilitat històrica sense monitor extern
+        assert data["uptime_percent"] is None
+        assert isinstance(data["uptime_seconds"], int) and data["uptime_seconds"] >= 0
+
+        # Sense mostres, cap latència/ràtio inventada
+        assert data["latencies_ms"] is None or data["latencies_ms"]["p95"] >= 0
+        assert data["cpu_ia_telemetry"]["whisper_avg_inference_sec"] is None
+
+        estats_valids = {"HEALTHY", "DOWN", "UNKNOWN"}
+        for nom, servei in data["microservices"].items():
+            assert servei["status"] in estats_valids, nom
+        # Serveis sense sonda real no poden declarar-se HEALTHY
+        for nom in ("pwa", "celery_beat", "bot"):
+            assert data["microservices"][nom]["status"] == "UNKNOWN"
+        assert data["microservices"]["backend"]["status"] == "HEALTHY"
+        assert data["microservices"]["db"]["status"] == "HEALTHY"
+
+        # Recursos del node reals
+        assert 0.0 <= data["cpu_ia_telemetry"]["cpu_utilization_percent"] <= 100.0
+        assert data["cpu_ia_telemetry"]["ram_total_mb"] > 0

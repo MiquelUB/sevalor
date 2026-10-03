@@ -4,17 +4,22 @@ Esquema de telemetria tècnica segregat (superadmin_telemetry).
 Prohibició absoluta d'accés a dades privades o de negoci dels inquilins (Zero Intrusió).
 """
 
-import psutil
+import asyncio
+import socket
 import time
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 
+import psutil
+from celery import __version__ as celery_version
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.db import get_db_with_tenant_context
+from app.core import metrics
+from app.core.config import settings
+from app.core.db import engine, get_db_with_tenant_context
 from app.core.security import require_roles
 from app.models.models import Empresa, Usuari
 
@@ -26,6 +31,8 @@ router = APIRouter(
 
 # Magatzem en memòria per a Feature Flags dinàmiques per tenant (Spec 022 RF-15)
 _tenant_features_store: Dict[str, Dict[str, bool]] = {}
+
+_QUEUES = ("queue_documents", "queue_periodic", "queue_alerts", "queue_sync")
 
 
 class ToggleFeatureRequest(BaseModel):
@@ -46,9 +53,84 @@ class ErrorTraceCreateRequest(BaseModel):
     detall: Optional[str] = None
 
 
+async def _mesurar_db(db: AsyncSession) -> Optional[float]:
+    """Latència real (ms) d'un SELECT 1 contra PostgreSQL."""
+    try:
+        inici = time.perf_counter()
+        await db.execute(text("SELECT 1;"))
+        return (time.perf_counter() - inici) * 1000.0
+    except Exception:
+        return None
+
+
+async def _versio_db(db: AsyncSession) -> Optional[str]:
+    try:
+        return str((await db.execute(text("SHOW server_version;"))).scalar())
+    except Exception:
+        return None
+
+
+async def _sonda_redis() -> Dict[str, Any]:
+    """Ping real a Redis + versió + longitud de cada cua Celery (cap valor inventat)."""
+    resultat: Dict[str, Any] = {
+        "ok": False,
+        "ping_ms": None,
+        "version": None,
+        "queues": {q: None for q in _QUEUES},
+    }
+    if not settings.REDIS_URL:
+        return resultat
+    import redis.asyncio as aioredis
+
+    client = aioredis.from_url(settings.REDIS_URL, socket_connect_timeout=1.5, socket_timeout=1.5)
+    try:
+        inici = time.perf_counter()
+        await client.ping()
+        resultat["ping_ms"] = (time.perf_counter() - inici) * 1000.0
+        resultat["ok"] = True
+        info = await client.info("server")
+        resultat["version"] = info.get("redis_version")
+        for q in _QUEUES:
+            resultat["queues"][q] = int(await client.llen(q))
+    except Exception:
+        resultat["ok"] = False
+    finally:
+        await client.aclose()
+    return resultat
+
+
+async def _sonda_celery_worker() -> bool:
+    """True si almenys un worker Celery respon a ``inspect().ping()``."""
+    from app.workers.celery_app import celery_app
+
+    def _ping() -> bool:
+        try:
+            return bool(celery_app.control.inspect(timeout=1.0).ping())
+        except Exception:
+            return False
+
+    return await asyncio.to_thread(_ping)
+
+
+def _estat_pool() -> Dict[str, Optional[float]]:
+    """Estat real del pool asyncpg (None si el pool no exposa estadístiques, p. ex. NullPool)."""
+    pool = engine.pool
+    try:
+        actius = int(pool.checkedout())  # type: ignore[attr-defined]
+        maxim = int(pool.size()) + max(0, int(getattr(pool, "_max_overflow", 0)))  # type: ignore[attr-defined]
+        return {
+            "active": actius,
+            "max": maxim,
+            "occupancy_percent": round(actius * 100.0 / maxim, 1) if maxim else None,
+        }
+    except Exception:
+        return {"active": None, "max": None, "occupancy_percent": None}
+
+
+@router.get("/kpis", response_model=Dict[str, Any])
 @router.get("/global", response_model=Dict[str, Any])
 async def get_system_kpis(db: AsyncSession = Depends(get_db_with_tenant_context)) -> Dict[str, Any]:
-    """Retorna els KPIs de disponibilitat, microserveis, cues i IA local sota CPU-only (Spec 022)."""
+    """KPIs reals de disponibilitat, microserveis, cues i recursos (Spec 022). Mètrica no mesurable => null."""
     db_ok = True
     try:
         await db.execute(text("SELECT 1;"))
@@ -138,83 +220,97 @@ async def get_system_kpis(db: AsyncSession = Depends(get_db_with_tenant_context)
             # Fallback en cas d'error no crític
             pass
 
-    # Valors de concurrència i pool
-    sessions_actives = total_operaris_camp + total_oficina
-    # Obtenir mètriques reals del sistema amb psutil
     cpu_percent = psutil.cpu_percent(interval=0.1)
     ram = psutil.virtual_memory()
-    disk = psutil.disk_usage('/')
-    boottime = psutil.boot_time()
-    uptime_seconds = time.time() - boottime
-    
-    # Simular latències basat en càrrega de CPU (Zero Mock, però heurística basada en dades reals)
-    base_latency = 15.0 + (cpu_percent * 0.5)
-    
-    if sessions_actives == 0:
-        sessions_actives = max(2, int(total_operaris_camp + total_oficina))
-        
+    disk = psutil.disk_usage("/")
+    usuaris_actius = total_operaris_camp + total_oficina
+
+    db_ping_ms = await _mesurar_db(db) if db_ok else None
+    redis_info = await _sonda_redis()
+    worker_ok = await _sonda_celery_worker() if redis_info["ok"] else False
+    pool = _estat_pool()
+
+    def _estat(ok: Optional[bool]) -> str:
+        if ok is None:
+            return "UNKNOWN"
+        return "HEALTHY" if ok else "DOWN"
+
+    def _ms(valor: Optional[float]) -> Optional[str]:
+        return None if valor is None else f"{valor:.1f}ms"
+
+    microservices: Dict[str, Dict[str, Any]] = {
+        "pwa": {"status": "UNKNOWN", "version": None, "type": "Next.js", "ping": None},
+        "backend": {
+            "status": "HEALTHY",
+            "version": settings.VERSION,
+            "type": "FastAPI",
+            "ping": f"uptime {int(metrics.process_uptime_seconds())}s",
+        },
+        "db": {
+            "status": _estat(db_ok),
+            "version": await _versio_db(db) if db_ok else None,
+            "type": "PostgreSQL",
+            "ping": _ms(db_ping_ms),
+        },
+        "redis": {
+            "status": _estat(redis_info["ok"]),
+            "version": redis_info["version"],
+            "type": "Broker & Cache",
+            "ping": _ms(redis_info["ping_ms"]),
+        },
+        "celery_worker": {
+            "status": _estat(worker_ok) if redis_info["ok"] else "UNKNOWN",
+            "version": celery_version,
+            "type": "Async Tasks",
+            "ping": "pong" if worker_ok else None,
+        },
+        "celery_beat": {"status": "UNKNOWN", "version": celery_version, "type": "Scheduler", "ping": None},
+        "bot": {"status": "UNKNOWN", "version": None, "type": "Aiogram", "ping": None},
+    }
+
+    latencies = metrics.latency_percentiles()
+    p95 = latencies["p95"] if latencies else None
+
     return {
-        "cluster": "hetzner-prod-fsn1 (Nuremberg DC14)",
-        "node": f"CPX21 ({psutil.cpu_count()} vCPU / {round(ram.total / (1024**3), 1)}GB RAM / {round(disk.total / (1024**3), 1)}GB NVMe)",
-        "uptime_percent": 99.99,
-        "latencies_ms": {
-            "p50": round(base_latency, 1),
-            "p95": round(base_latency * 2.5, 1),
-            "p99": round(base_latency * 4.0, 1),
-            "alerta_p95_degradat": cpu_percent > 85,
-        },
-        "http_ratio": {
-            "2xx_3xx_percent": 99.4,
-            "4xx_percent": 0.5,
-            "5xx_percent": 0.1,
-        },
-        "microservices": {
-            "pwa": {"status": "HEALTHY", "version": "14.2.5", "type": "Next.js 14", "ping": f"{round(base_latency * 0.3, 1)}ms"},
-            "backend": {"status": "HEALTHY" if db_ok else "DEGRADED", "version": "0.110.0", "type": "FastAPI", "ping": f"{round(base_latency * 0.1, 1)}ms"},
-            "db": {"status": "HEALTHY" if db_ok else "CRITICAL", "version": "16.2", "type": "PostgreSQL 16", "ping": "1ms"},
-            "redis": {"status": "HEALTHY", "version": "7.2.4", "type": "Broker & Cache", "ping": "< 1ms"},
-            "celery_worker": {"status": "HEALTHY", "version": "5.3.6", "type": "Async Tasks", "ping": "OK"},
-            "celery_beat": {"status": "HEALTHY", "version": "5.3.6", "type": "Scheduler", "ping": "OK"},
-            "bot": {"status": "HEALTHY", "version": "3.4.1", "type": "Aiogram 3", "ping": "OK"},
-        },
+        "cluster": socket.gethostname(),
+        "node": f"{psutil.cpu_count()} vCPU / {round(ram.total / (1024**3), 1)}GB RAM / {round(disk.total / (1024**3), 1)}GB disc",
+        "uptime_percent": None,
+        "uptime_seconds": int(metrics.process_uptime_seconds()),
+        "latencies_ms": (
+            {**latencies, "alerta_p95_degradat": bool(p95 is not None and p95 > 500)}
+            if latencies
+            else None
+        ),
+        "http_ratio": metrics.http_ratio(),
+        "microservices": microservices,
         "concurrency": {
-            "active_sessions": sessions_actives,
+            "active_sessions": None,
+            "usuaris_actius": usuaris_actius,
             "operaris_camp": total_operaris_camp,
             "oficina_tecnica": total_oficina,
-            "db_pool_occupancy_percent": round((sessions_actives / 60) * 100, 1),
-            "db_pool_active": min(60, sessions_actives),
-            "db_pool_max": 60,
-            "alerta_pool_saturacio": sessions_actives >= 55,
+            "db_pool_occupancy_percent": pool["occupancy_percent"],
+            "db_pool_active": pool["active"],
+            "db_pool_max": pool["max"],
+            "alerta_pool_saturacio": bool(
+                pool["occupancy_percent"] is not None and pool["occupancy_percent"] >= 85
+            ),
         },
         "celery_queues": {
-            "tasks_per_minute": max(0, int(cpu_percent * 2)),
-            "queue_wait_ms": max(20, int(cpu_percent * 1.5)),
-            "failed_tasks_count": 0,
-            "queues": {
-                "queue_documents": 0,
-                "queue_periodic": 0,
-                "queue_alerts": 0,
-                "queue_sync": 0,
-            },
-            "alerta_escalat_necessari": cpu_percent > 90,
+            "tasks_per_minute": None,
+            "queue_wait_ms": None,
+            "failed_tasks_count": None,
+            "queues": redis_info["queues"],
+            "alerta_escalat_necessari": False,
         },
         "cpu_ia_telemetry": {
-            "constraint": "Hetzner CPX21 CPU-Only (No GPU)",
-            "whisper_avg_inference_sec": 2.4,
-            "whisper_quantization": "INT8 (faster-whisper)",
+            "whisper_avg_inference_sec": None,
             "cpu_utilization_percent": cpu_percent,
             "ram_utilization_mb": round(ram.used / (1024**2), 1),
+            "ram_total_mb": round(ram.total / (1024**2), 1),
             "alerta_cpu_saturacio": cpu_percent > 85,
-            "timeout_rate_percent": 0.0,
             "privacy_guarantee": "Zero text retention - Transcripcions i àudios estrictament exclosos de telemetria (Spec 022 RF-11)",
         },
         "tenants": tenants_list,
-        "ip_allowlist": {
-            "enforced": True,
-            "client_ip_authorized": True,
-            "status": "ZERO_TRUST_ACTIVE",
-            "mascara": "185.12.x.x",
-        },
     }
 
 

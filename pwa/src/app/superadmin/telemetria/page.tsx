@@ -65,10 +65,12 @@ export default function SuperadminTelemetriaPage() {
   const [darreraActualitzacio, setDarreraActualitzacio] = useState<string>("Ara mateix");
 
   // Telemetria del sistema (Spec 022 RF-01)
-  const [uptimePercent, setUptimePercent] = useState<number>(100.0);
-  const [p50Latency, setP50Latency] = useState<number>(0);
-  const [p95Latency, setP95Latency] = useState<number>(0);
-  const [p99Latency, setP99Latency] = useState<number>(0);
+  const [errorCarrega, setErrorCarrega] = useState<string | null>(null);
+  const [uptimePercent, setUptimePercent] = useState<number | null>(null);
+  const [uptimeSegons, setUptimeSegons] = useState<number | null>(null);
+  const [p50Latency, setP50Latency] = useState<number | null>(null);
+  const [p95Latency, setP95Latency] = useState<number | null>(null);
+  const [p99Latency, setP99Latency] = useState<number | null>(null);
 
   // Microserveis (carregats del backend — Spec 022 RF-04)
   const [microserveis, setMicroserveis] = useState<any[]>([]);
@@ -77,19 +79,21 @@ export default function SuperadminTelemetriaPage() {
   const [sessionsActives, setSessionsActives] = useState<number>(0);
   const [operarisCamp, setOperarisCamp] = useState<number>(0);
   const [oficinaTecnica, setOficinaTecnica] = useState<number>(0);
-  const [poolOcupacioPercent, setPoolOcupacioPercent] = useState<number>(0);
-  const [poolConnexionsActives, setPoolConnexionsActives] = useState<number>(0);
-  const [poolConnexionsMax, setPoolConnexionsMax] = useState<number>(60);
+  const [poolOcupacioPercent, setPoolOcupacioPercent] = useState<number | null>(null);
+  const [poolConnexionsActives, setPoolConnexionsActives] = useState<number | null>(null);
+  const [poolConnexionsMax, setPoolConnexionsMax] = useState<number | null>(null);
 
   // Cues Celery / Redis (Spec 022 RF-08 & RF-09)
-  const [tasquesPerMinut, setTasquesPerMinut] = useState<number>(0);
-  const [queueWaitMs, setQueueWaitMs] = useState<number>(0);
-  const [tasquesPendents, setTasquesPendents] = useState<number>(0);
+  const [tasquesPerMinut, setTasquesPerMinut] = useState<number | null>(null);
+  const [queueWaitMs, setQueueWaitMs] = useState<number | null>(null);
+  const [tasquesPendents, setTasquesPendents] = useState<number | null>(null);
 
-  // IA Local CPU-Only Hetzner CPX21 (Spec 022 RF-10 & RF-11)
-  const [whisperAvgInferenceSec, setWhisperAvgInferenceSec] = useState<number>(0);
-  const [cpuUsagePercent, setCpuUsagePercent] = useState<number>(0);
-  const [ramUsageMb, setRamUsageMb] = useState<number>(0);
+  // Recursos del node i IA local (Spec 022 RF-10 & RF-11)
+  const [whisperAvgInferenceSec, setWhisperAvgInferenceSec] = useState<number | null>(null);
+  const [cpuUsagePercent, setCpuUsagePercent] = useState<number | null>(null);
+  const [ramUsageMb, setRamUsageMb] = useState<number | null>(null);
+  const [ramTotalMb, setRamTotalMb] = useState<number | null>(null);
+  const [nodeDescripcio, setNodeDescripcio] = useState<string | null>(null);
 
   // Llicències de Tenants (Spec 022 RF-12 & RF-15)
   const [tenants, setTenants] = useState<TenantLlicencia[]>([]);
@@ -101,49 +105,64 @@ export default function SuperadminTelemetriaPage() {
   // Carregar dades del backend
   const fetchTelemetria = async () => {
     setCarregant(true);
+    setErrorCarrega(null);
     try {
       const data = await apiFetch<any>("/superadmin/telemetria/kpis");
-      setUptimePercent(data.uptime_percent ?? 100.0);
-      if (data.latencies_ms) {
-        setP50Latency(data.latencies_ms.p50 ?? 0);
-        setP95Latency(data.latencies_ms.p95 ?? 0);
-        setP99Latency(data.latencies_ms.p99 ?? 0);
-      }
+      setUptimePercent(data.uptime_percent ?? null);
+      setUptimeSegons(data.uptime_seconds ?? null);
+      setP50Latency(data.latencies_ms?.p50 ?? null);
+      setP95Latency(data.latencies_ms?.p95 ?? null);
+      setP99Latency(data.latencies_ms?.p99 ?? null);
+      setNodeDescripcio(data.node ?? null);
       if (data.concurrency) {
-        setSessionsActives(data.concurrency.active_sessions ?? 0);
+        setSessionsActives(data.concurrency.usuaris_actius ?? 0);
         setOperarisCamp(data.concurrency.operaris_camp ?? 0);
         setOficinaTecnica(data.concurrency.oficina_tecnica ?? 0);
-        setPoolOcupacioPercent(data.concurrency.db_pool_occupancy_percent ?? 0);
-        setPoolConnexionsActives(data.concurrency.db_pool_active ?? 0);
-        setPoolConnexionsMax(data.concurrency.db_pool_max ?? 60);
+        setPoolOcupacioPercent(data.concurrency.db_pool_occupancy_percent ?? null);
+        setPoolConnexionsActives(data.concurrency.db_pool_active ?? null);
+        setPoolConnexionsMax(data.concurrency.db_pool_max ?? null);
       }
       if (data.celery_queues) {
-        setTasquesPerMinut(data.celery_queues.tasks_per_minute ?? 0);
-        setQueueWaitMs(data.celery_queues.queue_wait_ms ?? 0);
-        const totalPendents = Object.values(data.celery_queues.queues || {}).reduce(
-          (acc: number, val: any) => acc + (typeof val === "number" ? val : 0),
-          0
-        );
-        setTasquesPendents(Number(totalPendents) || 0);
+        setTasquesPerMinut(data.celery_queues.tasks_per_minute ?? null);
+        setQueueWaitMs(data.celery_queues.queue_wait_ms ?? null);
+        const valors = Object.values(data.celery_queues.queues || {}).filter(
+          (val: any) => typeof val === "number"
+        ) as number[];
+        setTasquesPendents(valors.length ? valors.reduce((acc, val) => acc + val, 0) : null);
       }
       if (data.cpu_ia_telemetry) {
-        setWhisperAvgInferenceSec(data.cpu_ia_telemetry.whisper_avg_inference_sec ?? 0);
-        setCpuUsagePercent(data.cpu_ia_telemetry.cpu_utilization_percent ?? 0);
-        setRamUsageMb(data.cpu_ia_telemetry.ram_utilization_mb ?? 0);
+        setWhisperAvgInferenceSec(data.cpu_ia_telemetry.whisper_avg_inference_sec ?? null);
+        setCpuUsagePercent(data.cpu_ia_telemetry.cpu_utilization_percent ?? null);
+        setRamUsageMb(data.cpu_ia_telemetry.ram_utilization_mb ?? null);
+        setRamTotalMb(data.cpu_ia_telemetry.ram_total_mb ?? null);
       }
-      if (Array.isArray(data.microserveis)) {
-        setMicroserveis(data.microserveis);
+      if (data.microservices && typeof data.microservices === "object") {
+        setMicroserveis(
+          Object.entries(data.microservices).map(([id, s]: [string, any]) => ({
+            id,
+            nom: id,
+            tipus: s.type ?? "",
+            versio: s.version ?? "—",
+            ping: s.ping ?? "—",
+            estat: s.status ?? "UNKNOWN",
+          }))
+        );
       }
       if (Array.isArray(data.tenants)) {
         setTenants(data.tenants);
       }
-    } catch {
-      // Backend no accessible en build/offline; es mantenen els valors per defecte
+    } catch (e) {
+      setErrorCarrega(
+        e instanceof Error ? e.message : "No s'han pogut carregar les mètriques del backend"
+      );
     } finally {
       setDarreraActualitzacio(new Date().toLocaleTimeString());
       setCarregant(false);
     }
   };
+
+  const fmt = (v: number | null, unitat = "", decimals = 0): string =>
+    v === null || v === undefined ? "—" : `${decimals ? v.toFixed(decimals) : v}${unitat}`;
 
   const fetchTracesError = async () => {
     try {
@@ -205,7 +224,7 @@ export default function SuperadminTelemetriaPage() {
             </span>
           </div>
           <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-            Uptime, p95 latències, microserveis, quotes de llicències i telemetria CPU-only Hetzner (Falkenstein)
+            Uptime, latències p95, microserveis, quotes de llicències i recursos del node (mesures reals)
           </p>
         </div>
 
@@ -224,8 +243,17 @@ export default function SuperadminTelemetriaPage() {
         </div>
       </div>
 
+      {errorCarrega && (
+        <div className="p-3.5 rounded-xl bg-rose-50 dark:bg-rose-950/70 border border-rose-300 dark:border-rose-800 flex items-center gap-3 text-rose-900 dark:text-rose-200 text-xs font-mono shadow-sm">
+          <ShieldAlert className="w-5 h-5 text-rose-500 shrink-0" />
+          <div>
+            <strong>No s'han pogut carregar les mètriques reals.</strong> {errorCarrega}
+          </div>
+        </div>
+      )}
+
       {/* BANNERS D'ALERTES DEGRADACIÓ / SATURACIÓ (Spec 022 RF-02, RF-07, RF-09, RF-10) */}
-      {p95Latency > 500 && (
+      {p95Latency !== null && p95Latency > 500 && (
         <div className="p-3.5 rounded-xl bg-amber-50 dark:bg-amber-950/70 border border-amber-300 dark:border-amber-800 flex items-center gap-3 text-amber-900 dark:text-amber-200 text-xs font-mono shadow-sm">
           <AlertTriangle className="w-5 h-5 text-amber-500 shrink-0 animate-pulse" />
           <div>
@@ -234,7 +262,7 @@ export default function SuperadminTelemetriaPage() {
         </div>
       )}
 
-      {poolOcupacioPercent > 85 && (
+      {poolOcupacioPercent !== null && poolOcupacioPercent > 85 && (
         <div className="p-3.5 rounded-xl bg-rose-50 dark:bg-rose-950/70 border border-rose-300 dark:border-rose-800 flex items-center gap-3 text-rose-900 dark:text-rose-200 text-xs font-mono shadow-sm">
           <ShieldAlert className="w-5 h-5 text-rose-500 shrink-0 animate-pulse" />
           <div>
@@ -243,7 +271,7 @@ export default function SuperadminTelemetriaPage() {
         </div>
       )}
 
-      {tasquesPendents > 50 && (
+      {tasquesPendents !== null && tasquesPendents > 50 && (
         <div className="p-3.5 rounded-xl bg-orange-50 dark:bg-orange-950/70 border border-orange-300 dark:border-orange-800 flex items-center gap-3 text-orange-900 dark:text-orange-200 text-xs font-mono shadow-sm">
           <AlertCircle className="w-5 h-5 text-orange-500 shrink-0" />
           <div>
@@ -254,33 +282,40 @@ export default function SuperadminTelemetriaPage() {
 
       {/* BLOC 1: DISPONIBILITAT, LATÈNCIES I POOL (Spec 022 RF-01 & RF-06) */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        {/* Uptime Global */}
+        {/* Disponibilitat del procés */}
         <div className="p-4 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 space-y-1 shadow-sm transition-colors">
           <div className="flex items-center justify-between text-slate-500 dark:text-slate-400 text-xs font-mono">
-            <span>Uptime Plataforma (30d)</span>
+            <span>Uptime del Backend</span>
             <CheckCircle2 className="w-4 h-4 text-emerald-500" />
           </div>
           <h3 className="text-2xl font-black font-mono text-emerald-600 dark:text-emerald-400">
-            {uptimePercent}%
+            {uptimeSegons === null
+              ? "—"
+              : uptimeSegons >= 86400
+              ? `${Math.floor(uptimeSegons / 86400)}d ${Math.floor((uptimeSegons % 86400) / 3600)}h`
+              : `${Math.floor(uptimeSegons / 3600)}h ${Math.floor((uptimeSegons % 3600) / 60)}m`}
           </h3>
-          <p className="text-[10px] text-slate-500 font-mono">SLA Garantit: 99.9% Hetzner Sovereign</p>
+          <p className="text-[10px] text-slate-500 font-mono">
+            Disponibilitat % històrica: {uptimePercent === null ? "no mesurada (cal monitor extern)" : `${uptimePercent}%`}
+          </p>
         </div>
 
         {/* Latència p95 */}
         <div className="p-4 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 space-y-1 shadow-sm transition-colors">
           <div className="flex items-center justify-between text-slate-500 dark:text-slate-400 text-xs font-mono">
             <span>Latència API (p95)</span>
-            {p95Latency > 500 ? (
+            {p95Latency !== null && p95Latency > 500 ? (
               <AlertTriangle className="w-4 h-4 text-amber-500 animate-pulse" />
             ) : (
               <Zap className="w-4 h-4 text-emerald-500" />
             )}
           </div>
-          <h3 className={`text-2xl font-black font-mono ${p95Latency > 500 ? "text-amber-500" : "text-slate-900 dark:text-white"}`}>
-            {p95Latency} ms
+          <h3 className={`text-2xl font-black font-mono ${p95Latency !== null && p95Latency > 500 ? "text-amber-500" : "text-slate-900 dark:text-white"}`}>
+            {fmt(p95Latency, " ms")}
           </h3>
           <p className="text-[10px] text-slate-500 font-mono">
-            p50: {p50Latency}ms • p99: {p99Latency}ms
+            p50: {fmt(p50Latency, "ms")} • p99: {fmt(p99Latency, "ms")}
+            {p95Latency === null ? " • sense peticions mesurades encara" : ""}
           </p>
         </div>
 
@@ -291,24 +326,24 @@ export default function SuperadminTelemetriaPage() {
             <Database className="w-4 h-4 text-blue-500" />
           </div>
           <h3 className="text-2xl font-black font-mono text-blue-600 dark:text-blue-400">
-            {poolConnexionsActives} / {poolConnexionsMax}
+            {fmt(poolConnexionsActives)} / {fmt(poolConnexionsMax)}
           </h3>
           <p className="text-[10px] text-slate-500 font-mono">
-            Ocupació: {poolOcupacioPercent}% (Límit alerta: 85%)
+            Ocupació: {fmt(poolOcupacioPercent, "%")} (Límit alerta: 85%)
           </p>
         </div>
 
-        {/* Rendiment Cues Celery */}
+        {/* Cues Celery */}
         <div className="p-4 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 space-y-1 shadow-sm transition-colors">
           <div className="flex items-center justify-between text-slate-500 dark:text-slate-400 text-xs font-mono">
-            <span>Throughput Celery / Redis</span>
+            <span>Cues Celery / Redis</span>
             <Activity className="w-4 h-4 text-purple-500" />
           </div>
           <h3 className="text-2xl font-black font-mono text-purple-600 dark:text-purple-400">
-            {tasquesPerMinut} <span className="text-xs font-normal text-slate-500">tasques/min</span>
+            {fmt(tasquesPendents)} <span className="text-xs font-normal text-slate-500">tasques pendents</span>
           </h3>
           <p className="text-[10px] text-slate-500 font-mono">
-            Queue Wait: {queueWaitMs}ms • Pendents: {tasquesPendents}
+            Throughput: {fmt(tasquesPerMinut, "/min")} • Queue Wait: {fmt(queueWaitMs, "ms")}
           </p>
         </div>
       </div>
@@ -333,7 +368,15 @@ export default function SuperadminTelemetriaPage() {
             >
               <div>
                 <div className="flex items-center justify-between">
-                  <span className="w-2 h-2 rounded-full bg-emerald-500 shadow-sm shadow-emerald-500/50"></span>
+                  <span
+                    className={`w-2 h-2 rounded-full shadow-sm ${
+                      servei.estat === "HEALTHY"
+                        ? "bg-emerald-500 shadow-emerald-500/50"
+                        : servei.estat === "DOWN"
+                        ? "bg-rose-500 shadow-rose-500/50"
+                        : "bg-slate-400"
+                    }`}
+                  ></span>
                   <span className="text-[10px] font-mono text-slate-400">{servei.ping}</span>
                 </div>
                 <h4 className="text-xs font-bold font-mono text-slate-900 dark:text-white mt-1">{servei.nom}</h4>
@@ -341,7 +384,17 @@ export default function SuperadminTelemetriaPage() {
               </div>
               <div className="pt-2 border-t border-slate-200 dark:border-slate-700/60 flex items-center justify-between text-[10px] font-mono text-slate-500">
                 <span>{servei.versio}</span>
-                <span className="text-emerald-600 dark:text-emerald-400 font-bold">UP</span>
+                <span
+                  className={`font-bold ${
+                    servei.estat === "HEALTHY"
+                      ? "text-emerald-600 dark:text-emerald-400"
+                      : servei.estat === "DOWN"
+                      ? "text-rose-600 dark:text-rose-400"
+                      : "text-slate-500"
+                  }`}
+                >
+                  {servei.estat === "HEALTHY" ? "UP" : servei.estat === "DOWN" ? "DOWN" : "SENSE SONDA"}
+                </span>
               </div>
             </div>
           ))}
@@ -353,26 +406,28 @@ export default function SuperadminTelemetriaPage() {
         <div className="flex items-center justify-between">
           <h3 className="text-sm font-bold font-mono uppercase tracking-wider text-slate-700 dark:text-slate-300 flex items-center gap-2">
             <Cpu className="w-4 h-4 text-amber-500" />
-            <span>Telemetria IA Local sota CPU-Only (Hetzner CPX21)</span>
+            <span>Recursos del Node i IA Local (CPU-Only)</span>
           </h3>
           <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-300">
-            3 vCPUs • No Dedicated GPU
+            {nodeDescripcio ?? "Node no identificat"}
           </span>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 space-y-1">
-            <span className="text-[11px] font-mono text-slate-500 dark:text-slate-400">Temps d'Inferència Whisper (INT8):</span>
+            <span className="text-[11px] font-mono text-slate-500 dark:text-slate-400">Temps d'Inferència Whisper:</span>
             <h4 className="text-xl font-bold font-mono text-emerald-600 dark:text-emerald-400">
-              {whisperAvgInferenceSec} segons
+              {fmt(whisperAvgInferenceSec, " segons")}
             </h4>
-            <p className="text-[10px] text-slate-500">faster-whisper optimitzat en CPU (Límit timeout: 15s)</p>
+            <p className="text-[10px] text-slate-500">
+              {whisperAvgInferenceSec === null ? "Sense mesures d'inferència registrades" : "Mitjana real d'inferència"}
+            </p>
           </div>
 
           <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 space-y-1">
             <span className="text-[11px] font-mono text-slate-500 dark:text-slate-400">Càrrega CPU del Node:</span>
             <h4 className="text-xl font-bold font-mono text-slate-900 dark:text-white">
-              {cpuUsagePercent}% <span className="text-xs font-normal text-slate-500">utilitzada</span>
+              {fmt(cpuUsagePercent, "%")} <span className="text-xs font-normal text-slate-500">utilitzada</span>
             </h4>
             <p className="text-[10px] text-slate-500">Alerta de saturació sostinguda si &gt; 90%</p>
           </div>
@@ -380,9 +435,9 @@ export default function SuperadminTelemetriaPage() {
           <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 space-y-1">
             <span className="text-[11px] font-mono text-slate-500 dark:text-slate-400">Memòria RAM del Node:</span>
             <h4 className="text-xl font-bold font-mono text-slate-900 dark:text-white">
-              {(ramUsageMb / 1024).toFixed(2)} GB / 4.00 GB
+              {ramUsageMb === null ? "—" : (ramUsageMb / 1024).toFixed(2)} GB / {ramTotalMb === null ? "—" : (ramTotalMb / 1024).toFixed(2)} GB
             </h4>
-            <p className="text-[10px] text-slate-500">Model Whisper carregat en memòria compartida</p>
+            <p className="text-[10px] text-slate-500">Lectura directa del sistema operatiu del servidor</p>
           </div>
         </div>
 
