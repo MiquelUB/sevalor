@@ -36,6 +36,7 @@ class FeinaCreate(BaseModel):
 class FeinaResponse(FeinaCreate):
     id: uuid.UUID
     versio: int = 1
+    versio: int = 1
 
 
 @router.get("", response_model=List[FeinaResponse])
