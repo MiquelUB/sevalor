@@ -21,6 +21,8 @@ import {
   HardDrive,
   Cpu,
   CheckCircle2,
+  Menu,
+  X,
 } from "lucide-react";
 import { clearAuthToken } from "@/lib/api";
 
@@ -32,6 +34,11 @@ export default function SuperadminLayout({
   const pathname = usePathname();
   const router = useRouter();
   const [isDark, setIsDark] = useState<boolean>(true);
+  const [mobileOpen, setMobileOpen] = useState<boolean>(false);
+
+  useEffect(() => {
+    setMobileOpen(false);
+  }, [pathname]);
 
   if (pathname?.startsWith("/superadmin/login")) {
     return <div className="min-h-screen bg-slate-50 dark:bg-slate-950">{children}</div>;
@@ -118,12 +125,112 @@ export default function SuperadminLayout({
     },
   ];
 
+  const isLinkActive = (href: string) => {
+    if (href === "/superadmin/telemetria") {
+      return pathname === "/superadmin/telemetria" || pathname === "/superadmin";
+    }
+    if (href === "/superadmin/empreses") {
+      return pathname?.startsWith("/superadmin/empreses") || pathname === "/superadmin/tenants";
+    }
+    if (href === "/superadmin/tenants/onboarding") {
+      return pathname === "/superadmin/tenants/onboarding";
+    }
+    if (href === "/superadmin/seguretat") {
+      return pathname?.startsWith("/superadmin/seguretat");
+    }
+    if (href === "/superadmin/auditoria") {
+      return pathname?.startsWith("/superadmin/auditoria");
+    }
+    return pathname === href;
+  };
+
+  const renderSidebarLinks = () => (
+    <>
+      <div className="p-3 space-y-5 overflow-y-auto">
+        {navSections.map((section, sIdx) => (
+          <div key={sIdx}>
+            <p className="px-3 text-[10px] font-mono font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500 mb-1.5">
+              {section.title}
+            </p>
+            <nav className="space-y-1">
+              {section.links.map((link) => {
+                const Icon = link.icon;
+                const isActive = isLinkActive(link.href);
+
+                return (
+                  <Link
+                    key={link.href}
+                    href={link.href}
+                    onClick={() => setMobileOpen(false)}
+                    className={`flex items-center justify-between px-3 py-2 rounded-xl text-xs transition-all ${
+                      isActive
+                        ? "bg-emerald-600 text-white font-bold shadow-md shadow-emerald-600/20"
+                        : "text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800/80 font-medium"
+                    }`}
+                  >
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <Icon
+                        className={`w-4 h-4 shrink-0 ${
+                          isActive ? "text-white" : "text-slate-500 dark:text-slate-400"
+                        }`}
+                      />
+                      <div className="truncate text-left">
+                        <span className="block truncate">{link.label}</span>
+                      </div>
+                    </div>
+                    <span
+                      className={`text-[9px] font-mono font-bold px-1.5 py-0.5 rounded shrink-0 ml-1.5 ${
+                        isActive
+                          ? "bg-emerald-700 text-emerald-100"
+                          : "bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 border border-slate-200 dark:border-slate-700"
+                      }`}
+                    >
+                      {link.badge}
+                    </span>
+                  </Link>
+                );
+              })}
+            </nav>
+          </div>
+        ))}
+      </div>
+
+      {/* PEU DEL SIDEBAR: ESTAT INFRAESTRUCTURA HETZNER */}
+      <div className="p-3 border-t border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-900/60 space-y-2">
+        <div className="p-2.5 rounded-xl bg-white dark:bg-slate-800/70 border border-slate-200 dark:border-slate-700/80 shadow-sm space-y-1">
+          <div className="flex items-center justify-between text-[10px] font-mono">
+            <span className="text-slate-500 dark:text-slate-400 flex items-center gap-1">
+              <CheckCircle2 className="w-3 h-3 text-emerald-500" />
+              SRE Nuremberg
+            </span>
+            <span className="font-bold text-emerald-600 dark:text-emerald-400">99.9% UPTIME</span>
+          </div>
+          <div className="flex items-center justify-between text-[10px] font-mono text-slate-500 dark:text-slate-400">
+            <span>Hetzner CPX21</span>
+            <span>PostgreSQL 16 RLS</span>
+          </div>
+        </div>
+
+        <p className="px-1 text-[9px] font-mono text-slate-400 text-center">
+          Dades 100% sobiranes a la UE • RGPD
+        </p>
+      </div>
+    </>
+  );
+
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-100 font-sans transition-colors duration-200 flex flex-col">
       {/* CAPÇALERA SUPERADMIN D'ALTA DENSITAT */}
       <header className="h-14 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between px-4 z-40 sticky top-0 shadow-sm transition-colors">
-        {/* Logo & Node Info */}
-        <div className="flex items-center gap-3">
+        {/* Logo, Hamburger & Node Info */}
+        <div className="flex items-center gap-2 sm:gap-3">
+          <button
+            onClick={() => setMobileOpen(!mobileOpen)}
+            className="md:hidden p-1.5 rounded-lg text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+            title="Menu de navegació"
+          >
+            {mobileOpen ? <X className="w-5 h-5 text-emerald-500" /> : <Menu className="w-5 h-5" />}
+          </button>
           <Link href="/superadmin/telemetria" className="flex items-center gap-2.5">
             <div className="w-8 h-8 rounded-xl bg-emerald-600 flex items-center justify-center font-black text-white text-xs tracking-wider shadow-lg shadow-emerald-600/20">
               HQ
@@ -145,7 +252,7 @@ export default function SuperadminLayout({
         </div>
 
         {/* Eines capçalera dreta: IP Allowlist, 2FA, Enllaç a Gestió, Theme, Logout */}
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2 sm:gap-3">
           {/* IP Allowlist Actiu (Zero-Trust) */}
           <div className="hidden lg:flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 text-[11px] font-mono">
             <Radio className="w-3 h-3 text-emerald-500 animate-pulse" />
@@ -189,81 +296,42 @@ export default function SuperadminLayout({
         </div>
       </header>
 
+      {/* MOBILE DRAWER */}
+      {mobileOpen && (
+        <div
+          className="fixed inset-0 z-50 bg-black/60 md:hidden backdrop-blur-xs flex"
+          onClick={() => setMobileOpen(false)}
+        >
+          <aside
+            className="w-72 bg-white dark:bg-slate-900 h-full flex flex-col justify-between shadow-2xl p-0 overflow-y-auto"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="p-3 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <div className="w-6 h-6 rounded-lg bg-emerald-600 flex items-center justify-center font-bold text-white text-xs">
+                  HQ
+                </div>
+                <span className="font-extrabold text-xs text-slate-900 dark:text-white">
+                  SEVALOR Superadmin
+                </span>
+              </div>
+              <button
+                onClick={() => setMobileOpen(false)}
+                className="p-1 rounded-lg text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            {renderSidebarLinks()}
+          </aside>
+        </div>
+      )}
+
       {/* CONTENIDOR PRINCIPAL AMB SIDEBAR D'ESTIL TWENTY CRM */}
       <div className="flex-1 flex overflow-hidden">
-        {/* SIDEBAR ESQUERRA D'ALTA DENSITAT */}
-        <aside className="w-64 bg-white dark:bg-slate-900 border-r border-slate-200 dark:border-slate-800 flex flex-col justify-between shrink-0 shadow-sm transition-colors">
-          <div className="p-3 space-y-5 overflow-y-auto">
-            {navSections.map((section, sIdx) => (
-              <div key={sIdx}>
-                <p className="px-3 text-[10px] font-mono font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500 mb-1.5">
-                  {section.title}
-                </p>
-                <nav className="space-y-1">
-                  {section.links.map((link) => {
-                    const Icon = link.icon;
-                    const isActive =
-                      pathname === link.href ||
-                      (link.href === "/superadmin/empreses" && pathname?.startsWith("/superadmin/empreses")) ||
-                      (link.href === "/superadmin/tenants/onboarding" && pathname === "/superadmin/tenants/onboarding");
-
-                    return (
-                      <Link
-                        key={link.href}
-                        href={link.href}
-                        className={`flex items-center justify-between px-3 py-2 rounded-xl text-xs transition-all ${
-                          isActive
-                            ? "bg-emerald-600 text-white font-bold shadow-md shadow-emerald-600/20"
-                            : "text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800/80 font-medium"
-                        }`}
-                      >
-                        <div className="flex items-center gap-2.5 min-w-0">
-                          <Icon
-                            className={`w-4 h-4 shrink-0 ${
-                              isActive ? "text-white" : "text-slate-500 dark:text-slate-400"
-                            }`}
-                          />
-                          <div className="truncate text-left">
-                            <span className="block truncate">{link.label}</span>
-                          </div>
-                        </div>
-                        <span
-                          className={`text-[9px] font-mono font-bold px-1.5 py-0.5 rounded shrink-0 ml-1.5 ${
-                            isActive
-                              ? "bg-emerald-700 text-emerald-100"
-                              : "bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 border border-slate-200 dark:border-slate-700"
-                          }`}
-                        >
-                          {link.badge}
-                        </span>
-                      </Link>
-                    );
-                  })}
-                </nav>
-              </div>
-            ))}
-          </div>
-
-          {/* PEU DEL SIDEBAR: ESTAT INFRAESTRUCTURA HETZNER */}
-          <div className="p-3 border-t border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-900/60 space-y-2">
-            <div className="p-2.5 rounded-xl bg-white dark:bg-slate-800/70 border border-slate-200 dark:border-slate-700/80 shadow-sm space-y-1">
-              <div className="flex items-center justify-between text-[10px] font-mono">
-                <span className="text-slate-500 dark:text-slate-400 flex items-center gap-1">
-                  <CheckCircle2 className="w-3 h-3 text-emerald-500" />
-                  SRE Nuremberg
-                </span>
-                <span className="font-bold text-emerald-600 dark:text-emerald-400">99.9% UPTIME</span>
-              </div>
-              <div className="flex items-center justify-between text-[10px] font-mono text-slate-500 dark:text-slate-400">
-                <span>Hetzner CPX21</span>
-                <span>PostgreSQL 16 RLS</span>
-              </div>
-            </div>
-
-            <p className="px-1 text-[9px] font-mono text-slate-400 text-center">
-              Dades 100% sobiranes a la UE • RGPD
-            </p>
-          </div>
+        {/* SIDEBAR ESQUERRA D'ALTA DENSITAT (DESKTOP) */}
+        <aside className="hidden md:flex w-64 bg-white dark:bg-slate-900 border-r border-slate-200 dark:border-slate-800 flex-col justify-between shrink-0 shadow-sm transition-colors">
+          {renderSidebarLinks()}
         </aside>
 
         {/* CONTINGUT PRINCIPAL SUPERADMIN */}
