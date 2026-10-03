@@ -105,7 +105,6 @@ async def crear_contracte(
         db.add(rel)
 
     await db.commit()
-    await db.refresh(nou_contracte)
 
     # Utilitzem dict per satisfer el model ContracteAmbFinquesResponse
     base_resp = ContracteMantenimentResponse.model_validate(nou_contracte)

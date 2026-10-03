@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db_with_tenant_context
 from app.core.security import require_roles
-from app.models.models import Incidencia, Vehicle, TiquetCarburant, Usuari
+from app.models.models import Incidencia, TiquetCarburant, Usuari, Vehicle
 
 router = APIRouter(
     prefix="/operari/vehicles",
@@ -115,11 +115,11 @@ async def vehicle_repostatge(
         # Fallback if state doesn't have it (for mock/tests)
         first_user = (await db.execute(select(Usuari).where(Usuari.empresa_id == uuid.UUID(empresa_id)))).scalars().first()
         usuari_id = first_user.id if first_user else uuid.uuid4()
-    
+
     vehicle = (await db.execute(select(Vehicle).where(Vehicle.id == vehicle_id, Vehicle.empresa_id == uuid.UUID(empresa_id)))).scalars().first()
     if not vehicle:
         raise HTTPException(status_code=404)
-        
+
     tiquet = TiquetCarburant(
         empresa_id=uuid.UUID(empresa_id),
         vehicle_id=vehicle_id,

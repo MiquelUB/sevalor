@@ -130,11 +130,14 @@ async def reset_pin_operari(
         "intents_pin_fallits": usuari.intents_pin_fallits
     }
 
-from fastapi import UploadFile, File
-from app.services.ocr_service import processar_dni_ocr
-from app.models.models import RegistreJornadaLaboral
-from app.api.v1.operari_pwa.jornada import JornadaInici
 from datetime import datetime, timezone
+
+from fastapi import File, UploadFile
+
+from app.api.v1.operari_pwa.jornada import JornadaInici
+from app.models.models import RegistreJornadaLaboral
+from app.services.ocr_service import processar_dni_ocr
+
 
 @router.post("/alta-dni-ocr")
 async def alta_dni_ocr(
@@ -157,7 +160,7 @@ async def fitxar_operari_gestio(
     claims: dict = Depends(require_roles(["BOSS", "SECRETARIA"])),
 ):
     empresa_id = await verificar_permisos_boss(request)
-    
+
     stmt = select(RegistreJornadaLaboral).where(
         RegistreJornadaLaboral.empresa_id == uuid.UUID(empresa_id),
         RegistreJornadaLaboral.usuari_id == operari_id,
@@ -184,6 +187,7 @@ async def fitxar_operari_gestio(
         return {"estat": "EN_CURS", "jornada_id": nova_jornada.id}
 
 from app.core.security import veto_enginyer_finances
+
 
 @router.get("/{operari_id}/control-horari")
 async def get_control_horari(

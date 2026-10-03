@@ -55,8 +55,8 @@ async def llistar_incidencies_operari(
     result = await db.execute(stmt)
     return result.scalars().all()
 
-from fastapi import UploadFile, File, Form
 import os
+
 
 @router.post("/incidencies", response_model=IncidenciaResponse, status_code=status.HTTP_201_CREATED)
 async def reportar_incidencia(

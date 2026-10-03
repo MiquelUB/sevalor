@@ -112,7 +112,6 @@ async def registrar_tiquet_carburant(
 
     db.add(nou_tiquet)
     await db.commit()
-    await db.refresh(nou_tiquet)
 
     return TiquetCarburantResponse(
         id=nou_tiquet.id,
@@ -167,7 +166,7 @@ async def pujar_tiquet_ocr(
     file_ext = file.filename.split(".")[-1] if file.filename else "jpg"
     safe_name = f"ocr_{secrets.token_hex(8)}.{file_ext}"
     file_path = f"{save_dir}/{safe_name}"
-    
+
     file_bytes = await file.read()
     with open(file_path, "wb") as f:
         f.write(file_bytes)
@@ -189,7 +188,6 @@ async def pujar_tiquet_ocr(
 
     db.add(nou_tiquet)
     await db.commit()
-    await db.refresh(nou_tiquet)
 
     return {
         "status": "OK",

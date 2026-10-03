@@ -1,10 +1,13 @@
 import uuid
-from datetime import date, timedelta
+from datetime import date
+
 from dateutil.relativedelta import relativedelta
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.models.contractes import ContracteManteniment, RevisionsContracte
-from app.models.models import OrdreTreball, Client
+from app.models.models import Client, OrdreTreball
+
 
 async def generar_ordres_preventives_per_contracte(
     contracte: ContracteManteniment,
@@ -36,7 +39,7 @@ async def generar_ordres_preventives_per_contracte(
     }
 
     interval = intervals.get(contracte.periodicitat, relativedelta(years=1))
-    
+
     noves_ordres_ids = []
 
     # Generem les revisions fins a 1 any vista o fins la data_fi del contracte
@@ -46,7 +49,7 @@ async def generar_ordres_preventives_per_contracte(
 
     data_seguent = data_base + interval
     # Si és la primera, i no hem arribat a la primera data planificada, no generem sobre data_inici si és futura, o si
-    
+
     client_res = await db.execute(select(Client).where(Client.id == contracte.client_id))
     client = client_res.scalars().first()
     client_rao_social = client.rao_social if client else "Desconegut"
@@ -82,7 +85,7 @@ async def generar_ordres_preventives_per_contracte(
         )
         db.add(nova_ot)
         await db.flush()
-        
+
         revisio.ordre_treball_id = nova_ot.id
         noves_ordres_ids.append(nova_ot.id)
 

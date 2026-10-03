@@ -44,10 +44,10 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
     Injecta automàticament el context RLS."""
     async with AsyncSessionLocal() as session:
         try:
-            from app.core.context import tenant_context, superadmin_context
+            from app.core.context import superadmin_context, tenant_context
             empresa_id = tenant_context.get()
             is_superadmin = superadmin_context.get()
-            
+
             await set_tenant_context(session, empresa_id, is_superadmin)
             yield session
         finally:

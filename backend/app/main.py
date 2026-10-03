@@ -1,5 +1,6 @@
 """Punt d'entrada principal de l'API de Sevalor Suite."""
 
+import os
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
@@ -11,46 +12,42 @@ from slowapi.middleware import SlowAPIMiddleware
 from slowapi.util import get_remote_address
 
 from app.api.v1.auth import router as auth_router
-from app.api.v1.gestio.dashboard import router as dashboard_router
-from app.api.v1.gestio.ws import router as ws_router
 from app.api.v1.gestio.cerca import router as cerca_router
 from app.api.v1.gestio.cerca import spotlight_router
 from app.api.v1.gestio.clients import router as clients_router
 from app.api.v1.gestio.comptabilitat import router as comptabilitat_router
-from app.api.v1.gestio.economia import router as economia_router
 from app.api.v1.gestio.configuracio import router as configuracio_router
 from app.api.v1.gestio.contractes import router as contractes_router
 from app.api.v1.gestio.copilot import router as copilot_router
-from app.api.v1.gestio.ia import router as ia_router
+from app.api.v1.gestio.dashboard import router as dashboard_router
+from app.api.v1.gestio.economia import router as economia_router
 from app.api.v1.gestio.feines import intervencions_router
 from app.api.v1.gestio.feines import router as feines_router
 from app.api.v1.gestio.flota import router as flota_router
+from app.api.v1.gestio.ia import router as ia_router
 from app.api.v1.gestio.magatzem import router as magatzem_router
 from app.api.v1.gestio.notificacions import router as notificacions_router
 from app.api.v1.gestio.operaris import router as operaris_router
 from app.api.v1.gestio.planols import router as planols_router
 from app.api.v1.gestio.pressupostos import router as pressupostos_router
 from app.api.v1.gestio.proveidors import router as proveidors_router
+from app.api.v1.gestio.ws import router as ws_router
 from app.api.v1.health import router as health_router
 from app.api.v1.operari_auth import router as operari_auth_router
 from app.api.v1.operari_pwa.feines import router as feines_pwa_router
 from app.api.v1.operari_pwa.incidencies import router as incidencies_router
 from app.api.v1.operari_pwa.jornada import router as jornada_router
 from app.api.v1.operari_pwa.picking import router as picking_router
+from app.api.v1.operari_pwa.planols import router as operari_planols_router
 from app.api.v1.operari_pwa.sync import router as sync_router
 from app.api.v1.operari_pwa.tiquets import router as tiquets_router
 from app.api.v1.operari_pwa.vehicles import router as vehicles_pwa_router
-from app.api.v1.operari_pwa.planols import router as operari_planols_router
 from app.api.v1.superadmin.tenants import router as tenants_router
 from app.api.v1.telemetria import router as telemetria_router
 from app.api.v1.webhooks.telegram import router as telegram_webhook_router
 from app.api.v1.workers import router as workers_router
 from app.core.config import settings
 from app.middleware.tenant import TenantMiddleware
-
-from limits.storage import RedisStorage
-from app.core.config import settings
-import os
 
 redis_url = os.getenv("REDIS_URL", "redis://:sevalor_redis_pass@127.0.0.1:6380/0")
 limiter = Limiter(
@@ -102,6 +99,7 @@ async def metrics_middleware(request, call_next):  # type: ignore[no-untyped-def
 
 app.include_router(health_router, prefix=settings.API_V1_STR)
 from app.api.v1.superadmin.empreses import router as empreses_router
+
 app.include_router(tenants_router, prefix=settings.API_V1_STR)
 app.include_router(empreses_router, prefix=settings.API_V1_STR)
 app.include_router(operaris_router, prefix=settings.API_V1_STR)
@@ -110,11 +108,14 @@ app.include_router(proveidors_router, prefix=settings.API_V1_STR)
 app.include_router(flota_router, prefix=settings.API_V1_STR)
 
 from app.api.v1.public_docs import router as public_docs_router
+
 app.include_router(public_docs_router, prefix=settings.API_V1_STR)
 
-from fastapi.responses import JSONResponse
-from fastapi import Request
 import traceback
+
+from fastapi import Request
+from fastapi.responses import JSONResponse
+
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):

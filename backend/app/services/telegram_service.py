@@ -39,11 +39,11 @@ class TelegramService:
         if not self.bot_token or self.bot_token == "DUMMY_TOKEN":
             logger.info(f"[TELEGRAM DISPATCH] Eliminat teclat a {chat_id}, missatge {message_id}")
             return True
-            
+
         payload = {"chat_id": chat_id, "message_id": message_id}
         if reply_markup:
             payload["reply_markup"] = reply_markup
-            
+
         async with httpx.AsyncClient() as client:
             try:
                 res = await client.post(

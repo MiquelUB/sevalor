@@ -25,7 +25,7 @@ def get_current_user_claims(request: Request) -> Dict[str, Any]:
             algorithms=[settings.ALGORITHM],
             options={"verify_aud": False},
         )
-        
+
         # Zero-Trust checks for SUPERADMIN
         if payload.get("rol", "").upper() == "SUPERADMIN":
             # Check TOTP
@@ -34,7 +34,7 @@ def get_current_user_claims(request: Request) -> Dict[str, Any]:
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail="El SUPERADMIN ha de tenir el TOTP activat.",
                 )
-            
+
             # Check IP Allowlist
             client_ip = request.client.host if request.client else None
             ip_allowlist = payload.get("ip_allowlist") or []

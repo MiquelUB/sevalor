@@ -1,11 +1,13 @@
 import uuid
-from typing import Dict, Any
-from fastapi import APIRouter, Depends, Request, HTTPException
+from typing import Any, Dict
+
+from fastapi import APIRouter, Depends, HTTPException, Request
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
+
 from app.core.db import get_db_with_tenant_context
 from app.core.security import require_roles
-from app.models.models import OrdreTreball, Incidencia, Usuari, Article, Vehicle
+from app.models.models import Article, Incidencia, OrdreTreball, Vehicle
 
 router = APIRouter(
     prefix="/gestio/dashboard",
@@ -21,7 +23,7 @@ async def get_dashboard_hud(
     empresa_id = getattr(request.state, "empresa_id", None) or request.headers.get("X-Empresa-ID")
     if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401, detail="No identificat")
-    
+
     emp_uuid = uuid.UUID(empresa_id)
 
     # Active jobs

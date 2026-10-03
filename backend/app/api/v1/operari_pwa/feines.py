@@ -167,9 +167,11 @@ async def obtenir_detall_feina(
         sys.stderr.write(f"ERROR: {str(e)}\n")
         raise HTTPException(status_code=500, detail=str(e))
 
-import os
 import math
-from fastapi import UploadFile, File, Form
+import os
+
+from fastapi import File, Form, UploadFile
+
 
 def calcular_distancia_metres(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     R = 6371000.0  # radi de la Terra en metres
@@ -197,7 +199,7 @@ async def iniciar_trajecte(
     empresa_id = request.state.empresa_id
     if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401)
-    
+
     ot_res = await db.execute(select(OrdreTreball).where(
         OrdreTreball.id == feina_id,
         OrdreTreball.empresa_id == uuid.UUID(empresa_id)
@@ -205,14 +207,14 @@ async def iniciar_trajecte(
     feina = ot_res.scalars().first()
     if not feina:
         raise HTTPException(status_code=404, detail="Feina no trobada")
-    
+
     if feina.vehicle_id:
         veh_res = await db.execute(select(Vehicle).where(Vehicle.id == feina.vehicle_id))
         veh = veh_res.scalars().first()
         if veh:
             veh.estat = "EN_TRANSIT"
             await db.commit()
-    
+
     return IniciarTrajecteResponse(
         feina_id=feina.id,
         estat_vehicle="EN_TRANSIT",
@@ -237,7 +239,7 @@ async def comencar_feina(
     empresa_id = request.state.empresa_id
     if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401)
-    
+
     ot_res = await db.execute(select(OrdreTreball).where(
         OrdreTreball.id == feina_id,
         OrdreTreball.empresa_id == uuid.UUID(empresa_id)
@@ -245,7 +247,7 @@ async def comencar_feina(
     feina = ot_res.scalars().first()
     if not feina:
         raise HTTPException(status_code=404, detail="Feina no trobada")
-    
+
     # Comprovació Geovalla de 50 m si es passen coordenades i l'adreça té coordenades
     if payload.lat is not None and payload.lng is not None and feina.adreca and "," in feina.adreca:
         try:
@@ -277,14 +279,14 @@ async def pujar_foto_qualitat(
     empresa_id = request.state.empresa_id
     if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401)
-    
+
     tipus_upper = tipus.upper()
     if tipus_upper not in ("INICIAL", "INTERMEDIA", "FINAL"):
         raise HTTPException(status_code=422, detail="El tipus de foto ha de ser INICIAL, INTERMEDIA o FINAL")
-    
+
     dir_feina = f"/tmp/data/{empresa_id}/feines/{feina_id}"
     os.makedirs(dir_feina, exist_ok=True)
-    
+
     file_path = f"{dir_feina}/foto_{tipus_upper.lower()}.webp"
     if foto:
         content = await foto.read()
@@ -294,7 +296,7 @@ async def pujar_foto_qualitat(
         # Crea evidència de fitxer si no s'adjunta binari multipart
         with open(file_path, "wb") as f:
             f.write(b"WEBP_EVIDENCE_PLACEHOLDER")
-            
+
     return {"feina_id": str(feina_id), "tipus": tipus_upper, "path": file_path, "status": "GUARDAT"}
 
 @router.get("/feines/{feina_id}/fotos")
@@ -307,13 +309,13 @@ async def consultar_fotos_qualitat(
     empresa_id = request.state.empresa_id
     if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401)
-    
+
     dir_feina = f"/tmp/data/{empresa_id}/feines/{feina_id}"
     fotos_pujades = {}
     for t in ["inicial", "intermedia", "final"]:
         p = f"{dir_feina}/foto_{t}.webp"
         fotos_pujades[t] = os.path.exists(p)
-        
+
     complet = all(fotos_pujades.values())
     return {
         "feina_id": str(feina_id),
@@ -331,7 +333,7 @@ async def finalitzar_feina(
     empresa_id = request.state.empresa_id
     if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401)
-    
+
     ot_res = await db.execute(select(OrdreTreball).where(
         OrdreTreball.id == feina_id,
         OrdreTreball.empresa_id == uuid.UUID(empresa_id)
@@ -339,19 +341,19 @@ async def finalitzar_feina(
     feina = ot_res.scalars().first()
     if not feina:
         raise HTTPException(status_code=404, detail="Feina no trobada")
-    
+
     dir_feina = f"/tmp/data/{empresa_id}/feines/{feina_id}"
     faltants = []
     for t in ["inicial", "intermedia", "final"]:
         if not os.path.exists(f"{dir_feina}/foto_{t}.webp"):
             faltants.append(t.capitalize())
-            
+
     if faltants:
         raise HTTPException(
             status_code=400,
             detail=f"Falten fotografies requerides de control de qualitat: {', '.join(faltants)} (Spec 013 RF-14)"
         )
-        
+
     feina.estat = "COMPLERT"
     await db.commit()
     return {"feina_id": str(feina.id), "estat": "COMPLERT", "missatge": "Feina finalitzada satisfactòriament"}

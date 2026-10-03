@@ -1,12 +1,25 @@
 import uuid
-from typing import List, Optional
-from fastapi import APIRouter, Depends, HTTPException, Request, status
-from pydantic import BaseModel, Field
-from sqlalchemy import select, func, text
+from typing import List
+
+from fastapi import APIRouter, Depends, HTTPException, Request
+from pydantic import BaseModel
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.core.db import get_db_with_tenant_context
 from app.core.security import require_roles
-from app.models.models import FacturaCapcalera, FacturaLinia, LiniaPicking, FullaPicking, Article, RegistreJornadaLaboral, Usuari, OrdreTreball, Client, FacturaProveidor
+from app.models.models import (
+    Article,
+    Client,
+    FacturaCapcalera,
+    FacturaLinia,
+    FacturaProveidor,
+    FullaPicking,
+    LiniaPicking,
+    OrdreTreball,
+    RegistreJornadaLaboral,
+    Usuari,
+)
 
 router = APIRouter(
     prefix="/gestio/economia",
@@ -41,7 +54,7 @@ async def llistar_rendibilitat(
     empresa_id = request.state.empresa_id
     if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401)
-    
+
     empresa_uuid = uuid.UUID(empresa_id)
 
     stmt = select(
@@ -51,7 +64,7 @@ async def llistar_rendibilitat(
     )
     result = await db.execute(stmt)
     rows = result.all()
-    
+
     res = []
     for ordre, client in rows:
         # Calcular facturat
@@ -77,15 +90,15 @@ async def llistar_rendibilitat(
             LiniaPicking.empresa_id == empresa_uuid
         )
         cost_materials = await db.scalar(stmt_mat) or 0.0
-        
+
         # PENDENT_AUDITORIA: Com que no hi ha taulell d'imputació directe d'hores a OrdreTreball,
         # només tenim RegistreJornadaLaboral general o AuditoriaPostObra.desviacio_hores.
         # Es manté a 0 segons requeriments de dades reals quan no hi ha vincle.
         hores_treballades = 0.0
         cost_operari = 0.0
-        
+
         marge = float(facturat) - float(cost_materials) - float(cost_operari)
-        
+
         res.append(RendibilitatObra(
             ordre_treball_id=ordre.id,
             codi=ordre.codi,
@@ -98,7 +111,7 @@ async def llistar_rendibilitat(
             import_facturat=float(facturat),
             marge_brut=marge
         ))
-        
+
     return res
 
 @router.get("/dashboard", response_model=DashboardFinancer)
@@ -109,9 +122,9 @@ async def obtenir_dashboard(
     empresa_id = request.state.empresa_id
     if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401)
-    
+
     empresa_uuid = uuid.UUID(empresa_id)
-    
+
     # Ingressos mensuals
     stmt_ingressos = select(func.coalesce(func.sum(FacturaCapcalera.base_imposable), 0)).where(
         FacturaCapcalera.empresa_id == empresa_uuid,

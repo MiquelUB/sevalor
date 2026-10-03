@@ -101,7 +101,6 @@ async def crear_pressupost(
     )
     db.add(nou_pressupost)
     await db.commit()
-    await db.refresh(nou_pressupost)
     return nou_pressupost
 
 
@@ -181,7 +180,6 @@ async def aprovar_pressupost(
 
     pressupost.estat = "APROVAT"
     await db.commit()
-    await db.refresh(pressupost)
     return pressupost
 
 
@@ -208,7 +206,6 @@ async def rebutjar_pressupost(
 
     pressupost.estat = "REBUTJAT"
     await db.commit()
-    await db.refresh(pressupost)
     return pressupost
 
 
@@ -222,7 +219,7 @@ async def generar_pressupost_ia(
     return {
         "status": "PENDENT_AUDITORIA",
         "draft": {
-            "titol": f"Pressupost generat per IA",
+            "titol": "Pressupost generat per IA",
             "linies": [
                 {"concepte": f"Generat des de: {prompt[:30]}", "quantitat": 1, "preu_unitari": 100.0, "total": 100.0}
             ],

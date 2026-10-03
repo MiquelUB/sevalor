@@ -23,7 +23,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db_with_tenant_context
 from app.core.security import require_roles
-from app.models.models import DocumentFlota, OrdreTreball, Vehicle, HistorialAssignacioVehicle, Usuari, MantenimentVehicle
+from app.models.models import (
+    DocumentFlota,
+    HistorialAssignacioVehicle,
+    MantenimentVehicle,
+    OrdreTreball,
+    Usuari,
+    Vehicle,
+)
 from app.services.ocr_service import processar_ocr_document_vehicle
 
 router = APIRouter(
@@ -179,7 +186,6 @@ async def editar_vehicle(
     v_db.pes_maxim_autoritzat = vehicle.pes_maxim_autoritzat
 
     await db.commit()
-    await db.refresh(v_db)
 
     return v_db
 
@@ -341,7 +347,6 @@ async def pujar_document_flota(
     )
     db.add(doc)
     await db.commit()
-    await db.refresh(doc)
 
     # Executar OCR asíncron
     try:
@@ -414,20 +419,20 @@ async def assignar_vehicle(
     db: AsyncSession = Depends(get_db_with_tenant_context)
 ):
     empresa_id = uuid.UUID(request.state.empresa_id)
-    
+
     # Check vehicle
     v = await db.scalar(select(Vehicle).where(Vehicle.id == id, Vehicle.empresa_id == empresa_id))
     if not v:
         raise HTTPException(status_code=404, detail="Vehicle no trobat")
-        
+
     # Check usuari
     u = await db.scalar(select(Usuari).where(Usuari.id == data.usuari_id, Usuari.empresa_id == empresa_id))
     if not u:
         raise HTTPException(status_code=404, detail="Usuari no trobat")
-        
+
     v.estat = "ASSIGNAT"
     u.vehicle_assignat_id = v.id
-    
+
     historial = HistorialAssignacioVehicle(
         empresa_id=empresa_id,
         vehicle_id=v.id,
@@ -452,24 +457,24 @@ async def revocar_vehicle(
     db: AsyncSession = Depends(get_db_with_tenant_context)
 ):
     empresa_id = uuid.UUID(request.state.empresa_id)
-    
+
     v = await db.scalar(select(Vehicle).where(Vehicle.id == id, Vehicle.empresa_id == empresa_id))
     if not v:
         raise HTTPException(status_code=404, detail="Vehicle no trobat")
-        
+
     # Update usuari
     usuaris = await db.execute(select(Usuari).where(Usuari.vehicle_assignat_id == v.id, Usuari.empresa_id == empresa_id))
     for u in usuaris.scalars().all():
         u.vehicle_assignat_id = None
-        
+
     v.estat = "DISPONIBLE"
-    
+
     # Close historial
     hist = await db.scalar(select(HistorialAssignacioVehicle).where(HistorialAssignacioVehicle.vehicle_id == v.id, HistorialAssignacioVehicle.data_fi.is_(None)).order_by(HistorialAssignacioVehicle.data_inici.desc()))
     if hist:
         hist.data_fi = datetime.now(timezone.utc)
         hist.odometre_fi = data.odometre
-        
+
     await db.commit()
     return {"status": "ok", "missatge": "Assignació revocada"}
 
@@ -488,11 +493,11 @@ async def crear_manteniment(
     db: AsyncSession = Depends(get_db_with_tenant_context)
 ):
     empresa_id = uuid.UUID(request.state.empresa_id)
-    
+
     v = await db.scalar(select(Vehicle).where(Vehicle.id == vehicle_id, Vehicle.empresa_id == empresa_id))
     if not v:
         raise HTTPException(status_code=404, detail="Vehicle no trobat")
-        
+
     mant = MantenimentVehicle(
         empresa_id=empresa_id,
         vehicle_id=vehicle_id,
@@ -504,7 +509,6 @@ async def crear_manteniment(
     )
     db.add(mant)
     await db.commit()
-    await db.refresh(mant)
     return {"id": str(mant.id), "missatge": "Manteniment registrat"}
 
 @router.get("/{vehicle_id}/manteniments")
@@ -525,21 +529,21 @@ async def ocr_document_vehicle(
     empresa_id = request.state.empresa_id
     if not empresa_id:
         raise HTTPException(status_code=401)
-        
+
     file_bytes = await file.read()
     kind = filetype.guess(file_bytes)
     if not kind:
         raise HTTPException(status_code=400, detail="Tipus de fitxer invàlid")
     file_ext = kind.extension
-    
+
     docs_dir = f"/docs/{empresa_id}/flota/ocr"
     os.makedirs(docs_dir, exist_ok=True)
     safe_name = f"{uuid.uuid4()}.{file_ext}"
     file_path = os.path.join(docs_dir, safe_name)
-    
+
     with open(file_path, "wb") as buffer:
         buffer.write(file_bytes)
-        
+
     resultat = await processar_ocr_document_vehicle(file_path)
     return resultat
 

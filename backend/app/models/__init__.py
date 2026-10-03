@@ -1,3 +1,8 @@
+from app.models.contractes import (
+    ContracteManteniment,
+    ContractesMantenimentFinques,
+    RevisionsContracte,
+)
 from app.models.models import (
     Article,
     CapaAnotacio,
@@ -22,11 +27,6 @@ from app.models.models import (
     TiquetCarburant,
     Usuari,
     Vehicle,
-)
-from app.models.contractes import (
-    ContracteManteniment,
-    ContractesMantenimentFinques,
-    RevisionsContracte,
 )
 
 __all__ = [

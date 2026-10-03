@@ -57,9 +57,8 @@ def validar_magic_bytes(content: bytes) -> Tuple[bool, str]:
         return True, kind.extension
     return False, kind.extension
 
-import hmac
 import hashlib
-import time
+import hmac
 from urllib.parse import urlencode
 
 SECRET_KEY = "SUPER_SECRET_KEY_MOCK" # Can be loaded from settings
@@ -68,7 +67,7 @@ def generar_enllac_efimer(base_url: str, doc_id: str, secret: str = SECRET_KEY) 
     expires = int(time.time()) + 86400 # 24 hores = 1440 minuts
     data = f"{doc_id}:{expires}".encode("utf-8")
     signature = hmac.new(secret.encode("utf-8"), data, hashlib.sha256).hexdigest()
-    
+
     query = urlencode({"expires": expires, "signature": signature})
     return f"{base_url}/api/v1/documents/{doc_id}/download?{query}"
 

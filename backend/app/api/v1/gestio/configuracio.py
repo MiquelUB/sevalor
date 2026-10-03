@@ -272,7 +272,7 @@ async def obtenir_dades_empresa(
         "nif": empresa.nif,
         "vertical": empresa.vertical,
         "magatzem_families_default": empresa.magatzem_families_default,
-        "agent_prompt_system": empresa.agent_prompt_system, 
+        "agent_prompt_system": empresa.agent_prompt_system,
         "adreca": empresa.adreca,
         "subdomini": empresa.subdomini,
         "primari_hsl": empresa.primari_hsl,
@@ -318,7 +318,6 @@ async def actualitzar_dades_empresa(
         empresa.subdomini = payload.subdomini
 
     await db.commit()
-    await db.refresh(empresa)
 
     return {"status": "OK", "missatge": "Dades de l'empresa actualitzades correctament"}
 
@@ -382,7 +381,6 @@ async def actualitzar_marca_camaleonica(
     empresa.accent_hsl = payload.accent_hsl
 
     await db.commit()
-    await db.refresh(empresa)
 
     return {
         "status": "OK",
@@ -478,7 +476,6 @@ async def aprovar_paleta_adn(
     empresa.adn_paleta_proposta = None
 
     await db.commit()
-    await db.refresh(empresa)
 
     return {
         "status": "OK",
@@ -649,7 +646,6 @@ async def crear_usuari_administratiu(
 
     db.add(nou_usuari)
     await db.commit()
-    await db.refresh(nou_usuari)
 
     return {
         "status": "OK",
@@ -719,7 +715,6 @@ async def actualitzar_usuari_administratiu(
         usuari.slot_jornada_id = payload.slot_jornada_id
 
     await db.commit()
-    await db.refresh(usuari)
 
     return {"status": "OK", "missatge": "Usuari actualitzat correctament"}
 
@@ -970,7 +965,6 @@ async def crear_slot_jornada(
 
     db.add(nou_slot)
     await db.commit()
-    await db.refresh(nou_slot)
 
     return {"status": "OK", "id": str(nou_slot.id), "nom": nou_slot.nom}
 

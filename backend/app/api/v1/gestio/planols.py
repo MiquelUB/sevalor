@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db_with_tenant_context
 from app.core.security import require_roles
-from app.models.models import CapaVectorial, CarpetaPlanol, PlanolBase, CapaAnotacio
+from app.models.models import CapaAnotacio, CapaVectorial, CarpetaPlanol, PlanolBase
 from app.workers.tasks import generar_informe_planol_pdf
 
 router = APIRouter(
@@ -343,7 +343,6 @@ async def exportar_planol_pdf(
     generar_informe_planol_pdf.delay(str(planol_id), str(empresa_id))
 
     return {"estat": "EN_PROCES", "missatge": "El PDF s'està generant a Celery"}
-from datetime import datetime
 
 class CapaAnotacioCreate(BaseModel):
     ordre_treball_id: uuid.UUID
@@ -401,6 +400,5 @@ async def crear_anotacio(
     )
     db.add(nova_anotacio)
     await db.commit()
-    await db.refresh(nova_anotacio)
     return nova_anotacio
 

@@ -1,7 +1,6 @@
 import logging
-import secrets
 import uuid
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -92,6 +91,7 @@ async def llistar_tenants(
     return resultat
 
 import re
+
 
 def validar_nif_cif_nie(doc: str) -> bool:
     doc = doc.upper().replace("-", "").replace(" ", "")
@@ -196,6 +196,7 @@ async def crear_nou_tenant(
         directoris_status = "SKIPPED"
 
     import jwt
+
     from app.core.config import settings
     expire = datetime.now(timezone.utc) + timedelta(hours=24)
     payload_jwt = {
@@ -346,13 +347,14 @@ async def impersonate_tenant(
         emp_uuid = uuid.UUID(empresa_id)
     except ValueError:
         raise HTTPException(status_code=400, detail="UUID invàlid")
-    
+
     emp_res = await db.execute(select(Empresa).where(Empresa.id == emp_uuid))
     empresa = emp_res.scalars().first()
     if not empresa:
         raise HTTPException(status_code=404, detail="Empresa no trobada")
 
     import jwt
+
     from app.core.config import settings
     expire = datetime.now(timezone.utc) + timedelta(hours=2)
     payload = {
@@ -365,9 +367,9 @@ async def impersonate_tenant(
         "totp_activat": claims.get("totp_activat", True),
         "ip_allowlist": claims.get("ip_allowlist", [])
     }
-    
+
     token = jwt.encode(payload, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
-    
+
     return {
         "access_token": token,
         "token_type": "bearer",
@@ -394,17 +396,18 @@ async def destroy_tenant(
 
     # Modificar estat
     emp.estat_pagament = "ELIMINAT"
-    
+
     # Generar Certificat (ReportLab)
     import os
     from datetime import datetime, timezone
+
     from reportlab.lib.pagesizes import A4
     from reportlab.pdfgen import canvas
-    
+
     cert_dir = f"/tmp/sevalor_docs/{tenant_id}/certificats"
     os.makedirs(cert_dir, exist_ok=True)
     pdf_path = os.path.join(cert_dir, f"certificat_destruccio_{tenant_id}.pdf")
-    
+
     c = canvas.Canvas(pdf_path, pagesize=A4)
     c.drawString(100, 750, "CERTIFICAT DE DESTRUCCIÓ DE DADES")
     c.drawString(100, 730, f"Tenant ID: {tenant_id}")
@@ -416,7 +419,7 @@ async def destroy_tenant(
     # Queue celery task
     from app.workers.tasks import purgar_dades_tenant_destruit
     purgar_dades_tenant_destruit.apply_async(args=[tenant_id], countdown=30*24*3600)
-    
+
     await db.commit()
 
     return {

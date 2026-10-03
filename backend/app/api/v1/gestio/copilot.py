@@ -241,8 +241,9 @@ TOOLS_SCHEMA = [
 # Funcions d'Execució d'Eines (Tools Execution Engine)
 
 async def execute_tool_get_unbilled_money(db: AsyncSession, empresa_id: uuid.UUID, mes: int = None) -> dict:
-    from sqlalchemy import select, func, and_
-    from app.models.models import OrdreTreball, FullaPicking, LiniaPicking, Article, FacturaLinia
+    from sqlalchemy import and_, func, select
+
+    from app.models.models import Article, FacturaLinia, FullaPicking, LiniaPicking, OrdreTreball
 
     # Cost material instal·lat en OT's tancades / facturades vs no facturades
     # 1. Cost material de OTs "TANCADA"
@@ -250,7 +251,7 @@ async def execute_tool_get_unbilled_money(db: AsyncSession, empresa_id: uuid.UUI
     if mes:
         # PostgreSQL extract
         condicions_ot.append(func.extract('month', OrdreTreball.data_planificacio) == mes)
-        
+
     stmt_cost = (
         select(func.sum(LiniaPicking.quantitat_carregada_pick_in * Article.preu_venda))
         .join(FullaPicking, LiniaPicking.picking_id == FullaPicking.id)
@@ -271,7 +272,7 @@ async def execute_tool_get_unbilled_money(db: AsyncSession, empresa_id: uuid.UUI
     facturat_real = res_fact.scalar() or 0.0
 
     diferencia = float(cost_materials_esperat) - float(facturat_real)
-    
+
     return {
         "trobat": True,
         "cost_materials_consumit_pvp": float(cost_materials_esperat),
@@ -283,13 +284,14 @@ async def execute_tool_get_unbilled_money(db: AsyncSession, empresa_id: uuid.UUI
 
 async def execute_tool_replanificar_ot(db: AsyncSession, empresa_id: uuid.UUID, codi_ot: str, nova_data: str) -> dict:
     from sqlalchemy import select
+
     from app.models.models import OrdreTreball
     q = select(OrdreTreball).where(OrdreTreball.empresa_id == empresa_id, OrdreTreball.codi == codi_ot)
     res = await db.execute(q)
     ot = res.scalar_one_or_none()
     if not ot:
         return {"trobat": False, "missatge": f"No s'ha trobat l'ordre de treball {codi_ot}."}
-    
+
     # En lloc de canviar-ho directament, retornem una proposta
     return {
         "trobat": True,
@@ -381,13 +383,13 @@ async def execute_tool_get_vehicle_info(db: AsyncSession, empresa_id: uuid.UUID,
             "matricula_cercada": matricula,
             "missatge": f"No s'ha trobat cap vehicle amb la matrícula '{matricula}'."
         }
-    
+
     from app.models.models import DocumentFlota
     stmt_docs = select(DocumentFlota).where(DocumentFlota.vehicle_id == v.id, DocumentFlota.empresa_id == empresa_id)
     res_docs = await db.execute(stmt_docs)
     docs = res_docs.scalars().all()
     docs_list = [{"tipus": d.tipus_document, "nom_arxiu": d.nom_arxiu, "data": d.data_document.isoformat() if d.data_document else None} for d in docs]
-    
+
     return {
         "trobat": True,
         "vehicle_id": str(v.id),
@@ -689,7 +691,7 @@ async def cridar_lm_studio_amb_tools(
     )
     if agent_prompt_system:
         system_prompt += f" Directrius Específiques de l'Empresa: {agent_prompt_system}. "
-        
+
     system_prompt += (
         "Tens accés a eines internes del sistema (tools) per consultar dades en temps real (estoc, vehicles, garanties, fitxa 360). "
         "Quan l'usuari pregunti sobre estoc, vehicles, proximitat o clients, utilitza les eines proporcionades abans de respondre. "
@@ -1229,7 +1231,6 @@ async def peritar_incidencia_multimodal(
 
     db.add(memo)
     await db.commit()
-    await db.refresh(memo)
 
     return {
         "id": str(memo.id),
@@ -1289,7 +1290,6 @@ async def validar_memorandum_enginyer(
     memo.data_validacio = datetime.now(timezone.utc)
 
     await db.commit()
-    await db.refresh(memo)
 
     return {
         "id": str(memo.id),
@@ -1449,7 +1449,6 @@ async def reconciliar_post_obra(
         auditoria.pressupost_corregit_proposta = pressupost_corregit
 
     await db.commit()
-    await db.refresh(auditoria)
 
     return {
         "auditoria_id": str(auditoria.id),
@@ -1501,7 +1500,6 @@ async def aprovar_pressupost_corregit_enginyer(
         auditoria.estat = "REBUTJAT"
 
     await db.commit()
-    await db.refresh(auditoria)
 
     return {
         "auditoria_id": str(auditoria.id),
@@ -1804,24 +1802,25 @@ async def confirmar_accio_copilot(
 ):
     empresa_id = uuid.UUID(claims["empresa_id"])
     if dades.action == "confirm_replanificar_ot":
-        from app.models.models import OrdreTreball
         from sqlalchemy import update
+
+        from app.models.models import OrdreTreball
         ot_id = uuid.UUID(dades.payload["ot_id"])
         nova_data_str = dades.payload["nova_data"]
         try:
             nova_data = date.fromisoformat(nova_data_str)
         except:
             raise HTTPException(400, "Format de data invàlid. Esperat YYYY-MM-DD.")
-            
+
         stmt = update(OrdreTreball).where(
-            OrdreTreball.id == ot_id, 
+            OrdreTreball.id == ot_id,
             OrdreTreball.empresa_id == empresa_id
         ).values(data_planificacio=nova_data)
-        
+
         await db.execute(stmt)
         await db.commit()
         return {"success": True, "missatge": f"S'ha replanificat l'OT correctament al {nova_data_str}."}
-    
+
     raise HTTPException(400, "Acció desconeguda o no suportada.")
 
 
@@ -1854,8 +1853,9 @@ async def generar_pressupost_intelligent(
     paraules_clau = payload.descripcio_tasca.lower().split()[:5]  # Primeres 5 paraules clau
 
     # Cerca feines similars tancades dels darrers 365 dies
-    from sqlalchemy import and_, extract
     from datetime import timedelta
+
+    from sqlalchemy import and_
 
     data_limit = datetime.now(timezone.utc) - timedelta(days=365)
     stmt = (

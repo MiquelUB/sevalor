@@ -134,7 +134,7 @@ async def llistar_feines_mapa(
                         lat, lng = parts[0], parts[1]
                 except (ValueError, TypeError):
                     pass
-        
+
         if lat is None or lng is None:
             continue
 
@@ -207,7 +207,6 @@ async def agendar_feina(
     ordre.versio = ordre.versio + 1
 
     await db.commit()
-    await db.refresh(ordre)
 
     return AgendarFeinaResponse(
         id=ordre.id,
@@ -310,7 +309,6 @@ async def drop_and_go(
     ordre.versio = ordre.versio + 1
 
     await db.commit()
-    await db.refresh(ordre)
     return {"status": "ok", "versio": ordre.versio, "cap_de_colla_id": ordre.cap_de_colla_id, "data_planificacio": ordre.data_planificacio}
 
 
@@ -360,7 +358,6 @@ async def tancar_obra(
     ordre.versio = (ordre.versio or 1) + 1
 
     await db.commit()
-    await db.refresh(ordre)
     return {
         "status": "TANCADA",
         "ordre_id": str(ordre.id),

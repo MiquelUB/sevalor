@@ -1,5 +1,4 @@
 import uuid
-from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
@@ -8,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db_with_tenant_context
 from app.core.security import require_roles
-from app.models.models import PlanolBase, CapaVectorial
+from app.models.models import CapaVectorial, PlanolBase
 
 router = APIRouter(
     prefix="/operari/planols",
@@ -37,14 +36,14 @@ async def crear_capa_operari(
 ):
     """Operari crea una capa sobre un plànol (Spec 017 RF-13.1)."""
     empresa_id = request.state.empresa_id
-    
+
     planol_res = await db.execute(select(PlanolBase).where(
         PlanolBase.id == planol_id,
         PlanolBase.empresa_id == uuid.UUID(empresa_id)
     ))
     if not planol_res.scalars().first():
         raise HTTPException(status_code=404, detail="Plànol no trobat")
-    
+
     nova_capa = CapaVectorial(
         empresa_id=uuid.UUID(empresa_id),
         planol_id=planol_id,
@@ -54,8 +53,7 @@ async def crear_capa_operari(
     )
     db.add(nova_capa)
     await db.commit()
-    await db.refresh(nova_capa)
-    
+
     return CapaVectorialResponse(
         id=nova_capa.id,
         nom=nova_capa.nom,

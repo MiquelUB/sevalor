@@ -1,7 +1,10 @@
 import uuid
 from typing import Optional
+
 from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.models.models import MemorandumTecnicCopilot
+
 
 class IAOcrNotImplementedError(NotImplementedError):
     pass
@@ -25,11 +28,11 @@ async def generar_memorandum_tecnic(
         # Zero Mock Data: Aixecarem un error si intentem usar OCR fins que estigui implementat,
         # o ho marcarem com a pendent d'auditoria si el flux ho requereix.
         analisi_visual = "PENDENT_AUDITORIA"
-    
+
     # Lògica bàsica de dictamen (En el futur serà generada per un LLM)
     dictamen = "EXTRA_FACTURABLE"
     motiu = "S'ha generat un memoràndum provisional. Pendent d'anàlisi de LLM per determinar la responsabilitat exacta."
-    
+
     if "no imputable" in transcripcio.lower() or "garantia" in transcripcio.lower():
         dictamen = "COST_NO_IMPUTABLE"
         motiu = "Possible incidència coberta per garantia segons la transcripció."
@@ -46,9 +49,8 @@ async def generar_memorandum_tecnic(
         motiu_dictamen=motiu,
         estat="PENDENT_REVISIO"
     )
-    
+
     db.add(nou_memo)
     await db.commit()
-    await db.refresh(nou_memo)
-    
+
     return nou_memo

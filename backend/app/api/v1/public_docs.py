@@ -1,10 +1,12 @@
 import uuid
+
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
-from app.core.db import get_db
-from app.models.models import Usuari, Empresa
 from fastapi.responses import HTMLResponse
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.db import get_db
+from app.models.models import Empresa, Usuari
 
 router = APIRouter(
     prefix="/public",
@@ -21,21 +23,21 @@ async def get_identificacio_operari(operari_id: uuid.UUID, db: AsyncSession = De
     stmt = select(Usuari).where(Usuari.id == operari_id)
     result = await db.execute(stmt)
     operari = result.scalars().first()
-    
+
     if not operari:
         raise HTTPException(status_code=404, detail="Operari no trobat o no acreditat")
-        
+
     stmt_emp = select(Empresa).where(Empresa.id == operari.empresa_id)
     result_emp = await db.execute(stmt_emp)
     empresa = result_emp.scalars().first()
-    
+
     if not empresa:
         raise HTTPException(status_code=404, detail="Empresa no trobada")
 
     # Si l'operari no és operari
     if operari.rol != "OPERARI" and operari.rol != "ENGINYER" and operari.rol != "BOSS":
         pass # Ho deixem obert perquè qualsevol treballador es pugui acreditar
-        
+
     nom_operari = f"{operari.nom or ''} {operari.cognoms or ''}".strip()
     dni = getattr(operari, "dni", "XXX-XXXX-XX")
 

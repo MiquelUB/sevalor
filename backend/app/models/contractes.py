@@ -51,7 +51,7 @@ class ContractesMantenimentFinques(Base):
     contracte_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("contractes_manteniment.id", ondelete="CASCADE"), nullable=False)
     finca_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("finques.id", ondelete="CASCADE"), nullable=False)
     data_assignacio: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), server_default=text('now()'))
-    
+
     __table_args__ = (
         UniqueConstraint("contracte_id", "finca_id", name="uq_contracte_finca"),
     )

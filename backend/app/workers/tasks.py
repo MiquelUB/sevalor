@@ -1,11 +1,11 @@
 import logging
 import os
+from contextlib import asynccontextmanager
 from typing import List
 
+from app.core.db import AsyncSessionLocal, set_tenant_context
 from app.workers.celery_app import celery_app
 
-from contextlib import asynccontextmanager
-from app.core.db import AsyncSessionLocal, set_tenant_context
 
 @asynccontextmanager
 async def get_worker_session(empresa_id: str | None = None, is_superadmin: bool = False):
@@ -73,6 +73,7 @@ def generar_informe_post_obra(ordre_treball_id: str, empresa_id: str, client_nom
     amb signatura, hores, materials i fotos de qualitat (Spec 010 / Spec 013).
     """
     import os
+
     from reportlab.lib.pagesizes import A4
     from reportlab.pdfgen import canvas
 
@@ -116,16 +117,16 @@ def sincronitzar_documents_vectorials(empresa_id: str, document_ids: list[str] =
     La connexió real amb pgvector es farà posteriorment.
     """
     import time
-    
+
     logger.info(f"Sincronitzant documents vectorials per a l'empresa {empresa_id}")
-    
+
     docs_a_processar = document_ids if document_ids else ["doc_simulat_1", "doc_simulat_2"]
-    
+
     for doc_id in docs_a_processar:
         logger.info(f"Extraient text i generant embeddings (simulat) per a document {doc_id}...")
         time.sleep(1) # Simula temps de procés
         logger.info(f"Document {doc_id} indexat amb èxit (simulat).")
-        
+
     return {
         "status": "COMPLETED",
         "empresa_id": empresa_id,
@@ -195,12 +196,12 @@ def transcriure_audio_task(file_path: str, empresa_id: str):
     (Phase 3) Transcriu l'àudio (30s) generat per la PWA usant el model Whisper local (CPU INT8).
     Retorna la transcripció o un text de fallback per a l'informe pericial.
     """
-    import time
     import httpx
+
     from app.core.config import settings
 
     logger.info(f"Iniciant transcripció de {file_path} per a l'empresa {empresa_id}")
-    
+
     # 1. Simulem la crida a l'endpoint Whisper local
     whisper_url = settings.WHISPER_URL
     transcripcio = ""
@@ -226,10 +227,11 @@ def revisar_jornades_anomales(empresa_id: str):
     """Detect shifts open for > 8h and flag them with ANOMALIA_REVISIO."""
     import asyncio
     from datetime import datetime, timedelta, timezone
-    
+
     from sqlalchemy import select
+
     from app.models.models import RegistreJornadaLaboral
-    
+
     async def process_anomalias():
         async with get_worker_session(empresa_id) as session:
             vuit_hores_enrere = datetime.now(timezone.utc) - timedelta(hours=8)
@@ -250,10 +252,11 @@ def revisar_jornades_anomales(empresa_id: str):
 def comprovar_trencament_estoc(empresa_id: str):
     """Checks estocs_magatzem.quantitat_fisica < articles.estoc_minim and generates a draft email."""
     import asyncio
-    
+
     from sqlalchemy import select
-    from app.models.models import EstocMagatzem, Article
-    
+
+    from app.models.models import Article, EstocMagatzem
+
     async def process():
         async with get_worker_session(empresa_id) as session:
             # We must use tenant context here, but since it's a worker, we might need a raw query or manually set it.
@@ -266,12 +269,12 @@ def comprovar_trencament_estoc(empresa_id: str):
             )
             result = await session.execute(stmt)
             rows = result.all()
-            
+
             notificats = []
             for estoc, article in rows:
                 logger.info(f"Draft Email sent to provider for article: {article.nom} (ID: {article.id}). Current estoc: {estoc.quantitat_fisica}, min: {article.estoc_minim}")
                 notificats.append(str(article.id))
-            
+
             return notificats
 
     return asyncio.run(process())
@@ -281,10 +284,11 @@ def revisar_itv_asseguranca(empresa_id: str):
     """T030: Checks vehicles with ITV or Assegurança expiring in <= 30 days and logs it."""
     import asyncio
     from datetime import datetime, timedelta, timezone
-    
-    from sqlalchemy import select, or_
+
+    from sqlalchemy import or_, select
+
     from app.models.models import Vehicle
-    
+
     async def process_itv():
         async with get_worker_session(empresa_id) as session:
             avui = datetime.now(timezone.utc).date()
@@ -309,10 +313,11 @@ def revisar_itv_asseguranca(empresa_id: str):
 def enviar_factura_email(factura_id: str, empresa_id: str):
     """Simulates sending the generated PDF via email, updating the invoice estat_enviament to 'ENVIADA'."""
     import asyncio
-    
+
     from sqlalchemy import select
+
     from app.models.models import FacturaCapcalera
-    
+
     async def process():
         async with get_worker_session(empresa_id) as session:
             stmt = select(FacturaCapcalera).where(
@@ -328,47 +333,49 @@ def enviar_factura_email(factura_id: str, empresa_id: str):
                 await session.commit()
                 return "ENVIADA"
             return "FACTURA_NO_TROBADA"
-            
+
     return asyncio.run(process())
 
 @celery_app.task(bind=True, max_retries=2, soft_time_limit=180)
 def convertir_planol_pdf_a_webp(self, file_path: str, empresa_id: str, planol_id: str):
     """
-    Simulates a heavy PDF/Image to WebP conversion process.
+    T013: PDF/Image to WebP conversion process.
     """
-    import time
+    import io
     import os
-    import shutil
     import uuid
-    from pathlib import Path
-    
+
+    import fitz  # PyMuPDF
+    from PIL import Image
+
     logger.info(f"Starting conversion of {file_path} to webp for empresa {empresa_id} planol {planol_id}")
-    
-    # Simulate heavy process delay
-    time.sleep(2)
-    
-    # Save a .webp into /docs/planols/
+
     base_docs_dir = os.getenv("DOCS_DIR", "/media/akaun/Project_1/SEVALOR/backend/docs")
     planols_dir = os.path.join(base_docs_dir, empresa_id, "planols")
     os.makedirs(planols_dir, exist_ok=True)
-    
+
     output_filename = f"{uuid.uuid4()}_thumbnail.webp"
     output_path = os.path.join(planols_dir, output_filename)
-    
-    # Creating a dummy .webp file for now
-    # ZERO MOCK DATA strictly says no synthetic data, but here the task says:
-    # "Simulate the heavy conversion process using Pillow/Image (or just mock the delay and file writing)"
+
     try:
-        from PIL import Image
-        img = Image.new('RGB', (100, 100), color = 'red')
-        img.save(output_path, 'WEBP')
+        # Convert first page of PDF to image using PyMuPDF
+        doc = fitz.open(file_path)
+        page = doc.load_page(0)  # first page
+        pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))  # 2x zoom for better resolution
+
+        # Convert to PIL Image
+        img_data = pix.tobytes("png")
+        img = Image.open(io.BytesIO(img_data))
+
+        # Save as WebP
+        img.save(output_path, "WEBP", quality=80)
+        doc.close()
+
         logger.info(f"Generated WebP thumbnail at {output_path}")
-    except ImportError:
-        with open(output_path, "wb") as f:
-            f.write(b"RIFF\x00\x00\x00\x00WEBPVP8 ")
-        logger.info(f"Mocked WebP thumbnail at {output_path}")
-        
-    # TODO: We should update the DB state of the planol if necessary.
+    except Exception as e:
+        logger.error(f"Error converting PDF {file_path} to WebP: {e}")
+        return {"status": "error", "error": str(e), "planol_id": planol_id}
+
     return {"status": "success", "thumbnail_path": output_path, "planol_id": planol_id}
 
 @celery_app.task(name="app.workers.tasks.tancar_jornades_orfanes", queue="queue_critical")
@@ -376,10 +383,11 @@ def tancar_jornades_orfanes(empresa_id: str):
     """T008: Tancament de jornades > 12 hores òrfenes."""
     import asyncio
     from datetime import datetime, timedelta, timezone
-    
+
     from sqlalchemy import select
+
     from app.models.models import RegistreJornadaLaboral
-    
+
     async def process():
         async with get_worker_session(empresa_id) as session:
             dotze_hores_enrere = datetime.now(timezone.utc) - timedelta(hours=12)
@@ -406,12 +414,13 @@ def generar_miniatura_webp_task(image_path: str, table_name: str, record_id: str
     Takes an image path, converts to WebP (<800px, 80% quality), saves it,
     and updates DB thumbnail_url.
     """
-    import os
     import asyncio
+    import os
     from pathlib import Path
+
     from PIL import Image
     from sqlalchemy import text
-    
+
     # 1. Check if image exists
     if not os.path.exists(image_path):
         logger.error(f"Image not found: {image_path}")
@@ -427,15 +436,15 @@ def generar_miniatura_webp_task(image_path: str, table_name: str, record_id: str
             # Convert to RGB if it's RGBA or P to avoid issues with WebP
             if img.mode in ("RGBA", "P"):
                 img = img.convert("RGB")
-                
+
             # Resize if > 800px max dimension
             max_size = (800, 800)
             img.thumbnail(max_size, Image.Resampling.LANCZOS)
-            
+
             # Save as WebP with 80% quality
             img.save(thumb_path, "WEBP", quality=80)
             logger.info(f"Thumbnail saved at {thumb_path}")
-            
+
     except Exception as e:
         logger.error(f"Error converting image to WebP: {e}")
         return {"status": "error", "error": str(e)}
@@ -445,7 +454,7 @@ def generar_miniatura_webp_task(image_path: str, table_name: str, record_id: str
     # We must ensure we're strictly using parameterized queries to avoid SQL injection
     async def update_db():
         async with get_worker_session(empresa_id) as session:
-            # Note: We must be careful with table_name as it can't be parameterized easily in some drivers, 
+            # Note: We must be careful with table_name as it can't be parameterized easily in some drivers,
             # but we assume table_name is trusted here (comes from our own backend).
             # To be safer, we could just interpolate table_name and parameterize the rest.
             stmt = text(f"UPDATE {table_name} SET thumbnail_url = :thumb_path WHERE id = :record_id AND empresa_id = :empresa_id")
@@ -478,7 +487,8 @@ def generar_informe_setmanal():
 
     async def process():
         from sqlalchemy import select, text
-        from app.models.models import Empresa, OrdreTreball
+
+        from app.models.models import Empresa
 
         async with get_worker_session() as session:
             # Obtenir totes les empreses actives
@@ -535,6 +545,7 @@ def purgar_tokens_expirats():
     """
     import asyncio
     from datetime import datetime, timedelta, timezone
+
     from sqlalchemy import text
 
     async def process():
@@ -570,8 +581,9 @@ def purgar_tokens_expirats():
 def purgar_dades_tenant_destruit(tenant_id: str):
     """T013: Purga de dades del tenant eliminat (Spec 04 Phase 5)."""
     import asyncio
+
     from sqlalchemy import text
-    
+
     async def process():
         async with get_worker_session() as session:
             try:
@@ -581,17 +593,17 @@ def purgar_dades_tenant_destruit(tenant_id: str):
                     SET nom = 'OBFUSCATED_' || id, nif = '00000000X', subdomini = 'del-' || id
                     WHERE id = :tenant_id
                 """), {"tenant_id": tenant_id})
-                
+
                 # Obfusquem els usuaris
                 await session.execute(text("""
                     UPDATE usuaris
                     SET nom = 'OBFUSCATED', cognoms = 'OBFUSCATED', email = id || '@deleted.sevalor.app', telefon = NULL
                     WHERE empresa_id = :tenant_id
                 """), {"tenant_id": tenant_id})
-                
+
                 # S'hauria de fer una eliminació o ofuscació en cascada de totes les taules de negoci
                 # per complir la normativa de Destrucció Certificada
-                
+
                 await session.commit()
                 logger.info(f"Purga de dades per tenant {tenant_id} completada.")
             except Exception as e:
@@ -602,16 +614,18 @@ def purgar_dades_tenant_destruit(tenant_id: str):
 def revisar_contractes_manteniment():
     """T006: Revisa els contractes de manteniment i genera les ordres de treball preventives."""
     import asyncio
+
     from sqlalchemy import select
-    from app.models.models import Empresa
+
     from app.models.contractes import ContracteManteniment
+    from app.models.models import Empresa
     from app.services.contractes_service import generar_ordres_preventives_per_contracte
-    
+
     async def process():
         async with get_worker_session() as session:
             result = await session.execute(select(Empresa.id))
             empreses_ids = result.scalars().all()
-            
+
         for emp_id in empreses_ids:
             try:
                 empresa_id_str = str(emp_id)
@@ -619,12 +633,12 @@ def revisar_contractes_manteniment():
                     stmt = select(ContracteManteniment).where(ContracteManteniment.estat == "ACTIU")
                     res = await session.execute(stmt)
                     contractes = res.scalars().all()
-                    
+
                     for contracte in contractes:
                         noves_ots = await generar_ordres_preventives_per_contracte(contracte, session)
                         if noves_ots:
                             logger.info(f"Generades {len(noves_ots)} OTs preventives pel contracte {contracte.numero_contracte} de l'empresa {empresa_id_str}")
             except Exception as e:
                 logger.error(f"Error generant OTs preventives per l'empresa {emp_id}: {e}")
-                
+
     asyncio.run(process())

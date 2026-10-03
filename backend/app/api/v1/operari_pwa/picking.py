@@ -63,7 +63,6 @@ async def crear_fulla_picking_operari(
     )
     db.add(fulla)
     await db.commit()
-    await db.refresh(fulla)
 
     return FullaPickingResponse(
         id=fulla.id,
@@ -102,7 +101,6 @@ async def afegir_linia_picking_operari(
     )
     db.add(linia)
     await db.commit()
-    await db.refresh(linia)
 
     return LiniaPickingResponse(
         id=linia.id,
@@ -154,7 +152,6 @@ async def actualitzar_linia_picking_operari(
         linia.quantitat_mermada = payload.quantitat_mermada
 
     await db.commit()
-    await db.refresh(linia)
 
     pick_in = float(linia.quantitat_carregada_pick_in or 0.0)
     pick_out = float(linia.quantitat_retornada_pick_out or 0.0)

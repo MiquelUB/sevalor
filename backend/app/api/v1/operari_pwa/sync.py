@@ -1,16 +1,15 @@
 import logging
+import uuid
 from typing import Any, Dict, List, Optional
-from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
-from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db_with_tenant_context
 from app.core.security import get_current_user_claims
-from app.models.models import OrdreTreball, Incidencia
-import uuid
+from app.models.models import Incidencia, OrdreTreball
 
 router = APIRouter(prefix="/sync", tags=["PWA Sync"])
 logger = logging.getLogger(__name__)
@@ -41,10 +40,10 @@ async def bulk_sync_push(
         try:
             if accio.accio == "FITXAR_JORNADA":
                 logger.info(f"Processant FITXAR_JORNADA per {accio.id}")
-                
+
             elif accio.accio == "CREAR_TIQUET":
                 logger.info(f"Processant CREAR_TIQUET per {accio.id}")
-                
+
             elif accio.accio == "REPORTAR_INCIDENCIA":
                 logger.info(f"Processant REPORTAR_INCIDENCIA per {accio.id}")
                 ambit = accio.payload.get("ambit", "GENERAL")
@@ -52,7 +51,7 @@ async def bulk_sync_push(
                 text_obs = accio.payload.get("text_observacions", accio.payload.get("descripcio", ""))
                 audio_path = accio.payload.get("audio_path")
                 foto_path = accio.payload.get("foto_path")
-                
+
                 nova_incidencia = Incidencia(
                     empresa_id=uuid.UUID(claims["empresa_id"]),
                     operari_id=uuid.UUID(claims["sub"]),
@@ -63,7 +62,7 @@ async def bulk_sync_push(
                     foto_path=foto_path
                 )
                 db.add(nova_incidencia)
-                
+
             elif accio.accio == "FINALITZAR_ORDRE":
                 logger.info(f"Processant FINALITZAR_ORDRE per {accio.id}")
                 # Exemple de validació de timestamp (CRDT/Conflict Resolution)
@@ -71,14 +70,14 @@ async def bulk_sync_push(
                 if ordre_id and accio.timestamp:
                     result = await db.execute(select(OrdreTreball).where(OrdreTreball.id == ordre_id))
                     ordre = result.scalars().first()
-                    
+
                     if ordre:
                         # Convertim el datetime a timestamp (ms)
                         db_ts = int(ordre.updated_at.timestamp() * 1000) if ordre.updated_at else 0
                         if accio.timestamp < db_ts:
                             logger.warning(f"Conflicte detectat per a ordre {ordre_id}. Client ts: {accio.timestamp}, DB ts: {db_ts}")
                             raise HTTPException(status_code=409, detail=f"Conflicte detectat a l'ordre {ordre_id}. DB és més recent.")
-                            
+
             else:
                 logger.warning(f"Acció desconeguda: {accio.accio}")
 
@@ -111,8 +110,9 @@ async def get_hud_stats(
     Retorna les estadístiques diàries per al HUD de l'operari.
     (S'executa quan hi ha connectivitat).
     """
-    from sqlalchemy import func
     import datetime
+
+    from sqlalchemy import func
 
     avui = datetime.date.today()
     operari_id_uuid = uuid.UUID(claims["sub"])
@@ -122,19 +122,19 @@ async def get_hud_stats(
         OrdreTreball.cap_de_colla_id == operari_id_uuid,
         OrdreTreball.data_planificacio == avui
     ).group_by(OrdreTreball.estat)
-    
+
     result_ordres = await db.execute(query_ordres)
     ordres = result_ordres.all()
-    
+
     ordres_pendents = sum(count for estat, count in ordres if estat == "PENDENT")
     ordres_completades = sum(count for estat, count in ordres if estat == "COMPLETADA")
-    
+
     # Incidències creades avui per l'operari
     query_inc = select(func.count(Incidencia.id)).where(
         Incidencia.operari_id == operari_id_uuid,
         func.date(Incidencia.created_at) == avui
     )
-    
+
     result_inc = await db.execute(query_inc)
     incidencies_avui = result_inc.scalar() or 0
 

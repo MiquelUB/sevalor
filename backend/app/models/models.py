@@ -266,26 +266,26 @@ class Vehicle(Base):
     polissa_asseguranca: Mapped[Optional[str]] = mapped_column(String(100))
     carnet_necessari: Mapped[str] = mapped_column(String(10), default="B", server_default="B")
     historial_reparacions: Mapped[Optional[str]] = mapped_column(Text)
-    
+
     # Spec 006: Rènting i controls operatius
     regim_adquisicio: Mapped[str] = mapped_column(String(30), default="PROPIETAT", server_default="PROPIETAT")
     renting_limit_km: Mapped[Optional[int]] = mapped_column(Integer)
     tacograf_necessari: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
     data_propera_descarrega_tacograf: Mapped[Optional[date]] = mapped_column(Date)
-    
+
     # Vehicles EV / PHEV
     capacitat_bateria_kwh: Mapped[Optional[float]] = mapped_column(Numeric(6,2))
     soh_bateria: Mapped[Optional[float]] = mapped_column(Numeric(5,2))
-    
+
     # Capacitats físiques
     places: Mapped[int] = mapped_column(Integer, default=5, server_default=text('5'))
     pes_maxim_autoritzat: Mapped[int] = mapped_column(Integer, default=3500, server_default=text('3500'))
-    
+
     # Desnormalització de Consums (Batch Celery)
     consum_l_100km: Mapped[Optional[float]] = mapped_column(Numeric(5,2))
     consum_mitjana_historica: Mapped[Optional[float]] = mapped_column(Numeric(5,2))
     consum_adblue_litres: Mapped[float] = mapped_column(Numeric(10,2), default=0.0, server_default=text('0'))
-    
+
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), server_default=text('now()'))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), server_default=text('now()'))
 
@@ -880,11 +880,11 @@ class Pressupost(Base):
     empresa_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("empreses.id", ondelete="CASCADE"), nullable=False)
     client_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("clients.id", ondelete="RESTRICT"), nullable=False)
     numero: Mapped[str] = mapped_column(String(30), nullable=False)
-    
+
     total: Mapped[float] = mapped_column(Numeric(12, 2), default=0.00, server_default=text('0'))
     estat: Mapped[str] = mapped_column(String(20), default="PENDENT", server_default="PENDENT")  # PENDENT, APROVAT, REBUTJAT
     token_signatura: Mapped[Optional[str]] = mapped_column(String(100))  # Token de Telegram al aprovar
-    
+
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), server_default=text('now()'))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), server_default=text('now()'))
 

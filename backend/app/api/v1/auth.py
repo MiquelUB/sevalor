@@ -98,11 +98,11 @@ async def login_oficina(
             "exp": expire,
             "iat": datetime.now(timezone.utc),
         }
-        
+
         if usuari.rol.upper() == "SUPERADMIN":
             payload["totp_activat"] = usuari.totp_activat
             payload["ip_allowlist"] = usuari.ip_allowlist or []
-            
+
         token = jwt.encode(payload, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
 
         return TokenResponse(

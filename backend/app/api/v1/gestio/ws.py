@@ -1,7 +1,7 @@
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query
-from typing import Dict, List, Any
 import json
-import uuid
+from typing import Dict, List
+
+from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
 
 router = APIRouter(
     prefix="/gestio/ws",

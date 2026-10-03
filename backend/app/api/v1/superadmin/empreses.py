@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, Field, HttpUrl
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -35,7 +35,7 @@ async def update_camaleo_config(
         emp_uuid = uuid.UUID(empresa_id)
     except ValueError:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="UUID invàlid.")
-        
+
     # BOSS role validation: make sure BOSS is modifying their own company
     rol = claims.get("rol", "")
     token_emp_id = claims.get("empresa_id")

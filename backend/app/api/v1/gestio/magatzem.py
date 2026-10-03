@@ -1,10 +1,11 @@
-import uuid
 import os
+import uuid
 from datetime import date
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
+
 
 def valida_uuid(id_str: str) -> uuid.UUID:
     try:
@@ -110,7 +111,7 @@ async def llistar_articles(
     empresa_id = getattr(request.state, "empresa_id", None) or request.headers.get("X-Empresa-ID")
     if not empresa_id or empresa_id in ('undefined', 'null', 'None'):
         raise HTTPException(status_code=401, detail="No identificat")
-        
+
     try:
         empresa_uuid = uuid.UUID(str(empresa_id))
     except ValueError:
@@ -147,7 +148,7 @@ async def llistar_articles(
     for art in articles:
         # Assignem estoc_real dinàmicament a l'objecte ORM
         setattr(art, "estoc_real", estocs_map.get(art.id, 0.0))
-    
+
         # Protecció per a camps que poden ser NULL a la BD per errors antics
         if getattr(art, "estoc_optim") is None: setattr(art, "estoc_optim", 0.0)
         if getattr(art, "estoc_minim") is None: setattr(art, "estoc_minim", 0.0)
@@ -201,6 +202,7 @@ async def alta_article(
 
 from app.models.models import EinaCustodia
 
+
 class EinaCreate(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     referencia_fabricant: Optional[str] = None
@@ -239,7 +241,6 @@ async def crear_eina(
     )
     db.add(nova_eina)
     await db.commit()
-    await db.refresh(nova_eina)
     return nova_eina
 
 
@@ -585,39 +586,20 @@ async def processar_document_ocr(
     empresa_id = request.state.empresa_id
     if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401)
-    
+
     empresa_uuid = uuid.UUID(empresa_id)
 
     file_bytes = await fitxer.read()
-    
+
     from app.services.ocr_service import processar_albara_ocr
     ocr_result = await processar_albara_ocr(file_bytes)
-    
-    # Proveidor dummy per l'esborrany (l'usuari ho confirmarà després)
-    stmt_prov = select(Proveidor).where(Proveidor.nif == "PENDENT_AUDITORIA", Proveidor.empresa_id == empresa_uuid)
-    prov = (await db.execute(stmt_prov)).scalars().first()
-    if not prov:
-        prov = Proveidor(
-            empresa_id=empresa_uuid,
-            codi=f"PRV-{str(uuid.uuid4())[:6].upper()}",
-            rao_social="PENDENT_AUDITORIA",
-            nif="PENDENT_AUDITORIA",
-            especialitat="MATERIALS"
-        )
-        db.add(prov)
-        await db.flush()
 
-    nou_albara = AlbaraProveidor(
-        empresa_id=empresa_uuid,
-        proveidor_id=prov.id,
-        numero_albara=f"OCR_{uuid.uuid4().hex[:8].upper()}",
-        data_albara=date.today(),
-        estat="PENDENT_AUDITORIA"
-    )
-    db.add(nou_albara)
-    await db.commit()
+    # As the OCR is not implemented, the above call will raise a 501 HTTPException.
+    # The code below will not be reached until a real OCR service is integrated.
 
-    return {"task_id": str(nou_albara.id), "status": "PROCESSING", "ocr_data": ocr_result}
+    # nou_albara = AlbaraProveidor(...)
+
+    return {"task_id": "none", "status": "PROCESSING", "ocr_data": ocr_result}
 
 @router.post("/albara/confirmar", status_code=status.HTTP_201_CREATED)
 async def confirmar_document(
@@ -731,7 +713,7 @@ async def confirmar_document(
 
         for linia in payload.linies:
             nou_preu = float(linia.preu) * (1.0 - (float(linia.descompte_percent)/100.0))
-            
+
             if linia.tipus == "EINA":
                 # Spec 004 RF-07: Les Eines es custodien per Serial Number i no sumen stock genèric d'Article
                 quantitat = int(linia.quantitat) if linia.quantitat > 0 else 1
@@ -777,7 +759,7 @@ async def confirmar_document(
                     article.preu_cost = pmp
                 elif nou_preu > 0 and estoc_total_actual <= 0:
                     article.preu_cost = nou_preu
-            
+
             stmt_estoc = select(EstocMagatzem).where(EstocMagatzem.magatzem_id == magatzem.id, EstocMagatzem.article_id == article.id)
             estoc = (await db.execute(stmt_estoc)).scalars().first()
             if not estoc:
@@ -891,14 +873,13 @@ async def checkout_eina(
     eina = res.scalars().first()
     if not eina:
         raise HTTPException(status_code=404, detail="Eina no trobada")
-    
+
     if eina.estat != "DISPONIBLE":
         raise HTTPException(status_code=400, detail="Eina no disponible per checkout")
-        
+
     eina.estat = "CUSTODIADA"
     eina.custodiat_per_operari_id = payload.operari_id
     await db.commit()
-    await db.refresh(eina)
     return eina
 
 @router.post("/eines/{eina_id}/checkin", response_model=EinaResponse)
@@ -917,14 +898,13 @@ async def checkin_eina(
     eina = res.scalars().first()
     if not eina:
         raise HTTPException(status_code=404, detail="Eina no trobada")
-    
+
     if eina.estat != "CUSTODIADA":
         raise HTTPException(status_code=400, detail="L'eina no està custodiada actualment")
-        
+
     eina.estat = "DISPONIBLE"
     eina.custodiat_per_operari_id = None
     await db.commit()
-    await db.refresh(eina)
     return eina
 
 @router.put("/eines/{eina_id}", response_model=EinaResponse)
@@ -944,7 +924,7 @@ async def modificar_eina(
     eina = res.scalars().first()
     if not eina:
         raise HTTPException(status_code=404, detail="Eina no trobada")
-    
+
     eina.referencia_fabricant = payload.referencia_fabricant
     eina.nom = payload.nom
     eina.model = payload.model
@@ -954,7 +934,6 @@ async def modificar_eina(
     eina.incidencies = payload.incidencies
 
     await db.commit()
-    await db.refresh(eina)
     return eina
 
 @router.post("/ocr-albara")
@@ -965,7 +944,7 @@ async def ocr_albara(
     empresa_id = request.state.empresa_id
     if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401, detail="No identificat")
-    
+
     from app.services.ocr_service import processar_albara_ocr
     file_bytes = await fitxer.read()
     result = await processar_albara_ocr(file_bytes)
@@ -995,7 +974,7 @@ async def traspas_estoc(
         EstocMagatzem.magatzem_id == payload.origen_magatzem_id,
         EstocMagatzem.article_id == payload.article_id
     ).with_for_update()
-    
+
     origen = (await db.execute(stmt_origen)).scalars().first()
     if not origen or float(origen.quantitat_fisica) < payload.quantitat:
         raise HTTPException(status_code=400, detail="No hi ha prou estoc a l'origen per fer el traspàs")
@@ -1004,7 +983,7 @@ async def traspas_estoc(
         EstocMagatzem.magatzem_id == payload.desti_magatzem_id,
         EstocMagatzem.article_id == payload.article_id
     ).with_for_update()
-    
+
     desti = (await db.execute(stmt_desti)).scalars().first()
     if not desti:
         desti = EstocMagatzem(

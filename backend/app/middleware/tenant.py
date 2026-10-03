@@ -79,7 +79,7 @@ class TenantMiddleware(BaseHTTPMiddleware):
                     content={"detail": "Zero-Trust Segregation: SUPERADMIN no pot accedir a rutes operatives de negoci."}
                 )
 
-        from app.core.context import tenant_context, superadmin_context
+        from app.core.context import superadmin_context, tenant_context
         token_tenant = tenant_context.set(empresa_id)
         token_superadmin = superadmin_context.set(is_superadmin)
 

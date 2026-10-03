@@ -1,7 +1,8 @@
 import logging
 from typing import Any, Dict, List, Optional
+
 import httpx
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 logger = logging.getLogger("llm_client")
 
@@ -12,7 +13,7 @@ class LLMClient:
     def __init__(self, base_url: str = "http://localhost:1234/v1", timeout: int = 30):
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
-        
+
         # Max input length to prevent injection or context limit issues
         self.MAX_PROMPT_LENGTH = 8000
 
@@ -39,7 +40,7 @@ class LLMClient:
                 raise LLMClientError(f"Message content exceeds maximum length of {self.MAX_PROMPT_LENGTH} characters.")
 
         url = f"{self.base_url}/chat/completions"
-        
+
         payload = {
             "model": model,
             "messages": messages,

@@ -1,8 +1,10 @@
 import uuid
-from typing import Optional
+
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
+
 from app.models.contractes import ContracteManteniment
+
 
 async def calculate_mrr(db: AsyncSession, empresa_uuid: uuid.UUID) -> float:
     """

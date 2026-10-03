@@ -1,8 +1,7 @@
-from fastapi import UploadFile, File
 import uuid
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
 from pydantic import BaseModel, Field
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -269,10 +268,10 @@ async def ocr_proveidor_draft(
     empresa_id = request.state.empresa_id
     if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401)
-    
+
     file_bytes = await file.read()
-    
+
     from app.services.ocr_service import processar_ocr_proveidor
     resultat = await processar_ocr_proveidor(file_bytes)
-    
+
     return resultat

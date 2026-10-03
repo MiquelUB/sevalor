@@ -2,21 +2,17 @@ import uuid
 from datetime import date, datetime, timedelta, timezone
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db_with_tenant_context
 from app.core.security import require_roles
-
-import io
-from fastapi import UploadFile, File
-from fastapi.responses import StreamingResponse
-from sqlalchemy.exc import IntegrityError
-from app.services.csv_service import parse_and_validate_csv, generate_csv_content, CsvImportResult
-
 from app.models.models import Client, Finca
+from app.services.csv_service import CsvImportResult, generate_csv_content, parse_and_validate_csv
 
 router = APIRouter(
     prefix="/gestio/clients",
@@ -284,15 +280,16 @@ async def obtenir_fitxa_360_client(
 
     # 2. Obtenir Finques
     from sqlalchemy import func
+
     from app.models.models import (
         AlertaGarantiaRecompra,
         Article,
+        FacturaLinia,
         Finca,
         FullaPicking,
         Incidencia,
         LiniaPicking,
         OrdreTreball,
-        FacturaLinia
     )
 
     res_finques = await db.execute(
@@ -481,15 +478,15 @@ async def importar_clients_csv(
 ):
     if not file.filename.endswith('.csv'):
         raise HTTPException(status_code=400, detail="El fitxer ha de ser un CSV")
-        
+
     content = await file.read()
     valid_records, errors = parse_and_validate_csv(content, ClientCreate)
-    
+
     inserits = 0
     total_processats = len(valid_records) + len(set(e["fila"] for e in errors))
-    
+
     empresa_id = request.state.empresa_id
-    
+
     # Processar els vàlids un a un per capturar duplicats de BD (ex. NIF repetit)
     for index, record in enumerate(valid_records):
         client_db = Client(
@@ -500,9 +497,9 @@ async def importar_clients_csv(
         try:
             await db.flush()
             inserits += 1
-        except IntegrityError as e:
+        except IntegrityError:
             await db.rollback()
-            # Mapejem la fila (afegim +2 pel offset d'index i capçalera, assumint sense errors previs, 
+            # Mapejem la fila (afegim +2 pel offset d'index i capçalera, assumint sense errors previs,
             # però millor no lligar-ho estricte si ja hi ha hagut errors, per ara posem info genèrica)
             errors.append({
                 "fila": "Desconeguda",
@@ -510,9 +507,9 @@ async def importar_clients_csv(
                 "valor": record.nif,
                 "motiu": "Ja existeix un client amb aquest NIF o Codi"
             })
-            
+
     await db.commit()
-    
+
     return CsvImportResult(
         total_processats=total_processats,
         inserits=inserits,
@@ -526,7 +523,7 @@ async def exportar_clients_csv(
 ):
     result = await db.execute(select(Client).where(Client.empresa_id == request.state.empresa_id))
     clients = result.scalars().all()
-    
+
     fieldnames = ["codi", "rao_social", "nif", "telefon", "email", "adreca_fiscal", "actiu"]
     records = []
     for c in clients:
@@ -539,10 +536,10 @@ async def exportar_clients_csv(
             "adreca_fiscal": c.adreca_fiscal or "",
             "actiu": str(c.actiu)
         })
-        
+
     csv_io = generate_csv_content(records, fieldnames)
     csv_io.seek(0)
-    
+
     return StreamingResponse(
         iter([csv_io.getvalue()]),
         media_type="text/csv",
@@ -615,7 +612,7 @@ async def crear_finca_client(
         codi_candat_en_memoria=finca.codi_candat_en_memoria,
         superficie_ha=finca.superficie_ha
     )
-    
+
     db.add(nova_finca)
     await db.commit()
     return nova_finca
