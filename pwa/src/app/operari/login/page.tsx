@@ -155,6 +155,7 @@ export default function OperariLoginPage() {
           localStorage.setItem(SENTINEL_IV_KEY, ivHex);
         }
 
+        sessionStorage.setItem("sevalor_session_pin", codiPin);
         window.location.href = "/operari/feines";
       } else {
         setError("PIN incorrecte. Torna a intentar-ho.");
@@ -171,6 +172,7 @@ export default function OperariLoginPage() {
             const saltBytes = new Uint8Array(saltHex.split(",").map(Number));
             const valid = await verifySentinelBlock(codiPin, saltBytes, cipher, iv);
             if (valid) {
+        sessionStorage.setItem("sevalor_session_pin", codiPin);
               window.location.href = "/operari/feines";
               setLoading(false);
               return;

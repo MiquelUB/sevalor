@@ -5,6 +5,7 @@ import { useParams, useRouter } from "next/navigation";
 import { ArrowLeft, Settings, Cpu, HardDrive, Server, Smartphone, Wrench, FileText } from "lucide-react";
 import { apiFetch } from "@/lib/api";
 import { db } from "@/lib/offline/db";
+import { encryptWithPin, decryptWithPin } from "@/lib/crypto";
 
 interface Asset {
   id: string;
@@ -31,42 +32,93 @@ export default function LlistaMaquinesPage() {
   const [ordre, setOrdre] = useState<OrdreDetall | null>(null);
   const [loading, setLoading] = useState(true);
   const [isOffline, setIsOffline] = useState(false);
+  const [showPinModal, setShowPinModal] = useState(false);
+  const [offlinePin, setOfflinePin] = useState("");
+  const [offlineError, setOfflineError] = useState<string | null>(null);
 
-  useEffect(() => {
-    const fetchDades = async () => {
-      setLoading(true);
-      
-      const checkOffline = typeof navigator !== "undefined" && !navigator.onLine;
-      setIsOffline(checkOffline);
-      
-      try {
-        if (checkOffline) {
-          // Offline: we don't have PIN to decrypt db.ordres, so we simulate reading from cache if it were plaintext.
-          // Since it's mandated to load from Dexie, and we only have EncryptedRecord schema, we'll try to find it.
-          // But actually we can't decrypt without the key. So we will mock an error or empty state as required by Zero Mock Data.
-          throw new Error("Offline, cal PIN per desxifrar. Aquesta versió no manté el PIN en memòria.");
-        } else {
-          // Fetch from API
-          const data = await apiFetch<any>(`/operari/feines/${id}`);
-          if (data) {
-            setOrdre({
-              id: String(data.id),
-              codi: data.codi || "OT-00",
-              titol: data.titol || "Detall de l'Ordre",
-              client: data.client?.rao_social || "Client",
-              estat: data.estat || "PENDENT",
-              assets: data.assets || [],
-            });
+
+const loadFeina = async (pin?: string) => {
+    setLoading(true);
+    setOfflineError(null);
+    const checkOffline = typeof navigator !== "undefined" && !navigator.onLine;
+    setIsOffline(checkOffline);
+
+    try {
+      if (checkOffline) {
+        const storedPin = pin || sessionStorage.getItem("sevalor_session_pin");
+        if (!storedPin) {
+          setShowPinModal(true);
+          setLoading(false);
+          return;
+        }
+
+        const record = await db.ordres.get(id);
+        if (!record) {
+          throw new Error("Dades no trobades a la memòria cau offline.");
+        }
+
+        const saltStr = localStorage.getItem("sevalor_sentinel_salt");
+        if (!saltStr) throw new Error("No s'ha trobat la sal criptogràfica del dispositiu.");
+        const saltBytes = new Uint8Array(saltStr.split(",").map(Number));
+
+        try {
+          const decryptedStr = await decryptWithPin(record.ciphertext, record.iv, storedPin, saltBytes);
+          const data = JSON.parse(decryptedStr);
+          
+          // Si el PIN era correcte, el guardem en sessió
+          sessionStorage.setItem("sevalor_session_pin", storedPin);
+          setShowPinModal(false);
+          
+          setOrdre({
+            id: String(data.id),
+            codi: data.codi || "OT-00",
+            titol: data.titol || "Detall de l'Ordre",
+            client: data.client?.rao_social || "Client",
+            estat: data.estat || "PENDENT",
+            assets: data.assets || [],
+          });
+        } catch (decErr) {
+          throw new Error("PIN incorrecte o error de desxifratge.");
+        }
+
+      } else {
+        const data = await apiFetch<any>(`/operari/feines/${id}`);
+        if (data) {
+          const mapped = {
+            id: String(data.id),
+            codi: data.codi || "OT-00",
+            titol: data.titol || "Detall de l'Ordre",
+            client: data.client?.rao_social || "Client",
+            estat: data.estat || "PENDENT",
+            assets: data.assets || [],
+          };
+          setOrdre(mapped);
+
+          // Guardar xifrat a IndexedDB si tenim el PIN
+          const sessionPin = sessionStorage.getItem("sevalor_session_pin");
+          const saltStr = localStorage.getItem("sevalor_sentinel_salt");
+          if (sessionPin && saltStr) {
+            const saltBytes = new Uint8Array(saltStr.split(",").map(Number));
+            const { cipherTextHex, ivHex } = await encryptWithPin(JSON.stringify(data), sessionPin, saltBytes);
+            await db.ordres.put({ id: mapped.id, ciphertext: cipherTextHex, iv: ivHex });
           }
         }
-      } catch (err) {
-        setOrdre(null);
-      } finally {
-        setLoading(false);
       }
-    };
+    } catch (err: any) {
+      if (err.message.includes("PIN incorrecte")) {
+        setOfflineError("PIN incorrecte. Torna-ho a provar.");
+        setShowPinModal(true);
+      } else {
+        setOrdre(null);
+        setOfflineError(err.message);
+      }
+    } finally {
+      if (!showPinModal) setLoading(false);
+    }
+  };
 
-    fetchDades();
+  useEffect(() => {
+    loadFeina();
   }, [id]);
 
   const getAssetIcon = (tipus: string) => {
@@ -92,6 +144,40 @@ export default function LlistaMaquinesPage() {
           Fitxa 360 - {ordre ? ordre.codi : id}
         </h1>
       </div>
+
+      
+      {showPinModal && (
+        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-slate-900 rounded-2xl max-w-sm w-full p-6 shadow-2xl space-y-4">
+            <h3 className="text-lg font-bold text-slate-900 dark:text-white text-center">Desbloqueig Offline</h3>
+            <p className="text-xs text-slate-500 text-center">
+              Introdueix el teu PIN per desxifrar les dades locals (AES-GCM 256).
+            </p>
+            {offlineError && <p className="text-xs text-red-500 font-bold text-center">{offlineError}</p>}
+            <input
+              type="password"
+              maxLength={4}
+              value={offlinePin}
+              onChange={(e) => setOfflinePin(e.target.value.replace(/\D/g, ''))}
+              className="w-full px-4 py-3 text-center text-2xl tracking-widest font-mono font-bold rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500 text-slate-900 dark:text-white"
+              placeholder="••••"
+            />
+            <button
+              onClick={() => loadFeina(offlinePin)}
+              disabled={offlinePin.length !== 4}
+              className="w-full py-3 rounded-xl text-sm font-bold bg-emerald-600 hover:bg-emerald-700 text-white transition-colors disabled:opacity-50"
+            >
+              Desxifrar Fitxa
+            </button>
+            <button
+              onClick={() => router.back()}
+              className="w-full py-2 rounded-xl text-xs font-bold text-slate-500 hover:text-slate-700 dark:hover:text-slate-300 transition-colors"
+            >
+              Tornar
+            </button>
+          </div>
+        </div>
+      )}
 
       {loading ? (
         <div className="text-center py-10 text-slate-400">
