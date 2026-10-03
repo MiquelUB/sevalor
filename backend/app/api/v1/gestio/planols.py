@@ -388,7 +388,13 @@ async def crear_anotacio(
     if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401, detail="No identificat")
 
-    # TODO Check if ordre_treball exists for this empresa
+    from app.models.models import OrdreTreball
+    stmt_ot = select(OrdreTreball.id).where(
+        OrdreTreball.id == payload.ordre_treball_id,
+        OrdreTreball.empresa_id == uuid.UUID(empresa_id),
+    )
+    if (await db.execute(stmt_ot)).scalar_one_or_none() is None:
+        raise HTTPException(status_code=404, detail="Ordre de treball no trobada")
 
     nova_anotacio = CapaAnotacio(
         empresa_id=uuid.UUID(empresa_id),

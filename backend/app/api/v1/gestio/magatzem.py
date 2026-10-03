@@ -594,12 +594,9 @@ async def processar_document_ocr(
     from app.services.ocr_service import processar_albara_ocr
     ocr_result = await processar_albara_ocr(file_bytes)
 
-    # As the OCR is not implemented, the above call will raise a 501 HTTPException.
-    # The code below will not be reached until a real OCR service is integrated.
-
-    # nou_albara = AlbaraProveidor(...)
-
-    return {"task_id": "none", "status": "PROCESSING", "ocr_data": ocr_result}
+    # Sense motor OCR: no es persisteix cap esborrany ni proveïdor fantasma.
+    # L'usuari introdueix les dades i les desa amb /albara/confirmar.
+    return {"task_id": None, "status": ocr_result["status"], "ocr_data": ocr_result}
 
 @router.post("/albara/confirmar", status_code=status.HTTP_201_CREATED)
 async def confirmar_document(

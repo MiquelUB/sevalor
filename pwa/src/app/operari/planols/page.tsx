@@ -117,15 +117,24 @@ export default function OperariPlanolsPage() {
     setMostrarDialegCapaTancada(false);
     setPendentClickCoords(null);
 
-    // Persistir al backend (requereix planol_id real del context)
+    // Persistir al backend: el plànol real arriba per query string (?planol=<uuid>)
+    const planolId =
+      typeof window !== "undefined"
+        ? new URLSearchParams(window.location.search).get("planol")
+        : null;
+    if (!planolId) {
+      alert("No s'ha pogut desar la capa: obre el visor des d'un plànol concret (falta ?planol=<id>).");
+      return;
+    }
     try {
-      const planolId = "00000000-0000-0000-0000-000000000000"; // TODO: obtenir planol real per props/query
       await apiFetch(`/operari/planols/${planolId}/capes`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(novaCapa),
       });
-    } catch {}
+    } catch (e: any) {
+      alert(e?.message || "Error desant la capa al servidor");
+    }
   };
 
   return (

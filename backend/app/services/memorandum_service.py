@@ -22,12 +22,7 @@ async def generar_memorandum_tecnic(
     Genera un dictamen (Extra Facturable vs Cost No Imputable) basat en àudio i foto.
     Desa a memorandum_tecnic amb estat PENDENT_REVISIO.
     """
-    analisi_visual = None
-    if foto_path:
-        # PENDENT_IMPLEMENTACIO: Connexió real amb model de visió per a OCR i anàlisi de danys.
-        # Zero Mock Data: Aixecarem un error si intentem usar OCR fins que estigui implementat,
-        # o ho marcarem com a pendent d'auditoria si el flux ho requereix.
-        analisi_visual = "PENDENT_AUDITORIA"
+    analisi_visual = None  # Sense model de visió connectat: cap anàlisi inventada (Zero Mock).
 
     # Lògica bàsica de dictamen (En el futur serà generada per un LLM)
     dictamen = "EXTRA_FACTURABLE"

@@ -171,21 +171,18 @@ def ping(payload: str = "PONG"):
 
 @celery_app.task(name="app.workers.tasks.processar_ocr_document_task", queue="queue_media")
 def processar_ocr_document_task(file_path: str, empresa_id: str):
-    """Processa el document OCR extreient metadades del fitxer."""
-    import os
-    basename = os.path.basename(file_path)
-    nom_base = os.path.splitext(basename)[0]
+    """Sense motor OCR connectat: retorna camps buits perquè es revisin manualment (Zero Mock)."""
     return {
-        "estat": "COMPLETADO",
+        "estat": "PENDENT_REVISIO_MANUAL",
         "proveidor": {
-            "nif": "PENDENT_AUDITORIA",
-            "nom": "PENDENT_AUDITORIA",
-            "adreca": "",
-            "telefon": "",
-            "email": ""
+            "nif": None,
+            "nom": None,
+            "adreca": None,
+            "telefon": None,
+            "email": None
         },
-        "numero_document": "PENDENT_AUDITORIA",
-        "tipus_document": "PENDENT_AUDITORIA",
+        "numero_document": None,
+        "tipus_document": None,
         "data_document": None,
         "linies": []
     }

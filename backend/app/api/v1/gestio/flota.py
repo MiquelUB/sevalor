@@ -313,7 +313,6 @@ async def pujar_document_flota(
     if not empresa_id:
         raise HTTPException(status_code=401)
     empresa_id = uuid.UUID(empresa_id)
-    # TODO current_user can be from state or skip for now
 
     # Comprovar vehicle
     stmt = select(Vehicle).where(Vehicle.id == vehicle_id, Vehicle.empresa_id == empresa_id)
