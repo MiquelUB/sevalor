@@ -25,7 +25,7 @@ async def test_configuracio_empresa_boss_only(async_client: AsyncClient, headers
     payload = {"nom": "Nova Empresa SA"}
     
     response = await async_client.put(
-        "/api/v1/gestio/configuracio/empresa",
+        "/gestio/configuracio/empresa",
         json=payload,
         headers=headers_enginyer
     )
