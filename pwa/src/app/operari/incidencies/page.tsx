@@ -16,7 +16,8 @@ import {
   AlertTriangle,
 } from "lucide-react";
 import { apiFetch } from "@/lib/api";
-import { CAMERA_LIVE_INPUT_PROPS, compressImageToWebP } from "@/lib/media";
+import { compressImageToWebP } from "@/lib/media";
+import CameraInput from "@/components/CameraInput";
 
 import { db } from "@/lib/offline/db";
 import { addToSyncQueue } from "@/lib/offline/sync";
@@ -174,51 +175,7 @@ export default function OperariIncidenciesPage() {
             className="bg-white dark:bg-slate-900 p-5 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm space-y-4"
           >
             <div>
-              <label className="block text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-1">
-                Tipus de Contingència
-              </label>
-              <select
-                value={tipus}
-                onChange={(e) => setTipus(e.target.value)}
-                className="w-full p-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs font-semibold"
-              >
-                <option value="VEHICLE">Avaria de Vehicle o Maquinària</option>
-                <option value="TASCA">Problema a la Tasca / Obra en Curs</option>
-                <option value="GENERAL">General (Manca de Material / Client Absent)</option>
-                <option value="SOS">Situació Crítica o Urgent</option>
-              </select>
-            </div>
-
-            {/* Tres canals de captura (Spec 016) */}
-            <div className="grid grid-cols-2 gap-3">
-              <button
-                type="button"
-                onClick={handleSimularAudio}
-                className={`py-3 px-3 rounded-xl border flex items-center justify-center gap-2 text-xs font-bold transition-all ${
-                  audioGravat
-                    ? "bg-emerald-50 dark:bg-emerald-950/50 border-emerald-500 text-emerald-700 dark:text-emerald-300"
-                    : "bg-slate-50 dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300"
-                }`}
-              >
-                <Mic className="w-4 h-4 text-emerald-600" />
-                <span>{audioGravat ? "Àudio Gravat ✓" : "Nota d'Àudio"}</span>
-              </button>
-
-              <label
-                className={`py-3 px-3 rounded-xl border flex items-center justify-center gap-2 text-xs font-bold cursor-pointer transition-all ${
-                  fotoPujada
-                    ? "bg-emerald-50 dark:bg-emerald-950/50 border-emerald-500 text-emerald-700 dark:text-emerald-300"
-                    : "bg-slate-50 dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300"
-                }`}
-              >
-                <Camera className="w-4 h-4 text-emerald-600" />
-                <span>{fotoPujada ? "Foto Capturada ✓" : "Càmera en Viu"}</span>
-                <input
-                  {...CAMERA_LIVE_INPUT_PROPS}
-                  onChange={handleFotoChange}
-                  className="hidden"
-                />
-              </label>
+              <CameraInput captured={fotoPujada} label="Càmera en Viu" onCapture={(blob) => { setFotoPujada(true); setErrorValidacio(null); }} />
             </div>
 
             <div>

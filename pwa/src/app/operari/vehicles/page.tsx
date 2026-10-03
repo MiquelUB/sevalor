@@ -18,7 +18,8 @@ import {
   Check,
   RefreshCw,
 } from "lucide-react";
-import { CAMERA_LIVE_INPUT_PROPS, compressImageToWebP } from "@/lib/media";
+import { compressImageToWebP } from "@/lib/media";
+import CameraInput from "@/components/CameraInput";
 import { apiFetch } from "@/lib/api";
 
 // Model segons Spec 015 RF-01
@@ -454,35 +455,7 @@ export default function OperariVehiclesPage() {
                   <p className="text-xs font-bold text-slate-600 dark:text-slate-400 mb-1.5">
                     1. Fotografia de l'Odòmetre del Vehicle *
                   </p>
-                  <label
-                    className={`p-3 rounded-xl border flex items-center justify-between cursor-pointer transition-colors ${
-                      fotoOdometreInici
-                        ? "border-emerald-500 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-800 dark:text-emerald-300"
-                        : "border-slate-300 dark:border-slate-700 hover:border-slate-400"
-                    }`}
-                  >
-                    <div className="flex items-center gap-2.5">
-                      <Camera className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
-                      <div>
-                        <p className="text-xs font-bold">Capturar Odòmetre en Viu</p>
-                        <p className="text-[10px] text-slate-500">Prohibit tecleig manual (Anti-fraude)</p>
-                      </div>
-                    </div>
-                    <span className="text-xs font-bold">
-                      {fotoOdometreInici ? "OK" : "Capturar"}
-                    </span>
-                    <input
-                      {...CAMERA_LIVE_INPUT_PROPS}
-                      onChange={async (e) => {
-                        if (e.target.files && e.target.files[0]) {
-                          const w = await compressImageToWebP(e.target.files[0]);
-                          setFotoOdometreInici(w);
-                          setErrorValidacio(null);
-                        }
-                      }}
-                      className="hidden"
-                    />
-                  </label>
+                  <CameraInput captured={!!fotoOdometreInici} label="Capturar" onCapture={(blob) => { setFotoOdometreInici(blob); setErrorValidacio(null); } } />
                 </div>
 
                 {/* Selector tàctil ràpid de combustible (RF-03) */}
@@ -514,35 +487,7 @@ export default function OperariVehiclesPage() {
                     <p className="text-xs font-bold text-slate-600 dark:text-slate-400 mb-1.5">
                       3. Horòmetre Maquinària ({maquinaria.identificador}) *
                     </p>
-                    <label
-                      className={`p-3 rounded-xl border flex items-center justify-between cursor-pointer transition-colors ${
-                        fotoHorometreInici
-                          ? "border-emerald-500 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-800 dark:text-emerald-300"
-                          : "border-slate-300 dark:border-slate-700 hover:border-slate-400"
-                      }`}
-                    >
-                      <div className="flex items-center gap-2.5">
-                        <Gauge className="w-5 h-5 text-amber-600" />
-                        <div>
-                          <p className="text-xs font-bold">Capturar Horòmetre en Viu</p>
-                          <p className="text-[10px] text-slate-500">Hores de motor del generador/equip</p>
-                        </div>
-                      </div>
-                      <span className="text-xs font-bold">
-                        {fotoHorometreInici ? "OK" : "Capturar"}
-                      </span>
-                      <input
-                        {...CAMERA_LIVE_INPUT_PROPS}
-                        onChange={async (e) => {
-                          if (e.target.files && e.target.files[0]) {
-                            const w = await compressImageToWebP(e.target.files[0]);
-                            setFotoHorometreInici(w);
-                            setErrorValidacio(null);
-                          }
-                        }}
-                        className="hidden"
-                      />
-                    </label>
+                    <CameraInput captured={!!fotoHorometreInici} label="Capturar" onCapture={(blob) => { setFotoHorometreInici(blob); setErrorValidacio(null); } } />
                   </div>
                 )}
 
@@ -551,34 +496,7 @@ export default function OperariVehiclesPage() {
                   <p className="text-xs font-bold text-slate-600 dark:text-slate-400 mb-1.5">
                     Danys Preexistents (Opcional - No bloqueja)
                   </p>
-                  <label
-                    className={`p-3 rounded-xl border flex items-center justify-between cursor-pointer transition-colors ${
-                      fotoDanyPreexistent
-                        ? "border-amber-500 bg-amber-50 dark:bg-amber-950/40 text-amber-800 dark:text-amber-300"
-                        : "border-slate-200 dark:border-slate-800 hover:border-slate-300"
-                    }`}
-                  >
-                    <div className="flex items-center gap-2.5">
-                      <Wrench className="w-5 h-5 text-slate-500" />
-                      <div>
-                        <p className="text-xs font-semibold">Fotografia de cops o rascades prèvies</p>
-                        <p className="text-[10px] text-slate-400">Només si es detecta desperfecte</p>
-                      </div>
-                    </div>
-                    <span className="text-xs font-bold">
-                      {fotoDanyPreexistent ? "OK" : "Afegir"}
-                    </span>
-                    <input
-                      {...CAMERA_LIVE_INPUT_PROPS}
-                      onChange={async (e) => {
-                        if (e.target.files && e.target.files[0]) {
-                          const w = await compressImageToWebP(e.target.files[0]);
-                          setFotoDanyPreexistent(w);
-                        }
-                      }}
-                      className="hidden"
-                    />
-                  </label>
+                  <CameraInput captured={!!fotoDanyPreexistent} label="Afegir" onCapture={(blob) => { setFotoDanyPreexistent(blob); setErrorValidacio(null); } } />
                 </div>
 
                 {errorValidacio && (
@@ -615,35 +533,7 @@ export default function OperariVehiclesPage() {
                   <p className="text-xs font-bold text-slate-600 dark:text-slate-400 mb-1.5">
                     1. Fotografia Odòmetre Final *
                   </p>
-                  <label
-                    className={`p-3 rounded-xl border flex items-center justify-between cursor-pointer transition-colors ${
-                      fotoOdometreFi
-                        ? "border-emerald-500 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-800 dark:text-emerald-300"
-                        : "border-slate-300 dark:border-slate-700 hover:border-slate-400"
-                    }`}
-                  >
-                    <div className="flex items-center gap-2.5">
-                      <Camera className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
-                      <div>
-                        <p className="text-xs font-bold">Capturar Odòmetre Final</p>
-                        <p className="text-[10px] text-slate-500">Càlcul automàtic de km nets</p>
-                      </div>
-                    </div>
-                    <span className="text-xs font-bold">
-                      {fotoOdometreFi ? "OK" : "Capturar"}
-                    </span>
-                    <input
-                      {...CAMERA_LIVE_INPUT_PROPS}
-                      onChange={async (e) => {
-                        if (e.target.files && e.target.files[0]) {
-                          const w = await compressImageToWebP(e.target.files[0]);
-                          setFotoOdometreFi(w);
-                          setErrorValidacio(null);
-                        }
-                      }}
-                      className="hidden"
-                    />
-                  </label>
+                  <CameraInput captured={!!fotoOdometreFi} label="Capturar" onCapture={(blob) => { setFotoOdometreFi(blob); setErrorValidacio(null); } } />
                 </div>
 
                 {/* Nivell combustible final */}
@@ -675,35 +565,7 @@ export default function OperariVehiclesPage() {
                     <p className="text-xs font-bold text-slate-600 dark:text-slate-400 mb-1.5">
                       3. Horòmetre Final ({maquinaria.identificador}) *
                     </p>
-                    <label
-                      className={`p-3 rounded-xl border flex items-center justify-between cursor-pointer transition-colors ${
-                        fotoHorometreFi
-                          ? "border-emerald-500 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-800 dark:text-emerald-300"
-                          : "border-slate-300 dark:border-slate-700 hover:border-slate-400"
-                      }`}
-                    >
-                      <div className="flex items-center gap-2.5">
-                        <Gauge className="w-5 h-5 text-amber-600" />
-                        <div>
-                          <p className="text-xs font-bold">Capturar Horòmetre Final</p>
-                          <p className="text-[10px] text-slate-500">Temps d'ús real de màquina</p>
-                        </div>
-                      </div>
-                      <span className="text-xs font-bold">
-                        {fotoHorometreFi ? "OK" : "Capturar"}
-                      </span>
-                      <input
-                        {...CAMERA_LIVE_INPUT_PROPS}
-                        onChange={async (e) => {
-                          if (e.target.files && e.target.files[0]) {
-                            const w = await compressImageToWebP(e.target.files[0]);
-                            setFotoHorometreFi(w);
-                            setErrorValidacio(null);
-                          }
-                        }}
-                        className="hidden"
-                      />
-                    </label>
+                    <CameraInput captured={!!fotoHorometreFi} label="Capturar" onCapture={(blob) => { setFotoHorometreFi(blob); setErrorValidacio(null); } } />
                   </div>
                 )}
 
@@ -712,34 +574,7 @@ export default function OperariVehiclesPage() {
                   <p className="text-xs font-bold text-slate-600 dark:text-slate-400 mb-1.5">
                     Incidents o Danys Nous (Opcional)
                   </p>
-                  <label
-                    className={`p-3 rounded-xl border flex items-center justify-between cursor-pointer transition-colors ${
-                      fotoNouDany
-                        ? "border-rose-500 bg-rose-50 dark:bg-rose-950/40 text-rose-800 dark:text-rose-300"
-                        : "border-slate-200 dark:border-slate-800 hover:border-slate-300"
-                    }`}
-                  >
-                    <div className="flex items-center gap-2.5">
-                      <AlertTriangle className="w-5 h-5 text-slate-500" />
-                      <div>
-                        <p className="text-xs font-semibold">Fotografia de ratllada o cop ocorregut avui</p>
-                        <p className="text-[10px] text-slate-400">Obre expedient preventiu a Flota</p>
-                      </div>
-                    </div>
-                    <span className="text-xs font-bold">
-                      {fotoNouDany ? "OK" : "Capturar"}
-                    </span>
-                    <input
-                      {...CAMERA_LIVE_INPUT_PROPS}
-                      onChange={async (e) => {
-                        if (e.target.files && e.target.files[0]) {
-                          const w = await compressImageToWebP(e.target.files[0]);
-                          setFotoNouDany(w);
-                        }
-                      }}
-                      className="hidden"
-                    />
-                  </label>
+                  <CameraInput captured={!!fotoNouDany} label="Capturar" onCapture={(blob) => { setFotoNouDany(blob); setErrorValidacio(null); } } />
                 </div>
 
                 {errorValidacio && (
@@ -1002,64 +837,10 @@ export default function OperariVehiclesPage() {
                   </p>
 
                   {/* Foto 1: Tiquet físic benzinera */}
-                  <label
-                    className={`p-3 rounded-xl border flex items-center justify-between cursor-pointer transition-colors ${
-                      fotoTiquetCarburant
-                        ? "border-emerald-500 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-800 dark:text-emerald-300"
-                        : "border-slate-300 dark:border-slate-700 hover:border-slate-400"
-                    }`}
-                  >
-                    <div className="flex items-center gap-2.5">
-                      <Camera className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
-                      <div>
-                        <p className="text-xs font-bold">Foto 1: Tiquet Físic de Servei</p>
-                        <p className="text-[10px] text-slate-500">Llegibilitat d'euros, litres i NIF</p>
-                      </div>
-                    </div>
-                    <span className="text-xs font-bold">
-                      {fotoTiquetCarburant ? "OK" : "Capturar"}
-                    </span>
-                    <input
-                      {...CAMERA_LIVE_INPUT_PROPS}
-                      onChange={async (e) => {
-                        if (e.target.files && e.target.files[0]) {
-                          const w = await compressImageToWebP(e.target.files[0]);
-                          setFotoTiquetCarburant(w);
-                        }
-                      }}
-                      className="hidden"
-                    />
-                  </label>
+                  <CameraInput captured={!!fotoTiquetCarburant} label="Capturar" onCapture={(blob) => { setFotoTiquetCarburant(blob); setErrorValidacio(null); } } />
 
                   {/* Foto 2: Odòmetre en viu en el moment de la càrrega */}
-                  <label
-                    className={`p-3 rounded-xl border flex items-center justify-between cursor-pointer transition-colors ${
-                      fotoOdometreCarburant
-                        ? "border-emerald-500 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-800 dark:text-emerald-300"
-                        : "border-slate-300 dark:border-slate-700 hover:border-slate-400"
-                    }`}
-                  >
-                    <div className="flex items-center gap-2.5">
-                      <Gauge className="w-5 h-5 text-amber-600" />
-                      <div>
-                        <p className="text-xs font-bold">Foto 2: Odòmetre en Viu</p>
-                        <p className="text-[10px] text-slate-500">Comprovació immediata del quilometratge</p>
-                      </div>
-                    </div>
-                    <span className="text-xs font-bold">
-                      {fotoOdometreCarburant ? "OK" : "Capturar"}
-                    </span>
-                    <input
-                      {...CAMERA_LIVE_INPUT_PROPS}
-                      onChange={async (e) => {
-                        if (e.target.files && e.target.files[0]) {
-                          const w = await compressImageToWebP(e.target.files[0]);
-                          setFotoOdometreCarburant(w);
-                        }
-                      }}
-                      className="hidden"
-                    />
-                  </label>
+                  <CameraInput captured={!!fotoOdometreCarburant} label="Capturar" onCapture={(blob) => { setFotoOdometreCarburant(blob); setErrorValidacio(null); } } />
                 </div>
 
                 {errorValidacio && (

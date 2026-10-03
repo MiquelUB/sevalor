@@ -15,7 +15,8 @@ import {
   X,
 } from "lucide-react";
 import { apiFetch } from "@/lib/api";
-import { CAMERA_LIVE_INPUT_PROPS, compressImageToWebP } from "@/lib/media";
+import { compressImageToWebP } from "@/lib/media";
+import CameraInput from "@/components/CameraInput";
 
 interface TiquetItem {
   id: string;
@@ -233,30 +234,10 @@ export default function OperariTiquetsPage() {
                 Fotos de Justificant
               </label>
               <div className="grid grid-cols-2 gap-3">
-                <label className="p-3 border-2 border-dashed border-slate-300 dark:border-slate-700 rounded-xl flex flex-col items-center justify-center text-center cursor-pointer hover:border-emerald-500 transition-colors">
-                  <Camera className="w-5 h-5 text-emerald-600 mb-1" />
-                  <span className="text-[10px] font-bold text-slate-700 dark:text-slate-300">
-                    {fotoTiquet ? "Tiquet capturat ✓" : "Foto Tiquet (Viu)"}
-                  </span>
-                  <input
-                    {...CAMERA_LIVE_INPUT_PROPS}
-                    onChange={handleFotoTiquet}
-                    className="hidden"
-                  />
-                </label>
+                <CameraInput captured={!!fotoTiquet} label="Foto Tiquet (Viu)" onCapture={(blob) => { setFotoTiquet(blob); setErrorValidacio(null); }} />
 
                 {categoria === "CARBURANT" && (
-                  <label className="p-3 border-2 border-dashed border-slate-300 dark:border-slate-700 rounded-xl flex flex-col items-center justify-center text-center cursor-pointer hover:border-emerald-500 transition-colors">
-                    <Fuel className="w-5 h-5 text-emerald-600 mb-1" />
-                    <span className="text-[10px] font-bold text-slate-700 dark:text-slate-300">
-                      {fotoOdometre ? "Odòmetre capturat ✓" : "Foto Odòmetre"}
-                    </span>
-                    <input
-                      {...CAMERA_LIVE_INPUT_PROPS}
-                      onChange={handleFotoOdometre}
-                      className="hidden"
-                    />
-                  </label>
+                  <CameraInput captured={!!fotoOdometre} label="Foto Odòmetre" onCapture={(blob) => { setFotoOdometre(blob); setErrorValidacio(null); }} />
                 )}
               </div>
             </div>

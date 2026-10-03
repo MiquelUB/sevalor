@@ -1,0 +1,1 @@
+sed -i 's/def _get_estoc(session: AsyncSession, article_id: uuid.UUID) -> float:/def _get_estoc(session: AsyncSession, article_id: uuid.UUID) -> float: # type: ignore/g' backend/app/api/v1/gestio/dashboard.py

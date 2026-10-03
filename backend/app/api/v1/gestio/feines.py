@@ -21,6 +21,7 @@ router = APIRouter(
 class FeinaCreate(BaseModel):
     codi: str = Field(..., max_length=20)
     client_id: uuid.UUID
+    versio: int = 1
     finca_id: Optional[uuid.UUID] = None
     titol: str = Field(..., max_length=200)
     adreca: str = Field(..., max_length=255)
@@ -28,11 +29,13 @@ class FeinaCreate(BaseModel):
     estat: str = Field("PENDENT", max_length=30)
     data_planificacio: date
     cap_de_colla_id: uuid.UUID
+    versio: int = 1
     vehicle_id: Optional[uuid.UUID] = None
 
 
 class FeinaResponse(FeinaCreate):
     id: uuid.UUID
+    versio: int = 1
 
 
 @router.get("", response_model=List[FeinaResponse])
@@ -162,6 +165,7 @@ class AgendarFeinaRequest(BaseModel):
 
 class AgendarFeinaResponse(BaseModel):
     id: uuid.UUID
+    versio: int = 1
     hora_inici_prevista: datetime
     hora_fi_prevista: datetime
     version_id: int
@@ -170,7 +174,8 @@ class AgendarFeinaResponse(BaseModel):
 
 @router.put("/{feina_id}/agendar", response_model=AgendarFeinaResponse)
 async def agendar_feina(
-    feina_id: uuid.UUID,
+    feina_id: uuid.UUID
+    versio: int = 1,
     payload: AgendarFeinaRequest,
     request: Request,
     db: AsyncSession = Depends(get_db_with_tenant_context),
@@ -283,7 +288,8 @@ class DropAndGoRequest(BaseModel):
 
 @router.patch("/{id}/drop-and-go")
 async def drop_and_go(
-    id: uuid.UUID,
+    id: uuid.UUID
+    versio: int = 1,
     payload: DropAndGoRequest,
     request: Request,
     db: AsyncSession = Depends(get_db_with_tenant_context),
@@ -331,7 +337,8 @@ class TancarObraRequest(BaseModel):
 
 @router.put("/{id}/tancar-obra")
 async def tancar_obra(
-    id: uuid.UUID,
+    id: uuid.UUID
+    versio: int = 1,
     payload: TancarObraRequest,
     request: Request,
     db: AsyncSession = Depends(get_db_with_tenant_context),
@@ -378,7 +385,8 @@ async def tancar_obra(
 # ── T027-T028: Reconciliació Post-Obra dels 4 Pilars ──────────────────────
 @router.post("/{id}/reconciliacio-post-obra")
 async def reconciliacio_post_obra(
-    id: uuid.UUID, request: Request, db: AsyncSession = Depends(get_db_with_tenant_context)
+    id: uuid.UUID
+    versio: int = 1, request: Request, db: AsyncSession = Depends(get_db_with_tenant_context)
 ):
     """T027-T028: Reconciliació post-obra dels 4 pilars: materials, hores, km i tiquets.
 

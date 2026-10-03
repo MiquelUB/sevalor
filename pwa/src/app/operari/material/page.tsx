@@ -17,7 +17,7 @@ import {
   Camera,
   RefreshCw,
 } from "lucide-react";
-import { CAMERA_LIVE_INPUT_PROPS, compressImageToWebP } from "@/lib/media";
+import { compressImageToWebP } from "@/lib/media";
 import { apiFetch } from "@/lib/api";
 import { BarcodeScanner } from "@/components/operari/BarcodeScanner";
 

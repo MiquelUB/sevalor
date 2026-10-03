@@ -1,14 +1,9 @@
-import asyncio
-from httpx import AsyncClient, ASGITransport
-import sys
-sys.path.insert(0, "./backend")
-from app.main import app
+import requests
 
-async def test_login():
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-        payload = {"email": "admin@sevalor.com", "password": "Password123!"}
-        res = await ac.post("/api/v1/auth/login", json=payload)
-        print("Status:", res.status_code)
-        print("Body:", res.text)
+res = requests.post("http://127.0.0.1:8000/api/v1/auth/login", data={"username": "admin@sevalor.com", "password": "superpassword"})
+print(res.status_code)
+print(res.json())
 
-asyncio.run(test_login())
+res2 = requests.get("http://127.0.0.1:8000/api/v1/superadmin/telemetria/kpis", headers={"Authorization": "Bearer " + res.json()["access_token"]})
+print(res2.status_code)
+print(res2.text)
