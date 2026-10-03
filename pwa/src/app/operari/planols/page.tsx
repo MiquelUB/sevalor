@@ -14,6 +14,7 @@ import {
   RefreshCw,
 } from "lucide-react";
 import { apiFetch } from "@/lib/api";
+import { addToSyncQueue } from "@/lib/offline/sync";
 
 interface CapaAnotacio {
   id: string;
@@ -97,8 +98,14 @@ export default function OperariPlanolsPage() {
         return c;
       })
     );
-    // TODO: Sincronitzar amb backend
-  };
+    const planolId = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("planol") : null;
+
+    if (planolId) {
+
+      addToSyncQueue('POST_PLANOL_PIN', { planol_id: planolId, capa_id: capaId, pin: { x, y, etiqueta: `Anotació #${(capes.find(c => c.id === capaId)?.pins.length || 0) + 1}` } }).catch(console.error);
+
+    }
+};
 
   // Creació de nova capa davant d'obra tancada (Spec 017 RF-13.1)
   const handleCrearNovaCapa = async () => {
@@ -127,11 +134,7 @@ export default function OperariPlanolsPage() {
       return;
     }
     try {
-      await apiFetch(`/operari/planols/${planolId}/capes`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(novaCapa),
-      });
+      await addToSyncQueue('POST_PLANOL_CAPA', { planol_id: planolId, capa: novaCapa });
     } catch (e: any) {
       alert(e?.message || "Error desant la capa al servidor");
     }
