@@ -52,13 +52,43 @@ export function ChameleonProvider({ children }: { children: React.ReactNode }) {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    // Si estem a la secció superadmin o el token és de Superadmin, no cal marca camaleònica de tenant
+    if (typeof window !== "undefined") {
+      if (window.location.pathname.startsWith("/superadmin")) {
+        setLoading(false);
+        return;
+      }
+      try {
+        const tokenRaw = localStorage.getItem("sevalor_auth_token");
+        if (tokenRaw) {
+          const parsed = JSON.parse(tokenRaw);
+          const jwtToken = parsed?.token;
+          if (jwtToken && typeof jwtToken === "string") {
+            const parts = jwtToken.split(".");
+            if (parts.length === 3) {
+              const payload = JSON.parse(atob(parts[1]));
+              if (payload?.is_superadmin || payload?.rol === "SUPERADMIN") {
+                setLoading(false);
+                return;
+              }
+            }
+          }
+        }
+      } catch {
+        // Ignorar errors de parsing de token
+      }
+    }
+
     apiFetch<ChameleonBrand>("/gestio/configuracio/marca")
       .then((data) => {
         setBrand(data);
         applyChameleonCSS(data);
       })
       .catch((err) => {
-        console.warn("[Chameleon] No s'ha pogut carregar la marca de l'empresa:", err.message);
+        // En cas de 401 o 403 no emetre soroll innecessari a la consola
+        if (!err?.message?.includes("401") && !err?.message?.includes("403")) {
+          console.warn("[Chameleon] No s'ha pogut carregar la marca de l'empresa:", err.message);
+        }
         setError("Marca no disponible");
       })
       .finally(() => setLoading(false));

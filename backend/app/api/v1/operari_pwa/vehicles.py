@@ -8,7 +8,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db_with_tenant_context
 from app.core.security import require_roles
-from app.models.models import Incidencia, TiquetCarburant, Usuari, Vehicle
+from app.models.models import (
+    Article,
+    EstocMagatzem,
+    Incidencia,
+    Magatzem,
+    TiquetCarburant,
+    Usuari,
+    Vehicle,
+)
 
 router = APIRouter(
     prefix="/operari/vehicles",
@@ -46,6 +54,52 @@ async def llistar_vehicles_pwa(
         )
         for v in vehicles
     ]
+
+
+class ItemEstocFurgonetaResponse(BaseModel):
+    id: uuid.UUID
+    nom: str
+    referencia: str
+    marca: str
+    quantitat_actual: float
+    quantitat_optima: float
+    unitat: str
+
+
+@router.get("/stock", response_model=List[ItemEstocFurgonetaResponse])
+async def llistar_estoc_furgonetes(
+    request: Request,
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+):
+    """Retorna l'estoc físic d'articles ubicats als vehicles/furgoneta de la colla."""
+    empresa_id = request.state.empresa_id
+    if not empresa_id or empresa_id == "undefined":
+        raise HTTPException(status_code=401, detail="Context d'empresa no trobat")
+
+    stmt = (
+        select(EstocMagatzem, Article)
+        .join(Article, EstocMagatzem.article_id == Article.id)
+        .join(Magatzem, EstocMagatzem.magatzem_id == Magatzem.id)
+        .where(
+            EstocMagatzem.empresa_id == uuid.UUID(empresa_id),
+            Magatzem.tipus == "FURGONETA",
+        )
+    )
+    res = await db.execute(stmt)
+    items = []
+    for estoc, art in res.all():
+        items.append(
+            ItemEstocFurgonetaResponse(
+                id=estoc.id,
+                nom=art.nom,
+                referencia=art.referencia_inventari,
+                marca=getattr(art, "familia", "") or "",
+                quantitat_actual=float(estoc.quantitat_fisica or 0.0),
+                quantitat_optima=float(getattr(art, "estoc_optim", 0.0) or 0.0),
+                unitat=getattr(art, "unitat_mesura", "UNITAT") or "UNITAT",
+            )
+        )
+    return items
 
 
 class ReportDanyRequest(BaseModel):

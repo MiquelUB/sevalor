@@ -1,5 +1,5 @@
 import uuid
-from typing import Optional
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db_with_tenant_context
 from app.core.security import require_roles
-from app.models.models import FullaPicking, LiniaPicking, OrdreTreball
+from app.models.models import Article, FullaPicking, LiniaPicking, OrdreTreball
 
 router = APIRouter(
     prefix="/operari/picking",
@@ -181,3 +181,71 @@ async def actualitzar_linia_picking_operari(
         quantitat_mermada=float(linia.quantitat_mermada or 0.0),
         consum_real=consum_real,
     )
+
+
+class MaterialOperariItemResponse(BaseModel):
+    id: uuid.UUID
+    nom: str
+    referencia: str
+    quantitat_programada: float
+    unitat: str
+    es_eina: bool = False
+    format_continu: bool = False
+    carregat_pick_in: bool = False
+    retornat_pick_out: float = 0.0
+
+
+@router.get("/materials", response_model=List[MaterialOperariItemResponse])
+async def llistar_materials_operari(
+    request: Request,
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+):
+    """Llista els materials i línies de picking programades per a la jornada de l'operari."""
+    empresa_id = request.state.empresa_id
+    if not empresa_id or empresa_id == "undefined":
+        raise HTTPException(status_code=401, detail="Context d'empresa no trobat")
+
+    stmt = (
+        select(LiniaPicking, Article)
+        .join(Article, LiniaPicking.article_id == Article.id)
+        .where(LiniaPicking.empresa_id == uuid.UUID(empresa_id))
+    )
+    result = await db.execute(stmt)
+    items = []
+    for lin, art in result.all():
+        q_prev = float(lin.quantitat_prevista or 0.0)
+        q_carr = float(lin.quantitat_carregada_pick_in or 0.0)
+        q_ret = float(lin.quantitat_retornada_pick_out or 0.0)
+        items.append(
+            MaterialOperariItemResponse(
+                id=lin.id,
+                nom=art.nom,
+                referencia=art.referencia_inventari,
+                quantitat_programada=q_prev,
+                unitat=art.unitat_mesura or "UNITAT",
+                es_eina=(getattr(art, "familia", "") == "EINES"),
+                format_continu=bool(getattr(art, "es_material_continu", False)),
+                carregat_pick_in=(q_carr >= q_prev and q_prev > 0),
+                retornat_pick_out=q_ret,
+            )
+        )
+    return items
+
+
+materials_operari_router = APIRouter(
+    prefix="/materials",
+    tags=["Operari Materials"],
+    dependencies=[
+        Depends(require_roles(["OPERARI", "CAPATAZ", "CAP_DE_COLLA", "BOSS", "SUPERADMIN"]))
+    ],
+)
+
+
+@materials_operari_router.get("/operari", response_model=List[MaterialOperariItemResponse])
+async def llistar_materials_operari_direct(
+    request: Request,
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+):
+    """Endpoint directe /api/v1/materials/operari per a compatibilitat total PWA."""
+    return await llistar_materials_operari(request, db)
+

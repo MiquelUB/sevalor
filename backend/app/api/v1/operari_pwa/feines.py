@@ -380,3 +380,14 @@ async def finalitzar_feina(
         "estat": "COMPLERT",
         "missatge": "Feina finalitzada satisfactòriament",
     }
+
+
+@router.get("/materials")
+async def llistar_materials_operari_en_feines(
+    request: Request,
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+):
+    from app.api.v1.operari_pwa.picking import llistar_materials_operari
+
+    return await llistar_materials_operari(request, db)
+

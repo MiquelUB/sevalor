@@ -125,7 +125,7 @@ export default function OperariVehiclesPage() {
     try {
       let dades = [];
       if (navigator.onLine) {
-          dades = await apiFetch("/operari_pwa/vehicles/stock") || [];
+          dades = await apiFetch("/operari/vehicles/stock") || [];
           if (!Array.isArray(dades)) dades = [];
           
           // Clear and cache in Dexie

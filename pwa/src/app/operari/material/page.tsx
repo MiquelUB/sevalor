@@ -46,7 +46,7 @@ export default function OperariMaterialPage() {
   const carregarMaterials = async () => {
     setLoading(true);
     try {
-      const data = await apiFetch("/materials/operari");
+      const data = await apiFetch("/operari/materials");
       const items = Array.isArray(data) ? data : [];
       // Assegurar que cada item tingui els flags necessaris
       const itemsNormalitzats = items.map((m: any) => ({

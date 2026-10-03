@@ -35,13 +35,17 @@ from app.api.v1.gestio.proveidors import router as proveidors_router
 from app.api.v1.gestio.ws import router as ws_router
 from app.api.v1.health import router as health_router
 from app.api.v1.operari_auth import router as operari_auth_router
+from app.api.v1.operari_pwa.feines import llistar_les_meves_feines
 from app.api.v1.operari_pwa.feines import router as feines_pwa_router
 from app.api.v1.operari_pwa.incidencies import router as incidencies_router
 from app.api.v1.operari_pwa.jornada import router as jornada_router
+from app.api.v1.operari_pwa.picking import materials_operari_router
 from app.api.v1.operari_pwa.picking import router as picking_router
+from app.api.v1.operari_pwa.planols import planols_operari_router
 from app.api.v1.operari_pwa.planols import router as operari_planols_router
 from app.api.v1.operari_pwa.sync import router as sync_router
 from app.api.v1.operari_pwa.tiquets import router as tiquets_router
+from app.api.v1.operari_pwa.vehicles import llistar_estoc_furgonetes
 from app.api.v1.operari_pwa.vehicles import router as vehicles_pwa_router
 from app.api.v1.public_docs import router as public_docs_router
 from app.api.v1.superadmin.empreses import router as empreses_router
@@ -149,6 +153,14 @@ app.include_router(tiquets_router, prefix=settings.API_V1_STR)
 app.include_router(vehicles_pwa_router, prefix=settings.API_V1_STR)
 app.include_router(sync_router, prefix=settings.API_V1_STR + "/operari_pwa")
 app.include_router(operari_planols_router, prefix=settings.API_V1_STR)
+app.include_router(materials_operari_router, prefix=settings.API_V1_STR)
+app.include_router(planols_operari_router, prefix=settings.API_V1_STR)
+
+compat_pwa_router = APIRouter(prefix="/operari_pwa", tags=["Operari PWA Compat"])
+compat_pwa_router.add_api_route("/feines", llistar_les_meves_feines, methods=["GET"])
+compat_pwa_router.add_api_route("/vehicles/stock", llistar_estoc_furgonetes, methods=["GET"])
+app.include_router(compat_pwa_router, prefix=settings.API_V1_STR)
+
 app.include_router(intervencions_router, prefix=settings.API_V1_STR)
 app.include_router(cerca_router, prefix=settings.API_V1_STR)
 app.include_router(spotlight_router, prefix=settings.API_V1_STR)

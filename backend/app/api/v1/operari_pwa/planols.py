@@ -1,4 +1,5 @@
 import uuid
+from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
@@ -7,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db_with_tenant_context
 from app.core.security import require_roles
-from app.models.models import CapaVectorial, PlanolBase
+from app.models.models import CapaAnotacio, CapaVectorial, PlanolBase
 
 router = APIRouter(
     prefix="/operari/planols",
@@ -68,3 +69,56 @@ async def crear_capa_operari(
         es_tancada=nova_capa.es_tancada,  # type: ignore
         dades_geojson=nova_capa.dades_geojson,  # type: ignore
     )
+
+
+class CapaAnotacioOperariResponse(BaseModel):
+    id: uuid.UUID
+    nom: str
+    es_tancada: bool = False
+    visible: bool = True
+    pins: List[dict] = []
+
+
+@router.get("", response_model=List[CapaAnotacioOperariResponse])
+async def llistar_capes_operari(
+    request: Request,
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+):
+    """Llista les capes d'anotació vectorials de l'empresa per a la PWA operari."""
+    empresa_id = request.state.empresa_id
+    if not empresa_id or empresa_id == "undefined":
+        raise HTTPException(status_code=401, detail="Context d'empresa no trobat")
+
+    stmt = select(CapaAnotacio).where(CapaAnotacio.empresa_id == uuid.UUID(empresa_id))
+    res = await db.execute(stmt)
+    capes = res.scalars().all()
+
+    return [
+        CapaAnotacioOperariResponse(
+            id=c.id,
+            nom=c.nom_capa,
+            es_tancada=(c.estat_capa == "TANCADA"),
+            visible=True,
+            pins=[],
+        )
+        for c in capes
+    ]
+
+
+planols_operari_router = APIRouter(
+    prefix="/planols",
+    tags=["Planols Operari Direct"],
+    dependencies=[
+        Depends(require_roles(["OPERARI", "CAPATAZ", "CAP_DE_COLLA", "BOSS", "SUPERADMIN"]))
+    ],
+)
+
+
+@planols_operari_router.get("/operari", response_model=List[CapaAnotacioOperariResponse])
+async def llistar_planols_operari_direct(
+    request: Request,
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+):
+    """Endpoint directe /api/v1/planols/operari per a compatibilitat PWA."""
+    return await llistar_capes_operari(request, db)
+

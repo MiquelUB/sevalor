@@ -43,7 +43,7 @@ export function useAssignacions() {
 
       // 2. Fetch remot des de l'API per actualitzar i xifrar a la memòria cau
       try {
-        const remoteData = await apiFetch<OrdreTreballLocal[]>("operari_pwa/feines");
+        const remoteData = await apiFetch<OrdreTreballLocal[]>("/operari/feines");
         if (remoteData && Array.isArray(remoteData)) {
           setOrdres(remoteData);
           setError(null);

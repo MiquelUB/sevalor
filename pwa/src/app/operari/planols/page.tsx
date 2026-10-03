@@ -37,7 +37,7 @@ export default function OperariPlanolsPage() {
   const carregarPlanol = async () => {
     setLoading(true);
     try {
-      const data = await apiFetch("/planols/operari");
+      const data = await apiFetch("/operari/planols");
       const capesData = Array.isArray(data) ? data : [];
       // Assegurar visibilitat per defecte
       const capesNormalitzades = capesData.map((c: any) => ({
