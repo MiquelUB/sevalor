@@ -51,7 +51,7 @@ export default function EmpresaDetailPage({ params }: { params: { id: string } }
 
   const saveEstat = async () => {
     try {
-      await fetch(`http://localhost:8000/api/v1/superadmin/tenants/${params.id}/estat`, {
+      await fetch(`${getApiBaseUrl()}/api/v1/superadmin/tenants/${params.id}/estat`, {
         method: "PUT",
         headers: { ...getAuthHeader(), "Content-Type": "application/json" },
         body: JSON.stringify({ estat })
@@ -61,7 +61,7 @@ export default function EmpresaDetailPage({ params }: { params: { id: string } }
 
   const saveQuota = async () => {
     try {
-      const r = await fetch(`http://localhost:8000/api/v1/superadmin/tenants/${params.id}/quota`, {
+      const r = await fetch(`${getApiBaseUrl()}/api/v1/superadmin/tenants/${params.id}/quota`, {
         method: "PUT",
         headers: { ...getAuthHeader(), "Content-Type": "application/json" },
         body: JSON.stringify({ pla_subscripcio: pla })
@@ -75,7 +75,7 @@ export default function EmpresaDetailPage({ params }: { params: { id: string } }
 
   const saveFeatures = async () => {
     try {
-      await fetch(`http://localhost:8000/api/v1/superadmin/tenants/${params.id}/feature-flags`, {
+      await fetch(`${getApiBaseUrl()}/api/v1/superadmin/tenants/${params.id}/feature-flags`, {
         method: "PUT",
         headers: { ...getAuthHeader(), "Content-Type": "application/json" },
         body: JSON.stringify(features)
@@ -92,7 +92,7 @@ export default function EmpresaDetailPage({ params }: { params: { id: string } }
   
   const handleDestroy = async () => {
     if(confirm("ATENCIÓ: Aquesta acció marcarà el tenant com ELIMINAT i programarà la purga de dades. N'estàs segur?")) {
-      await fetch(`http://localhost:8000/api/v1/superadmin/tenants/${params.id}/destruccio`, {
+      await fetch(`${getApiBaseUrl()}/api/v1/superadmin/tenants/${params.id}/destruccio`, {
         method: "POST",
         headers: getAuthHeader()
       });
