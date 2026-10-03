@@ -56,12 +56,15 @@ def executar_backup_empresa(
 
     with zipfile.ZipFile(ruta_zip, "w", zipfile.ZIP_DEFLATED) as zf:
         # Manifest
-        zf.writestr("manifest.txt", (
-            f"Backup SEVALOR\n"
-            f"Empresa: {empresa_id}\n"
-            f"Data: {data_str}\n"
-            f"Timestamp: {int(data_inici.timestamp())}\n"
-        ))
+        zf.writestr(
+            "manifest.txt",
+            (
+                f"Backup SEVALOR\n"
+                f"Empresa: {empresa_id}\n"
+                f"Data: {data_str}\n"
+                f"Timestamp: {int(data_inici.timestamp())}\n"
+            ),
+        )
 
         for dir_arrel in dirs_origen:
             if not os.path.isdir(dir_arrel):
@@ -89,7 +92,10 @@ def executar_backup_empresa(
 
     logger.info(
         "Backup completat: %s | Fitxers: %d | Mida: %.2f MB | Durada: %.1f s",
-        ruta_zip, total_fitxers, total_bytes / (1024 * 1024), durada_segons,
+        ruta_zip,
+        total_fitxers,
+        total_bytes / (1024 * 1024),
+        durada_segons,
     )
 
     return {

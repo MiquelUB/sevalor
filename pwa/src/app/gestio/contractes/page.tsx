@@ -38,9 +38,9 @@ export default function ContractesPage() {
   const fetchData = async () => {
     try {
       const [resC, resA, resM] = await Promise.all([
-        fetch(getApiBaseUrl() + "/api/v1/gestio/contractes", { headers: getAuthHeader() }),
-        fetch(getApiBaseUrl() + "/api/v1/gestio/contractes/alertes/venciments", { headers: getAuthHeader() }),
-        fetch(getApiBaseUrl() + "/api/v1/gestio/contractes/kpis/mrr", { headers: getAuthHeader() })
+        fetch(getApiBaseUrl() + "/gestio/contractes", { headers: getAuthHeader() }),
+        fetch(getApiBaseUrl() + "/gestio/contractes/alertes/venciments", { headers: getAuthHeader() }),
+        fetch(getApiBaseUrl() + "/gestio/contractes/kpis/mrr", { headers: getAuthHeader() })
       ]);
       if (resC.ok) setContractes(await resC.json());
       if (resA.ok) setAlertes(await resA.json());

@@ -28,7 +28,7 @@ test.describe('Superadmin - Tenants Management', () => {
     await expect(page).toHaveURL(/\/superadmin\/empreses/);
 
     // Verify we see the E2E Tenant seeded by seed_db
-    await expect(page.locator('text=Test E2E Empresa')).toBeVisible();
+    try { await expect(page.locator('text=Test E2E Empresa')).toBeVisible(); } catch(e) { console.log(await page.content()); throw e; }
     await expect(page.locator('text=e2e.campopro.cat')).toBeVisible();
 
     // Click on Edit

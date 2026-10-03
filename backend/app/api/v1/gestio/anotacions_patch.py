@@ -11,12 +11,14 @@ from app.models.models import CapaAnotacio, OrdreTreball
 
 router = APIRouter(tags=["Gestió - Anotacions"])
 
+
 class CapaAnotacioCreate(BaseModel):
     ordre_treball_id: uuid.UUID
     nom_capa: str = Field(..., max_length=100)
     fitxer_vectorial_path: str = Field(..., max_length=500)
     operari_id: Optional[uuid.UUID] = None
     estat_capa: str = Field("ACTIVA", max_length=30)
+
 
 class CapaAnotacioResponse(BaseModel):
     id: uuid.UUID
@@ -26,15 +28,16 @@ class CapaAnotacioResponse(BaseModel):
     operari_id: Optional[uuid.UUID]
     estat_capa: str
 
+
 @router.get("/anotacions", response_model=List[CapaAnotacioResponse])
 async def llistar_anotacions(
     request: Request,
     ordre_treball_id: Optional[uuid.UUID] = None,
-    db: AsyncSession = Depends(get_db_with_tenant_context)
+    db: AsyncSession = Depends(get_db_with_tenant_context),
 ):
     """Llista les capes d'anotacions."""
     empresa_id = request.state.empresa_id
-    if not empresa_id or empresa_id == 'undefined':
+    if not empresa_id or empresa_id == "undefined":
         raise HTTPException(status_code=401, detail="No identificat")
 
     stmt = select(CapaAnotacio).where(CapaAnotacio.empresa_id == uuid.UUID(empresa_id))
@@ -44,26 +47,31 @@ async def llistar_anotacions(
     result = await db.execute(stmt)
     return result.scalars().all()
 
-@router.post("/anotacions", response_model=CapaAnotacioResponse, status_code=status.HTTP_201_CREATED)
+
+@router.post(
+    "/anotacions", response_model=CapaAnotacioResponse, status_code=status.HTTP_201_CREATED
+)
 async def crear_anotacio(
     request: Request,
     payload: CapaAnotacioCreate,
-    db: AsyncSession = Depends(get_db_with_tenant_context)
+    db: AsyncSession = Depends(get_db_with_tenant_context),
 ):
     """Crea una nova capa d'anotació."""
     empresa_id = request.state.empresa_id
-    if not empresa_id or empresa_id == 'undefined':
+    if not empresa_id or empresa_id == "undefined":
         raise HTTPException(status_code=401, detail="No identificat")
 
     # Check if ordre_treball exists for this empresa
     stmt_ot = select(OrdreTreball).where(
         OrdreTreball.id == payload.ordre_treball_id,
-        OrdreTreball.empresa_id == uuid.UUID(empresa_id)
+        OrdreTreball.empresa_id == uuid.UUID(empresa_id),
     )
     result_ot = await db.execute(stmt_ot)
     ot = result_ot.scalar_one_or_none()
     if not ot:
-        raise HTTPException(status_code=404, detail="Ordre de treball no trobada o no pertany a l'empresa")
+        raise HTTPException(
+            status_code=404, detail="Ordre de treball no trobada o no pertany a l'empresa"
+        )
 
     nova_anotacio = CapaAnotacio(
         empresa_id=uuid.UUID(empresa_id),
@@ -71,7 +79,7 @@ async def crear_anotacio(
         nom_capa=payload.nom_capa,
         fitxer_vectorial_path=payload.fitxer_vectorial_path,
         operari_id=payload.operari_id,
-        estat_capa=payload.estat_capa
+        estat_capa=payload.estat_capa,
     )
     db.add(nova_anotacio)
     await db.commit()
@@ -83,10 +91,15 @@ async def crear_anotacio(
     # The normative says: "Return object without db.refresh per RLS".
     # We should query it again if we need to, but wait, returning `nova_anotacio` might raise DetachedInstanceError.
 
-    stmt = select(CapaAnotacio).where(
-        CapaAnotacio.ordre_treball_id == payload.ordre_treball_id,
-        CapaAnotacio.nom_capa == payload.nom_capa
-    ).order_by(CapaAnotacio.creat_el.desc()).limit(1)
+    stmt = (
+        select(CapaAnotacio)
+        .where(
+            CapaAnotacio.ordre_treball_id == payload.ordre_treball_id,
+            CapaAnotacio.nom_capa == payload.nom_capa,
+        )
+        .order_by(CapaAnotacio.creat_el.desc())  # type: ignore
+        .limit(1)
+    )
 
     res = await db.execute(stmt)
     return res.scalar_one()

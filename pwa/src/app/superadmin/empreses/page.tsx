@@ -30,7 +30,7 @@ export default function EmpresesPage() {
 
   const fetchTenants = async () => {
     try {
-      const res = await fetch(getApiBaseUrl() + "/api/v1/superadmin/tenants", {
+      const res = await fetch(getApiBaseUrl() + "/superadmin/tenants", {
         headers: getAuthHeader(),
       });
       if (!res.ok) throw new Error("Error fetching tenants");

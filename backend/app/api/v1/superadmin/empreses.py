@@ -14,7 +14,10 @@ from app.models.models import Empresa
 
 logger = logging.getLogger("superadmin.empreses")
 
-router = APIRouter(prefix="/superadmin/empreses", tags=["Superadmin", "Empreses Configuració Camaleó"])
+router = APIRouter(
+    prefix="/superadmin/empreses", tags=["Superadmin", "Empreses Configuració Camaleó"]
+)
+
 
 class UpdateCamaleoConfigRequest(BaseModel):
     primari_hsl: Optional[str] = Field(None, max_length=30)
@@ -23,6 +26,7 @@ class UpdateCamaleoConfigRequest(BaseModel):
     logotip_path: Optional[str] = Field(None, max_length=500)
     favicon_path: Optional[str] = Field(None, max_length=500)
     domini_custom: Optional[str] = Field(None, max_length=100)
+
 
 @router.put("/{empresa_id}/camaleo", response_model=Dict[str, Any])
 async def update_camaleo_config(
@@ -41,7 +45,10 @@ async def update_camaleo_config(
     token_emp_id = claims.get("empresa_id")
     if rol == "BOSS":
         if str(token_emp_id) != str(empresa_id):
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Un BOSS només pot modificar la configuració de la seva pròpia empresa.")
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Un BOSS només pot modificar la configuració de la seva pròpia empresa.",
+            )
 
     emp_res = await db.execute(select(Empresa).where(Empresa.id == emp_uuid))
     empresa = emp_res.scalars().first()
@@ -73,6 +80,6 @@ async def update_camaleo_config(
             "accent_hsl": empresa.accent_hsl,
             "logotip_path": empresa.logotip_path,
             "favicon_path": empresa.favicon_path,
-            "domini_custom": getattr(empresa, 'domini_custom', None),
-        }
+            "domini_custom": getattr(empresa, "domini_custom", None),
+        },
     }

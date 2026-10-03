@@ -6,7 +6,6 @@ Aquest mòdul proporciona aliases perquè els tests del backend puguin
 importar les funcions sense dependre del paquet bot complet.
 """
 
-
 # Intentar importar des de bot.security
 try:
     from bot.security import detectar_doble_extensio, validar_magic_bytes
@@ -17,6 +16,7 @@ except (ImportError, ModuleNotFoundError):
 
     def validar_magic_bytes(contingut_bytes: bytes, extensio: str = "") -> bool:
         return True
+
 
 def validate_telegram_file_safety(nom_fitxer: str, contingut_bytes: bytes) -> dict:
     """

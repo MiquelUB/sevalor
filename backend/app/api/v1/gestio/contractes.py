@@ -18,11 +18,14 @@ from app.services.economics_service import calculate_mrr
 
 router = APIRouter(prefix="/gestio/contractes", tags=["Contractes Manteniment"])
 
+
 class RenovarRequest(BaseModel):
     increment_percent: float = Field(default=0.0)
 
+
 class BaixaRequest(BaseModel):
     motiu: str
+
 
 class ContracteAlerta(BaseModel):
     revisio_id: uuid.UUID
@@ -31,6 +34,7 @@ class ContracteAlerta(BaseModel):
     data_prevista: date
     dies_restants: int
     estat: str
+
 
 class MrrResponse(BaseModel):
     mrr: float
@@ -47,6 +51,7 @@ class ContracteMantenimentCreate(BaseModel):
     observacions: Optional[str] = None
     finques_ids: List[uuid.UUID] = []
 
+
 class ContracteMantenimentResponse(ContracteMantenimentCreate):
     id: uuid.UUID
     empresa_id: uuid.UUID
@@ -54,31 +59,43 @@ class ContracteMantenimentResponse(ContracteMantenimentCreate):
     updated_at: datetime
     model_config = {"from_attributes": True}
 
+
 class ContracteAmbFinquesResponse(ContracteMantenimentResponse):
     finques: List[uuid.UUID]
+
 
 @router.post("/", response_model=ContracteAmbFinquesResponse, status_code=status.HTTP_201_CREATED)
 async def crear_contracte(
     request: Request,
     contracte: ContracteMantenimentCreate,
-    db: AsyncSession = Depends(get_db_with_tenant_context)
+    db: AsyncSession = Depends(get_db_with_tenant_context),
 ) -> Any:
     empresa_id = getattr(request.state, "empresa_id", None) or request.headers.get("X-Empresa-ID")
-    if not empresa_id or empresa_id == 'undefined':
+    if not empresa_id or empresa_id == "undefined":
         raise HTTPException(status_code=401, detail="No identificat")
     empresa_uuid = uuid.UUID(empresa_id)
 
     # Validar que client pertany a l'empresa
-    client_res = await db.execute(select(Client).where(Client.id == contracte.client_id, Client.empresa_id == empresa_uuid))
+    client_res = await db.execute(
+        select(Client).where(Client.id == contracte.client_id, Client.empresa_id == empresa_uuid)
+    )
     if not client_res.scalars().first():
         raise HTTPException(status_code=404, detail="Client no trobat")
 
     # Validar que totes les finques pertanyen a l'empresa i al client
     if contracte.finques_ids:
-        finques_res = await db.execute(select(Finca).where(Finca.id.in_(contracte.finques_ids), Finca.empresa_id == empresa_uuid, Finca.client_id == contracte.client_id))
+        finques_res = await db.execute(
+            select(Finca).where(
+                Finca.id.in_(contracte.finques_ids),
+                Finca.empresa_id == empresa_uuid,
+                Finca.client_id == contracte.client_id,
+            )
+        )
         finques_db = finques_res.scalars().all()
         if len(finques_db) != len(contracte.finques_ids):
-            raise HTTPException(status_code=400, detail="Alguna finca no és vàlida o no pertany al client")
+            raise HTTPException(
+                status_code=400, detail="Alguna finca no és vàlida o no pertany al client"
+            )
 
     # Crear contracte
     nou_contracte = ContracteManteniment(
@@ -90,17 +107,15 @@ async def crear_contracte(
         import_anual=contracte.import_anual,
         periodicitat=contracte.periodicitat,
         estat=contracte.estat,
-        observacions=contracte.observacions
+        observacions=contracte.observacions,
     )
     db.add(nou_contracte)
-    await db.flush() # Per obtenir l'ID
+    await db.flush()  # Per obtenir l'ID
 
     # Crear relacions amb finques
     for finca_id in contracte.finques_ids:
         rel = ContractesMantenimentFinques(
-            empresa_id=empresa_uuid,
-            contracte_id=nou_contracte.id,
-            finca_id=finca_id
+            empresa_id=empresa_uuid, contracte_id=nou_contracte.id, finca_id=finca_id
         )
         db.add(rel)
 
@@ -112,50 +127,56 @@ async def crear_contracte(
     resp_dict["finques"] = contracte.finques_ids
     return ContracteAmbFinquesResponse(**resp_dict)
 
+
 @router.get("/", response_model=List[ContracteMantenimentResponse])
 async def llistar_contractes(
-    request: Request,
-    db: AsyncSession = Depends(get_db_with_tenant_context)
+    request: Request, db: AsyncSession = Depends(get_db_with_tenant_context)
 ) -> Any:
     empresa_id = getattr(request.state, "empresa_id", None) or request.headers.get("X-Empresa-ID")
-    if not empresa_id or empresa_id == 'undefined':
+    if not empresa_id or empresa_id == "undefined":
         raise HTTPException(status_code=401, detail="No identificat")
     empresa_uuid = uuid.UUID(empresa_id)
 
-    stmt = select(ContracteManteniment).where(ContracteManteniment.empresa_id == empresa_uuid).order_by(ContracteManteniment.created_at.desc())
+    stmt = (
+        select(ContracteManteniment)
+        .where(ContracteManteniment.empresa_id == empresa_uuid)
+        .order_by(ContracteManteniment.created_at.desc())
+    )
     result = await db.execute(stmt)
     contractes = result.scalars().all()
     return contractes
 
+
 @router.get("/kpis/mrr", response_model=MrrResponse)
 async def obtenir_mrr(
-    request: Request,
-    db: AsyncSession = Depends(get_db_with_tenant_context)
+    request: Request, db: AsyncSession = Depends(get_db_with_tenant_context)
 ) -> Any:
     empresa_id = getattr(request.state, "empresa_id", None) or request.headers.get("X-Empresa-ID")
-    if not empresa_id or empresa_id == 'undefined':
+    if not empresa_id or empresa_id == "undefined":
         raise HTTPException(status_code=401, detail="No identificat")
 
     empresa_uuid = uuid.UUID(empresa_id)
     mrr = await calculate_mrr(db, empresa_uuid)
     return MrrResponse(mrr=mrr)
 
+
 @router.get("/alertes/venciments", response_model=List[ContracteAlerta])
 async def llistar_alertes(
-    request: Request,
-    db: AsyncSession = Depends(get_db_with_tenant_context)
+    request: Request, db: AsyncSession = Depends(get_db_with_tenant_context)
 ) -> Any:
     empresa_id = getattr(request.state, "empresa_id", None) or request.headers.get("X-Empresa-ID")
-    if not empresa_id or empresa_id == 'undefined':
+    if not empresa_id or empresa_id == "undefined":
         raise HTTPException(status_code=401, detail="No identificat")
 
     empresa_uuid = uuid.UUID(empresa_id)
 
-    stmt = select(RevisionsContracte, ContracteManteniment).join(
-        ContracteManteniment, RevisionsContracte.contracte_id == ContracteManteniment.id
-    ).where(
-        RevisionsContracte.empresa_id == empresa_uuid,
-        RevisionsContracte.estat.in_(["PENDENT", "VENCUDA", "PROGRAMADA"])
+    stmt = (
+        select(RevisionsContracte, ContracteManteniment)
+        .join(ContracteManteniment, RevisionsContracte.contracte_id == ContracteManteniment.id)
+        .where(
+            RevisionsContracte.empresa_id == empresa_uuid,
+            RevisionsContracte.estat.in_(["PENDENT", "VENCUDA", "PROGRAMADA"]),
+        )
     )
     result = await db.execute(stmt)
     rows = result.all()
@@ -179,29 +200,29 @@ async def llistar_alertes(
                     numero_contracte=contracte.numero_contracte,
                     data_prevista=revisio.data_prevista,
                     dies_restants=dies_restants,
-                    estat=estat_actual
+                    estat=estat_actual,
                 )
             )
 
     await db.commit()
     return alertes
 
+
 @router.post("/{contracte_id}/renovar")
 async def renovar_contracte(
     contracte_id: uuid.UUID,
     req: RenovarRequest,
     request: Request,
-    db: AsyncSession = Depends(get_db_with_tenant_context)
+    db: AsyncSession = Depends(get_db_with_tenant_context),
 ) -> Any:
     empresa_id = getattr(request.state, "empresa_id", None) or request.headers.get("X-Empresa-ID")
-    if not empresa_id or empresa_id == 'undefined':
+    if not empresa_id or empresa_id == "undefined":
         raise HTTPException(status_code=401, detail="No identificat")
 
     empresa_uuid = uuid.UUID(empresa_id)
 
     stmt = select(ContracteManteniment).where(
-        ContracteManteniment.id == contracte_id,
-        ContracteManteniment.empresa_id == empresa_uuid
+        ContracteManteniment.id == contracte_id, ContracteManteniment.empresa_id == empresa_uuid
     )
     result = await db.execute(stmt)
     contracte = result.scalar_one_or_none()
@@ -230,22 +251,22 @@ async def renovar_contracte(
 
     return {"status": "ok", "missatge": "Contracte renovat amb èxit"}
 
+
 @router.post("/{contracte_id}/baixa")
 async def baixa_contracte(
     contracte_id: uuid.UUID,
     req: BaixaRequest,
     request: Request,
-    db: AsyncSession = Depends(get_db_with_tenant_context)
+    db: AsyncSession = Depends(get_db_with_tenant_context),
 ) -> Any:
     empresa_id = getattr(request.state, "empresa_id", None) or request.headers.get("X-Empresa-ID")
-    if not empresa_id or empresa_id == 'undefined':
+    if not empresa_id or empresa_id == "undefined":
         raise HTTPException(status_code=401, detail="No identificat")
 
     empresa_uuid = uuid.UUID(empresa_id)
 
     stmt = select(ContracteManteniment).where(
-        ContracteManteniment.id == contracte_id,
-        ContracteManteniment.empresa_id == empresa_uuid
+        ContracteManteniment.id == contracte_id, ContracteManteniment.empresa_id == empresa_uuid
     )
     result = await db.execute(stmt)
     contracte = result.scalar_one_or_none()
@@ -258,7 +279,7 @@ async def baixa_contracte(
 
     stmt_rev = select(RevisionsContracte).where(
         RevisionsContracte.contracte_id == contracte.id,
-        RevisionsContracte.estat.in_(["PENDENT", "PROGRAMADA"])
+        RevisionsContracte.estat.in_(["PENDENT", "PROGRAMADA"]),
     )
     res_rev = await db.execute(stmt_rev)
     for rev in res_rev.scalars():
@@ -270,21 +291,21 @@ async def baixa_contracte(
 
     return {"status": "ok", "missatge": "Contracte donat de baixa"}
 
+
 @router.post("/{contracte_id}/prefacturar")
 async def generar_prefactura(
     contracte_id: uuid.UUID,
     request: Request,
-    db: AsyncSession = Depends(get_db_with_tenant_context)
+    db: AsyncSession = Depends(get_db_with_tenant_context),
 ) -> Any:
     empresa_id = getattr(request.state, "empresa_id", None) or request.headers.get("X-Empresa-ID")
-    if not empresa_id or empresa_id == 'undefined':
+    if not empresa_id or empresa_id == "undefined":
         raise HTTPException(status_code=401, detail="No identificat")
 
     empresa_uuid = uuid.UUID(empresa_id)
 
     stmt = select(ContracteManteniment).where(
-        ContracteManteniment.id == contracte_id,
-        ContracteManteniment.empresa_id == empresa_uuid
+        ContracteManteniment.id == contracte_id, ContracteManteniment.empresa_id == empresa_uuid
     )
     result = await db.execute(stmt)
     contracte = result.scalar_one_or_none()
@@ -298,13 +319,15 @@ async def generar_prefactura(
     factura = FacturaCapcalera(
         empresa_id=empresa_uuid,
         client_id=contracte.client_id,
-        serie="PRE", numero_factura=9999, hash_sha256="draft_hash",
+        serie="PRE",
+        numero_factura=9999,
+        hash_sha256="draft_hash",
         data_emissio=datetime.now(timezone.utc).date(),
         base_imposable=contracte.import_anual,
         quota_iva=float(contracte.import_anual) * 0.21,
         liquid_exigible=float(contracte.import_anual) * 1.21,
         estat_enviament="PENDENT",
-        estat_cobrament="PENDENT"
+        estat_cobrament="PENDENT",
     )
     db.add(factura)
     await db.flush()
@@ -316,32 +339,37 @@ async def generar_prefactura(
         quantitat=1,
         preu_venda_unitari=contracte.import_anual,
         subtotal=contracte.import_anual,
-        tipus_iva=21.0
+        tipus_iva=21.0,
     )
     db.add(linia)
     await db.commit()
 
     return {"status": "ok", "factura_id": str(factura.id), "missatge": "Pre-factura generada"}
 
+
 @router.get("/{contracte_id}", response_model=ContracteAmbFinquesResponse)
 async def detall_contracte(
     request: Request,
     contracte_id: uuid.UUID,
-    db: AsyncSession = Depends(get_db_with_tenant_context)
+    db: AsyncSession = Depends(get_db_with_tenant_context),
 ) -> Any:
     empresa_id = getattr(request.state, "empresa_id", None) or request.headers.get("X-Empresa-ID")
-    if not empresa_id or empresa_id == 'undefined':
+    if not empresa_id or empresa_id == "undefined":
         raise HTTPException(status_code=401, detail="No identificat")
     empresa_uuid = uuid.UUID(empresa_id)
 
-    stmt = select(ContracteManteniment).where(ContracteManteniment.id == contracte_id, ContracteManteniment.empresa_id == empresa_uuid)
+    stmt = select(ContracteManteniment).where(
+        ContracteManteniment.id == contracte_id, ContracteManteniment.empresa_id == empresa_uuid
+    )
     result = await db.execute(stmt)
     contracte = result.scalars().first()
 
     if not contracte:
         raise HTTPException(status_code=404, detail="Contracte no trobat")
 
-    finques_stmt = select(ContractesMantenimentFinques).where(ContractesMantenimentFinques.contracte_id == contracte_id)
+    finques_stmt = select(ContractesMantenimentFinques).where(
+        ContractesMantenimentFinques.contracte_id == contracte_id
+    )
     finques_res = await db.execute(finques_stmt)
     finques_db = finques_res.scalars().all()
     finques_ids = [f.finca_id for f in finques_db]

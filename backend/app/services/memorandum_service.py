@@ -9,6 +9,7 @@ from app.models.models import MemorandumTecnicCopilot
 class IAOcrNotImplementedError(NotImplementedError):
     pass
 
+
 async def generar_memorandum_tecnic(
     db: AsyncSession,
     empresa_id: uuid.UUID,
@@ -16,7 +17,7 @@ async def generar_memorandum_tecnic(
     ordre_treball_id: Optional[uuid.UUID],
     transcripcio: str,
     confianca_acustica: float,
-    foto_path: Optional[str] = None
+    foto_path: Optional[str] = None,
 ) -> MemorandumTecnicCopilot:
     """
     Genera un dictamen (Extra Facturable vs Cost No Imputable) basat en àudio i foto.
@@ -42,7 +43,7 @@ async def generar_memorandum_tecnic(
         analisi_visual=analisi_visual,
         dictamen_pericial=dictamen,
         motiu_dictamen=motiu,
-        estat="PENDENT_REVISIO"
+        estat="PENDENT_REVISIO",
     )
 
     db.add(nou_memo)

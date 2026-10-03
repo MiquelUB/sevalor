@@ -1,23 +1,27 @@
 import secrets
 import string
 import uuid
+from datetime import datetime, timezone
 from typing import List, Optional
 
 import bcrypt
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.v1.operari_pwa.jornada import JornadaInici
 from app.core.db import get_db_with_tenant_context
-from app.core.security import require_roles
-from app.models.models import Usuari
+from app.core.security import require_roles, veto_enginyer_finances
+from app.models.models import RegistreJornadaLaboral, Usuari
+from app.services.ocr_service import processar_dni_ocr
 
 router = APIRouter(
     prefix="/gestio/operaris",
     tags=["Gestió Operaris"],
     dependencies=[Depends(require_roles(["BOSS", "SECRETARIA", "ENGINYER"]))],
 )
+
 
 class OperariCreate(BaseModel):
     nif: str = Field(..., max_length=20)
@@ -26,6 +30,7 @@ class OperariCreate(BaseModel):
     telefon: str = Field(..., max_length=20)
     especialitat: str = Field("SISTEMES_REG", max_length=50)
     cost_hora_eur: float = Field(22.50)
+
 
 class OperariResponse(BaseModel):
     id: uuid.UUID
@@ -38,13 +43,16 @@ class OperariResponse(BaseModel):
     pin_bloquejat: bool
     intents_pin_fallits: int
 
+
 def generar_pin() -> str:
     """Genera un PIN numèric segur de 4 dígits."""
     return "".join(secrets.choice(string.digits) for _ in range(4))
 
+
 def hash_pin(pin: str) -> str:
     """Hashea el PIN utilitzant bcrypt directament."""
-    return bcrypt.hashpw(pin.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+    return bcrypt.hashpw(pin.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+
 
 async def verificar_permisos_boss(request: Request):
     """Comprova que l'usuari té rol BOSS o SECRETARIA."""
@@ -52,10 +60,10 @@ async def verificar_permisos_boss(request: Request):
         raise HTTPException(status_code=401, detail="No identificat")
     return request.state.empresa_id
 
+
 @router.get("", response_model=List[OperariResponse])
 async def llistar_operaris(
-    request: Request,
-    db: AsyncSession = Depends(get_db_with_tenant_context)
+    request: Request, db: AsyncSession = Depends(get_db_with_tenant_context)
 ):
     empresa_id = await verificar_permisos_boss(request)
 
@@ -64,6 +72,7 @@ async def llistar_operaris(
     operaris = result.scalars().all()
 
     return operaris
+
 
 @router.post("", response_model=OperariResponse, status_code=status.HTTP_201_CREATED)
 async def alta_operari(
@@ -74,7 +83,9 @@ async def alta_operari(
 ):
     empresa_id = await verificar_permisos_boss(request)
 
-    stmt = select(Usuari).where(Usuari.empresa_id == uuid.UUID(empresa_id), Usuari.nif == operari.nif)
+    stmt = select(Usuari).where(
+        Usuari.empresa_id == uuid.UUID(empresa_id), Usuari.nif == operari.nif
+    )
     result = await db.execute(stmt)
     if result.scalars().first():
         raise HTTPException(status_code=400, detail="Ja existeix un operari amb aquest NIF")
@@ -92,13 +103,14 @@ async def alta_operari(
         cost_hora_eur=operari.cost_hora_eur,
         rol="OPERARI",
         estat="ACTIU",
-        pin_hash=hashed_pin
+        pin_hash=hashed_pin,
     )
     db.add(nou_usuari)
     await db.commit()
 
     print(f"[SMS DISPATCH] -> Per a {operari.telefon}: El teu nou PIN de CampoPro és {nou_pin}")
     return nou_usuari
+
 
 @router.post("/{operari_id}/reset-pin")
 async def reset_pin_operari(
@@ -127,16 +139,8 @@ async def reset_pin_operari(
     return {
         "missatge": "Nou PIN generat i tramès per SMS",
         "pin_bloquejat": usuari.pin_bloquejat,
-        "intents_pin_fallits": usuari.intents_pin_fallits
+        "intents_pin_fallits": usuari.intents_pin_fallits,
     }
-
-from datetime import datetime, timezone
-
-from fastapi import File, UploadFile
-
-from app.api.v1.operari_pwa.jornada import JornadaInici
-from app.models.models import RegistreJornadaLaboral
-from app.services.ocr_service import processar_dni_ocr
 
 
 @router.post("/alta-dni-ocr")
@@ -146,10 +150,11 @@ async def alta_dni_ocr(
     db: AsyncSession = Depends(get_db_with_tenant_context),
     claims: dict = Depends(require_roles(["BOSS", "SECRETARIA"])),
 ):
-    empresa_id = await verificar_permisos_boss(request)
+    await verificar_permisos_boss(request)
     content = await file.read()
     data = await processar_dni_ocr(content)
     return data
+
 
 @router.post("/{operari_id}/fitxar")
 async def fitxar_operari_gestio(
@@ -164,7 +169,7 @@ async def fitxar_operari_gestio(
     stmt = select(RegistreJornadaLaboral).where(
         RegistreJornadaLaboral.empresa_id == uuid.UUID(empresa_id),
         RegistreJornadaLaboral.usuari_id == operari_id,
-        RegistreJornadaLaboral.estat == "EN_CURS"
+        RegistreJornadaLaboral.estat == "EN_CURS",
     )
     result = await db.execute(stmt)
     jornada = result.scalars().first()
@@ -180,13 +185,11 @@ async def fitxar_operari_gestio(
             empresa_id=uuid.UUID(empresa_id),
             usuari_id=operari_id,
             geolocalitzacio_inici=f"{payload.latitud},{payload.longitud}",
-            estat="EN_CURS"
+            estat="EN_CURS",
         )
         db.add(nova_jornada)
         await db.commit()
         return {"estat": "EN_CURS", "jornada_id": nova_jornada.id}
-
-from app.core.security import veto_enginyer_finances
 
 
 @router.get("/{operari_id}/control-horari")
@@ -197,11 +200,14 @@ async def get_control_horari(
     claims: dict = Depends(veto_enginyer_finances),
 ):
     empresa_id = await verificar_permisos_boss(request)
-    stmt = select(RegistreJornadaLaboral).where(
-        RegistreJornadaLaboral.empresa_id == uuid.UUID(empresa_id),
-        RegistreJornadaLaboral.usuari_id == operari_id
-    ).order_by(RegistreJornadaLaboral.hora_inici.desc())
+    stmt = (
+        select(RegistreJornadaLaboral)
+        .where(
+            RegistreJornadaLaboral.empresa_id == uuid.UUID(empresa_id),
+            RegistreJornadaLaboral.usuari_id == operari_id,
+        )
+        .order_by(RegistreJornadaLaboral.hora_inici.desc())
+    )
     result = await db.execute(stmt)
     jornades = result.scalars().all()
     return jornades
-

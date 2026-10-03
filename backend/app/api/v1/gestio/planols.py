@@ -17,6 +17,7 @@ router = APIRouter(
     dependencies=[Depends(require_roles(["BOSS", "SECRETARIA", "ENGINYER"]))],
 )
 
+
 class PlanolCreate(BaseModel):
     titol: str = Field(..., max_length=150)
     codi_referencia: str = Field(..., max_length=50)
@@ -26,8 +27,10 @@ class PlanolCreate(BaseModel):
     mida_bytes: int = Field(0)
     es_georeferenciat: bool = Field(False)
 
+
 class PlanolResponse(PlanolCreate):
     id: uuid.UUID
+
 
 class CarpetaCreate(BaseModel):
     nom: str = Field(..., max_length=100)
@@ -37,12 +40,14 @@ class CarpetaCreate(BaseModel):
     descripcio: Optional[str] = None
     parent_id: Optional[uuid.UUID] = None
 
+
 class CarpetaResponse(BaseModel):
     id: uuid.UUID
     nom: str
     categoria: str
     client_id: Optional[uuid.UUID]
     municipi: Optional[str]
+
 
 class CapaVectorialCreate(BaseModel):
     planol_base_id: uuid.UUID
@@ -54,6 +59,7 @@ class CapaVectorialCreate(BaseModel):
     opacitat_percent: int = 100
     geometries_geojson: dict = Field(default_factory=dict)
 
+
 class CapaVectorialResponse(BaseModel):
     id: uuid.UUID
     nom: str
@@ -62,6 +68,7 @@ class CapaVectorialResponse(BaseModel):
     version_id: int
     color_hex: str
 
+
 @router.get("", response_model=List[PlanolResponse])
 async def llistar_planols(
     request: Request,
@@ -69,10 +76,10 @@ async def llistar_planols(
     q: Optional[str] = None,
     limit: int = 50,
     offset: int = 0,
-    db: AsyncSession = Depends(get_db_with_tenant_context)
+    db: AsyncSession = Depends(get_db_with_tenant_context),
 ):
     empresa_id = request.state.empresa_id
-    if not empresa_id or empresa_id == 'undefined':
+    if not empresa_id or empresa_id == "undefined":
         raise HTTPException(status_code=401, detail="No identificat")
 
     stmt = select(PlanolBase).where(PlanolBase.empresa_id == uuid.UUID(empresa_id))
@@ -83,10 +90,7 @@ async def llistar_planols(
     if q:
         search_term = f"%{q}%"
         stmt = stmt.where(
-            or_(
-                PlanolBase.codi_referencia.ilike(search_term),
-                PlanolBase.titol.ilike(search_term)
-            )
+            or_(PlanolBase.codi_referencia.ilike(search_term), PlanolBase.titol.ilike(search_term))
         )
 
     stmt = stmt.limit(limit).offset(offset).order_by(PlanolBase.created_at.desc())
@@ -96,20 +100,18 @@ async def llistar_planols(
 
     return planols
 
+
 @router.post("", response_model=PlanolResponse, status_code=status.HTTP_201_CREATED)
 async def alta_planol(
-    request: Request,
-    planol: PlanolCreate,
-    db: AsyncSession = Depends(get_db_with_tenant_context)
+    request: Request, planol: PlanolCreate, db: AsyncSession = Depends(get_db_with_tenant_context)
 ):
     empresa_id = request.state.empresa_id
-    if not empresa_id or empresa_id == 'undefined':
+    if not empresa_id or empresa_id == "undefined":
         raise HTTPException(status_code=401, detail="No identificat")
 
     # Comprovem que la carpeta existeix i pertany a l'empresa
     stmt_carp = select(CarpetaPlanol).where(
-        CarpetaPlanol.id == planol.carpeta_id,
-        CarpetaPlanol.empresa_id == uuid.UUID(empresa_id)
+        CarpetaPlanol.id == planol.carpeta_id, CarpetaPlanol.empresa_id == uuid.UUID(empresa_id)
     )
     res_carp = await db.execute(stmt_carp)
     if not res_carp.scalars().first():
@@ -117,7 +119,7 @@ async def alta_planol(
 
     stmt_codi = select(PlanolBase).where(
         PlanolBase.empresa_id == uuid.UUID(empresa_id),
-        PlanolBase.codi_referencia == planol.codi_referencia
+        PlanolBase.codi_referencia == planol.codi_referencia,
     )
     result_codi = await db.execute(stmt_codi)
     if result_codi.scalars().first():
@@ -131,7 +133,7 @@ async def alta_planol(
         tipus_fitxer=planol.tipus_fitxer,
         fitxer_path=planol.fitxer_path,
         mida_bytes=planol.mida_bytes,
-        es_georeferenciat=planol.es_georeferenciat
+        es_georeferenciat=planol.es_georeferenciat,
     )
 
     db.add(nou_planol)
@@ -144,31 +146,31 @@ async def alta_planol(
 # Carpetes de plànols (Spec 010)
 # ---------------------------------------------------------------------------
 
+
 @router.get("/carpetes", response_model=List[CarpetaResponse])
 async def llistar_carpetes(
-    request: Request,
-    db: AsyncSession = Depends(get_db_with_tenant_context)
+    request: Request, db: AsyncSession = Depends(get_db_with_tenant_context)
 ):
     """Llista les carpetes de plànols de l'empresa (Spec 010)."""
     empresa_id = request.state.empresa_id
-    if not empresa_id or empresa_id == 'undefined':
+    if not empresa_id or empresa_id == "undefined":
         raise HTTPException(status_code=401, detail="No identificat")
 
     result = await db.execute(
-        select(CarpetaPlanol).where(CarpetaPlanol.empresa_id == uuid.UUID(empresa_id)).order_by(CarpetaPlanol.nom)
+        select(CarpetaPlanol)
+        .where(CarpetaPlanol.empresa_id == uuid.UUID(empresa_id))
+        .order_by(CarpetaPlanol.nom)
     )
     return result.scalars().all()
 
 
 @router.post("/carpetes", response_model=CarpetaResponse, status_code=status.HTTP_201_CREATED)
 async def crear_carpeta(
-    request: Request,
-    payload: CarpetaCreate,
-    db: AsyncSession = Depends(get_db_with_tenant_context)
+    request: Request, payload: CarpetaCreate, db: AsyncSession = Depends(get_db_with_tenant_context)
 ):
     """Crea una carpeta de plànols (Spec 010)."""
     empresa_id = request.state.empresa_id
-    if not empresa_id or empresa_id == 'undefined':
+    if not empresa_id or empresa_id == "undefined":
         raise HTTPException(status_code=401, detail="No identificat")
 
     nova = CarpetaPlanol(
@@ -189,15 +191,14 @@ async def crear_carpeta(
 # Capes vectorials (Spec 010 — gestió de capes per plànol)
 # ---------------------------------------------------------------------------
 
+
 @router.get("/planols/{planol_id}/capes", response_model=List[CapaVectorialResponse])
 async def llistar_capes_planol(
-    request: Request,
-    planol_id: uuid.UUID,
-    db: AsyncSession = Depends(get_db_with_tenant_context)
+    request: Request, planol_id: uuid.UUID, db: AsyncSession = Depends(get_db_with_tenant_context)
 ):
     """Llista les capes vectorials d'un plànol (Spec 010)."""
     empresa_id = request.state.empresa_id
-    if not empresa_id or empresa_id == 'undefined':
+    if not empresa_id or empresa_id == "undefined":
         raise HTTPException(status_code=401, detail="No identificat")
 
     result = await db.execute(
@@ -209,23 +210,29 @@ async def llistar_capes_planol(
     return result.scalars().all()
 
 
-@router.post("/planols/{planol_id}/capes", response_model=CapaVectorialResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/planols/{planol_id}/capes",
+    response_model=CapaVectorialResponse,
+    status_code=status.HTTP_201_CREATED,
+)
 async def crear_capa_planol(
     request: Request,
     planol_id: uuid.UUID,
     payload: CapaVectorialCreate,
-    db: AsyncSession = Depends(get_db_with_tenant_context)
+    db: AsyncSession = Depends(get_db_with_tenant_context),
 ):
     """Crea una capa vectorial sobre un plànol (Spec 010)."""
     empresa_id = request.state.empresa_id
-    if not empresa_id or empresa_id == 'undefined':
+    if not empresa_id or empresa_id == "undefined":
         raise HTTPException(status_code=401, detail="No identificat")
 
     # Verificar que el plànol pertany a l'empresa
-    planol_res = await db.execute(select(PlanolBase).where(
-        PlanolBase.id == planol_id,
-        PlanolBase.empresa_id == uuid.UUID(empresa_id),
-    ))
+    planol_res = await db.execute(
+        select(PlanolBase).where(
+            PlanolBase.id == planol_id,
+            PlanolBase.empresa_id == uuid.UUID(empresa_id),
+        )
+    )
     if not planol_res.scalars().first():
         raise HTTPException(status_code=404, detail="Plànol no trobat")
 
@@ -261,18 +268,20 @@ async def editar_capa_planol(
     planol_id: uuid.UUID,
     capa_id: uuid.UUID,
     payload: CapaVectorialUpdate,
-    db: AsyncSession = Depends(get_db_with_tenant_context)
+    db: AsyncSession = Depends(get_db_with_tenant_context),
 ):
     """Edita una capa vectorial d'un plànol (Spec 010). Les capes immutables no es poden editar."""
     empresa_id = request.state.empresa_id
-    if not empresa_id or empresa_id == 'undefined':
+    if not empresa_id or empresa_id == "undefined":
         raise HTTPException(status_code=401, detail="No identificat")
 
-    capa_res = await db.execute(select(CapaVectorial).where(
-        CapaVectorial.id == capa_id,
-        CapaVectorial.planol_base_id == planol_id,
-        CapaVectorial.empresa_id == uuid.UUID(empresa_id),
-    ))
+    capa_res = await db.execute(
+        select(CapaVectorial).where(
+            CapaVectorial.id == capa_id,
+            CapaVectorial.planol_base_id == planol_id,
+            CapaVectorial.empresa_id == uuid.UUID(empresa_id),
+        )
+    )
     capa = capa_res.scalars().first()
     if not capa:
         raise HTTPException(status_code=404, detail="Capa no trobada")
@@ -303,18 +312,20 @@ async def eliminar_capa_planol(
     request: Request,
     planol_id: uuid.UUID,
     capa_id: uuid.UUID,
-    db: AsyncSession = Depends(get_db_with_tenant_context)
+    db: AsyncSession = Depends(get_db_with_tenant_context),
 ):
     """Elimina una capa vectorial (Spec 010). Les immutables no es poden eliminar."""
     empresa_id = request.state.empresa_id
-    if not empresa_id or empresa_id == 'undefined':
+    if not empresa_id or empresa_id == "undefined":
         raise HTTPException(status_code=401, detail="No identificat")
 
-    capa_res = await db.execute(select(CapaVectorial).where(
-        CapaVectorial.id == capa_id,
-        CapaVectorial.planol_base_id == planol_id,
-        CapaVectorial.empresa_id == uuid.UUID(empresa_id),
-    ))
+    capa_res = await db.execute(
+        select(CapaVectorial).where(
+            CapaVectorial.id == capa_id,
+            CapaVectorial.planol_base_id == planol_id,
+            CapaVectorial.empresa_id == uuid.UUID(empresa_id),
+        )
+    )
     capa = capa_res.scalars().first()
     if not capa:
         raise HTTPException(status_code=404, detail="Capa no trobada")
@@ -329,12 +340,12 @@ async def eliminar_capa_planol(
 
 @router.post("/{planol_id}/exportar-pdf", status_code=status.HTTP_202_ACCEPTED)
 async def exportar_planol_pdf(
-    planol_id: uuid.UUID,
-    request: Request,
-    db: AsyncSession = Depends(get_db_with_tenant_context)
+    planol_id: uuid.UUID, request: Request, db: AsyncSession = Depends(get_db_with_tenant_context)
 ):
     empresa_id = request.state.empresa_id
-    stmt = select(PlanolBase).where(PlanolBase.id == planol_id, PlanolBase.empresa_id == uuid.UUID(empresa_id))
+    stmt = select(PlanolBase).where(
+        PlanolBase.id == planol_id, PlanolBase.empresa_id == uuid.UUID(empresa_id)
+    )
     planol = (await db.execute(stmt)).scalars().first()
     if not planol:
         raise HTTPException(status_code=404)
@@ -344,12 +355,14 @@ async def exportar_planol_pdf(
 
     return {"estat": "EN_PROCES", "missatge": "El PDF s'està generant a Celery"}
 
+
 class CapaAnotacioCreate(BaseModel):
     ordre_treball_id: uuid.UUID
     nom_capa: str = Field(..., max_length=100)
     fitxer_vectorial_path: str = Field(..., max_length=500)
     operari_id: Optional[uuid.UUID] = None
     estat_capa: str = Field("ACTIVA", max_length=30)
+
 
 class CapaAnotacioResponse(BaseModel):
     id: uuid.UUID
@@ -359,15 +372,16 @@ class CapaAnotacioResponse(BaseModel):
     operari_id: Optional[uuid.UUID]
     estat_capa: str
 
+
 @router.get("/anotacions", response_model=List[CapaAnotacioResponse])
 async def llistar_anotacions(
     request: Request,
     ordre_treball_id: Optional[uuid.UUID] = None,
-    db: AsyncSession = Depends(get_db_with_tenant_context)
+    db: AsyncSession = Depends(get_db_with_tenant_context),
 ):
     """Llista les capes d'anotacions."""
     empresa_id = request.state.empresa_id
-    if not empresa_id or empresa_id == 'undefined':
+    if not empresa_id or empresa_id == "undefined":
         raise HTTPException(status_code=401, detail="No identificat")
 
     stmt = select(CapaAnotacio).where(CapaAnotacio.empresa_id == uuid.UUID(empresa_id))
@@ -377,18 +391,22 @@ async def llistar_anotacions(
     result = await db.execute(stmt)
     return result.scalars().all()
 
-@router.post("/anotacions", response_model=CapaAnotacioResponse, status_code=status.HTTP_201_CREATED)
+
+@router.post(
+    "/anotacions", response_model=CapaAnotacioResponse, status_code=status.HTTP_201_CREATED
+)
 async def crear_anotacio(
     request: Request,
     payload: CapaAnotacioCreate,
-    db: AsyncSession = Depends(get_db_with_tenant_context)
+    db: AsyncSession = Depends(get_db_with_tenant_context),
 ):
     """Crea una nova capa d'anotació."""
     empresa_id = request.state.empresa_id
-    if not empresa_id or empresa_id == 'undefined':
+    if not empresa_id or empresa_id == "undefined":
         raise HTTPException(status_code=401, detail="No identificat")
 
     from app.models.models import OrdreTreball
+
     stmt_ot = select(OrdreTreball.id).where(
         OrdreTreball.id == payload.ordre_treball_id,
         OrdreTreball.empresa_id == uuid.UUID(empresa_id),
@@ -402,9 +420,8 @@ async def crear_anotacio(
         nom_capa=payload.nom_capa,
         fitxer_vectorial_path=payload.fitxer_vectorial_path,
         operari_id=payload.operari_id,
-        estat_capa=payload.estat_capa
+        estat_capa=payload.estat_capa,
     )
     db.add(nova_anotacio)
     await db.commit()
     return nova_anotacio
-

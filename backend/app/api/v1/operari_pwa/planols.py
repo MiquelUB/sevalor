@@ -12,8 +12,11 @@ from app.models.models import CapaVectorial, PlanolBase
 router = APIRouter(
     prefix="/operari/planols",
     tags=["Operari PWA Planols"],
-    dependencies=[Depends(require_roles(["OPERARI", "CAPATAZ", "CAP_DE_COLLA", "BOSS", "SUPERADMIN"]))],
+    dependencies=[
+        Depends(require_roles(["OPERARI", "CAPATAZ", "CAP_DE_COLLA", "BOSS", "SUPERADMIN"]))
+    ],
 )
+
 
 class CapaVectorialCreate(BaseModel):
     nom: str
@@ -21,26 +24,31 @@ class CapaVectorialCreate(BaseModel):
     visible: bool = True
     dades_geojson: dict
 
+
 class CapaVectorialResponse(BaseModel):
     id: uuid.UUID
     nom: str
     es_tancada: bool
     dades_geojson: dict
 
-@router.post("/{planol_id}/capes", response_model=CapaVectorialResponse, status_code=status.HTTP_201_CREATED)
+
+@router.post(
+    "/{planol_id}/capes", response_model=CapaVectorialResponse, status_code=status.HTTP_201_CREATED
+)
 async def crear_capa_operari(
     planol_id: uuid.UUID,
     payload: CapaVectorialCreate,
     request: Request,
-    db: AsyncSession = Depends(get_db_with_tenant_context)
+    db: AsyncSession = Depends(get_db_with_tenant_context),
 ):
     """Operari crea una capa sobre un plànol (Spec 017 RF-13.1)."""
     empresa_id = request.state.empresa_id
 
-    planol_res = await db.execute(select(PlanolBase).where(
-        PlanolBase.id == planol_id,
-        PlanolBase.empresa_id == uuid.UUID(empresa_id)
-    ))
+    planol_res = await db.execute(
+        select(PlanolBase).where(
+            PlanolBase.id == planol_id, PlanolBase.empresa_id == uuid.UUID(empresa_id)
+        )
+    )
     if not planol_res.scalars().first():
         raise HTTPException(status_code=404, detail="Plànol no trobat")
 
@@ -49,7 +57,7 @@ async def crear_capa_operari(
         planol_id=planol_id,
         nom=payload.nom,
         es_tancada=payload.es_tancada,
-        dades_geojson=payload.dades_geojson
+        dades_geojson=payload.dades_geojson,
     )
     db.add(nova_capa)
     await db.commit()
@@ -57,6 +65,6 @@ async def crear_capa_operari(
     return CapaVectorialResponse(
         id=nova_capa.id,
         nom=nova_capa.nom,
-        es_tancada=nova_capa.es_tancada,
-        dades_geojson=nova_capa.dades_geojson
+        es_tancada=nova_capa.es_tancada,  # type: ignore
+        dades_geojson=nova_capa.dades_geojson,  # type: ignore
     )

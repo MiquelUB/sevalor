@@ -20,11 +20,12 @@ logger = logging.getLogger("outbox_aeat")
 
 def calcular_temps_reintent_exponencial(intents: int, base: float = 2.0) -> float:
     """Calcula el temps de reintent exponencial per a la Dead Letter Queue (RF-20)."""
-    return base ** intents
+    return base**intents
 
 
 class AEATSoapClient:
     """Client SOAP stub per a l'enviament de factures a la AEAT (a implementar amb credencials reals)."""
+
     def __init__(self, endpoint: str = "https://sede.aeat.gob.es/verifactu/soap"):
         self.endpoint = endpoint
 
@@ -38,6 +39,7 @@ class AEATSoapClient:
             "timestamp": timestamp,
             "nota": "Stub: implementar credencials AEAT per a enviament real",
         }
+
 
 ESTAT_PENDENT = "PENDENT"
 ESTAT_ENVIAT = "ENVIAT_AEAT"
@@ -74,12 +76,18 @@ async def registrar_enviament_outbox(
     logger.info(
         "OUTBOX: Factura %s/%s-%d registrada per enviament AEAT. "
         "Hash: %s | PDF: %s | Timestamp: %s",
-        empresa_id, serie, numero, hash_sha256, ruta_pdf, timestamp,
+        empresa_id,
+        serie,
+        numero,
+        hash_sha256,
+        ruta_pdf,
+        timestamp,
     )
 
     if db_session is not None:
         from sqlalchemy import text
-        await db_session.execute(
+
+        await db_session.execute(  # type: ignore
             text("""
                 UPDATE factures_capcalera
                 SET estat_enviament = :estat,
@@ -88,7 +96,7 @@ async def registrar_enviament_outbox(
             """),
             {"estat": ESTAT_PENDENT, "factura_id": factura_id},
         )
-        await db_session.commit()
+        await db_session.commit()  # type: ignore
 
     return {
         "factura_id": factura_id,
@@ -118,12 +126,16 @@ async def processar_enviament_aeat(
 
     # Simular enviament AEAT (a substituir per SOAP real)
     import asyncio
+
     await asyncio.sleep(0.01)  # Simular latència de xarxa
 
     logger.info(
-        "AEAT SOAP: Factura %s (sèrie %s, num %d) enviada correctament. "
-        "Hash: %s | Timestamp: %s",
-        factura_id, serie, numero, hash_sha256, timestamp,
+        "AEAT SOAP: Factura %s (sèrie %s, num %d) enviada correctament. Hash: %s | Timestamp: %s",
+        factura_id,
+        serie,
+        numero,
+        hash_sha256,
+        timestamp,
     )
 
     return {

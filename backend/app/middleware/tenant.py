@@ -58,6 +58,7 @@ class TenantMiddleware(BaseHTTPMiddleware):
 
         if empresa_id:
             import uuid
+
             try:
                 empresa_id = str(uuid.UUID(str(empresa_id)))
             except Exception:
@@ -69,17 +70,21 @@ class TenantMiddleware(BaseHTTPMiddleware):
         if is_superadmin:
             path = request.url.path
             if path.startswith("/api/v1/") and not (
-                path.startswith("/api/v1/superadmin") or
-                path.startswith("/api/v1/auth") or
-                path.startswith("/api/v1/health")
+                path.startswith("/api/v1/superadmin")
+                or path.startswith("/api/v1/auth")
+                or path.startswith("/api/v1/health")
             ):
                 from fastapi.responses import JSONResponse
+
                 return JSONResponse(
                     status_code=403,
-                    content={"detail": "Zero-Trust Segregation: SUPERADMIN no pot accedir a rutes operatives de negoci."}
+                    content={
+                        "detail": "Zero-Trust Segregation: SUPERADMIN no pot accedir a rutes operatives de negoci."
+                    },
                 )
 
         from app.core.context import superadmin_context, tenant_context
+
         token_tenant = tenant_context.set(empresa_id)
         token_superadmin = superadmin_context.set(is_superadmin)
 

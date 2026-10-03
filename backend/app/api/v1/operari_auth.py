@@ -22,37 +22,37 @@ logger = logging.getLogger("operari_auth")
 router = APIRouter(prefix="/operari_auth", tags=["Operari Auth"])
 limiter_login = Limiter(key_func=get_remote_address, enabled=os.getenv("TESTING") != "1")
 
+
 class LoginRequest(BaseModel):
     nif: str = Field(..., max_length=20)
     pin: str = Field(..., min_length=4, max_length=4)
+
 
 class UsuariTokenResponse(BaseModel):
     id: uuid.UUID
     nom: str
     rol: str
 
+
 class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
     usuari: UsuariTokenResponse
 
-def create_access_token(subject: str | Any, rol: str, empresa_id: str, expires_delta: timedelta) -> str:
+
+def create_access_token(
+    subject: str | Any, rol: str, empresa_id: str, expires_delta: timedelta
+) -> str:
     expire = datetime.now(timezone.utc) + expires_delta
-    to_encode = {
-        "sub": str(subject),
-        "rol": rol,
-        "empresa_id": str(empresa_id),
-        "exp": expire
-    }
+    to_encode = {"sub": str(subject), "rol": rol, "empresa_id": str(empresa_id), "exp": expire}
     encoded_jwt = jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
     return encoded_jwt
+
 
 @router.post("/login", response_model=TokenResponse)
 @limiter_login.limit("5/minute")
 async def login_operari(
-    request: Request,
-    login_data: LoginRequest,
-    db: AsyncSession = Depends(get_db)
+    request: Request, login_data: LoginRequest, db: AsyncSession = Depends(get_db)
 ):
     empresa_id = getattr(request.state, "empresa_id", None) or request.headers.get("X-Empresa-ID")
     empresa_uuid = None
@@ -76,7 +76,7 @@ async def login_operari(
         try:
             stmt_nif = select(Usuari).where(
                 func.upper(Usuari.nif) == login_data.nif.upper(),
-                Usuari.rol.in_(["OPERARI", "CAP_DE_COLLA", "ADMIN", "SUPERADMIN"])
+                Usuari.rol.in_(["OPERARI", "CAP_DE_COLLA", "ADMIN", "SUPERADMIN"]),
             )
             res_nif = await db.execute(stmt_nif)
             usuari_pre = res_nif.scalars().first()
@@ -91,12 +91,11 @@ async def login_operari(
 
     await set_tenant_context(db, str(empresa_uuid))
 
-
     # 1. Buscar l'usuari aplicant el filtre de tenant implícitament i explícitament
     stmt = select(Usuari).where(
         Usuari.empresa_id == empresa_uuid,
         func.upper(Usuari.nif) == login_data.nif.upper(),
-        Usuari.rol.in_(["OPERARI", "CAP_DE_COLLA", "ADMIN", "SUPERADMIN"])
+        Usuari.rol.in_(["OPERARI", "CAP_DE_COLLA", "ADMIN", "SUPERADMIN"]),
     )
 
     result = await db.execute(stmt)
@@ -105,22 +104,23 @@ async def login_operari(
     # Si no existeix, error opac (RF-23)
     if not usuari:
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Credencials invàlides"
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Credencials invàlides"
         )
 
     # 2. Comprovar si el compte ja està bloquejat per intents fallits
-    if usuari.pin_bloquejat or (usuari.intents_pin_fallits is not None and usuari.intents_pin_fallits >= 4):
+    if usuari.pin_bloquejat or (
+        usuari.intents_pin_fallits is not None and usuari.intents_pin_fallits >= 4
+    ):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="El compte ha estat bloquejat per massa intents fallits. Contacteu amb el supervisor."
+            detail="El compte ha estat bloquejat per massa intents fallits. Contacteu amb el supervisor.",
         )
 
     # 3. Comprovar estat actiu
     if usuari.estat != "ACTIU":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Usuari inactiu. Contacta amb l'administrador."
+            detail="Usuari inactiu. Contacta amb l'administrador.",
         )
 
     # 4. Verificar PIN (amb bcrypt)
@@ -128,7 +128,7 @@ async def login_operari(
         if not hashed_pin:
             return False
         try:
-            return bcrypt.checkpw(plain_pin.encode('utf-8'), hashed_pin.encode('utf-8'))
+            return bcrypt.checkpw(plain_pin.encode("utf-8"), hashed_pin.encode("utf-8"))
         except Exception:
             return False
 
@@ -141,12 +141,11 @@ async def login_operari(
             await db.commit()
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="El compte ha estat bloquejat per massa intents fallits. Contacteu amb el supervisor."
+                detail="El compte ha estat bloquejat per massa intents fallits. Contacteu amb el supervisor.",
             )
         await db.commit()
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Credencials invàlides"
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Credencials invàlides"
         )
 
     # 5. Login correcte: reiniciar comptador d'intents i bloqueig
@@ -160,14 +159,9 @@ async def login_operari(
         subject=str(usuari.id),
         rol=usuari.rol,
         empresa_id=str(usuari.empresa_id),
-        expires_delta=access_token_expires
+        expires_delta=access_token_expires,
     )
 
     return TokenResponse(
-        access_token=token,
-        usuari=UsuariTokenResponse(
-            id=usuari.id,
-            nom=usuari.nom,
-            rol=usuari.rol
-        )
+        access_token=token, usuari=UsuariTokenResponse(id=usuari.id, nom=usuari.nom, rol=usuari.rol)
     )

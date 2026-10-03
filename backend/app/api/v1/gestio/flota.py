@@ -39,6 +39,7 @@ router = APIRouter(
     dependencies=[Depends(require_roles(["BOSS", "SECRETARIA", "ENGINYER"]))],
 )
 
+
 class VehicleCreate(BaseModel):
     matricula: str = Field(..., max_length=20)
     marca: str = Field(..., max_length=50)
@@ -62,6 +63,7 @@ class VehicleCreate(BaseModel):
     places: int = 5
     pes_maxim_autoritzat: int = 3500
 
+
 class VehicleResponse(VehicleCreate):
     id: uuid.UUID
     horometre_acumulat: float
@@ -70,16 +72,17 @@ class VehicleResponse(VehicleCreate):
     consum_mitjana_historica: Optional[float] = None
     consum_adblue_litres: float = 0.0
 
+
 @router.get("", response_model=List[VehicleResponse])
 async def llistar_flota(
     request: Request,
     q: Optional[str] = None,
     limit: int = 50,
     offset: int = 0,
-    db: AsyncSession = Depends(get_db_with_tenant_context)
+    db: AsyncSession = Depends(get_db_with_tenant_context),
 ):
     empresa_id = request.state.empresa_id
-    if not empresa_id or empresa_id == 'undefined':
+    if not empresa_id or empresa_id == "undefined":
         raise HTTPException(status_code=401, detail="No identificat")
 
     stmt = select(Vehicle).where(Vehicle.empresa_id == uuid.UUID(empresa_id))
@@ -90,7 +93,7 @@ async def llistar_flota(
             or_(
                 Vehicle.matricula.ilike(search_term),
                 Vehicle.marca.ilike(search_term),
-                Vehicle.model.ilike(search_term)
+                Vehicle.model.ilike(search_term),
             )
         )
 
@@ -101,17 +104,18 @@ async def llistar_flota(
 
     return vehicles
 
+
 @router.post("", response_model=VehicleResponse, status_code=status.HTTP_201_CREATED)
 async def alta_vehicle(
-    request: Request,
-    vehicle: VehicleCreate,
-    db: AsyncSession = Depends(get_db_with_tenant_context)
+    request: Request, vehicle: VehicleCreate, db: AsyncSession = Depends(get_db_with_tenant_context)
 ):
     empresa_id = request.state.empresa_id
-    if not empresa_id or empresa_id == 'undefined':
+    if not empresa_id or empresa_id == "undefined":
         raise HTTPException(status_code=401, detail="No identificat")
 
-    stmt_mat = select(Vehicle).where(Vehicle.empresa_id == uuid.UUID(empresa_id), Vehicle.matricula == vehicle.matricula)
+    stmt_mat = select(Vehicle).where(
+        Vehicle.empresa_id == uuid.UUID(empresa_id), Vehicle.matricula == vehicle.matricula
+    )
     result_mat = await db.execute(stmt_mat)
     if result_mat.scalars().first():
         raise HTTPException(status_code=400, detail="La matrícula ja es troba registrada")
@@ -138,7 +142,7 @@ async def alta_vehicle(
         capacitat_bateria_kwh=vehicle.capacitat_bateria_kwh,
         soh_bateria=vehicle.soh_bateria,
         places=vehicle.places,
-        pes_maxim_autoritzat=vehicle.pes_maxim_autoritzat
+        pes_maxim_autoritzat=vehicle.pes_maxim_autoritzat,
     )
 
     db.add(nou_vehicle)
@@ -146,18 +150,21 @@ async def alta_vehicle(
 
     return nou_vehicle
 
+
 @router.put("/{vehicle_id}", response_model=VehicleResponse)
 async def editar_vehicle(
     request: Request,
     vehicle_id: uuid.UUID,
     vehicle: VehicleCreate,
-    db: AsyncSession = Depends(get_db_with_tenant_context)
+    db: AsyncSession = Depends(get_db_with_tenant_context),
 ):
     empresa_id = request.state.empresa_id
-    if not empresa_id or empresa_id == 'undefined':
+    if not empresa_id or empresa_id == "undefined":
         raise HTTPException(status_code=401, detail="No identificat")
 
-    stmt = select(Vehicle).where(Vehicle.id == vehicle_id, Vehicle.empresa_id == uuid.UUID(empresa_id))
+    stmt = select(Vehicle).where(
+        Vehicle.id == vehicle_id, Vehicle.empresa_id == uuid.UUID(empresa_id)
+    )
     result = await db.execute(stmt)
     v_db = result.scalars().first()
     if not v_db:
@@ -190,18 +197,20 @@ async def editar_vehicle(
     return v_db
 
 
-
 # ---------------------------------------------------------------------------
 # Càlcul de Vehicles Propers per Haversine (Spec 006 / Spec 012 / Phase 3)
 # ---------------------------------------------------------------------------
+
 
 def calcular_distancia_haversine(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     """Calcula la distància en quilòmetres entre dues coordenades usant la fórmula de Haversine."""
     R = 6371.0  # Radi de la Terra en km
     dlat = math.radians(lat2 - lat1)
     dlon = math.radians(lon2 - lon1)
-    a = (math.sin(dlat / 2) ** 2 +
-         math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon / 2) ** 2)
+    a = (
+        math.sin(dlat / 2) ** 2
+        + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon / 2) ** 2
+    )
     c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
     return round(R * c, 2)
 
@@ -226,14 +235,14 @@ async def llistar_vehicles_propers(
     lat: float = Query(..., description="Latitud de l'objectiu"),
     lng: float = Query(..., description="Longitud de l'objectiu"),
     limit: int = Query(10, ge=1, le=50),
-    db: AsyncSession = Depends(get_db_with_tenant_context)
+    db: AsyncSession = Depends(get_db_with_tenant_context),
 ):
     """
     Retorna els vehicles de l'empresa ordenats per proximitat geogràfica a les coordenades donades (Haversine).
     Determina la posició del vehicle segons l'OT activa en curs o ubicació registrada.
     """
     empresa_id = getattr(request.state, "empresa_id", None) or request.headers.get("X-Empresa-ID")
-    if not empresa_id or empresa_id == 'undefined':
+    if not empresa_id or empresa_id == "undefined":
         raise HTTPException(status_code=401, detail="No identificat")
 
     empresa_uuid = uuid.UUID(empresa_id)
@@ -250,7 +259,7 @@ async def llistar_vehicles_propers(
     stmt_ot = select(OrdreTreball).where(
         OrdreTreball.empresa_id == empresa_uuid,
         OrdreTreball.vehicle_id.isnot(None),
-        OrdreTreball.estat.in_(["EN_OBRA", "EN_RUTA", "EN_CURS", "PENDENT"])
+        OrdreTreball.estat.in_(["EN_OBRA", "EN_RUTA", "EN_CURS", "PENDENT"]),
     )
     res_ot = await db.execute(stmt_ot)
     ots = res_ot.scalars().all()
@@ -275,30 +284,32 @@ async def llistar_vehicles_propers(
                 except (ValueError, TypeError):
                     pass
 
-        dist = calcular_distancia_haversine(lat, lng, v_lat, v_lng) if v_lat is not None and v_lng is not None else None
+        dist = (
+            calcular_distancia_haversine(lat, lng, v_lat, v_lng)
+            if v_lat is not None and v_lng is not None
+            else None
+        )
 
-        resultats.append(VehicleProperItem(
-            vehicle_id=v.id,
-            matricula=v.matricula,
-            marca=v.marca,
-            model=v.model,
-            estat=v.estat,
-            distancia_km=dist,
-            lat=v_lat,
-            lng=v_lng,
-            ordre_treball_id=ot_associada.id if ot_associada else None,
-            ordre_treball_codi=ot_associada.codi if ot_associada else None,
-            ordre_treball_titol=ot_associada.titol if ot_associada else None
-        ))
+        resultats.append(
+            VehicleProperItem(
+                vehicle_id=v.id,
+                matricula=v.matricula,
+                marca=v.marca,
+                model=v.model,
+                estat=v.estat,
+                distancia_km=dist,  # type: ignore
+                lat=v_lat,  # type: ignore
+                lng=v_lng,  # type: ignore
+                ordre_treball_id=ot_associada.id if ot_associada else None,
+                ordre_treball_codi=ot_associada.codi if ot_associada else None,
+                ordre_treball_titol=ot_associada.titol if ot_associada else None,
+            )
+        )
 
     # Ordenar pel vehicle més proper
-    resultats.sort(key=lambda x: x.distancia_km if x.distancia_km is not None else float('inf'))
+    resultats.sort(key=lambda x: x.distancia_km if x.distancia_km is not None else float("inf"))
 
     return resultats[:limit]
-
-
-
-
 
 
 @router.post("/{vehicle_id}/documents", status_code=201)
@@ -307,7 +318,7 @@ async def pujar_document_flota(
     vehicle_id: uuid.UUID,
     tipus_document: str = Form(...),
     file: UploadFile = File(...),
-    db: AsyncSession = Depends(get_db_with_tenant_context)
+    db: AsyncSession = Depends(get_db_with_tenant_context),
 ):
     empresa_id = request.state.empresa_id
     if not empresa_id:
@@ -342,7 +353,7 @@ async def pujar_document_flota(
         tipus_document=tipus_document,
         nom_arxiu=safe_name,
         ruta_arxiu=file_path,
-        creat_per_id=None
+        creat_per_id=None,
     )
     db.add(doc)
     await db.commit()
@@ -350,23 +361,25 @@ async def pujar_document_flota(
     # Executar OCR asíncron
     try:
         from app.workers.tasks import processar_ocr_document_task
+
         processar_ocr_document_task.delay(file_path, str(empresa_id))
     except Exception:
         pass
 
     return {"missatge": "Document pujat i en procés d'OCR", "id": str(doc.id)}
 
+
 @router.get("/{vehicle_id}/documents")
 async def llistar_documents_flota(
-    request: Request,
-    vehicle_id: uuid.UUID,
-    db: AsyncSession = Depends(get_db_with_tenant_context)
+    request: Request, vehicle_id: uuid.UUID, db: AsyncSession = Depends(get_db_with_tenant_context)
 ):
     empresa_id = request.state.empresa_id
     if not empresa_id:
         raise HTTPException(status_code=401)
     empresa_id = uuid.UUID(empresa_id)
-    stmt = select(DocumentFlota).where(DocumentFlota.vehicle_id == vehicle_id, DocumentFlota.empresa_id == empresa_id)
+    stmt = select(DocumentFlota).where(
+        DocumentFlota.vehicle_id == vehicle_id, DocumentFlota.empresa_id == empresa_id
+    )
     res = await db.execute(stmt)
     docs = res.scalars().all()
 
@@ -375,15 +388,14 @@ async def llistar_documents_flota(
             "id": str(d.id),
             "tipus": d.tipus_document,
             "nom_arxiu": d.nom_arxiu,
-            "data": d.data_document.isoformat() if d.data_document else None
-        } for d in docs
+            "data": d.data_document.isoformat() if d.data_document else None,
+        }
+        for d in docs
     ]
 
+
 @router.post("/ocr-draft")
-async def ocr_vehicle_draft(
-    request: Request,
-    file: UploadFile = File(...)
-):
+async def ocr_vehicle_draft(request: Request, file: UploadFile = File(...)):
     empresa_id = request.state.empresa_id
     if not empresa_id:
         raise HTTPException(status_code=401)
@@ -405,17 +417,19 @@ async def ocr_vehicle_draft(
     resultat = await processar_ocr_document_vehicle(file_path)
     return resultat
 
+
 class AssignarVehicleRequest(BaseModel):
     usuari_id: uuid.UUID
     odometre: Optional[int] = None
     motiu: Optional[str] = None
+
 
 @router.post("/{id}/assignar")
 async def assignar_vehicle(
     request: Request,
     id: uuid.UUID,
     data: AssignarVehicleRequest,
-    db: AsyncSession = Depends(get_db_with_tenant_context)
+    db: AsyncSession = Depends(get_db_with_tenant_context),
 ):
     empresa_id = uuid.UUID(request.state.empresa_id)
 
@@ -425,7 +439,9 @@ async def assignar_vehicle(
         raise HTTPException(status_code=404, detail="Vehicle no trobat")
 
     # Check usuari
-    u = await db.scalar(select(Usuari).where(Usuari.id == data.usuari_id, Usuari.empresa_id == empresa_id))
+    u = await db.scalar(
+        select(Usuari).where(Usuari.id == data.usuari_id, Usuari.empresa_id == empresa_id)
+    )
     if not u:
         raise HTTPException(status_code=404, detail="Usuari no trobat")
 
@@ -438,22 +454,24 @@ async def assignar_vehicle(
         conductor_id=u.id,
         data_inici=datetime.now(timezone.utc),
         odometre_inici=data.odometre,
-        motiu=data.motiu
+        motiu=data.motiu,
     )
     db.add(historial)
     await db.commit()
     return {"status": "ok", "missatge": "Vehicle assignat correctament"}
 
+
 class RevocarVehicleRequest(BaseModel):
     odometre: Optional[int] = None
     motiu: Optional[str] = None
+
 
 @router.post("/{id}/revocar")
 async def revocar_vehicle(
     request: Request,
     id: uuid.UUID,
     data: RevocarVehicleRequest,
-    db: AsyncSession = Depends(get_db_with_tenant_context)
+    db: AsyncSession = Depends(get_db_with_tenant_context),
 ):
     empresa_id = uuid.UUID(request.state.empresa_id)
 
@@ -462,20 +480,30 @@ async def revocar_vehicle(
         raise HTTPException(status_code=404, detail="Vehicle no trobat")
 
     # Update usuari
-    usuaris = await db.execute(select(Usuari).where(Usuari.vehicle_assignat_id == v.id, Usuari.empresa_id == empresa_id))
+    usuaris = await db.execute(
+        select(Usuari).where(Usuari.vehicle_assignat_id == v.id, Usuari.empresa_id == empresa_id)
+    )
     for u in usuaris.scalars().all():
         u.vehicle_assignat_id = None
 
     v.estat = "DISPONIBLE"
 
     # Close historial
-    hist = await db.scalar(select(HistorialAssignacioVehicle).where(HistorialAssignacioVehicle.vehicle_id == v.id, HistorialAssignacioVehicle.data_fi.is_(None)).order_by(HistorialAssignacioVehicle.data_inici.desc()))
+    hist = await db.scalar(
+        select(HistorialAssignacioVehicle)
+        .where(
+            HistorialAssignacioVehicle.vehicle_id == v.id,
+            HistorialAssignacioVehicle.data_fi.is_(None),
+        )
+        .order_by(HistorialAssignacioVehicle.data_inici.desc())
+    )
     if hist:
         hist.data_fi = datetime.now(timezone.utc)
         hist.odometre_fi = data.odometre
 
     await db.commit()
     return {"status": "ok", "missatge": "Assignació revocada"}
+
 
 class MantenimentCreate(BaseModel):
     data_manteniment: date
@@ -484,47 +512,55 @@ class MantenimentCreate(BaseModel):
     taller: Optional[str] = None
     cost_euros: Optional[float] = None
 
+
 @router.post("/{vehicle_id}/manteniments", status_code=201)
 async def crear_manteniment(
     request: Request,
     vehicle_id: uuid.UUID,
     manteniment: MantenimentCreate,
-    db: AsyncSession = Depends(get_db_with_tenant_context)
+    db: AsyncSession = Depends(get_db_with_tenant_context),
 ):
     empresa_id = uuid.UUID(request.state.empresa_id)
 
-    v = await db.scalar(select(Vehicle).where(Vehicle.id == vehicle_id, Vehicle.empresa_id == empresa_id))
+    v = await db.scalar(
+        select(Vehicle).where(Vehicle.id == vehicle_id, Vehicle.empresa_id == empresa_id)
+    )
     if not v:
         raise HTTPException(status_code=404, detail="Vehicle no trobat")
 
     mant = MantenimentVehicle(
         empresa_id=empresa_id,
         vehicle_id=vehicle_id,
-        data_manteniment=datetime.combine(manteniment.data_manteniment, datetime.min.time(), tzinfo=timezone.utc),
+        data_manteniment=datetime.combine(
+            manteniment.data_manteniment, datetime.min.time(), tzinfo=timezone.utc
+        ),
         tipus=manteniment.tipus,
         descripcio=manteniment.descripcio,
         taller=manteniment.taller,
-        cost_euros=manteniment.cost_euros
+        cost_euros=manteniment.cost_euros,
     )
     db.add(mant)
     await db.commit()
     return {"id": str(mant.id), "missatge": "Manteniment registrat"}
 
+
 @router.get("/{vehicle_id}/manteniments")
 async def llistar_manteniments(
-    request: Request,
-    vehicle_id: uuid.UUID,
-    db: AsyncSession = Depends(get_db_with_tenant_context)
+    request: Request, vehicle_id: uuid.UUID, db: AsyncSession = Depends(get_db_with_tenant_context)
 ):
     empresa_id = uuid.UUID(request.state.empresa_id)
-    mants = await db.execute(select(MantenimentVehicle).where(MantenimentVehicle.vehicle_id == vehicle_id, MantenimentVehicle.empresa_id == empresa_id).order_by(MantenimentVehicle.data_manteniment.desc()))
+    mants = await db.execute(
+        select(MantenimentVehicle)
+        .where(
+            MantenimentVehicle.vehicle_id == vehicle_id, MantenimentVehicle.empresa_id == empresa_id
+        )
+        .order_by(MantenimentVehicle.data_manteniment.desc())
+    )
     return mants.scalars().all()
 
+
 @router.post("/ocr-document")
-async def ocr_document_vehicle(
-    request: Request,
-    file: UploadFile = File(...)
-):
+async def ocr_document_vehicle(request: Request, file: UploadFile = File(...)):
     empresa_id = request.state.empresa_id
     if not empresa_id:
         raise HTTPException(status_code=401)
@@ -545,4 +581,3 @@ async def ocr_document_vehicle(
 
     resultat = await processar_ocr_document_vehicle(file_path)
     return resultat
-

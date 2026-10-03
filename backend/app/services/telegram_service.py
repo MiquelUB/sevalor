@@ -10,12 +10,13 @@ from app.models.models import Client, TokenInvitacioTelegram
 
 logger = logging.getLogger("telegram_service")
 
+
 class TelegramService:
     def __init__(self):
         self.bot_token = settings.TELEGRAM_BOT_TOKEN
         self.api_url = f"https://api.telegram.org/bot{self.bot_token}"
 
-    async def send_message(self, chat_id: int, text: str, reply_markup: dict = None) -> bool:
+    async def send_message(self, chat_id: int, text: str, reply_markup: dict = None) -> bool:  # type: ignore
         if not self.bot_token or self.bot_token == "DUMMY_TOKEN":
             logger.info(f"[TELEGRAM DISPATCH] Missatge a {chat_id}: {text} (markup={reply_markup})")
             return True
@@ -26,36 +27,34 @@ class TelegramService:
 
         async with httpx.AsyncClient() as client:
             try:
-                res = await client.post(
-                    f"{self.api_url}/sendMessage",
-                    json=payload
-                )
+                res = await client.post(f"{self.api_url}/sendMessage", json=payload)
                 return res.status_code == 200
             except Exception as e:
                 logger.error(f"Error enviant missatge Telegram: {e}")
                 return False
 
-    async def edit_message_reply_markup(self, chat_id: int, message_id: int, reply_markup: dict = None) -> bool:
+    async def edit_message_reply_markup(
+        self, chat_id: int, message_id: int, reply_markup: dict = None  # type: ignore
+    ) -> bool:
         if not self.bot_token or self.bot_token == "DUMMY_TOKEN":
             logger.info(f"[TELEGRAM DISPATCH] Eliminat teclat a {chat_id}, missatge {message_id}")
             return True
 
         payload = {"chat_id": chat_id, "message_id": message_id}
         if reply_markup:
-            payload["reply_markup"] = reply_markup
+            payload["reply_markup"] = reply_markup  # type: ignore
 
         async with httpx.AsyncClient() as client:
             try:
-                res = await client.post(
-                    f"{self.api_url}/editMessageReplyMarkup",
-                    json=payload
-                )
+                res = await client.post(f"{self.api_url}/editMessageReplyMarkup", json=payload)
                 return res.status_code == 200
             except Exception as e:
                 logger.error(f"Error editant missatge Telegram: {e}")
                 return False
 
-    async def processar_comanda_start(self, db: AsyncSession, chat_id: int, payload_text: str) -> str:
+    async def processar_comanda_start(
+        self, db: AsyncSession, chat_id: int, payload_text: str
+    ) -> str:
         parts = payload_text.split(" ")
         if len(parts) < 2:
             return "Benvingut al Bot de Sevalor. Necessites un enllaç d'invitació vàlid per enllaçar el teu compte."
@@ -63,7 +62,10 @@ class TelegramService:
         token_str = parts[1]
 
         # Buscar el token a la BD
-        stmt = select(TokenInvitacioTelegram).where(TokenInvitacioTelegram.token_hash == token_str, TokenInvitacioTelegram.utilitzat.is_(False))
+        stmt = select(TokenInvitacioTelegram).where(
+            TokenInvitacioTelegram.token_hash == token_str,
+            TokenInvitacioTelegram.utilitzat.is_(False),
+        )
         token_db = (await db.execute(stmt)).scalars().first()
 
         if not token_db:
@@ -82,14 +84,15 @@ class TelegramService:
         await db.commit()
         return "✅ Compte de client enllaçat correctament! A partir d'ara rebràs les alertes d'intervencions per aquí."
 
-
     async def processar_missatge_general(self, db: AsyncSession, chat_id: int, text: str) -> str:
         from sqlalchemy import func, or_, select
 
         from app.models.models import FaqCorporativaRag
 
         # Obtenir client per chat_id
-        stmt = select(Client).where(Client.telegram_chat_id == chat_id, Client.estat_canal_telegram == "ACTIU")
+        stmt = select(Client).where(
+            Client.telegram_chat_id == chat_id, Client.estat_canal_telegram == "ACTIU"
+        )
         client_db = (await db.execute(stmt)).scalars().first()
 
         if not client_db:
@@ -108,7 +111,13 @@ class TelegramService:
 
         context_rag = ""
         if filtres_rag:
-            q_faq = select(FaqCorporativaRag).where(FaqCorporativaRag.empresa_id == empresa_id, FaqCorporativaRag.actiu.is_(True)).where(or_(*filtres_rag))
+            q_faq = (
+                select(FaqCorporativaRag)
+                .where(
+                    FaqCorporativaRag.empresa_id == empresa_id, FaqCorporativaRag.actiu.is_(True)
+                )
+                .where(or_(*filtres_rag))
+            )
             res_faq = (await db.execute(q_faq)).scalars().all()
             if res_faq:
                 context_rag += "Informació autoritzada de la base de coneixement de l'empresa:\n"
@@ -136,7 +145,11 @@ class TelegramService:
                 return "Ho sento, en aquest moment no et puc atendre i no he trobat resposta als manuals. Contacta amb atenció al client."
 
         base_url = lm_url.rstrip("/")
-        endpoint = f"{base_url}/chat/completions" if base_url.endswith("/v1") else f"{base_url}/v1/chat/completions"
+        endpoint = (
+            f"{base_url}/chat/completions"
+            if base_url.endswith("/v1")
+            else f"{base_url}/v1/chat/completions"
+        )
         model_name = getattr(settings, "LM_STUDIO_MODEL", "default")
         api_key = getattr(settings, "LM_STUDIO_API_KEY", "lm-studio")
 
@@ -155,13 +168,16 @@ class TelegramService:
                 resp = await http_client.post(
                     endpoint,
                     json=payload,
-                    headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                    headers={
+                        "Authorization": f"Bearer {api_key}",
+                        "Content-Type": "application/json",
+                    },
                 )
                 if resp.status_code == 200:
                     resultat = resp.json()
                     choices = resultat.get("choices", [])
                     if choices and "message" in choices[0]:
-                        return choices[0]["message"].get("content", "").strip()
+                        return choices[0]["message"].get("content", "").strip()  # type: ignore
         except Exception as e:
             logger.warning(f"Error connectant a LM Studio des de Telegram: {e}")
 
@@ -169,15 +185,18 @@ class TelegramService:
             return f"He trobat aquesta informació que et podria ser útil:\n\n{context_rag}"
         return "Ho sento, hi ha hagut un problema tècnic. Torna-ho a provar més tard."
 
-
-    async def processar_callback_query(self, db: AsyncSession, chat_id: int, callback_data: str) -> str:
+    async def processar_callback_query(
+        self, db: AsyncSession, chat_id: int, callback_data: str
+    ) -> str:
         """Processa les accions de botons en línia (aprovacions de pressupostos, etc.)"""
         from sqlalchemy import select
 
         from app.models.models import Client, Pressupost
 
         # Verificar que el client està enllaçat
-        stmt = select(Client).where(Client.telegram_chat_id == chat_id, Client.estat_canal_telegram == "ACTIU")
+        stmt = select(Client).where(
+            Client.telegram_chat_id == chat_id, Client.estat_canal_telegram == "ACTIU"
+        )
         client_db = (await db.execute(stmt)).scalars().first()
 
         if not client_db:
@@ -197,7 +216,7 @@ class TelegramService:
             q_press = select(Pressupost).where(
                 Pressupost.id == pressupost_uuid,
                 Pressupost.client_id == client_db.id,
-                Pressupost.estat == "PENDENT"
+                Pressupost.estat == "PENDENT",
             )
             pressupost = (await db.execute(q_press)).scalars().first()
 
@@ -223,7 +242,7 @@ class TelegramService:
             q_press = select(Pressupost).where(
                 Pressupost.id == pressupost_uuid,
                 Pressupost.client_id == client_db.id,
-                Pressupost.estat == "PENDENT"
+                Pressupost.estat == "PENDENT",
             )
             pressupost = (await db.execute(q_press)).scalars().first()
             if not pressupost:
@@ -259,8 +278,14 @@ class TelegramService:
         reply_markup = {
             "inline_keyboard": [
                 [
-                    {"text": "✅ Acceptar Pressupost", "callback_data": f"aprovar_pressupost:{pressupost.id}"},
-                    {"text": "❌ Demanar Canvis", "callback_data": f"rebutjar_pressupost:{pressupost.id}"},
+                    {
+                        "text": "✅ Acceptar Pressupost",
+                        "callback_data": f"aprovar_pressupost:{pressupost.id}",
+                    },
+                    {
+                        "text": "❌ Demanar Canvis",
+                        "callback_data": f"rebutjar_pressupost:{pressupost.id}",
+                    },
                 ]
             ]
         }
@@ -271,5 +296,6 @@ class TelegramService:
             "chat_id": client.telegram_chat_id,
             "numero": pressupost.numero,
         }
+
 
 telegram_service = TelegramService()

@@ -11,6 +11,7 @@ from app.services.contractes_service import generar_ordres_preventives_per_contr
 
 logger = logging.getLogger(__name__)
 
+
 @celery_app.task(name="app.workers.tasks.revisar_contractes_manteniment", queue="queue_periodic")
 def revisar_contractes_manteniment():
     """T006: Revisa els contractes de manteniment i genera les ordres de treball preventives."""
@@ -29,9 +30,13 @@ def revisar_contractes_manteniment():
                     contractes = res.scalars().all()
 
                     for contracte in contractes:
-                        noves_ots = await generar_ordres_preventives_per_contracte(contracte, session)
+                        noves_ots = await generar_ordres_preventives_per_contracte(
+                            contracte, session
+                        )
                         if noves_ots:
-                            logger.info(f"Generades {len(noves_ots)} OTs preventives pel contracte {contracte.numero_contracte} de l'empresa {empresa_id_str}")
+                            logger.info(
+                                f"Generades {len(noves_ots)} OTs preventives pel contracte {contracte.numero_contracte} de l'empresa {empresa_id_str}"
+                            )
             except Exception as e:
                 logger.error(f"Error generant OTs preventives per l'empresa {emp_id}: {e}")
 

@@ -27,7 +27,7 @@ export default function NouContractePage() {
   useEffect(() => {
     const fetchClients = async () => {
       try {
-        const res = await fetch(getApiBaseUrl() + "/api/v1/gestio/clients", {
+        const res = await fetch(getApiBaseUrl() + "/gestio/clients", {
           headers: getAuthHeader(),
         });
         if (res.ok) {
@@ -44,7 +44,7 @@ export default function NouContractePage() {
       // Fetch finques for this client
       const fetchFinques = async () => {
         try {
-          const res = await fetch(`${getApiBaseUrl()}/api/v1/gestio/clients/${formData.client_id}`, {
+          const res = await fetch(`${getApiBaseUrl()}/gestio/clients/${formData.client_id}`, {
             headers: getAuthHeader(),
           });
           if (res.ok) {
@@ -72,7 +72,7 @@ export default function NouContractePage() {
         import_anual: Number(formData.import_anual)
       };
       
-      const res = await fetch(getApiBaseUrl() + "/api/v1/gestio/contractes", {
+      const res = await fetch(getApiBaseUrl() + "/gestio/contractes", {
         method: "POST",
         headers: {
           ...getAuthHeader(),

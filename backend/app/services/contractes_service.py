@@ -10,8 +10,7 @@ from app.models.models import Client, OrdreTreball
 
 
 async def generar_ordres_preventives_per_contracte(
-    contracte: ContracteManteniment,
-    db: AsyncSession
+    contracte: ContracteManteniment, db: AsyncSession
 ) -> list[uuid.UUID]:
     """Genera les ordres de treball i revisions previstes per a un contracte donat el seu estat."""
     if contracte.estat != "ACTIU":
@@ -25,7 +24,11 @@ async def generar_ordres_preventives_per_contracte(
         return []
 
     # Comprovem quina va ser l'última revisió generada
-    stmt_ult = select(RevisionsContracte).where(RevisionsContracte.contracte_id == contracte.id).order_by(RevisionsContracte.data_prevista.desc())
+    stmt_ult = (
+        select(RevisionsContracte)
+        .where(RevisionsContracte.contracte_id == contracte.id)
+        .order_by(RevisionsContracte.data_prevista.desc())
+    )
     res_ult = await db.execute(stmt_ult)
     ultima_revisio = res_ult.scalars().first()
 
@@ -35,7 +38,7 @@ async def generar_ordres_preventives_per_contracte(
         "MENSUAL": relativedelta(months=1),
         "TRIMESTRAL": relativedelta(months=3),
         "SEMESTRAL": relativedelta(months=6),
-        "ANUAL": relativedelta(years=1)
+        "ANUAL": relativedelta(years=1),
     }
 
     interval = intervals.get(contracte.periodicitat, relativedelta(years=1))
@@ -60,14 +63,14 @@ async def generar_ordres_preventives_per_contracte(
             data_seguent_iter = data_seguent + interval
             if data_seguent_iter <= limit_date:
                 data_seguent = data_seguent_iter
-                continue # Ometem generació d'OTs antigues que es van obviar, o les generem igualment? Generarem només les actuals/imminents.
+                continue  # Ometem generació d'OTs antigues que es van obviar, o les generem igualment? Generarem només les actuals/imminents.
 
         # Generar Revisió
         revisio = RevisionsContracte(
             empresa_id=contracte.empresa_id,
             contracte_id=contracte.id,
             data_prevista=data_seguent,
-            estat="GENERADA_OT"
+            estat="GENERADA_OT",
         )
         db.add(revisio)
         await db.flush()
@@ -81,7 +84,7 @@ async def generar_ordres_preventives_per_contracte(
             adreca=client.adreca_fiscal if client and client.adreca_fiscal else "Sense adreça",
             estat="PENDENT",
             descripcio="Generada automàticament per contracte de manteniment",
-            data_planificacio=data_seguent
+            data_planificacio=data_seguent,
         )
         db.add(nova_ot)
         await db.flush()

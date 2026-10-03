@@ -1,11 +1,11 @@
-"""Punt d'entrada principal de l'API de Sevalor Suite."""
-
 import os
+import traceback
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
-from fastapi import FastAPI
+from fastapi import APIRouter, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
@@ -16,6 +16,7 @@ from app.api.v1.gestio.cerca import router as cerca_router
 from app.api.v1.gestio.cerca import spotlight_router
 from app.api.v1.gestio.clients import router as clients_router
 from app.api.v1.gestio.comptabilitat import router as comptabilitat_router
+from app.api.v1.gestio.configuracio import obtenir_dades_empresa, obtenir_marca_camaleonica
 from app.api.v1.gestio.configuracio import router as configuracio_router
 from app.api.v1.gestio.contractes import router as contractes_router
 from app.api.v1.gestio.copilot import router as copilot_router
@@ -42,6 +43,8 @@ from app.api.v1.operari_pwa.planols import router as operari_planols_router
 from app.api.v1.operari_pwa.sync import router as sync_router
 from app.api.v1.operari_pwa.tiquets import router as tiquets_router
 from app.api.v1.operari_pwa.vehicles import router as vehicles_pwa_router
+from app.api.v1.public_docs import router as public_docs_router
+from app.api.v1.superadmin.empreses import router as empreses_router
 from app.api.v1.superadmin.tenants import router as tenants_router
 from app.api.v1.telemetria import router as telemetria_router
 from app.api.v1.webhooks.telegram import router as telegram_webhook_router
@@ -49,16 +52,21 @@ from app.api.v1.workers import router as workers_router
 from app.core.config import settings
 from app.middleware.tenant import TenantMiddleware
 
+"""Punt d'entrada principal de l'API de Sevalor Suite."""
+
+
 redis_url = os.getenv("REDIS_URL", "redis://:sevalor_redis_pass@127.0.0.1:6380/0")
 limiter = Limiter(
     key_func=get_remote_address,
     default_limits=["100/minute"],
-    storage_uri=redis_url if os.getenv("TESTING") != "1" else "memory://"
+    storage_uri=redis_url if os.getenv("TESTING") != "1" else "memory://",
 )
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     yield
+
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
@@ -97,8 +105,8 @@ async def metrics_middleware(request, call_next):  # type: ignore[no-untyped-def
     finally:
         _metrics.record((_time.perf_counter() - inici) * 1000.0, status_code)
 
+
 app.include_router(health_router, prefix=settings.API_V1_STR)
-from app.api.v1.superadmin.empreses import router as empreses_router
 
 app.include_router(tenants_router, prefix=settings.API_V1_STR)
 app.include_router(empreses_router, prefix=settings.API_V1_STR)
@@ -107,14 +115,8 @@ app.include_router(clients_router, prefix=settings.API_V1_STR)
 app.include_router(proveidors_router, prefix=settings.API_V1_STR)
 app.include_router(flota_router, prefix=settings.API_V1_STR)
 
-from app.api.v1.public_docs import router as public_docs_router
 
 app.include_router(public_docs_router, prefix=settings.API_V1_STR)
-
-import traceback
-
-from fastapi import Request
-from fastapi.responses import JSONResponse
 
 
 @app.exception_handler(Exception)
@@ -124,6 +126,7 @@ async def global_exception_handler(request: Request, exc: Exception):
         status_code=400,
         content={"detail": f"GLOBAL 500 CAUGHT: {str(exc)}", "traceback": err},
     )
+
 
 app.include_router(magatzem_router, prefix=settings.API_V1_STR)
 app.include_router(telegram_webhook_router, prefix=settings.API_V1_STR)
@@ -152,9 +155,7 @@ app.include_router(spotlight_router, prefix=settings.API_V1_STR)
 app.include_router(configuracio_router, prefix=settings.API_V1_STR)
 
 # Compatibilitat de rutes per a crides directes a /configuracio/empresa
-from fastapi import APIRouter
 
-from app.api.v1.gestio.configuracio import obtenir_dades_empresa, obtenir_marca_camaleonica
 
 compat_config_router = APIRouter(prefix="/configuracio", tags=["Configuració Compat"])
 compat_config_router.add_api_route("/empresa", obtenir_dades_empresa, methods=["GET"])
@@ -164,6 +165,7 @@ app.include_router(copilot_router, prefix=settings.API_V1_STR)
 app.include_router(ia_router, prefix=settings.API_V1_STR)
 app.include_router(telemetria_router, prefix=settings.API_V1_STR)
 app.include_router(workers_router, prefix=settings.API_V1_STR + "/workers", tags=["Workers Celery"])
+
 
 @app.get("/")
 async def root() -> dict[str, str]:

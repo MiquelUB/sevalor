@@ -1,4 +1,5 @@
 import logging
+import re
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
@@ -27,6 +28,7 @@ QUOTES_PER_PLA = {
 # no es deia de mockear-ho en python dict, però prioritzem arreglar la DB i els enums).
 # El correcte és persistir les feature flags dins d'Empresa (afegides a 001_core_multitenant.sql)
 
+
 class OnboardingTenantRequest(BaseModel):
     rao_social: str = Field(..., min_length=2, max_length=100)
     nif: str = Field(..., min_length=9, max_length=20)
@@ -43,17 +45,21 @@ class OnboardingTenantRequest(BaseModel):
     boss_telefon: Optional[str] = None
     feature_flags: Optional[Dict[str, bool]] = None
 
+
 class UpdateEstatTenantRequest(BaseModel):
     estat: str = Field(..., pattern="^(TRIAL|ACTIU|SUSPES_PAGAMENT|MANTENIMENT|BAIXA_OFFBOARDING)$")
 
+
 class UpdateQuotaTenantRequest(BaseModel):
     pla_subscripcio: str = Field(..., pattern="^(STARTER|PRO|ENTERPRISE)$")
+
 
 class UpdateFeatureFlagsRequest(BaseModel):
     feature_copilot_ia: bool
     feature_flota: bool
     feature_planols: bool
     feature_telegram: bool
+
 
 def crear_directoris_sobirans(empresa_id: str) -> List[str]:
     base_path = f"/data/{empresa_id}"
@@ -69,6 +75,7 @@ def crear_directoris_sobirans(empresa_id: str) -> List[str]:
     # però aquesta és la funció que en producció s'executaria.
     return dirs
 
+
 @router.get("", response_model=List[Dict[str, Any]])
 async def llistar_tenants(
     db: AsyncSession = Depends(get_db_with_tenant_context),
@@ -79,26 +86,27 @@ async def llistar_tenants(
 
     resultat = []
     for emp in empreses:
-        resultat.append({
-            "id": str(emp.id),
-            "rao_social": emp.nom,
-            "subdomini": emp.subdomini,
-            "vertical": emp.vertical,
-            "estat": emp.estat_pagament,
-            "pla": emp.pla_subscripcio,
-            "data_alta": emp.created_at.isoformat(),
-        })
+        resultat.append(
+            {
+                "id": str(emp.id),
+                "rao_social": emp.nom,
+                "subdomini": emp.subdomini,
+                "vertical": emp.vertical,
+                "estat": emp.estat_pagament,
+                "pla": emp.pla_subscripcio,
+                "data_alta": emp.created_at.isoformat(),
+            }
+        )
     return resultat
-
-import re
 
 
 def validar_nif_cif_nie(doc: str) -> bool:
     doc = doc.upper().replace("-", "").replace(" ", "")
-    if not re.match(r'^[A-Z0-9]{9}$', doc):
+    if not re.match(r"^[A-Z0-9]{9}$", doc):
         return False
     # Basic structural check
     return True
+
 
 @router.post("/onboarding", status_code=status.HTTP_201_CREATED, response_model=Dict[str, Any])
 async def crear_nou_tenant(
@@ -116,14 +124,14 @@ async def crear_nou_tenant(
     if subdomini_norm in {"api", "admin", "www", "app", "superadmin", "billing"}:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"El subdomini '{subdomini_norm}' està reservat per al sistema."
+            detail=f"El subdomini '{subdomini_norm}' està reservat per al sistema.",
         )
 
     res_subd = await db.execute(select(Empresa).where(Empresa.subdomini == subdomini_norm))
     if res_subd.scalars().first():
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail=f"El subdomini '{subdomini_norm}' ja està en ús."
+            detail=f"El subdomini '{subdomini_norm}' ja està en ús.",
         )
 
     nou_id = uuid.uuid4()
@@ -141,10 +149,18 @@ async def crear_nou_tenant(
         quota_disc_bytes_autoritzada=quota_bytes,
         vertical=vertical_norm,
         data_onboarding=datetime.now(timezone.utc),
-        feature_copilot_ia=payload.feature_flags.get("copilot_ia", False) if payload.feature_flags else False,
-        feature_flota=payload.feature_flags.get("flota_avancada", True) if payload.feature_flags else True,
-        feature_planols=payload.feature_flags.get("planols_tecnics", False) if payload.feature_flags else False,
-        feature_telegram=payload.feature_flags.get("telegram_bot", True) if payload.feature_flags else True,
+        feature_copilot_ia=payload.feature_flags.get("copilot_ia", False)
+        if payload.feature_flags
+        else False,
+        feature_flota=payload.feature_flags.get("flota_avancada", True)
+        if payload.feature_flags
+        else True,
+        feature_planols=payload.feature_flags.get("planols_tecnics", False)
+        if payload.feature_flags
+        else False,
+        feature_telegram=payload.feature_flags.get("telegram_bot", True)
+        if payload.feature_flags
+        else True,
         primari_hsl="210 100% 15%",
         secundari_hsl="38 92% 50%",
     )
@@ -152,12 +168,14 @@ async def crear_nou_tenant(
 
     boss_user_id = uuid.uuid4()
     # Verificar que l'email no existeixi a cap altra empresa
-    stmt_check = select(Usuari).where(func.lower(Usuari.email) == str(payload.boss_email).strip().lower())
+    stmt_check = select(Usuari).where(
+        func.lower(Usuari.email) == str(payload.boss_email).strip().lower()
+    )
     res_check = await db.execute(stmt_check)
     if res_check.scalars().first():
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Aquest email ja està registrat a una altra empresa. S'ha de fer servir un email únic."
+            detail="Aquest email ja està registrat a una altra empresa. S'ha de fer servir un email únic.",
         )
 
     nou_boss = Usuari(
@@ -179,25 +197,24 @@ async def crear_nou_tenant(
     except Exception as e:
         await db.rollback()
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error en BD: {str(e)}"
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Error en BD: {str(e)}"
         )
 
     emp_id_str = str(nou_id)
 
     # (RF-08) Delegar a Celery la creació dels directoris sobirans
     try:
-        from app.workers.tasks import crear_directoris_sobirans_task
+        from app.workers.tasks import crear_directoris_sobirans_task  # type: ignore
+
         crear_directoris_sobirans_task.delay(emp_id_str)
-        directoris_status = "QUEUED"
         logger.info("Tasca Celery encuada per crear directoris sobirans de %s", emp_id_str)
     except Exception as e:
         logger.warning("No s'ha pogut encuar la tasca Celery: %s", e)
-        directoris_status = "SKIPPED"
 
     import jwt
 
     from app.core.config import settings
+
     expire = datetime.now(timezone.utc) + timedelta(hours=24)
     payload_jwt = {
         "sub": str(boss_user_id),
@@ -220,6 +237,7 @@ async def crear_nou_tenant(
             "estat_inicial": "TRIAL",
         },
     }
+
 
 @router.put("/{empresa_id}/estat", response_model=Dict[str, Any])
 async def canviar_estat_tenant(
@@ -252,6 +270,7 @@ async def canviar_estat_tenant(
         "nou_estat": nou_estat,
         "missatge": f"L'estat del tenant s'ha canviat a '{nou_estat}'.",
     }
+
 
 @router.put("/{empresa_id}/quota", response_model=Dict[str, Any])
 async def canviar_quota_tenant(
@@ -286,7 +305,7 @@ async def canviar_quota_tenant(
         sobrants = operaris_actius - nou_limit
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"Downgrade bloquejat: màxim {nou_limit} operaris però en teniu {operaris_actius}. Doneu de baixa {sobrants} operaris."
+            detail=f"Downgrade bloquejat: màxim {nou_limit} operaris però en teniu {operaris_actius}. Doneu de baixa {sobrants} operaris.",
         )
 
     empresa.pla_subscripcio = nou_pla
@@ -299,6 +318,7 @@ async def canviar_quota_tenant(
         "nou_pla": nou_pla,
         "nova_quota_operaris": nou_limit,
     }
+
 
 @router.put("/{empresa_id}/feature-flags", response_model=Dict[str, Any])
 async def update_feature_flags(
@@ -334,8 +354,9 @@ async def update_feature_flags(
             "flota": empresa.feature_flota,
             "planols": empresa.feature_planols,
             "telegram": empresa.feature_telegram,
-        }
+        },
     }
+
 
 @router.post("/{empresa_id}/impersonate", response_model=Dict[str, Any])
 async def impersonate_tenant(
@@ -356,6 +377,7 @@ async def impersonate_tenant(
     import jwt
 
     from app.core.config import settings
+
     expire = datetime.now(timezone.utc) + timedelta(hours=2)
     payload = {
         "sub": claims.get("sub"),
@@ -365,7 +387,7 @@ async def impersonate_tenant(
         "iat": datetime.now(timezone.utc),
         "is_impersonation": True,
         "totp_activat": claims.get("totp_activat", True),
-        "ip_allowlist": claims.get("ip_allowlist", [])
+        "ip_allowlist": claims.get("ip_allowlist", []),
     }
 
     token = jwt.encode(payload, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
@@ -375,16 +397,15 @@ async def impersonate_tenant(
         "token_type": "bearer",
         "rol": "SUPERADMIN",
         "empresa_id": str(empresa.id),
-        "is_impersonation": True
+        "is_impersonation": True,
     }
 
+
 @router.post("/{tenant_id}/destruccio")
-async def destroy_tenant(
-    tenant_id: str,
-    db: AsyncSession = Depends(get_db_with_tenant_context)
-):
+async def destroy_tenant(tenant_id: str, db: AsyncSession = Depends(get_db_with_tenant_context)):
     try:
         import uuid
+
         tenant_uuid = uuid.UUID(tenant_id)
     except ValueError:
         raise HTTPException(status_code=400, detail="UUID invàlid")
@@ -413,12 +434,15 @@ async def destroy_tenant(
     c.drawString(100, 730, f"Tenant ID: {tenant_id}")
     c.drawString(100, 710, f"Empresa: {emp.nom}")
     c.drawString(100, 690, f"Data: {datetime.now(timezone.utc).isoformat()}")
-    c.drawString(100, 670, "Les dades han estat marcades per a la seva purga segura i ofuscació segons GDPR.")
+    c.drawString(
+        100, 670, "Les dades han estat marcades per a la seva purga segura i ofuscació segons GDPR."
+    )
     c.save()
 
     # Queue celery task
     from app.workers.tasks import purgar_dades_tenant_destruit
-    purgar_dades_tenant_destruit.apply_async(args=[tenant_id], countdown=30*24*3600)
+
+    purgar_dades_tenant_destruit.apply_async(args=[tenant_id], countdown=30 * 24 * 3600)
 
     await db.commit()
 
@@ -426,5 +450,5 @@ async def destroy_tenant(
         "status": "success",
         "message": "Tenant eliminat i certificat generat",
         "certificat_url": pdf_path,
-        "estat": "ELIMINAT"
+        "estat": "ELIMINAT",
     }

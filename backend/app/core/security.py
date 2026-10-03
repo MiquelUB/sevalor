@@ -62,6 +62,7 @@ def get_current_user_claims(request: Request) -> Dict[str, Any]:
 
 def require_roles(allowed_roles: List[str]) -> Callable:
     """Dependència FastAPI per restringir endpoints a rols específics (Tasca 4.4: Veto d'Enginyer)."""
+
     def role_checker(claims: Dict[str, Any] = Depends(get_current_user_claims)) -> Dict[str, Any]:
         user_role = claims.get("rol", "").upper()
 
@@ -85,7 +86,10 @@ def require_roles(allowed_roles: List[str]) -> Callable:
 # Veto d'Enginyer: Només BOSS, SECRETARIA o COMPTABILITAT poden accedir a dades financeres
 veto_enginyer_finances = require_roles(["BOSS", "SECRETARIA", "COMPTABILITAT"])
 
-def require_financial_access_checker(request: Request, claims: Dict[str, Any] = Depends(veto_enginyer_finances)) -> Dict[str, Any]:
+
+def require_financial_access_checker(
+    request: Request, claims: Dict[str, Any] = Depends(veto_enginyer_finances)
+) -> Dict[str, Any]:
     """Assegura l'accés financer i restringeix a només lectura si és una sessió d'impersonació."""
     if claims.get("is_impersonation") and request.method not in ("GET", "HEAD", "OPTIONS"):
         raise HTTPException(
@@ -93,6 +97,7 @@ def require_financial_access_checker(request: Request, claims: Dict[str, Any] = 
             detail="Les sessions d'impersonació tenen accés de només lectura a dades financeres.",
         )
     return claims
+
 
 require_financial_access = require_financial_access_checker
 require_boss = require_roles(["BOSS"])

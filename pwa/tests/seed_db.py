@@ -24,8 +24,8 @@ async def seed():
         operari_id = str(uuid.uuid4())
         hashed_pin = bcrypt.hashpw('1234'.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
         await conn.execute(
-            text("""INSERT INTO usuaris (id, empresa_id, nif, nom, rol, pin_hash, pin_bloquejat, intents_pin_fallits) 
-                    VALUES (:id, :emp, '99999999E', 'Operari E2E', 'OPERARI', :pin, false, 0)"""),
+            text("""INSERT INTO usuaris (id, empresa_id, nif, nom, rol, pin_hash, pin_bloquejat, intents_pin_fallits, totp_activat, ip_allowlist)
+                    VALUES (:id, :emp, '99999999E', 'Operari E2E', 'OPERARI', :pin, false, 0, true, '{"*"}')"""),
             {"id": operari_id, "emp": empresa_id, "pin": hashed_pin}
         )
 
@@ -33,8 +33,8 @@ async def seed():
         hashed_pw_boss = bcrypt.hashpw('bosspassword'.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
         await conn.execute(text("DELETE FROM usuaris WHERE email = 'boss@e2e.com'"))
         await conn.execute(
-            text("""INSERT INTO usuaris (id, empresa_id, nif, nom, email, password_hash, rol, pin_bloquejat, intents_pin_fallits) 
-                    VALUES (:id, :emp, '00000000B', 'Boss E2E', 'boss@e2e.com', :pw, 'BOSS', false, 0)"""),
+            text("""INSERT INTO usuaris (id, empresa_id, nif, nom, email, password_hash, rol, pin_bloquejat, intents_pin_fallits, totp_activat, ip_allowlist)
+                    VALUES (:id, :emp, '00000000B', 'Boss E2E', 'boss@e2e.com', :pw, 'BOSS', false, 0, true, '{"*"}')"""),
             {"id": boss_id, "emp": empresa_id, "pw": hashed_pw_boss}
         )
 
@@ -42,8 +42,8 @@ async def seed():
         superadmin_id = str(uuid.uuid4())
         hashed_pw_sa = bcrypt.hashpw('superpassword'.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
         await conn.execute(
-            text("""INSERT INTO usuaris (id, nif, nom, email, password_hash, rol, pin_bloquejat, intents_pin_fallits) 
-                    VALUES (:id, '00000000T', 'Super Admin', 'admin@sevalor.com', :pw, 'SUPERADMIN', false, 0)"""),
+            text("""INSERT INTO usuaris (id, nif, nom, email, password_hash, rol, pin_bloquejat, intents_pin_fallits, totp_activat, ip_allowlist)
+                    VALUES (:id, '00000000T', 'Super Admin', 'admin@sevalor.com', :pw, 'SUPERADMIN', false, 0, true, '{"*"}')"""),
             {"id": superadmin_id, "pw": hashed_pw_sa}
         )
     print(f"Database seeded for E2E tests: EmpresaID={empresa_id}")

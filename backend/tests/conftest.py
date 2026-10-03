@@ -53,7 +53,7 @@ def event_loop():
 @pytest_asyncio.fixture(scope="session", autouse=True)
 async def setup_test_database():
     """Initializes the database schema and RLS policies for testing before any tests run."""
-    engine = create_async_engine(TEST_DB_URL, echo=False)
+    print(f"setup_test_database using: {TEST_DB_URL}"); engine = create_async_engine(TEST_DB_URL, echo=False)
 
     from app.core.db import Base
 

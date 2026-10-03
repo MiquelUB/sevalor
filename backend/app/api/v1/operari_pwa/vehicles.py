@@ -13,8 +13,11 @@ from app.models.models import Incidencia, TiquetCarburant, Usuari, Vehicle
 router = APIRouter(
     prefix="/operari/vehicles",
     tags=["Operari PWA Vehicles"],
-    dependencies=[Depends(require_roles(["OPERARI", "CAPATAZ", "CAP_DE_COLLA", "BOSS", "SUPERADMIN"]))],
+    dependencies=[
+        Depends(require_roles(["OPERARI", "CAPATAZ", "CAP_DE_COLLA", "BOSS", "SUPERADMIN"]))
+    ],
 )
+
 
 class VehicleResponse(BaseModel):
     id: uuid.UUID
@@ -24,10 +27,10 @@ class VehicleResponse(BaseModel):
     estat: str
     odometre_acumulat: int | None
 
+
 @router.get("", response_model=List[VehicleResponse])
 async def llistar_vehicles_pwa(
-    request: Request,
-    db: AsyncSession = Depends(get_db_with_tenant_context)
+    request: Request, db: AsyncSession = Depends(get_db_with_tenant_context)
 ):
     empresa_id = request.state.empresa_id
     res = await db.execute(select(Vehicle).where(Vehicle.empresa_id == uuid.UUID(empresa_id)))
@@ -39,20 +42,23 @@ async def llistar_vehicles_pwa(
             marca=v.marca,
             model=v.model,
             estat=v.estat,
-            odometre_acumulat=v.odometre_acumulat
-        ) for v in vehicles
+            odometre_acumulat=v.odometre_acumulat,
+        )
+        for v in vehicles
     ]
+
 
 class ReportDanyRequest(BaseModel):
     descripcio: str
     gravetat: str
+
 
 @router.post("/{vehicle_id}/danys")
 async def reportar_dany_vehicle(
     vehicle_id: uuid.UUID,
     payload: ReportDanyRequest,
     request: Request,
-    db: AsyncSession = Depends(get_db_with_tenant_context)
+    db: AsyncSession = Depends(get_db_with_tenant_context),
 ):
     empresa_id = request.state.empresa_id
 
@@ -60,8 +66,8 @@ async def reportar_dany_vehicle(
         empresa_id=uuid.UUID(empresa_id),
         vehicle_id=vehicle_id,
         text_observacions=payload.descripcio,
-        estat='VERMELL',
-        ambit="VEHICLE"
+        estat="VERMELL",
+        ambit="VEHICLE",
     )
     db.add(nova_incidencia)
     await db.commit()
@@ -74,15 +80,26 @@ class CheckinVehicleRequest(BaseModel):
     foto_odometre_id: str | None = None
     nivell_combustible: str | None = None
 
+
 @router.post("/{vehicle_id}/checkin", status_code=status.HTTP_201_CREATED)
 async def vehicle_checkin(
     vehicle_id: uuid.UUID,
     payload: CheckinVehicleRequest,
     request: Request,
-    db: AsyncSession = Depends(get_db_with_tenant_context)
+    db: AsyncSession = Depends(get_db_with_tenant_context),
 ):
     empresa_id = request.state.empresa_id
-    vehicle = (await db.execute(select(Vehicle).where(Vehicle.id == vehicle_id, Vehicle.empresa_id == uuid.UUID(empresa_id)))).scalars().first()
+    vehicle = (
+        (
+            await db.execute(
+                select(Vehicle).where(
+                    Vehicle.id == vehicle_id, Vehicle.empresa_id == uuid.UUID(empresa_id)
+                )
+            )
+        )
+        .scalars()
+        .first()
+    )
     if not vehicle:
         raise HTTPException(status_code=404)
 
@@ -102,21 +119,36 @@ class RepostatgeRequest(BaseModel):
     euros: float
     odometre: int
 
+
 @router.post("/{vehicle_id}/repostatge", status_code=status.HTTP_201_CREATED)
 async def vehicle_repostatge(
     vehicle_id: uuid.UUID,
     payload: RepostatgeRequest,
     request: Request,
-    db: AsyncSession = Depends(get_db_with_tenant_context)
+    db: AsyncSession = Depends(get_db_with_tenant_context),
 ):
     empresa_id = request.state.empresa_id
-    usuari_id = getattr(request.state, "user_id", None) # Assuming user_id is in state
+    usuari_id = getattr(request.state, "user_id", None)  # Assuming user_id is in state
     if not usuari_id:
         # Fallback if state doesn't have it (for mock/tests)
-        first_user = (await db.execute(select(Usuari).where(Usuari.empresa_id == uuid.UUID(empresa_id)))).scalars().first()
+        first_user = (
+            (await db.execute(select(Usuari).where(Usuari.empresa_id == uuid.UUID(empresa_id))))
+            .scalars()
+            .first()
+        )
         usuari_id = first_user.id if first_user else uuid.uuid4()
 
-    vehicle = (await db.execute(select(Vehicle).where(Vehicle.id == vehicle_id, Vehicle.empresa_id == uuid.UUID(empresa_id)))).scalars().first()
+    vehicle = (
+        (
+            await db.execute(
+                select(Vehicle).where(
+                    Vehicle.id == vehicle_id, Vehicle.empresa_id == uuid.UUID(empresa_id)
+                )
+            )
+        )
+        .scalars()
+        .first()
+    )
     if not vehicle:
         raise HTTPException(status_code=404)
 
@@ -128,7 +160,7 @@ async def vehicle_repostatge(
         odometre_foto_path="n/a",
         litres=payload.litres,
         import_=payload.euros,
-        odometre_valor=payload.odometre
+        odometre_valor=payload.odometre,
     )
     db.add(tiquet)
     await db.commit()
@@ -141,15 +173,26 @@ class CheckoutVehicleRequest(BaseModel):
     foto_odometre_id: str | None = None
     nivell_combustible: str | None = None
 
+
 @router.post("/{vehicle_id}/checkout", status_code=status.HTTP_200_OK)
 async def vehicle_checkout(
     vehicle_id: uuid.UUID,
     payload: CheckoutVehicleRequest,
     request: Request,
-    db: AsyncSession = Depends(get_db_with_tenant_context)
+    db: AsyncSession = Depends(get_db_with_tenant_context),
 ):
     empresa_id = request.state.empresa_id
-    vehicle = (await db.execute(select(Vehicle).where(Vehicle.id == vehicle_id, Vehicle.empresa_id == uuid.UUID(empresa_id)))).scalars().first()
+    vehicle = (
+        (
+            await db.execute(
+                select(Vehicle).where(
+                    Vehicle.id == vehicle_id, Vehicle.empresa_id == uuid.UUID(empresa_id)
+                )
+            )
+        )
+        .scalars()
+        .first()
+    )
     if not vehicle:
         raise HTTPException(status_code=404)
 

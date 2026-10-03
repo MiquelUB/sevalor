@@ -36,7 +36,10 @@ _QUEUES = ("queue_documents", "queue_periodic", "queue_alerts", "queue_sync")
 
 
 class ToggleFeatureRequest(BaseModel):
-    feature_key: str = Field(..., description="Clau del feature flag: copilot_ia, flota_avancada, planols_tecnics, telegram_bot")
+    feature_key: str = Field(
+        ...,
+        description="Clau del feature flag: copilot_ia, flota_avancada, planols_tecnics, telegram_bot",
+    )
     enabled: bool = Field(..., description="Nou estat del feature flag")
 
 
@@ -144,7 +147,6 @@ async def get_system_kpis(db: AsyncSession = Depends(get_db_with_tenant_context)
 
     if db_ok:
         try:
-
             # Consultar empreses registrades (Dia 0 real o actuals)
             q_empreses = select(Empresa).order_by(Empresa.created_at.desc()).limit(50)
             res_empreses = await db.execute(q_empreses)
@@ -155,17 +157,14 @@ async def get_system_kpis(db: AsyncSession = Depends(get_db_with_tenant_context)
 
                 # Comptar usuaris actius per empresa
                 q_count = select(func.count(Usuari.id)).where(
-                    Usuari.empresa_id == emp.id,
-                    Usuari.estat == "ACTIU"
+                    Usuari.empresa_id == emp.id, Usuari.estat == "ACTIU"
                 )
                 res_count = await db.execute(q_count)
                 operaris_actius = res_count.scalar() or 0
 
                 # Desglossament aproximat camp vs oficina
                 q_camp = select(func.count(Usuari.id)).where(
-                    Usuari.empresa_id == emp.id,
-                    Usuari.estat == "ACTIU",
-                    Usuari.rol == "OPERARI"
+                    Usuari.empresa_id == emp.id, Usuari.estat == "ACTIU", Usuari.rol == "OPERARI"
                 )
                 res_camp = await db.execute(q_camp)
                 camp_count = res_camp.scalar() or 0
@@ -204,18 +203,20 @@ async def get_system_kpis(db: AsyncSession = Depends(get_db_with_tenant_context)
                 elif "CONSTRUCT" in nom_upper or "BUILD" in nom_upper:
                     vertical = "BUILDINGPRO"
 
-                tenants_list.append({
-                    "id": emp_id_str,
-                    "subdomini": emp.subdomini or f"tenant-{emp_id_str[:6]}.sevalor.app",
-                    "nom": emp.nom,
-                    "vertical": vertical,
-                    "operaris_actius": operaris_actius,
-                    "quota_operaris": quota_operaris,
-                    "disc_utilitzat_mb": disc_utilitzat_mb,
-                    "disc_quota_mb": quota_disc_mb,
-                    "features": _tenant_features_store[emp_id_str],
-                    "estat": emp.estat_pagament or "AL_DIA",
-                })
+                tenants_list.append(
+                    {
+                        "id": emp_id_str,
+                        "subdomini": emp.subdomini or f"tenant-{emp_id_str[:6]}.sevalor.app",
+                        "nom": emp.nom,
+                        "vertical": vertical,
+                        "operaris_actius": operaris_actius,
+                        "quota_operaris": quota_operaris,
+                        "disc_utilitzat_mb": disc_utilitzat_mb,
+                        "disc_quota_mb": quota_disc_mb,
+                        "features": _tenant_features_store[emp_id_str],
+                        "estat": emp.estat_pagament or "AL_DIA",
+                    }
+                )
         except Exception:
             # Fallback en cas d'error no crític
             pass
@@ -264,7 +265,12 @@ async def get_system_kpis(db: AsyncSession = Depends(get_db_with_tenant_context)
             "type": "Async Tasks",
             "ping": "pong" if worker_ok else None,
         },
-        "celery_beat": {"status": "UNKNOWN", "version": celery_version, "type": "Scheduler", "ping": None},
+        "celery_beat": {
+            "status": "UNKNOWN",
+            "version": celery_version,
+            "type": "Scheduler",
+            "ping": None,
+        },
         "bot": {"status": "UNKNOWN", "version": None, "type": "Aiogram", "ping": None},
     }
 
@@ -364,8 +370,9 @@ async def update_tenant_quota(
     try:
         tenant_uuid = UUID(tenant_id)
     except ValueError:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="ID de tenant invàlid (cal UUID)")
-
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="ID de tenant invàlid (cal UUID)"
+        )
 
     emp_res = await db.execute(select(Empresa).where(Empresa.id == tenant_uuid))
     emp = emp_res.scalar_one_or_none()
@@ -373,7 +380,9 @@ async def update_tenant_quota(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant no trobat")
 
     # Si es vol fer downgrade, verificar que els operaris actius no superin el nou límit
-    q_count = select(func.count(Usuari.id)).where(Usuari.empresa_id == tenant_uuid, Usuari.estat == "ACTIU")
+    q_count = select(func.count(Usuari.id)).where(
+        Usuari.empresa_id == tenant_uuid, Usuari.estat == "ACTIU"
+    )
     res_count = await db.execute(q_count)
     actius = res_count.scalar() or 0
 
@@ -411,13 +420,16 @@ async def record_error_trace(
         VALUES (:endpoint, :metode, :status_code, :stack_trace, :detall)
         RETURNING id, creat_a;
     """)
-    result = await db.execute(query, {
-        "endpoint": req.endpoint,
-        "metode": req.metode,
-        "status_code": req.status_code,
-        "stack_trace": req.stack_trace,
-        "detall": req.detall,
-    })
+    result = await db.execute(
+        query,
+        {
+            "endpoint": req.endpoint,
+            "metode": req.metode,
+            "status_code": req.status_code,
+            "stack_trace": req.stack_trace,
+            "detall": req.detall,
+        },
+    )
     await db.commit()
     row = result.fetchone()
 
@@ -443,13 +455,15 @@ async def list_error_traces(
     result = await db.execute(query, {"limit": limit})
     traces = []
     for r in result.fetchall():
-        traces.append({
-            "id": str(r[0]),
-            "endpoint": r[1],
-            "metode": r[2],
-            "status_code": r[3],
-            "stack_trace": r[4],
-            "detall": r[5],
-            "creat_a": r[6].isoformat() if r[6] else None,
-        })
+        traces.append(
+            {
+                "id": str(r[0]),
+                "endpoint": r[1],
+                "metode": r[2],
+                "status_code": r[3],
+                "stack_trace": r[4],
+                "detall": r[5],
+                "creat_a": r[6].isoformat() if r[6] else None,
+            }
+        )
     return traces

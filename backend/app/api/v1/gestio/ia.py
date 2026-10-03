@@ -18,12 +18,15 @@ router = APIRouter(
     dependencies=[Depends(require_roles(["BOSS", "SECRETARIA", "ENGINYER"]))],
 )
 
+
 class RagQueryIn(BaseModel):
     prompt: str = Field(..., description="La consulta per al model")
+
 
 class RagQueryOut(BaseModel):
     resposta: str
     fonts: list[str] = []
+
 
 MAX_PROMPT_CHARS = 2000
 
@@ -38,7 +41,7 @@ def sanititzar_prompt(text: str) -> str:
 async def consultar_ia_rag(
     dades: RagQueryIn,
     db: AsyncSession = Depends(get_db_with_tenant_context),
-    claims: Dict[str, Any] = Depends(get_current_user_claims)
+    claims: Dict[str, Any] = Depends(get_current_user_claims),
 ) -> RagQueryOut:
     """Consulta el LLM local (LM Studio). Si el node d'IA no respon, retorna 503 (mai text inventat)."""
     from app.api.v1.gestio.copilot import cridar_lm_studio
@@ -55,6 +58,7 @@ async def consultar_ia_rag(
         )
     return RagQueryOut(resposta=resposta, fonts=[])
 
+
 class PeritatgeOut(BaseModel):
     id: uuid.UUID
     estat: str
@@ -62,28 +66,33 @@ class PeritatgeOut(BaseModel):
     transcripcio_audio: str
     confianca_acustica: float
 
+
 def verificar_magic_bytes(file_path: str, tipus: str) -> bool:
     with open(file_path, "rb") as f:
         capcalera = f.read(8)
     if tipus == "audio":
-        return capcalera.startswith(b'\x1a\x45\xdf\xa3') or \
-               capcalera.startswith(b'OggS') or \
-               capcalera.startswith(b'RIFF') or \
-               capcalera.startswith(b'ID3') or \
-               capcalera.startswith(b'\xff\xfb')
+        return (
+            capcalera.startswith(b"\x1a\x45\xdf\xa3")
+            or capcalera.startswith(b"OggS")
+            or capcalera.startswith(b"RIFF")
+            or capcalera.startswith(b"ID3")
+            or capcalera.startswith(b"\xff\xfb")
+        )
     elif tipus == "imatge":
-        return capcalera.startswith(b'\xff\xd8\xff') or \
-               capcalera.startswith(b'\x89PNG\r\n\x1a\n')
+        return capcalera.startswith(b"\xff\xd8\xff") or capcalera.startswith(b"\x89PNG\r\n\x1a\n")
     return False
 
-@router.post("/incidencies/peritatge", response_model=PeritatgeOut, status_code=status.HTTP_201_CREATED)
+
+@router.post(
+    "/incidencies/peritatge", response_model=PeritatgeOut, status_code=status.HTTP_201_CREATED
+)
 async def peritatge_incidencies(
     request: Request,
     audio: UploadFile = File(...),
     foto: Optional[UploadFile] = File(None),
     incidencia_id: Optional[str] = Form(None),
     ordre_treball_id: Optional[str] = Form(None),
-    db: AsyncSession = Depends(get_db_with_tenant_context)
+    db: AsyncSession = Depends(get_db_with_tenant_context),
 ):
     claims = get_current_user_claims(request)
     empresa_id = uuid.UUID(claims["empresa_id"])
@@ -123,7 +132,7 @@ async def peritatge_incidencies(
             ordre_treball_id=uuid.UUID(ordre_treball_id) if ordre_treball_id else None,
             transcripcio=transcripcio_text,
             confianca_acustica=confianca,
-            foto_path=foto_path
+            foto_path=foto_path,
         )
 
         return PeritatgeOut(
@@ -131,7 +140,7 @@ async def peritatge_incidencies(
             estat=memo.estat,
             dictamen_pericial=memo.dictamen_pericial,
             transcripcio_audio=memo.transcripcio_audio or "",
-            confianca_acustica=float(memo.confianca_acustica)
+            confianca_acustica=float(memo.confianca_acustica),
         )
     finally:
         if os.path.exists(audio_path):

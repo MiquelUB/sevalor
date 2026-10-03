@@ -32,7 +32,9 @@ class SpotlightResultItem(BaseModel):
 async def cerca_spotlight(
     request: Request,
     q: str = Query(..., min_length=2, description="Criteri de cerca (mínim 2 caràcters)"),
-    entitat: Optional[str] = Query(None, description="Filtre per entitat (CLIENTS, VEHICLES, ORDRES, ARTICLES, OPERARIS, TOTS)"),
+    entitat: Optional[str] = Query(
+        None, description="Filtre per entitat (CLIENTS, VEHICLES, ORDRES, ARTICLES, OPERARIS, TOTS)"
+    ),
     db: AsyncSession = Depends(get_db),
 ) -> List[SpotlightResultItem]:
     """Executa la cerca ràpida Spotlight multi-entitat sota el tenant actual."""
@@ -177,11 +179,14 @@ async def cerca_spotlight(
 
 spotlight_router = APIRouter(prefix="/spotlight", tags=["Spotlight"])
 
+
 @spotlight_router.get("/items")
-async def llistar_spotlight_items_inicials(request: Request, db: AsyncSession = Depends(get_db)) -> List[dict[str, Any]]:
+async def llistar_spotlight_items_inicials(
+    request: Request, db: AsyncSession = Depends(get_db)
+) -> List[dict[str, Any]]:
     """Retorna els elements principals per a cerca ràpida."""
     empresa_id = getattr(request.state, "empresa_id", None)
-    if not empresa_id or empresa_id == 'undefined':
+    if not empresa_id or empresa_id == "undefined":
         return []
     await set_tenant_context(db, empresa_id)
 
@@ -190,10 +195,12 @@ async def llistar_spotlight_items_inicials(request: Request, db: AsyncSession = 
 
     items = []
     for c in clients:
-        items.append({
-            "id": str(c.id),
-            "titol": f"{c.codi}: {c.rao_social}",
-            "desc": f"NIF: {c.nif}",
-            "esFinancera": False,
-        })
+        items.append(
+            {
+                "id": str(c.id),
+                "titol": f"{c.codi}: {c.rao_social}",
+                "desc": f"NIF: {c.nif}",
+                "esFinancera": False,
+            }
+        )
     return items

@@ -5,6 +5,7 @@ from app.workers.celery_app import celery_app
 
 router = APIRouter()
 
+
 @router.get("/status/{task_id}")
 async def get_task_status(task_id: str, request: Request):
     """Retorna l'estat en temps real d'una tasca encolada (Spec 024 RF-21)."""
@@ -27,5 +28,5 @@ async def get_task_status(task_id: str, request: Request):
     return {
         "task_id": task_id,
         "estat": estat,
-        "resultat": task_result.result if task_result.ready() else None
+        "resultat": task_result.result if task_result.ready() else None,
     }

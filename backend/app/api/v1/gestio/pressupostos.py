@@ -25,6 +25,7 @@ router = APIRouter(
 # DTOs / Esquemes Pydantic
 # ---------------------------------------------------------------------------
 
+
 class PressupostCreate(BaseModel):
     client_id: uuid.UUID
     numero: str = Field(..., max_length=30)
@@ -48,6 +49,7 @@ class PressupostResponse(BaseModel):
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
+
 
 @router.get("", response_model=List[PressupostResponse])
 async def llistar_pressupostos(
@@ -89,7 +91,10 @@ async def crear_pressupost(
     stmt_c = select(Client).where(Client.id == dades.client_id, Client.empresa_id == empresa_id)
     client = (await db.execute(stmt_c)).scalars().first()
     if not client:
-        raise HTTPException(status_code=404, detail="El client especificat no existeix o no pertany a la teva empresa.")
+        raise HTTPException(
+            status_code=404,
+            detail="El client especificat no existeix o no pertany a la teva empresa.",
+        )
 
     nou_pressupost = Pressupost(
         id=uuid.uuid4(),
@@ -116,7 +121,9 @@ async def obtenir_pressupost(
         raise HTTPException(status_code=400, detail="Falta el tenant al token.")
     empresa_id = uuid.UUID(empresa_id_str)
 
-    stmt = select(Pressupost).where(Pressupost.id == pressupost_id, Pressupost.empresa_id == empresa_id)
+    stmt = select(Pressupost).where(
+        Pressupost.id == pressupost_id, Pressupost.empresa_id == empresa_id
+    )
     res = await db.execute(stmt)
     pressupost = res.scalars().first()
     if not pressupost:
@@ -136,7 +143,9 @@ async def enviar_pressupost_via_telegram(
         raise HTTPException(status_code=400, detail="Falta el tenant al token.")
     empresa_id = uuid.UUID(empresa_id_str)
 
-    stmt = select(Pressupost).where(Pressupost.id == pressupost_id, Pressupost.empresa_id == empresa_id)
+    stmt = select(Pressupost).where(
+        Pressupost.id == pressupost_id, Pressupost.empresa_id == empresa_id
+    )
     res = await db.execute(stmt)
     pressupost = res.scalars().first()
     if not pressupost:
@@ -146,7 +155,7 @@ async def enviar_pressupost_via_telegram(
     if not resultat.get("ok"):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=resultat.get("detail", "No s'ha pogut enviar el missatge per Telegram.")
+            detail=resultat.get("detail", "No s'ha pogut enviar el missatge per Telegram."),
         )
 
     return {
@@ -169,14 +178,18 @@ async def aprovar_pressupost(
         raise HTTPException(status_code=400, detail="Falta el tenant al token.")
     empresa_id = uuid.UUID(empresa_id_str)
 
-    stmt = select(Pressupost).where(Pressupost.id == pressupost_id, Pressupost.empresa_id == empresa_id)
+    stmt = select(Pressupost).where(
+        Pressupost.id == pressupost_id, Pressupost.empresa_id == empresa_id
+    )
     res = await db.execute(stmt)
     pressupost = res.scalars().first()
     if not pressupost:
         raise HTTPException(status_code=404, detail="Pressupost no trobat.")
 
     if pressupost.estat != "PENDENT":
-        raise HTTPException(status_code=400, detail="Només es poden aprovar pressupostos en estat PENDENT.")
+        raise HTTPException(
+            status_code=400, detail="Només es poden aprovar pressupostos en estat PENDENT."
+        )
 
     pressupost.estat = "APROVAT"
     await db.commit()
@@ -195,14 +208,18 @@ async def rebutjar_pressupost(
         raise HTTPException(status_code=400, detail="Falta el tenant al token.")
     empresa_id = uuid.UUID(empresa_id_str)
 
-    stmt = select(Pressupost).where(Pressupost.id == pressupost_id, Pressupost.empresa_id == empresa_id)
+    stmt = select(Pressupost).where(
+        Pressupost.id == pressupost_id, Pressupost.empresa_id == empresa_id
+    )
     res = await db.execute(stmt)
     pressupost = res.scalars().first()
     if not pressupost:
         raise HTTPException(status_code=404, detail="Pressupost no trobat.")
 
     if pressupost.estat != "PENDENT":
-        raise HTTPException(status_code=400, detail="Només es poden rebutjar pressupostos en estat PENDENT.")
+        raise HTTPException(
+            status_code=400, detail="Només es poden rebutjar pressupostos en estat PENDENT."
+        )
 
     pressupost.estat = "REBUTJAT"
     await db.commit()
@@ -221,9 +238,14 @@ async def generar_pressupost_ia(
         "draft": {
             "titol": "Pressupost generat per IA",
             "linies": [
-                {"concepte": f"Generat des de: {prompt[:30]}", "quantitat": 1, "preu_unitari": 100.0, "total": 100.0}
+                {
+                    "concepte": f"Generat des de: {prompt[:30]}",
+                    "quantitat": 1,
+                    "preu_unitari": 100.0,
+                    "total": 100.0,
+                }
             ],
-            "total_estimat": 100.0
+            "total_estimat": 100.0,
         },
-        "missatge": "Proposta PENDENT_AUDITORIA generada correctament."
+        "missatge": "Proposta PENDENT_AUDITORIA generada correctament.",
     }

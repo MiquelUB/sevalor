@@ -17,6 +17,7 @@ router = APIRouter(
     dependencies=[Depends(require_roles(["BOSS", "SECRETARIA", "ENGINYER"]))],
 )
 
+
 class FeinaCreate(BaseModel):
     codi: str = Field(..., max_length=20)
     client_id: uuid.UUID
@@ -29,8 +30,10 @@ class FeinaCreate(BaseModel):
     cap_de_colla_id: uuid.UUID
     vehicle_id: Optional[uuid.UUID] = None
 
+
 class FeinaResponse(FeinaCreate):
     id: uuid.UUID
+
 
 @router.get("", response_model=List[FeinaResponse])
 async def llistar_feines(
@@ -38,10 +41,10 @@ async def llistar_feines(
     q: Optional[str] = None,
     limit: int = 50,
     offset: int = 0,
-    db: AsyncSession = Depends(get_db_with_tenant_context)
+    db: AsyncSession = Depends(get_db_with_tenant_context),
 ):
     empresa_id = request.state.empresa_id
-    if not empresa_id or empresa_id == 'undefined':
+    if not empresa_id or empresa_id == "undefined":
         raise HTTPException(status_code=401, detail="No identificat")
 
     stmt = select(OrdreTreball).where(OrdreTreball.empresa_id == uuid.UUID(empresa_id))
@@ -49,10 +52,7 @@ async def llistar_feines(
     if q:
         search_term = f"%{q}%"
         stmt = stmt.where(
-            or_(
-                OrdreTreball.codi.ilike(search_term),
-                OrdreTreball.titol.ilike(search_term)
-            )
+            or_(OrdreTreball.codi.ilike(search_term), OrdreTreball.titol.ilike(search_term))
         )
 
     stmt = stmt.limit(limit).offset(offset).order_by(OrdreTreball.created_at.desc())
@@ -62,19 +62,17 @@ async def llistar_feines(
 
     return feines
 
+
 @router.post("", response_model=FeinaResponse, status_code=status.HTTP_201_CREATED)
 async def alta_feina(
-    request: Request,
-    feina: FeinaCreate,
-    db: AsyncSession = Depends(get_db_with_tenant_context)
+    request: Request, feina: FeinaCreate, db: AsyncSession = Depends(get_db_with_tenant_context)
 ):
     empresa_id = request.state.empresa_id
-    if not empresa_id or empresa_id == 'undefined':
+    if not empresa_id or empresa_id == "undefined":
         raise HTTPException(status_code=401, detail="No identificat")
 
     stmt_codi = select(OrdreTreball).where(
-        OrdreTreball.empresa_id == uuid.UUID(empresa_id),
-        OrdreTreball.codi == feina.codi
+        OrdreTreball.empresa_id == uuid.UUID(empresa_id), OrdreTreball.codi == feina.codi
     )
     result_codi = await db.execute(stmt_codi)
     if result_codi.scalars().first():
@@ -91,7 +89,7 @@ async def alta_feina(
         estat=feina.estat,
         data_planificacio=feina.data_planificacio,
         cap_de_colla_id=feina.cap_de_colla_id,
-        vehicle_id=feina.vehicle_id
+        vehicle_id=feina.vehicle_id,
     )
 
     db.add(nova_feina)
@@ -102,11 +100,10 @@ async def alta_feina(
 
 @router.get("/mapa")
 async def llistar_feines_mapa(
-    request: Request,
-    db: AsyncSession = Depends(get_db_with_tenant_context)
+    request: Request, db: AsyncSession = Depends(get_db_with_tenant_context)
 ):
     empresa_id = getattr(request.state, "empresa_id", None) or request.headers.get("X-Empresa-ID")
-    if not empresa_id or empresa_id == 'undefined':
+    if not empresa_id or empresa_id == "undefined":
         raise HTTPException(status_code=401, detail="No identificat")
 
     stmt = (
@@ -114,7 +111,7 @@ async def llistar_feines_mapa(
         .outerjoin(Client, OrdreTreball.client_id == Client.id)
         .where(
             OrdreTreball.empresa_id == uuid.UUID(empresa_id),
-            OrdreTreball.estat.in_(["PENDENT", "EN_CURS", "BLOQUEJADA", "EN_OBRA", "EN_RUTA"])
+            OrdreTreball.estat.in_(["PENDENT", "EN_CURS", "BLOQUEJADA", "EN_OBRA", "EN_RUTA"]),
         )
         .order_by(OrdreTreball.created_at.desc())
     )
@@ -138,32 +135,30 @@ async def llistar_feines_mapa(
         if lat is None or lng is None:
             continue
 
-        features.append({
-            "type": "Feature",
-            "geometry": {
-                "type": "Point",
-                "coordinates": [float(lng), float(lat)]
-            },
-            "properties": {
-                "id": str(ordre.id),
-                "codi": ordre.codi,
-                "titol": ordre.titol,
-                "estat": ordre.estat,
-                "adreca": ordre.adreca,
-                "client_rao_social": client.rao_social if client else None,
-                "is_incidencia": False
+        features.append(
+            {
+                "type": "Feature",
+                "geometry": {"type": "Point", "coordinates": [float(lng), float(lat)]},
+                "properties": {
+                    "id": str(ordre.id),
+                    "codi": ordre.codi,
+                    "titol": ordre.titol,
+                    "estat": ordre.estat,
+                    "adreca": ordre.adreca,
+                    "client_rao_social": client.rao_social if client else None,
+                    "is_incidencia": False,
+                },
             }
-        })
+        )
 
-    return {
-        "type": "FeatureCollection",
-        "features": features
-    }
+    return {"type": "FeatureCollection", "features": features}
+
 
 class AgendarFeinaRequest(BaseModel):
     hora_inici_prevista: datetime
     hora_fi_prevista: datetime
     version_id: int
+
 
 class AgendarFeinaResponse(BaseModel):
     id: uuid.UUID
@@ -172,24 +167,24 @@ class AgendarFeinaResponse(BaseModel):
     version_id: int
     estat: str
 
+
 @router.put("/{feina_id}/agendar", response_model=AgendarFeinaResponse)
 async def agendar_feina(
     feina_id: uuid.UUID,
     payload: AgendarFeinaRequest,
     request: Request,
-    db: AsyncSession = Depends(get_db_with_tenant_context)
+    db: AsyncSession = Depends(get_db_with_tenant_context),
 ):
     """
     Planifica/reagenda una Ordre de Treball usant Optimistic Locking (version_id).
     Si un altre usuari ha modificat l'OT, es retorna HTTP 409 Conflict.
     """
     empresa_id = getattr(request.state, "empresa_id", None) or request.headers.get("X-Empresa-ID")
-    if not empresa_id or empresa_id == 'undefined':
+    if not empresa_id or empresa_id == "undefined":
         raise HTTPException(status_code=401, detail="No identificat")
 
     stmt = select(OrdreTreball).where(
-        OrdreTreball.id == feina_id,
-        OrdreTreball.empresa_id == uuid.UUID(empresa_id)
+        OrdreTreball.id == feina_id, OrdreTreball.empresa_id == uuid.UUID(empresa_id)
     )
     result = await db.execute(stmt)
     ordre = result.scalars().first()
@@ -199,7 +194,7 @@ async def agendar_feina(
     if ordre.versio != payload.version_id:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail=f"Conflicte de concurrència: la feina ha estat modificada per un altre usuari (versió actual: {ordre.versio}, versió enviada: {payload.version_id})"
+            detail=f"Conflicte de concurrència: la feina ha estat modificada per un altre usuari (versió actual: {ordre.versio}, versió enviada: {payload.version_id})",
         )
 
     ordre.hora_inici_prevista = payload.hora_inici_prevista
@@ -213,8 +208,9 @@ async def agendar_feina(
         hora_inici_prevista=ordre.hora_inici_prevista,
         hora_fi_prevista=ordre.hora_fi_prevista,
         version_id=ordre.versio,
-        estat=ordre.estat
+        estat=ordre.estat,
     )
+
 
 # ---------------------------------------------------------------------------
 # Intervencions Actives per a la Torre de Control GIS (Spec 001)
@@ -226,19 +222,23 @@ intervencions_router = APIRouter(
     dependencies=[Depends(require_roles(["BOSS", "SECRETARIA", "ENGINYER", "SUPERADMIN"]))],
 )
 
+
 @intervencions_router.get("/actives")
 async def llistar_intervencions_actives(
-    request: Request,
-    db: AsyncSession = Depends(get_db_with_tenant_context)
+    request: Request, db: AsyncSession = Depends(get_db_with_tenant_context)
 ):
     empresa_id = request.state.empresa_id
-    if not empresa_id or empresa_id == 'undefined':
+    if not empresa_id or empresa_id == "undefined":
         raise HTTPException(status_code=401, detail="No identificat")
 
-    stmt = select(OrdreTreball).where(
-        OrdreTreball.empresa_id == uuid.UUID(empresa_id),
-        OrdreTreball.estat.in_(["PENDENT", "EN_CURS", "BLOQUEJADA", "EN_OBRA", "EN_RUTA"])
-    ).order_by(OrdreTreball.created_at.desc())
+    stmt = (
+        select(OrdreTreball)
+        .where(
+            OrdreTreball.empresa_id == uuid.UUID(empresa_id),
+            OrdreTreball.estat.in_(["PENDENT", "EN_CURS", "BLOQUEJADA", "EN_OBRA", "EN_RUTA"]),
+        )
+        .order_by(OrdreTreball.created_at.desc())
+    )
 
     res = await db.execute(stmt)
     ordres = res.scalars().all()
@@ -255,40 +255,45 @@ async def llistar_intervencions_actives(
             except (ValueError, TypeError):
                 pass
 
-        items.append({
-            "id": str(o.id),
-            "codi": o.codi,
-            "client": "Client " + str(o.client_id)[:8],
-            "titol": o.titol,
-            "cap_colla": "Capataz",
-            "estat": o.estat if o.estat in ["EN_OBRA", "EN_RUTA", "PENDENT", "INCIDENCIA"] else "PENDENT",
-            "coords": [lat, lng],
-            "sector": "Sector Operatiu",
-            "pressio_bar": 3.8,
-            "codi_candat": "N/A",
-        })
+        items.append(
+            {
+                "id": str(o.id),
+                "codi": o.codi,
+                "client": "Client " + str(o.client_id)[:8],
+                "titol": o.titol,
+                "cap_colla": "Capataz",
+                "estat": o.estat
+                if o.estat in ["EN_OBRA", "EN_RUTA", "PENDENT", "INCIDENCIA"]
+                else "PENDENT",
+                "coords": [lat, lng],
+                "sector": "Sector Operatiu",
+                "pressio_bar": 3.8,
+                "codi_candat": "N/A",
+            }
+        )
 
     return items
+
 
 class DropAndGoRequest(BaseModel):
     versio: int
     cap_de_colla_id: Optional[uuid.UUID] = None
     data_programada: Optional[date] = None
 
+
 @router.patch("/{id}/drop-and-go")
 async def drop_and_go(
     id: uuid.UUID,
     payload: DropAndGoRequest,
     request: Request,
-    db: AsyncSession = Depends(get_db_with_tenant_context)
+    db: AsyncSession = Depends(get_db_with_tenant_context),
 ):
     empresa_id = getattr(request.state, "empresa_id", None) or request.headers.get("X-Empresa-ID")
-    if not empresa_id or empresa_id == 'undefined':
+    if not empresa_id or empresa_id == "undefined":
         raise HTTPException(status_code=401, detail="No identificat")
 
     stmt = select(OrdreTreball).where(
-        OrdreTreball.id == id,
-        OrdreTreball.empresa_id == uuid.UUID(empresa_id)
+        OrdreTreball.id == id, OrdreTreball.empresa_id == uuid.UUID(empresa_id)
     )
     result = await db.execute(stmt)
     ordre = result.scalars().first()
@@ -298,7 +303,7 @@ async def drop_and_go(
     if ordre.versio != payload.versio:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail=f"Conflicte de concurrència: la feina ha estat modificada per un altre usuari (versió actual: {ordre.versio}, versió enviada: {payload.versio})"
+            detail=f"Conflicte de concurrència: la feina ha estat modificada per un altre usuari (versió actual: {ordre.versio}, versió enviada: {payload.versio})",
         )
 
     if payload.cap_de_colla_id is not None:
@@ -309,7 +314,12 @@ async def drop_and_go(
     ordre.versio = ordre.versio + 1
 
     await db.commit()
-    return {"status": "ok", "versio": ordre.versio, "cap_de_colla_id": ordre.cap_de_colla_id, "data_planificacio": ordre.data_planificacio}
+    return {
+        "status": "ok",
+        "versio": ordre.versio,
+        "cap_de_colla_id": ordre.cap_de_colla_id,
+        "data_planificacio": ordre.data_planificacio,
+    }
 
 
 # ── T024: Signatura Digital de Conformitat de Tancament d'Obra ─────────────
@@ -324,7 +334,7 @@ async def tancar_obra(
     id: uuid.UUID,
     payload: TancarObraRequest,
     request: Request,
-    db: AsyncSession = Depends(get_db_with_tenant_context)
+    db: AsyncSession = Depends(get_db_with_tenant_context),
 ):
     """T024: Tanca una ordre de treball amb signatura digital del client (Spec 03 Bloc 5).
 
@@ -337,11 +347,10 @@ async def tancar_obra(
     if not payload.conformitat_client:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="La conformitat del client és obligatòria per tancar l'obra"
+            detail="La conformitat del client és obligatòria per tancar l'obra",
         )
     stmt = select(OrdreTreball).where(
-        OrdreTreball.id == id,
-        OrdreTreball.empresa_id == uuid.UUID(empresa_id)
+        OrdreTreball.id == id, OrdreTreball.empresa_id == uuid.UUID(empresa_id)
     )
     result = await db.execute(stmt)
     ordre = result.scalars().first()
@@ -369,9 +378,7 @@ async def tancar_obra(
 # ── T027-T028: Reconciliació Post-Obra dels 4 Pilars ──────────────────────
 @router.post("/{id}/reconciliacio-post-obra")
 async def reconciliacio_post_obra(
-    id: uuid.UUID,
-    request: Request,
-    db: AsyncSession = Depends(get_db_with_tenant_context)
+    id: uuid.UUID, request: Request, db: AsyncSession = Depends(get_db_with_tenant_context)
 ):
     """T027-T028: Reconciliació post-obra dels 4 pilars: materials, hores, km i tiquets.
 
@@ -382,8 +389,7 @@ async def reconciliacio_post_obra(
         raise HTTPException(status_code=401, detail="No identificat")
 
     stmt = select(OrdreTreball).where(
-        OrdreTreball.id == id,
-        OrdreTreball.empresa_id == uuid.UUID(empresa_id)
+        OrdreTreball.id == id, OrdreTreball.empresa_id == uuid.UUID(empresa_id)
     )
     result = await db.execute(stmt)
     ordre = result.scalars().first()

@@ -31,21 +31,28 @@ HETZNER_BASE_DOCS = os.environ.get("HETZNER_DOCS_PATH", "/docs")
 # Utilitats i Validacions Criptogràfiques & Cromàtiques
 # ---------------------------------------------------------------------------
 
+
 def parse_hsl(hsl_str: str) -> tuple[float, float, float]:
     """Converteix una cadena '210 100% 15%' o 'hsl(210, 100%, 15%)' a (h, s, l)."""
-    clean = hsl_str.replace("hsl", "").replace("(", "").replace(")", "").replace("%", "").replace(",", " ")
+    clean = (
+        hsl_str.replace("hsl", "")
+        .replace("(", "")
+        .replace(")", "")
+        .replace("%", "")
+        .replace(",", " ")
+    )
     parts = [float(p) for p in clean.split() if p.strip()]
     if len(parts) < 3:
         raise ValueError(f"Cadena HSL invàlida: {hsl_str}")
-    h, s, l = parts[0], parts[1] / 100.0, parts[2] / 100.0
-    return h, s, l
+    h, s, lum = parts[0], parts[1] / 100.0, parts[2] / 100.0
+    return h, s, lum
 
 
-def hsl_to_rgb(h: float, s: float, l: float) -> tuple[float, float, float]:
+def hsl_to_rgb(h: float, s: float, lum: float) -> tuple[float, float, float]:
     """Converteix HSL a sRGB [0, 1]."""
-    c = (1.0 - abs(2.0 * l - 1.0)) * s
+    c = (1.0 - abs(2.0 * lum - 1.0)) * s
     x = c * (1.0 - abs((h / 60.0) % 2 - 1.0))
-    m = l - c / 2.0
+    m = lum - c / 2.0
 
     if 0 <= h < 60:
         r_p, g_p, b_p = c, x, 0.0
@@ -65,6 +72,7 @@ def hsl_to_rgb(h: float, s: float, l: float) -> tuple[float, float, float]:
 
 def get_relative_luminance(r: float, g: float, b: float) -> float:
     """Calcula la luminància relativa segons WCAG 2.1."""
+
     def adjust(val: float) -> float:
         return val / 12.92 if val <= 0.04045 else ((val + 0.055) / 1.055) ** 2.4
 
@@ -84,8 +92,8 @@ def get_contrast_ratio(lum1: float, lum2: float) -> float:
 def validar_contrast_wcag(hsl_str: str) -> float:
     """Valida que el color tingui un contrast mínim de 4.5:1 (WCAG 2.1 AA) contra text blanc."""
     try:
-        h, s, l = parse_hsl(hsl_str)
-        r, g, b = hsl_to_rgb(h, s, l)
+        h, s, lum = parse_hsl(hsl_str)
+        r, g, b = hsl_to_rgb(h, s, lum)
         lum = get_relative_luminance(r, g, b)
         contrast_white = get_contrast_ratio(1.0, lum)
         return contrast_white
@@ -133,7 +141,21 @@ def generar_contrasenya_forta(longitud: int = 12) -> str:
 
 def generar_monograma_net(nom: str) -> str:
     """Genera un monograma de 2 caràcters basat en la raó social (RF-18)."""
-    STOP_WORDS = {"de", "del", "dels", "la", "les", "el", "els", "i", "sl", "sa", "sll", "sc", "slu"}
+    STOP_WORDS = {
+        "de",
+        "del",
+        "dels",
+        "la",
+        "les",
+        "el",
+        "els",
+        "i",
+        "sl",
+        "sa",
+        "sll",
+        "sc",
+        "slu",
+    }
     paraules = [p for p in nom.strip().split() if p and p.lower() not in STOP_WORDS]
     if len(paraules) >= 2:
         return (paraules[0][0] + paraules[1][0]).upper()
@@ -145,6 +167,7 @@ def generar_monograma_net(nom: str) -> str:
 # ---------------------------------------------------------------------------
 # Esquemes Pydantic (DTOs)
 # ---------------------------------------------------------------------------
+
 
 class EmpresaUpdateRequest(BaseModel):
     nom: Optional[str] = None
@@ -159,7 +182,9 @@ class MarcaUpdateRequest(BaseModel):
 
 
 class AdnAnalisiRequest(BaseModel):
-    adn_text: str = Field(..., min_length=10, description="Contingut de la guia d'estil o ADN de marca")
+    adn_text: str = Field(
+        ..., min_length=10, description="Contingut de la guia d'estil o ADN de marca"
+    )
 
 
 class AdnAprovacioRequest(BaseModel):
@@ -191,10 +216,14 @@ class UsuariAdminUpdateRequest(BaseModel):
 
 class SlotJornadaCreateUpdateRequest(BaseModel):
     nom: str = Field(..., min_length=2)
-    modalitat: str = Field("JORNADA_CONTINUADA", description="JORNADA_CONTINUADA, JORNADA_PARTIDA, TORN_ESPECIAL")
+    modalitat: str = Field(
+        "JORNADA_CONTINUADA", description="JORNADA_CONTINUADA, JORNADA_PARTIDA, TORN_ESPECIAL"
+    )
     hora_entrada_teorica: str = Field("08:00", description="Format HH:MM")
     hora_sortida_teorica: str = Field("17:00", description="Format HH:MM")
-    hora_inici_dinar: Optional[str] = Field("13:00", description="Format HH:MM per a jornada partida")
+    hora_inici_dinar: Optional[str] = Field(
+        "13:00", description="Format HH:MM per a jornada partida"
+    )
     hora_fi_dinar: Optional[str] = Field("14:00", description="Format HH:MM per a jornada partida")
     hores_convenio_setmanals: float = Field(40.0, gt=0)
     es_intensiva_estiu: bool = False
@@ -218,7 +247,10 @@ class Emergencia2faBossRequest(BaseModel):
 # Verificació de Seguretat i Rols
 # ---------------------------------------------------------------------------
 
-def validar_permisos_gestio(claims: Dict[str, Any], requereix_escriptura: bool = False, nomes_boss: bool = False):
+
+def validar_permisos_gestio(
+    claims: Dict[str, Any], requereix_escriptura: bool = False, nomes_boss: bool = False
+):
     """Aplica la matriu de permisos de Spec 011."""
     rol = claims.get("rol", "").upper()
 
@@ -246,6 +278,7 @@ def validar_permisos_gestio(claims: Dict[str, Any], requereix_escriptura: bool =
 # ---------------------------------------------------------------------------
 # 1. PARÀMETRES DE L'EMPRESA & MONOGRAMA (RF-01, RF-18, RF-21, RF-22)
 # ---------------------------------------------------------------------------
+
 
 @router.get("/empresa")
 async def obtenir_dades_empresa(
@@ -326,6 +359,7 @@ async def actualitzar_dades_empresa(
 # 2. MOTOR CAMALEÒNIC, CONTRAST WCAG & ADN DE MARCA (RF-12 a RF-15, EDGE-02)
 # ---------------------------------------------------------------------------
 
+
 @router.get("/marca")
 async def obtenir_marca_camaleonica(
     claims: Dict[str, Any] = Depends(get_current_user_claims),
@@ -333,7 +367,7 @@ async def obtenir_marca_camaleonica(
 ):
     """Retorna la configuració cromàtica i visual de la marca de l'empresa."""
     empresa_id = claims.get("empresa_id")
-    if not empresa_id or empresa_id == 'undefined':
+    if not empresa_id or empresa_id == "undefined":
         raise HTTPException(status_code=401, detail="No identificat")
 
     res = await db.execute(select(Empresa).where(Empresa.id == uuid.UUID(empresa_id)))
@@ -349,6 +383,7 @@ async def obtenir_marca_camaleonica(
         "favicon_path": empresa.favicon_path,
         "monograma": empresa.monograma or "SE",
     }
+
 
 @router.put("/marca")
 async def actualitzar_marca_camaleonica(
@@ -409,23 +444,23 @@ async def analitzar_adn_marca(
     text = payload.adn_text.lower()
     if "verd" in text or "natura" in text or "camp" in text or "reg" in text:
         paleta_proposta = {
-            "primari_hsl": "142 76% 25%",    # Verd maragda profund
-            "secundari_hsl": "38 92% 50%",   # Ambre càlid
-            "accent_hsl": "160 84% 39%",     # Menta viva
+            "primari_hsl": "142 76% 25%",  # Verd maragda profund
+            "secundari_hsl": "38 92% 50%",  # Ambre càlid
+            "accent_hsl": "160 84% 39%",  # Menta viva
             "descripcio": "Paleta Bio-Agro basada en tons orgànics i natura",
         }
     elif "blau" in text or "aigua" in text or "hidraulica" in text:
         paleta_proposta = {
-            "primari_hsl": "217 91% 30%",    # Blau oceà industrial
-            "secundari_hsl": "199 89% 48%",   # Cian fluvial
-            "accent_hsl": "43 96% 56%",      # Or d'alta visibilitat
+            "primari_hsl": "217 91% 30%",  # Blau oceà industrial
+            "secundari_hsl": "199 89% 48%",  # Cian fluvial
+            "accent_hsl": "43 96% 56%",  # Or d'alta visibilitat
             "descripcio": "Paleta Hidràulica Industrial centrada en xarxes de pressió",
         }
     else:
         paleta_proposta = {
-            "primari_hsl": "210 100% 15%",   # Blau fosc corporatiu
-            "secundari_hsl": "38 92% 50%",   # Ambre taronja
-            "accent_hsl": "190 90% 50%",     # Cian tecnològic
+            "primari_hsl": "210 100% 15%",  # Blau fosc corporatiu
+            "secundari_hsl": "38 92% 50%",  # Ambre taronja
+            "accent_hsl": "190 90% 50%",  # Cian tecnològic
             "descripcio": "Paleta Industrial Precision estàndard de CampoPro",
         }
 
@@ -490,6 +525,7 @@ async def aprovar_paleta_adn(
 # 3. GESTIÓ DEL LOGOTIP & MAGIC BYTES (RF-16 a RF-18, EDGE-03)
 # ---------------------------------------------------------------------------
 
+
 @router.post("/logotip")
 async def pujar_logotip_corporatiu(
     fitxer: UploadFile = File(...),
@@ -547,6 +583,7 @@ async def pujar_logotip_corporatiu(
 # ---------------------------------------------------------------------------
 # 4. GESTIÓ DE PERSONAL ADMINISTRATIU & PROTECCIÓ ÚLTIM BOSS (RF-01 a RF-04, EDGE-05)
 # ---------------------------------------------------------------------------
+
 
 @router.get("/usuaris")
 async def llistar_usuaris_administratius(
@@ -636,7 +673,9 @@ async def crear_usuari_administratiu(
         cognoms=payload.cognoms.strip(),
         email=payload.email.strip().lower(),
         telefon=payload.telefon.strip() if payload.telefon else None,
-        password_hash=bcrypt.hashpw(contrasenya_generada.encode('utf-8'), bcrypt.gensalt()).decode('utf-8'),
+        password_hash=bcrypt.hashpw(contrasenya_generada.encode("utf-8"), bcrypt.gensalt()).decode(
+            "utf-8"
+        ),
         rol=rol_upper,
         estat="ACTIU",
         secret_2fa=secret_2fa_provisional,
@@ -684,7 +723,9 @@ async def actualitzar_usuari_administratiu(
         raise HTTPException(status_code=404, detail="Usuari no trobat")
 
     # EDGE-05: Protecció de l'últim Boss
-    if (payload.rol and payload.rol.upper() != "BOSS" and usuari.rol == "BOSS") or (payload.estat == "INACTIU" and usuari.rol == "BOSS"):
+    if (payload.rol and payload.rol.upper() != "BOSS" and usuari.rol == "BOSS") or (
+        payload.estat == "INACTIU" and usuari.rol == "BOSS"
+    ):
         res_boss = await db.execute(
             select(func.count(Usuari.id)).where(
                 Usuari.empresa_id == uuid.UUID(empresa_id),
@@ -767,6 +808,7 @@ async def eliminar_usuari_administratiu(
 # 5. SEGURETAT 2FA TOTP & REINICI PEL BOSS (RF-05, RF-06, EDGE-01)
 # ---------------------------------------------------------------------------
 
+
 @router.post("/usuaris/{usuari_id}/reset-2fa")
 async def reiniciar_2fa_usuari(
     usuari_id: uuid.UUID,
@@ -816,7 +858,9 @@ async def acces_emergencia_2fa_boss(
     """Accés d'emergència de l'últim Boss mitjançant codi de recuperació estàtic (EDGE-01)."""
     # Cercar l'usuari Boss pel seu NIF
     res = await db.execute(
-        select(Usuari, Empresa).join(Empresa, Usuari.empresa_id == Empresa.id).where(
+        select(Usuari, Empresa)
+        .join(Empresa, Usuari.empresa_id == Empresa.id)
+        .where(
             Usuari.nif == payload.nif.strip().upper(),
             Usuari.rol == "BOSS",
             Usuari.estat == "ACTIU",
@@ -860,6 +904,7 @@ async def acces_emergencia_2fa_boss(
 # 6. SLOTS DE JORNADA LABORAL & INTENSIVA D'ESTIU (RF-08 a RF-11, EDGE-08)
 # ---------------------------------------------------------------------------
 
+
 @router.get("/slots")
 async def llistar_slots_jornada(
     claims: Dict[str, Any] = Depends(get_current_user_claims),
@@ -873,7 +918,9 @@ async def llistar_slots_jornada(
         await set_tenant_context(db, empresa_id)
 
     res = await db.execute(
-        select(SlotJornada).where(SlotJornada.empresa_id == uuid.UUID(empresa_id)).order_by(SlotJornada.nom)
+        select(SlotJornada)
+        .where(SlotJornada.empresa_id == uuid.UUID(empresa_id))
+        .order_by(SlotJornada.nom)
     )
     slots = res.scalars().all()
 
@@ -922,7 +969,9 @@ async def crear_slot_jornada(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail="HTTP 422: L'hora d'inici del dinar no pot ser posterior o igual a la de represa (EDGE-08)",
             )
-        if not (payload.hora_entrada_teorica < payload.hora_inici_dinar < payload.hora_sortida_teorica):
+        if not (
+            payload.hora_entrada_teorica < payload.hora_inici_dinar < payload.hora_sortida_teorica
+        ):
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail="HTTP 422: La pausa del dinar ha d'estar compresa entre l'hora d'entrada i la de sortida",
@@ -972,6 +1021,7 @@ async def crear_slot_jornada(
 # ---------------------------------------------------------------------------
 # 7. PARÀMETRES DEL BOT DE TELEGRAM (RF-19, RF-20, EDGE-09)
 # ---------------------------------------------------------------------------
+
 
 @router.put("/telegram")
 async def actualitzar_credencials_telegram(

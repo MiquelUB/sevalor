@@ -20,6 +20,7 @@ router = APIRouter(
     dependencies=[Depends(require_financial_access)],
 )
 
+
 class FacturaCreate(BaseModel):
     numero_factura: int
     serie: str = Field("2026", max_length=20)
@@ -30,6 +31,7 @@ class FacturaCreate(BaseModel):
     import_suplits: float = Field(0.0)
     liquid_exigible: float = Field(0.0)
     data_emissio: str = Field("")
+
 
 class FacturaResponse(BaseModel):
     id: uuid.UUID
@@ -47,31 +49,36 @@ class FacturaResponse(BaseModel):
     estat_cobrament: str
     estat_enviament: str
 
+
 @router.get("/factures", response_model=List[FacturaResponse])
 async def llistar_factures(
-    request: Request,
-    db: AsyncSession = Depends(get_db_with_tenant_context)
+    request: Request, db: AsyncSession = Depends(get_db_with_tenant_context)
 ):
     empresa_id = request.state.empresa_id
-    if not empresa_id or empresa_id == 'undefined':
+    if not empresa_id or empresa_id == "undefined":
         raise HTTPException(status_code=401)
 
-    stmt = select(FacturaCapcalera).where(FacturaCapcalera.empresa_id == uuid.UUID(empresa_id)).order_by(FacturaCapcalera.created_at.desc())
+    stmt = (
+        select(FacturaCapcalera)
+        .where(FacturaCapcalera.empresa_id == uuid.UUID(empresa_id))
+        .order_by(FacturaCapcalera.created_at.desc())
+    )
     result = await db.execute(stmt)
     return result.scalars().all()
 
+
 @router.post("/factures", response_model=FacturaResponse, status_code=status.HTTP_201_CREATED)
 async def crear_factura(
-    request: Request,
-    payload: FacturaCreate,
-    db: AsyncSession = Depends(get_db_with_tenant_context)
+    request: Request, payload: FacturaCreate, db: AsyncSession = Depends(get_db_with_tenant_context)
 ):
     empresa_id = request.state.empresa_id
-    if not empresa_id or empresa_id == 'undefined':
+    if not empresa_id or empresa_id == "undefined":
         raise HTTPException(status_code=401)
 
     # Validar client
-    stmt_c = select(Client).where(Client.id == payload.client_id, Client.empresa_id == uuid.UUID(empresa_id))
+    stmt_c = select(Client).where(
+        Client.id == payload.client_id, Client.empresa_id == uuid.UUID(empresa_id)
+    )
     if not (await db.execute(stmt_c)).scalars().first():
         raise HTTPException(status_code=404, detail="Client no trobat")
 
@@ -79,7 +86,7 @@ async def crear_factura(
     stmt_dup = select(FacturaCapcalera).where(
         FacturaCapcalera.empresa_id == uuid.UUID(empresa_id),
         FacturaCapcalera.numero_factura == payload.numero_factura,
-        FacturaCapcalera.serie == payload.serie
+        FacturaCapcalera.serie == payload.serie,
     )
     if (await db.execute(stmt_dup)).scalars().first():
         raise HTTPException(status_code=400, detail="Número i sèrie de factura ja registrats")
@@ -101,7 +108,12 @@ async def crear_factura(
         data_emissio_dt = datetime.strptime(data_emissio, "%Y-%m-%d").replace(tzinfo=timezone.utc)
     except ValueError:
         data_emissio_dt = datetime.now(timezone.utc)
-    import_total = payload.base_imposable + payload.quota_iva + payload.import_suplits - payload.import_retencio
+    import_total = (
+        payload.base_imposable
+        + payload.quota_iva
+        + payload.import_suplits
+        - payload.import_retencio
+    )
 
     # Ruta per al PDF (en testing, usar /tmp/docs per evitar permisos)
     base_docs = "/tmp/docs" if os.getenv("TESTING") == "1" else "/docs"
@@ -148,7 +160,7 @@ async def crear_factura(
         hash_sha256=hash_actual,
         pdf_path=ruta_pdf,
         estat_cobrament="PENDENT",
-        estat_enviament="PENDENT"
+        estat_enviament="PENDENT",
     )
 
     db.add(nova_factura)
@@ -167,24 +179,22 @@ async def crear_factura(
 
     return nova_factura
 
-import xml.etree.ElementTree as ET
 
-from fastapi.responses import Response
+import xml.etree.ElementTree as ET  # noqa: E402
+
+from fastapi.responses import Response  # noqa: E402
 
 
 @router.get("/factures/{factura_id}/xml")
 async def exportar_factura_xml(
-    factura_id: uuid.UUID,
-    request: Request,
-    db: AsyncSession = Depends(get_db_with_tenant_context)
+    factura_id: uuid.UUID, request: Request, db: AsyncSession = Depends(get_db_with_tenant_context)
 ):
     empresa_id = request.state.empresa_id
-    if not empresa_id or empresa_id == 'undefined':
+    if not empresa_id or empresa_id == "undefined":
         raise HTTPException(status_code=401)
 
     stmt = select(FacturaCapcalera).where(
-        FacturaCapcalera.id == factura_id,
-        FacturaCapcalera.empresa_id == uuid.UUID(empresa_id)
+        FacturaCapcalera.id == factura_id, FacturaCapcalera.empresa_id == uuid.UUID(empresa_id)
     )
     factura = (await db.execute(stmt)).scalars().first()
     if not factura:

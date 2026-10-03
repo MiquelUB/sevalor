@@ -90,6 +90,7 @@ async def obtenir_hash_anterior_amb_lock(
     Retorna None si no hi ha factura anterior (Dia 0 real).
     """
     import os
+
     base_sql = (
         "SELECT hash_sha256 FROM factures_capcalera "
         "WHERE empresa_id = :emp_id AND serie = :serie "
@@ -240,7 +241,10 @@ async def generar_factura_pdf(
 
     logger.info(
         "PDF Veri*factu generat: %s | Sèrie: %s | Núm: %s | Hash: %s",
-        ruta_desti, serie, numero_factura, hash_actual,
+        ruta_desti,
+        serie,
+        numero_factura,
+        hash_actual,
     )
 
     return {

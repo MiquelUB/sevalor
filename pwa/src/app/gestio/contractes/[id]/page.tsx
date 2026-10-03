@@ -27,7 +27,7 @@ export default function ContracteDetailPage({ params }: { params: { id: string }
 
   const fetchContracte = async () => {
     try {
-      const res = await fetch(`${getApiBaseUrl()}/api/v1/gestio/contractes/${params.id}`, {
+      const res = await fetch(`${getApiBaseUrl()}/gestio/contractes/${params.id}`, {
         headers: getAuthHeader(),
       });
       if (res.ok) {
@@ -44,7 +44,7 @@ export default function ContracteDetailPage({ params }: { params: { id: string }
   const handleRenovar = async () => {
     setRenovating(true);
     try {
-      const res = await fetch(`${getApiBaseUrl()}/api/v1/gestio/contractes/${params.id}/renovar`, {
+      const res = await fetch(`${getApiBaseUrl()}/gestio/contractes/${params.id}/renovar`, {
         method: "POST",
         headers: { ...getAuthHeader(), "Content-Type": "application/json" },
         body: JSON.stringify({ increment_percent: percentRenovacio })
@@ -64,7 +64,7 @@ export default function ContracteDetailPage({ params }: { params: { id: string }
     if(confirm("N'estàs segur de donar de baixa? Les revisions pendents es cancel·laran.")) {
       setIsDarDeBaixa(true);
       try {
-        const res = await fetch(`${getApiBaseUrl()}/api/v1/gestio/contractes/${params.id}/baixa`, {
+        const res = await fetch(`${getApiBaseUrl()}/gestio/contractes/${params.id}/baixa`, {
           method: "POST",
           headers: { ...getAuthHeader(), "Content-Type": "application/json" },
           body: JSON.stringify({ motiu: baixaMotiu })
@@ -77,7 +77,7 @@ export default function ContracteDetailPage({ params }: { params: { id: string }
   const handlePrefacturar = async () => {
     setPrefacturant(true);
     try {
-      const res = await fetch(`${getApiBaseUrl()}/api/v1/gestio/contractes/${params.id}/prefacturar`, {
+      const res = await fetch(`${getApiBaseUrl()}/gestio/contractes/${params.id}/prefacturar`, {
         method: "POST",
         headers: getAuthHeader(),
       });

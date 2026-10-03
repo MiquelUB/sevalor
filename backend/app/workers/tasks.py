@@ -17,16 +17,17 @@ async def get_worker_session(empresa_id: str | None = None, is_superadmin: bool 
 logger = logging.getLogger("workers.tasks")
 
 
-def crear_directoris_sobirans(empresa_id: str, base_data_dir: str = None, base_docs_dir: str = None) -> List[str]:
+def crear_directoris_sobirans(
+    empresa_id: str, base_data_dir: str = None, base_docs_dir: str = None  # type: ignore
+) -> List[str]:
     """Crea l'arbre de directoris sobirans per a una empresa (Spec 021 RF-08)."""
     data_prefix = base_data_dir or os.getenv("SOVEREIGN_DATA_PATH", "/data")
-    docs_prefix = base_docs_dir or os.getenv("SOVEREIGN_DOCS_PATH", "/docs")
+    base_docs_dir or os.getenv("SOVEREIGN_DOCS_PATH", "/docs")
 
     try:
         os.makedirs(data_prefix, exist_ok=True)
     except OSError:
         data_prefix = "/tmp/data"
-        docs_prefix = "/tmp/docs"
 
     dirs = [
         f"{data_prefix}/{empresa_id}",
@@ -44,6 +45,7 @@ def crear_directoris_sobirans(empresa_id: str, base_data_dir: str = None, base_d
         except OSError as e:
             logger.warning("No s'ha pogut crear %s: %s", d, e)
     return creades
+
 
 @celery_app.task(name="generar_informe_planol_pdf", queue="queue_documents")
 def generar_informe_planol_pdf(planol_id: str, empresa_id: str):
@@ -67,7 +69,9 @@ def generar_informe_planol_pdf(planol_id: str, empresa_id: str):
 
 
 @celery_app.task(name="generar_informe_post_obra", queue="queue_documents")
-def generar_informe_post_obra(ordre_treball_id: str, empresa_id: str, client_nom: str = "Client", dades_informe: dict = None):
+def generar_informe_post_obra(
+    ordre_treball_id: str, empresa_id: str, client_nom: str = "Client", dades_informe: dict = None  # type: ignore
+):
     """
     (Phase 4 / F4-T04) Genera l'informe oficial en PDF post-intervenció
     amb signatura, hores, materials i fotos de qualitat (Spec 010 / Spec 013).
@@ -91,7 +95,9 @@ def generar_informe_post_obra(ordre_treball_id: str, empresa_id: str, client_nom
     c.drawString(50, 735, f"Client: {client_nom}")
     c.drawString(50, 715, "Estat: FINALITZADA / CONCILIADA")
     c.drawString(50, 695, "Protocol de 3 Fotos: VERIFICAT (Inicial, Intermèdia, Final)")
-    c.drawString(50, 675, "Certificació de Sobirania: Hetzner Falkenstein (Zero Public Cloud Egress)")
+    c.drawString(
+        50, 675, "Certificació de Sobirania: Hetzner Falkenstein (Zero Public Cloud Egress)"
+    )
 
     if dades_informe:
         c.drawString(50, 645, f"Hores Reals Imputades: {dades_informe.get('hores_reals', 0.0)} h")
@@ -106,12 +112,14 @@ def generar_informe_post_obra(ordre_treball_id: str, empresa_id: str, client_nom
         "empresa_id": empresa_id,
     }
 
+
 @celery_app.task(queue="queue_critical", bind=True, max_retries=3)
 def processar_outbox_aeat(self):
     pass
 
+
 @celery_app.task(name="sincronitzar_documents_vectorials", queue="queue_documents")
-def sincronitzar_documents_vectorials(empresa_id: str, document_ids: list[str] = None):
+def sincronitzar_documents_vectorials(empresa_id: str, document_ids: list[str] = None):  # type: ignore
     """
     (T047) Simula l'extracció de text i creació d'embeddings per a documents RAG.
     La connexió real amb pgvector es farà posteriorment.
@@ -124,20 +132,22 @@ def sincronitzar_documents_vectorials(empresa_id: str, document_ids: list[str] =
 
     for doc_id in docs_a_processar:
         logger.info(f"Extraient text i generant embeddings (simulat) per a document {doc_id}...")
-        time.sleep(1) # Simula temps de procés
+        time.sleep(1)  # Simula temps de procés
         logger.info(f"Document {doc_id} indexat amb èxit (simulat).")
 
     return {
         "status": "COMPLETED",
         "empresa_id": empresa_id,
         "processats": len(docs_a_processar),
-        "nota": "Pendent connexió real amb pgvector"
+        "nota": "Pendent connexió real amb pgvector",
     }
+
 
 @celery_app.task(name="generar_backup_pgdump", queue="queue_critical")
 def generar_backup_pgdump(empresa_id: str):
     import gzip
     import os
+
     path_dir = f"/tmp/data/{empresa_id}/backups"
     os.makedirs(path_dir, exist_ok=True)
     file_path = f"{path_dir}/backup_{empresa_id}.sql.gz"
@@ -145,11 +155,8 @@ def generar_backup_pgdump(empresa_id: str):
     with gzip.open(file_path, "wt", encoding="utf-8") as f:
         f.write(f"-- SEVALOR PostgreSQL Database Backup\n-- Empresa: {empresa_id}\n")
 
-    return {
-        "status": "COMPLETED",
-        "file_path": file_path,
-        "empresa_id": empresa_id
-    }
+    return {"status": "COMPLETED", "file_path": file_path, "empresa_id": empresa_id}
+
 
 @celery_app.task(name="generar_exportacio_aeat", queue="queue_critical")
 def generar_exportacio_aeat(empresa_id: str, trimestre: str):
@@ -159,9 +166,10 @@ def generar_exportacio_aeat(empresa_id: str, trimestre: str):
             "trimestre": trimestre,
             "empresa_id": empresa_id,
             "facturacion": 1500.50,
-            "iva_meritat": 315.10
-        }
+            "iva_meritat": 315.10,
+        },
     }
+
 
 @celery_app.task(name="app.workers.tasks.ping", queue="queue_critical")
 def ping(payload: str = "PONG"):
@@ -169,23 +177,19 @@ def ping(payload: str = "PONG"):
     logger.info(f"Ping received with payload: {payload}")
     return {"status": "PONG", "payload": payload}
 
+
 @celery_app.task(name="app.workers.tasks.processar_ocr_document_task", queue="queue_media")
 def processar_ocr_document_task(file_path: str, empresa_id: str):
     """Sense motor OCR connectat: retorna camps buits perquè es revisin manualment (Zero Mock)."""
     return {
         "estat": "PENDENT_REVISIO_MANUAL",
-        "proveidor": {
-            "nif": None,
-            "nom": None,
-            "adreca": None,
-            "telefon": None,
-            "email": None
-        },
+        "proveidor": {"nif": None, "nom": None, "adreca": None, "telefon": None, "email": None},
         "numero_document": None,
         "tipus_document": None,
         "data_document": None,
-        "linies": []
+        "linies": [],
     }
+
 
 @celery_app.task(name="app.workers.tasks.transcriure_audio_task", queue="queue_media")
 def transcriure_audio_task(file_path: str, empresa_id: str):
@@ -213,11 +217,8 @@ def transcriure_audio_task(file_path: str, empresa_id: str):
         logger.warning(f"Error connectant al node Whisper ({whisper_url}): {e}")
         transcripcio = "Transcripció no disponible — node Whisper inactiu"
 
-    return {
-        "estat": "COMPLETADO",
-        "transcripcio": transcripcio,
-        "arxiu": file_path
-    }
+    return {"estat": "COMPLETADO", "transcripcio": transcripcio, "arxiu": file_path}
+
 
 @celery_app.task(name="app.workers.tasks.revisar_jornades_anomales", queue="queue_critical")
 def revisar_jornades_anomales(empresa_id: str):
@@ -234,7 +235,7 @@ def revisar_jornades_anomales(empresa_id: str):
             vuit_hores_enrere = datetime.now(timezone.utc) - timedelta(hours=8)
             stmt = select(RegistreJornadaLaboral).where(
                 RegistreJornadaLaboral.estat == "EN_CURS",
-                RegistreJornadaLaboral.hora_inici < vuit_hores_enrere
+                RegistreJornadaLaboral.hora_inici < vuit_hores_enrere,
             )
             result = await session.execute(stmt)
             jornades = result.scalars().all()
@@ -244,6 +245,7 @@ def revisar_jornades_anomales(empresa_id: str):
             return len(jornades)
 
     return asyncio.run(process_anomalias())
+
 
 @celery_app.task(name="app.workers.tasks.comprovar_trencament_estoc", queue="queue_critical")
 def comprovar_trencament_estoc(empresa_id: str):
@@ -258,23 +260,28 @@ def comprovar_trencament_estoc(empresa_id: str):
         async with get_worker_session(empresa_id) as session:
             # We must use tenant context here, but since it's a worker, we might need a raw query or manually set it.
             # Using simple query with enterprise_id filter.
-            stmt = select(EstocMagatzem, Article).join(
-                Article, EstocMagatzem.article_id == Article.id
-            ).where(
-                EstocMagatzem.empresa_id == empresa_id,
-                EstocMagatzem.quantitat_fisica < Article.estoc_minim
+            stmt = (
+                select(EstocMagatzem, Article)
+                .join(Article, EstocMagatzem.article_id == Article.id)
+                .where(
+                    EstocMagatzem.empresa_id == empresa_id,
+                    EstocMagatzem.quantitat_fisica < Article.estoc_minim,
+                )
             )
             result = await session.execute(stmt)
             rows = result.all()
 
             notificats = []
             for estoc, article in rows:
-                logger.info(f"Draft Email sent to provider for article: {article.nom} (ID: {article.id}). Current estoc: {estoc.quantitat_fisica}, min: {article.estoc_minim}")
+                logger.info(
+                    f"Draft Email sent to provider for article: {article.nom} (ID: {article.id}). Current estoc: {estoc.quantitat_fisica}, min: {article.estoc_minim}"
+                )
                 notificats.append(str(article.id))
 
             return notificats
 
     return asyncio.run(process())
+
 
 @celery_app.task(name="app.workers.tasks.revisar_itv_asseguranca", queue="queue_critical")
 def revisar_itv_asseguranca(empresa_id: str):
@@ -293,18 +300,21 @@ def revisar_itv_asseguranca(empresa_id: str):
             stmt = select(Vehicle).where(
                 or_(
                     Vehicle.data_proxima_itv <= trenta_dies,
-                    Vehicle.data_caducitat_asseguranca <= trenta_dies
+                    Vehicle.data_caducitat_asseguranca <= trenta_dies,
                 )
             )
             result = await session.execute(stmt)
             vehicles = result.scalars().all()
             for vehicle in vehicles:
                 vehicle.estat_itv = "CADUCADA_O_PROXIMA"
-                logger.info(f"ALERTA ITV/ASSEGURANCA: Vehicle {vehicle.matricula} necessita revisió.")
+                logger.info(
+                    f"ALERTA ITV/ASSEGURANCA: Vehicle {vehicle.matricula} necessita revisió."
+                )
             await session.commit()
             return len(vehicles)
 
     return asyncio.run(process_itv())
+
 
 @celery_app.task(name="app.workers.tasks.enviar_factura_email", queue="queue_media")
 def enviar_factura_email(factura_id: str, empresa_id: str):
@@ -318,20 +328,22 @@ def enviar_factura_email(factura_id: str, empresa_id: str):
     async def process():
         async with get_worker_session(empresa_id) as session:
             stmt = select(FacturaCapcalera).where(
-                FacturaCapcalera.id == factura_id,
-                FacturaCapcalera.empresa_id == empresa_id
+                FacturaCapcalera.id == factura_id, FacturaCapcalera.empresa_id == empresa_id
             )
             result = await session.execute(stmt)
             factura = result.scalars().first()
             if factura:
                 # Simulació enviament
-                logger.info(f"Simulating email send for Factura {factura.serie}-{factura.numero_factura} to client.")
+                logger.info(
+                    f"Simulating email send for Factura {factura.serie}-{factura.numero_factura} to client."
+                )
                 factura.estat_enviament = "ENVIADA"
                 await session.commit()
                 return "ENVIADA"
             return "FACTURA_NO_TROBADA"
 
     return asyncio.run(process())
+
 
 @celery_app.task(bind=True, max_retries=2, soft_time_limit=180)
 def convertir_planol_pdf_a_webp(self, file_path: str, empresa_id: str, planol_id: str):
@@ -345,7 +357,9 @@ def convertir_planol_pdf_a_webp(self, file_path: str, empresa_id: str, planol_id
     import fitz  # PyMuPDF
     from PIL import Image
 
-    logger.info(f"Starting conversion of {file_path} to webp for empresa {empresa_id} planol {planol_id}")
+    logger.info(
+        f"Starting conversion of {file_path} to webp for empresa {empresa_id} planol {planol_id}"
+    )
 
     base_docs_dir = os.getenv("DOCS_DIR", "/media/akaun/Project_1/SEVALOR/backend/docs")
     planols_dir = os.path.join(base_docs_dir, empresa_id, "planols")
@@ -375,6 +389,7 @@ def convertir_planol_pdf_a_webp(self, file_path: str, empresa_id: str, planol_id
 
     return {"status": "success", "thumbnail_path": output_path, "planol_id": planol_id}
 
+
 @celery_app.task(name="app.workers.tasks.tancar_jornades_orfanes", queue="queue_critical")
 def tancar_jornades_orfanes(empresa_id: str):
     """T008: Tancament de jornades > 12 hores òrfenes."""
@@ -390,7 +405,7 @@ def tancar_jornades_orfanes(empresa_id: str):
             dotze_hores_enrere = datetime.now(timezone.utc) - timedelta(hours=12)
             stmt = select(RegistreJornadaLaboral).where(
                 RegistreJornadaLaboral.hora_fi.is_(None),
-                RegistreJornadaLaboral.hora_inici < dotze_hores_enrere
+                RegistreJornadaLaboral.hora_inici < dotze_hores_enrere,
             )
             result = await session.execute(stmt)
             jornades = result.scalars().all()
@@ -403,6 +418,7 @@ def tancar_jornades_orfanes(empresa_id: str):
             return tancades
 
     return asyncio.run(process())
+
 
 @celery_app.task(name="app.workers.tasks.generar_miniatura_webp_task", queue="queue_media")
 def generar_miniatura_webp_task(image_path: str, table_name: str, record_id: str, empresa_id: str):
@@ -432,7 +448,7 @@ def generar_miniatura_webp_task(image_path: str, table_name: str, record_id: str
         with Image.open(original_path) as img:
             # Convert to RGB if it's RGBA or P to avoid issues with WebP
             if img.mode in ("RGBA", "P"):
-                img = img.convert("RGB")
+                img = img.convert("RGB")  # type: ignore
 
             # Resize if > 800px max dimension
             max_size = (800, 800)
@@ -454,13 +470,18 @@ def generar_miniatura_webp_task(image_path: str, table_name: str, record_id: str
             # Note: We must be careful with table_name as it can't be parameterized easily in some drivers,
             # but we assume table_name is trusted here (comes from our own backend).
             # To be safer, we could just interpolate table_name and parameterize the rest.
-            stmt = text(f"UPDATE {table_name} SET thumbnail_url = :thumb_path WHERE id = :record_id AND empresa_id = :empresa_id")
+            stmt = text(
+                f"UPDATE {table_name} SET thumbnail_url = :thumb_path WHERE id = :record_id AND empresa_id = :empresa_id"
+            )
             try:
-                await session.execute(stmt, {
-                    "thumb_path": str(thumb_path),
-                    "record_id": record_id,
-                    "empresa_id": empresa_id
-                })
+                await session.execute(
+                    stmt,
+                    {
+                        "thumb_path": str(thumb_path),
+                        "record_id": record_id,
+                        "empresa_id": empresa_id,
+                    },
+                )
                 await session.commit()
                 return {"status": "success", "thumbnail_url": str(thumb_path)}
             except Exception as e:
@@ -552,20 +573,26 @@ def purgar_tokens_expirats():
 
             # Eliminar tokens d'invitació de Telegram expirats (>24h)
             try:
-                await session.execute(text("""
+                await session.execute(
+                    text("""
                     DELETE FROM tokens_invitacio_telegram
                     WHERE created_at < :cutoff OR usat = TRUE
-                """), {"cutoff": fa_24h})
+                """),
+                    {"cutoff": fa_24h},
+                )
             except Exception:
                 # Taula pot no existir en totes les versions
                 pass
 
             # Eliminar tokens efímers de descàrrega expirats
             try:
-                await session.execute(text("""
+                await session.execute(
+                    text("""
                     DELETE FROM tokens_descarrega_efimers
                     WHERE expires_at < :ara
-                """), {"ara": ara})
+                """),
+                    {"ara": ara},
+                )
             except Exception:
                 pass
 
@@ -573,6 +600,7 @@ def purgar_tokens_expirats():
             logger.info(f"Purga de tokens expirats completada a les {ara.isoformat()}")
 
     asyncio.run(process())
+
 
 @celery_app.task(name="app.workers.tasks.purgar_dades_tenant_destruit", queue="queue_periodic")
 def purgar_dades_tenant_destruit(tenant_id: str):
@@ -585,18 +613,24 @@ def purgar_dades_tenant_destruit(tenant_id: str):
         async with get_worker_session() as session:
             try:
                 # Obfusquem l'empresa
-                await session.execute(text("""
-                    UPDATE empreses 
+                await session.execute(
+                    text("""
+                    UPDATE empreses
                     SET nom = 'OBFUSCATED_' || id, nif = '00000000X', subdomini = 'del-' || id
                     WHERE id = :tenant_id
-                """), {"tenant_id": tenant_id})
+                """),
+                    {"tenant_id": tenant_id},
+                )
 
                 # Obfusquem els usuaris
-                await session.execute(text("""
+                await session.execute(
+                    text("""
                     UPDATE usuaris
                     SET nom = 'OBFUSCATED', cognoms = 'OBFUSCATED', email = id || '@deleted.sevalor.app', telefon = NULL
                     WHERE empresa_id = :tenant_id
-                """), {"tenant_id": tenant_id})
+                """),
+                    {"tenant_id": tenant_id},
+                )
 
                 # S'hauria de fer una eliminació o ofuscació en cascada de totes les taules de negoci
                 # per complir la normativa de Destrucció Certificada
@@ -607,6 +641,8 @@ def purgar_dades_tenant_destruit(tenant_id: str):
                 logger.error(f"Error purgant tenant {tenant_id}: {e}")
 
     asyncio.run(process())
+
+
 @celery_app.task(name="app.workers.tasks.revisar_contractes_manteniment", queue="queue_periodic")
 def revisar_contractes_manteniment():
     """T006: Revisa els contractes de manteniment i genera les ordres de treball preventives."""
@@ -632,9 +668,13 @@ def revisar_contractes_manteniment():
                     contractes = res.scalars().all()
 
                     for contracte in contractes:
-                        noves_ots = await generar_ordres_preventives_per_contracte(contracte, session)
+                        noves_ots = await generar_ordres_preventives_per_contracte(
+                            contracte, session
+                        )
                         if noves_ots:
-                            logger.info(f"Generades {len(noves_ots)} OTs preventives pel contracte {contracte.numero_contracte} de l'empresa {empresa_id_str}")
+                            logger.info(
+                                f"Generades {len(noves_ots)} OTs preventives pel contracte {contracte.numero_contracte} de l'empresa {empresa_id_str}"
+                            )
             except Exception as e:
                 logger.error(f"Error generant OTs preventives per l'empresa {emp_id}: {e}")
 

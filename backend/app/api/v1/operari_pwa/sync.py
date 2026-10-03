@@ -14,20 +14,25 @@ from app.models.models import Incidencia, OrdreTreball
 router = APIRouter(prefix="/sync", tags=["PWA Sync"])
 logger = logging.getLogger(__name__)
 
+
 class SyncAction(BaseModel):
     id: str = Field(..., description="ID únic de l'acció al client")
     accio: str = Field(..., description="Tipus d'acció (FITXAR_JORNADA, CREAR_TIQUET, etc.)")
     payload: Dict[str, Any] = Field(..., description="Càrrega útil de l'acció")
     timestamp: Optional[int] = Field(None, description="Timestamp de l'acció en client (ms)")
 
+
 class BulkSyncRequest(BaseModel):
-    accions: List[SyncAction] = Field(..., description="Llista d'accions a sincronitzar seqüencialment")
+    accions: List[SyncAction] = Field(
+        ..., description="Llista d'accions a sincronitzar seqüencialment"
+    )
+
 
 @router.post("/push")
 async def bulk_sync_push(
     request: BulkSyncRequest,
     db: AsyncSession = Depends(get_db_with_tenant_context),
-    claims: Dict[str, Any] = Depends(get_current_user_claims)
+    claims: Dict[str, Any] = Depends(get_current_user_claims),
 ):
     """
     Rep una llista d'accions encuades (Offline-First) i les processa seqüencialment.
@@ -48,7 +53,9 @@ async def bulk_sync_push(
                 logger.info(f"Processant REPORTAR_INCIDENCIA per {accio.id}")
                 ambit = accio.payload.get("ambit", "GENERAL")
                 estat = accio.payload.get("estat", "VERMELL")
-                text_obs = accio.payload.get("text_observacions", accio.payload.get("descripcio", ""))
+                text_obs = accio.payload.get(
+                    "text_observacions", accio.payload.get("descripcio", "")
+                )
                 audio_path = accio.payload.get("audio_path")
                 foto_path = accio.payload.get("foto_path")
 
@@ -59,7 +66,7 @@ async def bulk_sync_push(
                     estat=estat,
                     text_observacions=text_obs,
                     audio_path=audio_path,
-                    foto_path=foto_path
+                    foto_path=foto_path,
                 )
                 db.add(nova_incidencia)
 
@@ -68,15 +75,22 @@ async def bulk_sync_push(
                 # Exemple de validació de timestamp (CRDT/Conflict Resolution)
                 ordre_id = accio.payload.get("ordre_id")
                 if ordre_id and accio.timestamp:
-                    result = await db.execute(select(OrdreTreball).where(OrdreTreball.id == ordre_id))
+                    result = await db.execute(
+                        select(OrdreTreball).where(OrdreTreball.id == ordre_id)
+                    )
                     ordre = result.scalars().first()
 
                     if ordre:
                         # Convertim el datetime a timestamp (ms)
                         db_ts = int(ordre.updated_at.timestamp() * 1000) if ordre.updated_at else 0
                         if accio.timestamp < db_ts:
-                            logger.warning(f"Conflicte detectat per a ordre {ordre_id}. Client ts: {accio.timestamp}, DB ts: {db_ts}")
-                            raise HTTPException(status_code=409, detail=f"Conflicte detectat a l'ordre {ordre_id}. DB és més recent.")
+                            logger.warning(
+                                f"Conflicte detectat per a ordre {ordre_id}. Client ts: {accio.timestamp}, DB ts: {db_ts}"
+                            )
+                            raise HTTPException(
+                                status_code=409,
+                                detail=f"Conflicte detectat a l'ordre {ordre_id}. DB és més recent.",
+                            )
 
             else:
                 logger.warning(f"Acció desconeguda: {accio.accio}")
@@ -95,16 +109,13 @@ async def bulk_sync_push(
     await db.commit()
 
     # Si hi ha conflictes, responem 207 (Multi-Status) o un 200 amb detall
-    return {
-        "status": "ok",
-        "processades": processades,
-        "errors": errors
-    }
+    return {"status": "ok", "processades": processades, "errors": errors}
+
 
 @router.get("/hud")
 async def get_hud_stats(
     db: AsyncSession = Depends(get_db_with_tenant_context),
-    claims: Dict[str, Any] = Depends(get_current_user_claims)
+    claims: Dict[str, Any] = Depends(get_current_user_claims),
 ):
     """
     Retorna les estadístiques diàries per al HUD de l'operari.
@@ -118,10 +129,13 @@ async def get_hud_stats(
     operari_id_uuid = uuid.UUID(claims["sub"])
 
     # Ordres de treball per avui assignades a l'operari
-    query_ordres = select(OrdreTreball.estat, func.count(OrdreTreball.id)).where(
-        OrdreTreball.cap_de_colla_id == operari_id_uuid,
-        OrdreTreball.data_planificacio == avui
-    ).group_by(OrdreTreball.estat)
+    query_ordres = (
+        select(OrdreTreball.estat, func.count(OrdreTreball.id))
+        .where(
+            OrdreTreball.cap_de_colla_id == operari_id_uuid, OrdreTreball.data_planificacio == avui
+        )
+        .group_by(OrdreTreball.estat)
+    )
 
     result_ordres = await db.execute(query_ordres)
     ordres = result_ordres.all()
@@ -131,8 +145,7 @@ async def get_hud_stats(
 
     # Incidències creades avui per l'operari
     query_inc = select(func.count(Incidencia.id)).where(
-        Incidencia.operari_id == operari_id_uuid,
-        func.date(Incidencia.created_at) == avui
+        Incidencia.operari_id == operari_id_uuid, func.date(Incidencia.created_at) == avui
     )
 
     result_inc = await db.execute(query_inc)
@@ -142,5 +155,5 @@ async def get_hud_stats(
         "ordres_pendents": ordres_pendents,
         "ordres_completades": ordres_completades,
         "incidencies_avui": incidencies_avui,
-        "data": avui.isoformat()
+        "data": avui.isoformat(),
     }

@@ -16,8 +16,11 @@ from app.models.models import TiquetCarburant, Vehicle
 router = APIRouter(
     prefix="/operari",
     tags=["Operari Tiquets i Despeses"],
-    dependencies=[Depends(require_roles(["OPERARI", "CAPATAZ", "CAP_DE_COLLA", "BOSS", "SUPERADMIN"]))],
+    dependencies=[
+        Depends(require_roles(["OPERARI", "CAPATAZ", "CAP_DE_COLLA", "BOSS", "SUPERADMIN"]))
+    ],
 )
+
 
 class TiquetCarburantCreate(BaseModel):
     vehicle_id: Optional[uuid.UUID] = None
@@ -26,6 +29,7 @@ class TiquetCarburantCreate(BaseModel):
     litres: Optional[float] = None
     import_euros: Optional[float] = None
     odometre_valor: Optional[int] = None
+
 
 class TiquetCarburantResponse(BaseModel):
     id: uuid.UUID
@@ -39,22 +43,26 @@ class TiquetCarburantResponse(BaseModel):
     estat_ocr: str
     created_at: Optional[datetime] = None
 
+
 @router.get("/tiquets", response_model=List[TiquetCarburantResponse])
 async def llistar_tiquets_operari(
-    request: Request,
-    db: AsyncSession = Depends(get_db_with_tenant_context)
+    request: Request, db: AsyncSession = Depends(get_db_with_tenant_context)
 ):
     empresa_id = request.state.empresa_id
-    if not empresa_id or empresa_id == 'undefined':
+    if not empresa_id or empresa_id == "undefined":
         raise HTTPException(status_code=401, detail="Tenant context missing")
 
     claims = get_current_user_claims(request)
     usuari_id = claims.get("sub")
 
-    stmt = select(TiquetCarburant).where(
-        TiquetCarburant.empresa_id == uuid.UUID(empresa_id),
-        TiquetCarburant.operari_id == uuid.UUID(usuari_id)
-    ).order_by(TiquetCarburant.created_at.desc())
+    stmt = (
+        select(TiquetCarburant)
+        .where(
+            TiquetCarburant.empresa_id == uuid.UUID(empresa_id),
+            TiquetCarburant.operari_id == uuid.UUID(usuari_id),
+        )
+        .order_by(TiquetCarburant.created_at.desc())
+    )
 
     result = await db.execute(stmt)
     items = result.scalars().all()
@@ -75,14 +83,17 @@ async def llistar_tiquets_operari(
         for t in items
     ]
 
-@router.post("/tiquets", response_model=TiquetCarburantResponse, status_code=status.HTTP_201_CREATED)
+
+@router.post(
+    "/tiquets", response_model=TiquetCarburantResponse, status_code=status.HTTP_201_CREATED
+)
 async def registrar_tiquet_carburant(
     request: Request,
     payload: TiquetCarburantCreate,
-    db: AsyncSession = Depends(get_db_with_tenant_context)
+    db: AsyncSession = Depends(get_db_with_tenant_context),
 ):
     empresa_id = request.state.empresa_id
-    if not empresa_id or empresa_id == 'undefined':
+    if not empresa_id or empresa_id == "undefined":
         raise HTTPException(status_code=401, detail="Tenant context missing")
 
     claims = get_current_user_claims(request)
@@ -96,7 +107,10 @@ async def registrar_tiquet_carburant(
         if v:
             v_id = v.id
         else:
-            raise HTTPException(status_code=400, detail="No hi ha cap vehicle registrat al tenant. Doneu-ne d'alta un primer.")
+            raise HTTPException(
+                status_code=400,
+                detail="No hi ha cap vehicle registrat al tenant. Doneu-ne d'alta un primer.",
+            )
 
     nou_tiquet = TiquetCarburant(
         empresa_id=uuid.UUID(empresa_id),
@@ -127,17 +141,16 @@ async def registrar_tiquet_carburant(
     )
 
 
-
 @router.post("/tiquets/ocr", response_model=dict, status_code=status.HTTP_200_OK)
 async def pujar_tiquet_ocr(
     request: Request,
     file: UploadFile = File(...),
     vehicle_id: Optional[str] = Form(None),
-    db: AsyncSession = Depends(get_db_with_tenant_context)
+    db: AsyncSession = Depends(get_db_with_tenant_context),
 ):
     """(Spec 018) Rep una imatge de tiquet, simula extracció OCR i ho desa a DB."""
     empresa_id = request.state.empresa_id
-    if not empresa_id or empresa_id == 'undefined':
+    if not empresa_id or empresa_id == "undefined":
         raise HTTPException(status_code=401, detail="Tenant context missing")
 
     claims = get_current_user_claims(request)
@@ -156,7 +169,10 @@ async def pujar_tiquet_ocr(
         if v:
             v_id = v.id
         else:
-            raise HTTPException(status_code=400, detail="No hi ha cap vehicle registrat al tenant. Doneu-ne d'alta un primer.")
+            raise HTTPException(
+                status_code=400,
+                detail="No hi ha cap vehicle registrat al tenant. Doneu-ne d'alta un primer.",
+            )
 
     # Desa el fitxer (Simulació guardat sobiran)
     base_dir = os.getenv("SOVEREIGN_DATA_PATH", "/tmp/data")
@@ -172,6 +188,7 @@ async def pujar_tiquet_ocr(
         f.write(file_bytes)
 
     from app.services.ocr_service import processar_tiquet_ocr
+
     ocr_result = await processar_tiquet_ocr(file_bytes)
 
     nou_tiquet = TiquetCarburant(
@@ -196,5 +213,5 @@ async def pujar_tiquet_ocr(
         "import_extret": nou_tiquet.import_,
         "odometre_valor": nou_tiquet.odometre_valor,
         "estat_ocr": nou_tiquet.estat_ocr,
-        "missatge": "Tiquet pujat amb processament OCR automàtic."
+        "missatge": "Tiquet pujat amb processament OCR automàtic.",
     }

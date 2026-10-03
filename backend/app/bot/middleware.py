@@ -4,7 +4,7 @@ from aiogram import BaseMiddleware
 from aiogram.types import CallbackQuery, Message, TelegramObject
 from sqlalchemy import select
 
-from app.core.db import async_session_maker
+from app.core.db import async_session_maker  # type: ignore
 from app.models.models import Client
 
 

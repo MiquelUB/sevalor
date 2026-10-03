@@ -36,6 +36,7 @@ AsyncSessionLocal = async_sessionmaker(
 
 class Base(DeclarativeBase):
     """Classe base per a tots els models SQLAlchemy."""
+
     pass
 
 
@@ -45,6 +46,7 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
     async with AsyncSessionLocal() as session:
         try:
             from app.core.context import superadmin_context, tenant_context
+
             empresa_id = tenant_context.get()
             is_superadmin = superadmin_context.get()
 
@@ -60,19 +62,17 @@ async def get_db_with_tenant_context(request: Request) -> AsyncGenerator[AsyncSe
         yield session
 
 
-async def set_tenant_context(session: AsyncSession, empresa_id: str | None, is_superadmin: bool = False) -> None:
+async def set_tenant_context(
+    session: AsyncSession, empresa_id: str | None, is_superadmin: bool = False
+) -> None:
     """Injecta la variable de sessió app.current_empresa_id per activar les polítiques RLS de PostgreSQL."""
     if is_superadmin:
         await session.execute(text("RESET ROLE;"))
-        await session.execute(
-            text("SELECT set_config('app.is_superadmin', 'true', true);")
-        )
+        await session.execute(text("SELECT set_config('app.is_superadmin', 'true', true);"))
     else:
         # Assignar el rol d'aplicació per fer complir RLS a PostgreSQL (els superusuaris ignorarien RLS)
         await session.execute(text("SET ROLE sevalor_app;"))
-        await session.execute(
-            text("SELECT set_config('app.is_superadmin', 'false', true);")
-        )
+        await session.execute(text("SELECT set_config('app.is_superadmin', 'false', true);"))
 
     if empresa_id:
         await session.execute(
@@ -80,6 +80,4 @@ async def set_tenant_context(session: AsyncSession, empresa_id: str | None, is_s
             {"val": str(empresa_id)},
         )
     else:
-        await session.execute(
-            text("SELECT set_config('app.current_empresa_id', '', true);")
-        )
+        await session.execute(text("SELECT set_config('app.current_empresa_id', '', true);"))

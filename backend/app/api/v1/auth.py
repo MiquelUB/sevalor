@@ -22,9 +22,11 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 limiter_login = Limiter(key_func=get_remote_address, enabled=os.getenv("TESTING") != "1")
 
+
 class LoginRequest(BaseModel):
     email: EmailStr
     password: str
+
 
 class TokenResponse(BaseModel):
     access_token: str
@@ -32,20 +34,20 @@ class TokenResponse(BaseModel):
     rol: str
     nom: str
 
+
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     if not hashed_password:
         return False
     try:
-        return bcrypt.checkpw(plain_password.encode('utf-8'), hashed_password.encode('utf-8'))
+        return bcrypt.checkpw(plain_password.encode("utf-8"), hashed_password.encode("utf-8"))
     except Exception:
         return False
+
 
 @router.post("/login", response_model=TokenResponse)
 @limiter_login.limit("5/minute")
 async def login_oficina(
-    request: Request,
-    login_data: LoginRequest,
-    db: AsyncSession = Depends(get_db)
+    request: Request, login_data: LoginRequest, db: AsyncSession = Depends(get_db)
 ):
     try:
         # Guardem el rol actual per no trencar les transaccions de test
@@ -54,9 +56,7 @@ async def login_oficina(
 
         await db.execute(text("RESET ROLE;"))
         try:
-            stmt = select(Usuari).where(
-                func.lower(Usuari.email) == login_data.email.lower()
-            )
+            stmt = select(Usuari).where(func.lower(Usuari.email) == login_data.email.lower())
             result = await db.execute(stmt)
             usuaris = result.scalars().all()
         finally:
@@ -66,7 +66,7 @@ async def login_oficina(
         if len(usuaris) > 1:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Error de consistència: L'email està duplicat a diferents empreses. L'accés ha estat bloquejat per seguretat."
+                detail="Error de consistència: L'email està duplicat a diferents empreses. L'accés ha estat bloquejat per seguretat.",
             )
 
         usuari = usuaris[0] if usuaris else None
@@ -77,20 +77,22 @@ async def login_oficina(
                 detail="Credencials invàlides",
             )
 
-        if not verify_password(login_data.password, usuari.password_hash):
+        if not verify_password(login_data.password, usuari.password_hash):  # type: ignore
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Credencials invàlides",
             )
 
         if usuari.rol.upper() == "OPERARI":
-             raise HTTPException(
+            raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Els operaris han d'accedir per la PWA amb PIN",
             )
 
         # Generar JWT
-        expire = datetime.now(timezone.utc) + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+        expire = datetime.now(timezone.utc) + timedelta(
+            minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES
+        )
         payload = {
             "sub": str(usuari.id),
             "empresa_id": str(usuari.empresa_id) if usuari.empresa_id else "",
@@ -105,20 +107,16 @@ async def login_oficina(
 
         token = jwt.encode(payload, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
 
-        return TokenResponse(
-            access_token=token,
-            rol=usuari.rol.upper(),
-            nom=usuari.nom
-        )
+        return TokenResponse(access_token=token, rol=usuari.rol.upper(), nom=usuari.nom)
 
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Error intern durant login d'oficina: {e}")
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Error intern del servidor"
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Error intern del servidor"
         )
+
 
 class UserMeResponse(BaseModel):
     id: str
@@ -130,8 +128,7 @@ class UserMeResponse(BaseModel):
 
 @router.get("/me", response_model=UserMeResponse)
 async def get_me(
-    claims: dict = Depends(get_current_user_claims),
-    db: AsyncSession = Depends(get_db)
+    claims: dict = Depends(get_current_user_claims), db: AsyncSession = Depends(get_db)
 ):
     usuari_id = claims.get("sub")
     try:
@@ -149,7 +146,7 @@ async def get_me(
             empresa_id=claims.get("empresa_id"),
             rol=claims.get("rol", "OPERARI").upper(),
             nom=claims.get("nom", "Usuari"),
-            email=claims.get("email")
+            email=claims.get("email"),
         )
 
     return UserMeResponse(
@@ -157,7 +154,5 @@ async def get_me(
         empresa_id=str(usuari.empresa_id) if usuari.empresa_id else None,
         rol=usuari.rol.upper(),
         nom=usuari.nom,
-        email=usuari.email
+        email=usuari.email,
     )
-
-

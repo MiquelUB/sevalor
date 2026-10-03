@@ -3,15 +3,13 @@ from typing import Dict, List
 
 from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
 
-router = APIRouter(
-    prefix="/gestio/ws",
-    tags=["WebSocket Telemetry"]
-)
+router = APIRouter(prefix="/gestio/ws", tags=["WebSocket Telemetry"])
+
 
 class ConnectionManager:
     def __init__(self):
         # empresa_id -> list of WebSockets
-        self.active_connections: Dict[str, List[WebSocket]] = {}
+        self.active_connections: Dict[str, List[WebSocket]] = {}  # type: ignore
 
     async def connect(self, websocket: WebSocket, empresa_id: str):
         await websocket.accept()
@@ -36,13 +34,12 @@ class ConnectionManager:
                 except Exception:
                     pass
 
+
 manager = ConnectionManager()
 
+
 @router.websocket("")
-async def websocket_endpoint(
-    websocket: WebSocket,
-    empresa_id: str = Query(...)
-):
+async def websocket_endpoint(websocket: WebSocket, empresa_id: str = Query(...)):
     await manager.connect(websocket, empresa_id)
     try:
         while True:
@@ -55,4 +52,3 @@ async def websocket_endpoint(
                 pass
     except WebSocketDisconnect:
         manager.disconnect(websocket, empresa_id)
-

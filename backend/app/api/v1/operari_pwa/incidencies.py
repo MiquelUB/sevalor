@@ -1,3 +1,4 @@
+import os
 import uuid
 from typing import List, Optional
 
@@ -16,6 +17,7 @@ router = APIRouter(
     dependencies=[Depends(require_roles(["OPERARI", "CAPATAZ", "CAP_DE_COLLA"]))],
 )
 
+
 class IncidenciaCreate(BaseModel):
     ordre_treball_id: Optional[uuid.UUID] = None
     vehicle_id: Optional[uuid.UUID] = None
@@ -25,54 +27,61 @@ class IncidenciaCreate(BaseModel):
     foto_path: Optional[str] = None
     text_observacions: Optional[str] = None
 
+
 class IncidenciaResponse(IncidenciaCreate):
     id: uuid.UUID
     operari_id: Optional[uuid.UUID]
 
+
 @router.get("/incidencies", response_model=List[IncidenciaResponse])
 async def llistar_incidencies_operari(
-    request: Request,
-    db: AsyncSession = Depends(get_db_with_tenant_context)
+    request: Request, db: AsyncSession = Depends(get_db_with_tenant_context)
 ):
     empresa_id = request.state.empresa_id
-    if not empresa_id or empresa_id == 'undefined':
+    if not empresa_id or empresa_id == "undefined":
         raise HTTPException(status_code=401)
 
     auth_header = request.headers.get("Authorization")
-    token = auth_header.split(" ")[1]
+    token = auth_header.split(" ")[1]  # type: ignore
     import jwt
 
     from app.core.config import settings
-    decoded = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM], options={"verify_aud": False})
+
+    decoded = jwt.decode(
+        token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM], options={"verify_aud": False}
+    )
     usuari_id = decoded.get("sub")
 
-
-    stmt = select(Incidencia).where(
-        Incidencia.empresa_id == uuid.UUID(empresa_id),
-        Incidencia.operari_id == uuid.UUID(usuari_id)
-    ).order_by(Incidencia.created_at.desc())
+    stmt = (
+        select(Incidencia)
+        .where(
+            Incidencia.empresa_id == uuid.UUID(empresa_id),
+            Incidencia.operari_id == uuid.UUID(usuari_id),
+        )
+        .order_by(Incidencia.created_at.desc())
+    )
 
     result = await db.execute(stmt)
     return result.scalars().all()
 
-import os
-
 
 @router.post("/incidencies", response_model=IncidenciaResponse, status_code=status.HTTP_201_CREATED)
 async def reportar_incidencia(
-    request: Request,
-    db: AsyncSession = Depends(get_db_with_tenant_context)
+    request: Request, db: AsyncSession = Depends(get_db_with_tenant_context)
 ):
     empresa_id = request.state.empresa_id
-    if not empresa_id or empresa_id == 'undefined':
+    if not empresa_id or empresa_id == "undefined":
         raise HTTPException(status_code=401)
 
     auth_header = request.headers.get("Authorization")
-    token = auth_header.split(" ")[1]
+    token = auth_header.split(" ")[1]  # type: ignore
     import jwt
 
     from app.core.config import settings
-    decoded = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM], options={"verify_aud": False})
+
+    decoded = jwt.decode(
+        token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM], options={"verify_aud": False}
+    )
     usuari_id = decoded.get("sub")
 
     content_type = request.headers.get("content-type", "")
@@ -143,7 +152,7 @@ async def reportar_incidencia(
         estat=estat,
         audio_path=audio_path,
         foto_path=foto_path,
-        text_observacions=text_observacions
+        text_observacions=text_observacions,
     )
 
     db.add(nova_inci)
@@ -152,10 +161,11 @@ async def reportar_incidencia(
     # Disparar transcripció i avaluació (Fase 3 Copilot)
     if audio_path:
         from app.workers.celery_app import celery_app
+
         celery_app.send_task(
             "app.workers.tasks.transcriure_audio_task",
             args=[audio_path, empresa_id],
-            queue="queue_media"
+            queue="queue_media",
         )
 
     return nova_inci

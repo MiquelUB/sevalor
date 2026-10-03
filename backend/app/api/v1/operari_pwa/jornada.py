@@ -17,41 +17,44 @@ router = APIRouter(
     dependencies=[Depends(require_roles(["OPERARI", "CAPATAZ", "CAP_DE_COLLA"]))],
 )
 
+
 class JornadaInici(BaseModel):
     latitud: float
     longitud: float
+
 
 class JornadaResponse(BaseModel):
     id: uuid.UUID
     estat: str
     geolocalitzacio_inici: Optional[str]
 
+
 @router.post("/inici", response_model=JornadaResponse, status_code=status.HTTP_201_CREATED)
 @router.post("/jornada/inici", response_model=JornadaResponse, status_code=status.HTTP_201_CREATED)
 async def iniciar_jornada(
-    request: Request,
-    payload: JornadaInici,
-    db: AsyncSession = Depends(get_db_with_tenant_context)
+    request: Request, payload: JornadaInici, db: AsyncSession = Depends(get_db_with_tenant_context)
 ):
     empresa_id = request.state.empresa_id
-    if not empresa_id or empresa_id == 'undefined':
+    if not empresa_id or empresa_id == "undefined":
         raise HTTPException(status_code=401, detail="No identificat")
 
     # L'usuari ha de ser extret del token JWT (el Subject)
     import jwt
 
     from app.core.config import settings
-    auth_header = request.headers.get("Authorization")
-    token = auth_header.split(" ")[1]
-    decoded = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM], options={"verify_aud": False})
-    usuari_id = decoded.get("sub")
 
+    auth_header = request.headers.get("Authorization")
+    token = auth_header.split(" ")[1]  # type: ignore
+    decoded = jwt.decode(
+        token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM], options={"verify_aud": False}
+    )
+    usuari_id = decoded.get("sub")
 
     # Validar si ja té una jornada en curs
     stmt = select(RegistreJornadaLaboral).where(
         RegistreJornadaLaboral.empresa_id == uuid.UUID(empresa_id),
         RegistreJornadaLaboral.usuari_id == uuid.UUID(usuari_id),
-        RegistreJornadaLaboral.estat == "EN_CURS"
+        RegistreJornadaLaboral.estat == "EN_CURS",
     )
     result = await db.execute(stmt)
     if result.scalars().first():
@@ -61,7 +64,7 @@ async def iniciar_jornada(
         empresa_id=uuid.UUID(empresa_id),
         usuari_id=uuid.UUID(usuari_id),
         geolocalitzacio_inici=f"{payload.latitud},{payload.longitud}",
-        estat="EN_CURS"
+        estat="EN_CURS",
     )
 
     db.add(jornada)
@@ -69,29 +72,31 @@ async def iniciar_jornada(
 
     return jornada
 
+
 @router.get("/activa", response_model=JornadaResponse)
 @router.get("/jornada/activa", response_model=JornadaResponse)
 async def get_jornada_activa(
-    request: Request,
-    db: AsyncSession = Depends(get_db_with_tenant_context)
+    request: Request, db: AsyncSession = Depends(get_db_with_tenant_context)
 ):
     empresa_id = request.state.empresa_id
-    if not empresa_id or empresa_id == 'undefined':
+    if not empresa_id or empresa_id == "undefined":
         raise HTTPException(status_code=401)
 
     auth_header = request.headers.get("Authorization")
-    token = auth_header.split(" ")[1]
+    token = auth_header.split(" ")[1]  # type: ignore
     import jwt
 
     from app.core.config import settings
-    decoded = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM], options={"verify_aud": False})
-    usuari_id = decoded.get("sub")
 
+    decoded = jwt.decode(
+        token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM], options={"verify_aud": False}
+    )
+    usuari_id = decoded.get("sub")
 
     stmt = select(RegistreJornadaLaboral).where(
         RegistreJornadaLaboral.empresa_id == uuid.UUID(empresa_id),
         RegistreJornadaLaboral.usuari_id == uuid.UUID(usuari_id),
-        RegistreJornadaLaboral.estat == "EN_CURS"
+        RegistreJornadaLaboral.estat == "EN_CURS",
     )
     result = await db.execute(stmt)
     jornada = result.scalars().first()
@@ -101,22 +106,22 @@ async def get_jornada_activa(
 
     return jornada
 
+
 @router.post("/{jornada_id}/fi", response_model=JornadaResponse)
 @router.post("/jornada/{jornada_id}/fi", response_model=JornadaResponse)
 async def finalitzar_jornada(
     jornada_id: uuid.UUID,
     request: Request,
     payload: JornadaInici,
-    db: AsyncSession = Depends(get_db_with_tenant_context)
+    db: AsyncSession = Depends(get_db_with_tenant_context),
 ):
     empresa_id = request.state.empresa_id
-    if not empresa_id or empresa_id == 'undefined':
+    if not empresa_id or empresa_id == "undefined":
         raise HTTPException(status_code=401)
-
 
     stmt = select(RegistreJornadaLaboral).where(
         RegistreJornadaLaboral.id == jornada_id,
-        RegistreJornadaLaboral.empresa_id == uuid.UUID(empresa_id)
+        RegistreJornadaLaboral.empresa_id == uuid.UUID(empresa_id),
     )
     result = await db.execute(stmt)
     jornada = result.scalars().first()
@@ -135,9 +140,11 @@ async def finalitzar_jornada(
 
     return jornada
 
+
 class AssignarVehicleRequest(BaseModel):
     vehicle_id: uuid.UUID
     km_actuals: int
+
 
 @router.post("/{jornada_id}/vehicle")
 @router.post("/jornada/{jornada_id}/vehicle")
@@ -145,38 +152,51 @@ async def assignar_vehicle_a_jornada(
     jornada_id: uuid.UUID,
     payload: AssignarVehicleRequest,
     request: Request,
-    db: AsyncSession = Depends(get_db_with_tenant_context)
+    db: AsyncSession = Depends(get_db_with_tenant_context),
 ):
     """Assigna un vehicle a l'operari per a la jornada actual i comprova odòmetre."""
     empresa_id = request.state.empresa_id
-    if not empresa_id or empresa_id == 'undefined':
+    if not empresa_id or empresa_id == "undefined":
         raise HTTPException(status_code=401)
 
     auth_header = request.headers.get("Authorization")
-    token = auth_header.split(" ")[1]
+    token = auth_header.split(" ")[1]  # type: ignore
     import jwt
 
     from app.core.config import settings
-    decoded = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM], options={"verify_aud": False})
+
+    decoded = jwt.decode(
+        token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM], options={"verify_aud": False}
+    )
     usuari_id = decoded.get("sub")
 
     # Obtenir vehicle
     from app.models.models import Usuari, Vehicle
-    v_res = await db.execute(select(Vehicle).where(Vehicle.id == payload.vehicle_id, Vehicle.empresa_id == uuid.UUID(empresa_id)))
+
+    v_res = await db.execute(
+        select(Vehicle).where(
+            Vehicle.id == payload.vehicle_id, Vehicle.empresa_id == uuid.UUID(empresa_id)
+        )
+    )
     vehicle = v_res.scalars().first()
     if not vehicle:
         raise HTTPException(status_code=404, detail="Vehicle no trobat")
 
     if vehicle.odometre_acumulat and payload.km_actuals < vehicle.odometre_acumulat:
-        raise HTTPException(status_code=422, detail="Els km reportats són inferiors als últims registrats")
+        raise HTTPException(
+            status_code=422, detail="Els km reportats són inferiors als últims registrats"
+        )
 
     # Actualitzar Vehicle i Usuari
     vehicle.odometre_acumulat = payload.km_actuals
     u_res = await db.execute(select(Usuari).where(Usuari.id == uuid.UUID(usuari_id)))
     usuari = u_res.scalars().first()
-    usuari.vehicle_assignat_id = vehicle.id
+    usuari.vehicle_assignat_id = vehicle.id  # type: ignore
 
     await db.commit()
 
-    return {"status": "OK", "vehicle_assignat_id": str(vehicle.id), "km_actuals": payload.km_actuals}
-
+    return {
+        "status": "OK",
+        "vehicle_assignat_id": str(vehicle.id),
+        "km_actuals": payload.km_actuals,
+    }

@@ -42,7 +42,9 @@ TIMEOUT_LIMIT_SEGONS = 15
 CONFIANCA_ACUSTICA_LLINDAR = 0.40  # Si < 0.40, avís de tractor/vent (EDGE-03)
 TERMINI_GARANTIA_MA_OBRA_DIES = 90  # 3 mesos (<3 mesos a cost 0 €) (RF-07)
 TERMINI_GARANTIA_FABRICANT_ANYS = 2  # 2 anys per defecte
-LLINDAR_MERMA_CONTINUA_PERCENTATGE = 250.0  # Consum continu >250% bloca si no hi ha incidència (EDGE-08)
+LLINDAR_MERMA_CONTINUA_PERCENTATGE = (
+    250.0  # Consum continu >250% bloca si no hi ha incidència (EDGE-08)
+)
 
 PARAULES_CLAU_FINANCERES_VETO = [
     "salari",
@@ -89,13 +91,12 @@ TOOLS_SCHEMA = [
                 "properties": {
                     "mes": {
                         "type": "integer",
-                        "description": "Mes de l'any a analitzar (1-12), opcional. Si no es posa es fa global."
+                        "description": "Mes de l'any a analitzar (1-12), opcional. Si no es posa es fa global.",
                     }
-                }
-            }
-        }
+                },
+            },
+        },
     },
-
     {
         "type": "function",
         "function": {
@@ -106,18 +107,17 @@ TOOLS_SCHEMA = [
                 "properties": {
                     "codi_ot": {
                         "type": "string",
-                        "description": "Codi de l'Ordre de Treball (ex: 'OT-2026-001')"
+                        "description": "Codi de l'Ordre de Treball (ex: 'OT-2026-001')",
                     },
                     "nova_data": {
                         "type": "string",
-                        "description": "Nova data de planificació en format YYYY-MM-DD"
-                    }
+                        "description": "Nova data de planificació en format YYYY-MM-DD",
+                    },
                 },
-                "required": ["codi_ot", "nova_data"]
-            }
-        }
+                "required": ["codi_ot", "nova_data"],
+            },
+        },
     },
-
     {
         "type": "function",
         "function": {
@@ -240,17 +240,20 @@ TOOLS_SCHEMA = [
 # ---------------------------------------------------------------------------
 # Funcions d'Execució d'Eines (Tools Execution Engine)
 
-async def execute_tool_get_unbilled_money(db: AsyncSession, empresa_id: uuid.UUID, mes: int = None) -> dict:
+
+async def execute_tool_get_unbilled_money(
+    db: AsyncSession, empresa_id: uuid.UUID, mes: int = None  # type: ignore
+) -> dict:
     from sqlalchemy import and_, func, select
 
     from app.models.models import Article, FacturaLinia, FullaPicking, LiniaPicking, OrdreTreball
 
     # Cost material instal·lat en OT's tancades / facturades vs no facturades
     # 1. Cost material de OTs "TANCADA"
-    condicions_ot = [OrdreTreball.empresa_id == empresa_id, OrdreTreball.estat == 'TANCADA']
+    condicions_ot = [OrdreTreball.empresa_id == empresa_id, OrdreTreball.estat == "TANCADA"]
     if mes:
         # PostgreSQL extract
-        condicions_ot.append(func.extract('month', OrdreTreball.data_planificacio) == mes)
+        condicions_ot.append(func.extract("month", OrdreTreball.data_planificacio) == mes)
 
     stmt_cost = (
         select(func.sum(LiniaPicking.quantitat_carregada_pick_in * Article.preu_venda))
@@ -278,15 +281,20 @@ async def execute_tool_get_unbilled_money(db: AsyncSession, empresa_id: uuid.UUI
         "cost_materials_consumit_pvp": float(cost_materials_esperat),
         "facturat_real": float(facturat_real),
         "diner_no_facturat": diferencia,
-        "missatge": f"L'anàlisi mostra que el material consumit a preu de venda val {cost_materials_esperat:.2f}€, però només s'ha facturat {facturat_real:.2f}€. Falten per facturar {diferencia:.2f}€."
+        "missatge": f"L'anàlisi mostra que el material consumit a preu de venda val {cost_materials_esperat:.2f}€, però només s'ha facturat {facturat_real:.2f}€. Falten per facturar {diferencia:.2f}€.",
     }
 
 
-async def execute_tool_replanificar_ot(db: AsyncSession, empresa_id: uuid.UUID, codi_ot: str, nova_data: str) -> dict:
+async def execute_tool_replanificar_ot(
+    db: AsyncSession, empresa_id: uuid.UUID, codi_ot: str, nova_data: str
+) -> dict:
     from sqlalchemy import select
 
     from app.models.models import OrdreTreball
-    q = select(OrdreTreball).where(OrdreTreball.empresa_id == empresa_id, OrdreTreball.codi == codi_ot)
+
+    q = select(OrdreTreball).where(
+        OrdreTreball.empresa_id == empresa_id, OrdreTreball.codi == codi_ot
+    )
     res = await db.execute(q)
     ot = res.scalar_one_or_none()
     if not ot:
@@ -301,22 +309,23 @@ async def execute_tool_replanificar_ot(db: AsyncSession, empresa_id: uuid.UUID, 
             "ot_id": str(ot.id),
             "codi_ot": codi_ot,
             "nova_data": nova_data,
-            "titol": ot.titol
+            "titol": ot.titol,
         },
-        "missatge": f"He preparat la proposta per moure l'ordre {codi_ot} ({ot.titol}) al dia {nova_data}. Necessito la teva confirmació per executar l'acció."
+        "missatge": f"He preparat la proposta per moure l'ordre {codi_ot} ({ot.titol}) al dia {nova_data}. Necessito la teva confirmació per executar l'acció.",
     }
+
 
 # ---------------------------------------------------------------------------
 
-async def execute_tool_get_real_stock(db: AsyncSession, empresa_id: uuid.UUID, article_ref: str) -> dict:
+
+async def execute_tool_get_real_stock(
+    db: AsyncSession, empresa_id: uuid.UUID, article_ref: str
+) -> dict:
     terme = article_ref.strip()
     cerca = f"%{terme}%"
     stmt = select(Article).where(
         Article.empresa_id == empresa_id,
-        or_(
-            Article.referencia_inventari.ilike(cerca),
-            Article.nom.ilike(cerca)
-        )
+        or_(Article.referencia_inventari.ilike(cerca), Article.nom.ilike(cerca)),
     )
     res = await db.execute(stmt)
     articles = res.scalars().all()
@@ -325,7 +334,10 @@ async def execute_tool_get_real_stock(db: AsyncSession, empresa_id: uuid.UUID, a
     if not articles:
         paraules = [p for p in terme.split() if len(p) > 2]
         if paraules:
-            clauses = [or_(Article.referencia_inventari.ilike(f"%{p}%"), Article.nom.ilike(f"%{p}%")) for p in paraules]
+            clauses = [
+                or_(Article.referencia_inventari.ilike(f"%{p}%"), Article.nom.ilike(f"%{p}%"))
+                for p in paraules
+            ]
             stmt_p = select(Article).where(Article.empresa_id == empresa_id, or_(*clauses))
             res_p = await db.execute(stmt_p)
             articles = res_p.scalars().all()
@@ -336,7 +348,7 @@ async def execute_tool_get_real_stock(db: AsyncSession, empresa_id: uuid.UUID, a
             "article_cercat": article_ref,
             "total_disponible": 0.0,
             "articles": [],
-            "missatge": f"No s'ha trobat cap article amb la referència o nom '{article_ref}'."
+            "missatge": f"No s'ha trobat cap article amb la referència o nom '{article_ref}'.",
         }
 
     articles_data = []
@@ -344,36 +356,41 @@ async def execute_tool_get_real_stock(db: AsyncSession, empresa_id: uuid.UUID, a
 
     for art in articles:
         q_stock = select(
-            func.coalesce(func.sum(EstocMagatzem.quantitat_fisica - EstocMagatzem.quantitat_virtual_reservada), 0)
-        ).where(
-            EstocMagatzem.article_id == art.id,
-            EstocMagatzem.empresa_id == empresa_id
-        )
+            func.coalesce(
+                func.sum(
+                    EstocMagatzem.quantitat_fisica - EstocMagatzem.quantitat_virtual_reservada
+                ),
+                0,
+            )
+        ).where(EstocMagatzem.article_id == art.id, EstocMagatzem.empresa_id == empresa_id)
         stock_val = float((await db.execute(q_stock)).scalar_one() or 0.0)
         total_disponible_global += stock_val
-        articles_data.append({
-            "id": str(art.id),
-            "referencia": art.referencia_inventari,
-            "nom": art.nom,
-            "estoc_disponible": stock_val,
-            "unitat_mesura": art.unitat_mesura,
-            "estoc_minim": float(art.estoc_minim),
-            "estoc_optim": float(art.estoc_optim),
-            "familia": art.familia
-        })
+        articles_data.append(
+            {
+                "id": str(art.id),
+                "referencia": art.referencia_inventari,
+                "nom": art.nom,
+                "estoc_disponible": stock_val,
+                "unitat_mesura": art.unitat_mesura,
+                "estoc_minim": float(art.estoc_minim),
+                "estoc_optim": float(art.estoc_optim),
+                "familia": art.familia,
+            }
+        )
 
     return {
         "trobat": True,
         "article_cercat": article_ref,
         "total_disponible": total_disponible_global,
-        "articles": articles_data
+        "articles": articles_data,
     }
 
 
-async def execute_tool_get_vehicle_info(db: AsyncSession, empresa_id: uuid.UUID, matricula: str) -> dict:
+async def execute_tool_get_vehicle_info(
+    db: AsyncSession, empresa_id: uuid.UUID, matricula: str
+) -> dict:
     stmt = select(Vehicle).where(
-        Vehicle.empresa_id == empresa_id,
-        Vehicle.matricula.ilike(f"%{matricula.strip()}%")
+        Vehicle.empresa_id == empresa_id, Vehicle.matricula.ilike(f"%{matricula.strip()}%")
     )
     res = await db.execute(stmt)
     v = res.scalars().first()
@@ -381,14 +398,24 @@ async def execute_tool_get_vehicle_info(db: AsyncSession, empresa_id: uuid.UUID,
         return {
             "trobat": False,
             "matricula_cercada": matricula,
-            "missatge": f"No s'ha trobat cap vehicle amb la matrícula '{matricula}'."
+            "missatge": f"No s'ha trobat cap vehicle amb la matrícula '{matricula}'.",
         }
 
     from app.models.models import DocumentFlota
-    stmt_docs = select(DocumentFlota).where(DocumentFlota.vehicle_id == v.id, DocumentFlota.empresa_id == empresa_id)
+
+    stmt_docs = select(DocumentFlota).where(
+        DocumentFlota.vehicle_id == v.id, DocumentFlota.empresa_id == empresa_id
+    )
     res_docs = await db.execute(stmt_docs)
     docs = res_docs.scalars().all()
-    docs_list = [{"tipus": d.tipus_document, "nom_arxiu": d.nom_arxiu, "data": d.data_document.isoformat() if d.data_document else None} for d in docs]
+    docs_list = [
+        {
+            "tipus": d.tipus_document,
+            "nom_arxiu": d.nom_arxiu,
+            "data": d.data_document.isoformat() if d.data_document else None,
+        }
+        for d in docs
+    ]
 
     return {
         "trobat": True,
@@ -402,17 +429,21 @@ async def execute_tool_get_vehicle_info(db: AsyncSession, empresa_id: uuid.UUID,
         "data_proxima_itv": v.data_proxima_itv.isoformat() if v.data_proxima_itv else None,
         "odometre_acumulat": v.odometre_acumulat,
         "estat_itv": v.estat_itv,
-        "data_caducitat_asseguranca": v.data_caducitat_asseguranca.isoformat() if v.data_caducitat_asseguranca else None,
+        "data_caducitat_asseguranca": v.data_caducitat_asseguranca.isoformat()
+        if v.data_caducitat_asseguranca
+        else None,
         "companyia_asseguradora": v.companyia_asseguradora,
         "carnet_necessari": v.carnet_necessari,
         "historial_reparacions": v.historial_reparacions,
         "regim_adquisicio": v.regim_adquisicio,
         "renting_limit_km": v.renting_limit_km,
-        "consum_l_100km": v.consum_l_100km
+        "consum_l_100km": v.consum_l_100km,
     }
 
 
-async def execute_tool_get_closest_vehicle(db: AsyncSession, empresa_id: uuid.UUID, lat: float, lng: float) -> dict:
+async def execute_tool_get_closest_vehicle(
+    db: AsyncSession, empresa_id: uuid.UUID, lat: float, lng: float
+) -> dict:
     from app.api.v1.gestio.flota import calcular_distancia_haversine
 
     stmt_v = select(Vehicle).where(Vehicle.empresa_id == empresa_id)
@@ -420,16 +451,17 @@ async def execute_tool_get_closest_vehicle(db: AsyncSession, empresa_id: uuid.UU
     vehicles = res_v.scalars().all()
 
     if not vehicles:
-        return {
-            "trobat": False,
-            "missatge": "No hi ha cap vehicle registrat a la flota."
-        }
+        return {"trobat": False, "missatge": "No hi ha cap vehicle registrat a la flota."}
 
-    stmt_ot = select(OrdreTreball).where(
-        OrdreTreball.empresa_id == empresa_id,
-        OrdreTreball.vehicle_id.isnot(None),
-        OrdreTreball.estat.in_(["EN_OBRA", "EN_RUTA", "EN_CURS", "PENDENT"])
-    ).order_by(OrdreTreball.created_at.desc())
+    stmt_ot = (
+        select(OrdreTreball)
+        .where(
+            OrdreTreball.empresa_id == empresa_id,
+            OrdreTreball.vehicle_id.isnot(None),
+            OrdreTreball.estat.in_(["EN_OBRA", "EN_RUTA", "EN_CURS", "PENDENT"]),
+        )
+        .order_by(OrdreTreball.created_at.desc())
+    )
     res_ot = await db.execute(stmt_ot)
     ots = res_ot.scalars().all()
     vehicle_ot_map = {}
@@ -454,26 +486,28 @@ async def execute_tool_get_closest_vehicle(db: AsyncSession, empresa_id: uuid.UU
                     pass
 
         dist = calcular_distancia_haversine(lat, lng, v_lat, v_lng)
-        llista.append({
-            "vehicle_id": str(v.id),
-            "matricula": v.matricula,
-            "marca": v.marca,
-            "model": v.model,
-            "estat": v.estat,
-            "distancia_km": dist,
-            "lat": v_lat,
-            "lng": v_lng,
-            "ordre_treball_actual": ot_rel.codi if ot_rel else None
-        })
+        llista.append(
+            {
+                "vehicle_id": str(v.id),
+                "matricula": v.matricula,
+                "marca": v.marca,
+                "model": v.model,
+                "estat": v.estat,
+                "distancia_km": dist,
+                "lat": v_lat,
+                "lng": v_lng,
+                "ordre_treball_actual": ot_rel.codi if ot_rel else None,
+            }
+        )
 
-    llista.sort(key=lambda x: x["distancia_km"])
+    llista.sort(key=lambda x: x["distancia_km"])  # type: ignore
     closest = llista[0]
 
     return {
         "trobat": True,
         "coordenades_cercades": {"lat": lat, "lng": lng},
         "vehicle_mes_proper": closest,
-        "tots_els_vehicles": llista
+        "tots_els_vehicles": llista,
     }
 
 
@@ -482,7 +516,7 @@ async def execute_tool_get_warranty_status(
     empresa_id: uuid.UUID,
     finca_id: Optional[str] = None,
     client_id: Optional[str] = None,
-    numero_serie: Optional[str] = None
+    numero_serie: Optional[str] = None,
 ) -> dict:
     f_uuid = uuid.UUID(finca_id) if finca_id else None
     c_uuid = uuid.UUID(client_id) if client_id else None
@@ -491,10 +525,13 @@ async def execute_tool_get_warranty_status(
     alertes = []
 
     if f_uuid or c_uuid:
-        query = select(OrdreTreball).where(
-            OrdreTreball.empresa_id == empresa_id,
-            OrdreTreball.data_planificacio >= fa_un_any
-        ).order_by(OrdreTreball.data_planificacio.desc())
+        query = (
+            select(OrdreTreball)
+            .where(
+                OrdreTreball.empresa_id == empresa_id, OrdreTreball.data_planificacio >= fa_un_any
+            )
+            .order_by(OrdreTreball.data_planificacio.desc())
+        )
         if f_uuid:
             query = query.where(OrdreTreball.finca_id == f_uuid)
         if c_uuid:
@@ -504,17 +541,21 @@ async def execute_tool_get_warranty_status(
             darrera = ots[0]
             dies = (avui - darrera.data_planificacio).days
             if dies <= TERMINI_GARANTIA_MA_OBRA_DIES:
-                alertes.append({
-                    "tipus": "GARANTIA_INTERNA_SERVEI",
-                    "activa": True,
-                    "cost_euros": 0.0,
-                    "dies_passats": dies,
-                    "missatge": f"Garantia interna de mà d'obra vigent (<90 dies: {dies} dies). Cost 0 € per al client."
-                })
+                alertes.append(
+                    {
+                        "tipus": "GARANTIA_INTERNA_SERVEI",
+                        "activa": True,
+                        "cost_euros": 0.0,
+                        "dies_passats": dies,
+                        "missatge": f"Garantia interna de mà d'obra vigent (<90 dies: {dies} dies). Cost 0 € per al client.",
+                    }
+                )
 
     if numero_serie:
         res_eina = await db.execute(
-            select(EinaCustodia).where(EinaCustodia.empresa_id == empresa_id, EinaCustodia.numero_serie == numero_serie)
+            select(EinaCustodia).where(
+                EinaCustodia.empresa_id == empresa_id, EinaCustodia.numero_serie == numero_serie
+            )
         )
         eina = res_eina.scalar_one_or_none()
         if eina:
@@ -522,44 +563,50 @@ async def execute_tool_get_warranty_status(
             data_fi = data_compra + timedelta(days=730)
             dies_restants = (data_fi - avui).days
             if dies_restants >= 0:
-                alertes.append({
-                    "tipus": "GARANTIA_FABRICANT",
-                    "activa": True,
-                    "dies_restants": dies_restants,
-                    "missatge": f"Garantia oficial del fabricant vigent fins al {data_fi.isoformat()} ({dies_restants} dies restants)."
-                })
+                alertes.append(
+                    {
+                        "tipus": "GARANTIA_FABRICANT",
+                        "activa": True,
+                        "dies_restants": dies_restants,
+                        "missatge": f"Garantia oficial del fabricant vigent fins al {data_fi.isoformat()} ({dies_restants} dies restants).",
+                    }
+                )
 
-    return {
-        "trobat": len(alertes) > 0,
-        "garanties": alertes
-    }
+    return {"trobat": len(alertes) > 0, "garanties": alertes}
 
 
 async def execute_tool_get_client_history(
     db: AsyncSession,
     empresa_id: uuid.UUID,
     client_id: Optional[str] = None,
-    client_nom: Optional[str] = None
+    client_nom: Optional[str] = None,
 ) -> dict:
     c_uuid = uuid.UUID(client_id) if client_id else None
     if not c_uuid and client_nom:
         res_c = await db.execute(
-            select(Client).where(Client.empresa_id == empresa_id, Client.rao_social.ilike(f"%{client_nom.strip()}%"))
+            select(Client).where(
+                Client.empresa_id == empresa_id, Client.rao_social.ilike(f"%{client_nom.strip()}%")
+            )
         )
         cl = res_c.scalars().first()
         if cl:
             c_uuid = cl.id
 
     if not c_uuid:
-        return {"trobat": False, "missatge": f"No s'ha trobat cap client amb '{client_nom or client_id}'."}
+        return {
+            "trobat": False,
+            "missatge": f"No s'ha trobat cap client amb '{client_nom or client_id}'.",
+        }
 
     fa_un_any = datetime.now(timezone.utc) - timedelta(days=365)
     res_ots = await db.execute(
-        select(OrdreTreball).where(
+        select(OrdreTreball)
+        .where(
             OrdreTreball.client_id == c_uuid,
             OrdreTreball.empresa_id == empresa_id,
-            OrdreTreball.created_at >= fa_un_any
-        ).order_by(OrdreTreball.created_at.desc())
+            OrdreTreball.created_at >= fa_un_any,
+        )
+        .order_by(OrdreTreball.created_at.desc())
     )
     ots = res_ots.scalars().all()
 
@@ -567,11 +614,15 @@ async def execute_tool_get_client_history(
         "trobat": True,
         "client_id": str(c_uuid),
         "total_intervencions_365d": len(ots),
-        "intervencions": [{"id": str(o.id), "codi": o.codi, "titol": o.titol, "estat": o.estat} for o in ots]
+        "intervencions": [
+            {"id": str(o.id), "codi": o.codi, "titol": o.titol, "estat": o.estat} for o in ots
+        ],
     }
 
 
-async def execute_tool_get_rag_knowledge(db: AsyncSession, empresa_id: uuid.UUID, query: str) -> dict:
+async def execute_tool_get_rag_knowledge(
+    db: AsyncSession, empresa_id: uuid.UUID, query: str
+) -> dict:
     paraules = [p for p in query.lower().split() if len(p) > 3]
     if not paraules:
         return {"trobat": False, "documents": []}
@@ -580,11 +631,15 @@ async def execute_tool_get_rag_knowledge(db: AsyncSession, empresa_id: uuid.UUID
         filtres.append(func.lower(FaqCorporativaRag.resposta).contains(p))
         filtres.append(func.lower(FaqCorporativaRag.pregunta).contains(p))
         filtres.append(func.lower(FaqCorporativaRag.paraules_clau).contains(p))
-    q_faq = select(FaqCorporativaRag).where(FaqCorporativaRag.empresa_id == empresa_id, or_(*filtres))
+    q_faq = select(FaqCorporativaRag).where(
+        FaqCorporativaRag.empresa_id == empresa_id, or_(*filtres)
+    )
     docs = (await db.execute(q_faq)).scalars().all()
     return {
         "trobat": len(docs) > 0,
-        "documents": [{"pregunta": d.pregunta, "resposta": d.resposta, "tags": d.paraules_clau} for d in docs]
+        "documents": [
+            {"pregunta": d.pregunta, "resposta": d.resposta, "tags": d.paraules_clau} for d in docs
+        ],
     }
 
 
@@ -607,9 +662,11 @@ async def executar_eina(nom_eina: str, args: dict, db: AsyncSession, empresa_id:
             db, empresa_id, args.get("client_id"), args.get("client_nom")
         )
     elif nom_eina == "get_unbilled_money":
-        return await execute_tool_get_unbilled_money(db, empresa_id, args.get("mes"))
+        return await execute_tool_get_unbilled_money(db, empresa_id, args.get("mes"))  # type: ignore
     elif nom_eina == "replanificar_ot":
-        return await execute_tool_replanificar_ot(db, empresa_id, args.get("codi_ot", ""), args.get("nova_data", ""))
+        return await execute_tool_replanificar_ot(
+            db, empresa_id, args.get("codi_ot", ""), args.get("nova_data", "")
+        )
     elif nom_eina == "get_rag_knowledge":
         return await execute_tool_get_rag_knowledge(db, empresa_id, args.get("query", ""))
     else:
@@ -617,9 +674,7 @@ async def executar_eina(nom_eina: str, args: dict, db: AsyncSession, empresa_id:
 
 
 async def cridar_lm_studio(
-    pregunta: str,
-    vertical: str = "SEVALOR",
-    context_addicional: Optional[str] = None
+    pregunta: str, vertical: str = "SEVALOR", context_addicional: Optional[str] = None
 ) -> Optional[str]:
     """Cridar LM Studio per a generació de text estàndard / suport."""
     lm_url = getattr(settings, "LMSTUDIO_URL", None) or getattr(settings, "LM_STUDIO_URL", None)
@@ -627,7 +682,11 @@ async def cridar_lm_studio(
         return None
 
     base_url = lm_url.rstrip("/")
-    endpoint = f"{base_url}/chat/completions" if base_url.endswith("/v1") else f"{base_url}/v1/chat/completions"
+    endpoint = (
+        f"{base_url}/chat/completions"
+        if base_url.endswith("/v1")
+        else f"{base_url}/v1/chat/completions"
+    )
 
     system_prompt = (
         f"Ets el Copilot Tècnic Especialitzat de SEVALOR (Vertical: {vertical}). "
@@ -660,7 +719,7 @@ async def cridar_lm_studio(
                 data = resp.json()
                 choices = data.get("choices", [])
                 if choices:
-                    return choices[0].get("message", {}).get("content", "").strip()
+                    return choices[0].get("message", {}).get("content", "").strip()  # type: ignore
     except Exception as e:
         logger.warning(f"Connexió amb LM Studio fallida a {endpoint}: {e}")
 
@@ -673,7 +732,7 @@ async def cridar_lm_studio_amb_tools(
     db: AsyncSession,
     empresa_id: uuid.UUID,
     imatge_b64: Optional[str] = None,
-    agent_prompt_system: Optional[str] = None
+    agent_prompt_system: Optional[str] = None,
 ) -> Tuple[Optional[str], Optional[str], Optional[dict], Optional[dict]]:
     """
     Executa el cicle d'Agent de Tool Calling amb LM Studio (OpenAI-compatible).
@@ -684,11 +743,13 @@ async def cridar_lm_studio_amb_tools(
         return None, None, None, None
 
     base_url = lm_url.rstrip("/")
-    endpoint = f"{base_url}/chat/completions" if base_url.endswith("/v1") else f"{base_url}/v1/chat/completions"
-
-    system_prompt = (
-        f"Ets el Copilot d'Intel·ligència Artificial tècnic de SEVALOR Suite, especialitzat en {vertical}. "
+    endpoint = (
+        f"{base_url}/chat/completions"
+        if base_url.endswith("/v1")
+        else f"{base_url}/v1/chat/completions"
     )
+
+    system_prompt = f"Ets el Copilot d'Intel·ligència Artificial tècnic de SEVALOR Suite, especialitzat en {vertical}. "
     if agent_prompt_system:
         system_prompt += f" Directrius Específiques de l'Empresa: {agent_prompt_system}. "
 
@@ -747,12 +808,14 @@ async def cridar_lm_studio_amb_tools(
 
                 # Segona crida per sintetitzar la resposta amb el resultat
                 messages.append(msg)
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": tc.get("id", "call_1"),
-                    "name": fn_name,
-                    "content": json.dumps(tool_res, ensure_ascii=False)
-                })
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": tc.get("id", "call_1"),
+                        "name": fn_name,
+                        "content": json.dumps(tool_res, ensure_ascii=False),
+                    }
+                )
 
                 payload_synthesis = {
                     "model": model_name,
@@ -763,7 +826,10 @@ async def cridar_lm_studio_amb_tools(
                 resp_synth = await client.post(
                     endpoint,
                     json=payload_synthesis,
-                    headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                    headers={
+                        "Authorization": f"Bearer {api_key}",
+                        "Content-Type": "application/json",
+                    },
                 )
                 if resp_synth.status_code == 200:
                     synth_json = resp_synth.json()
@@ -780,15 +846,15 @@ async def cridar_lm_studio_amb_tools(
                 return content, None, None, None
 
     except Exception as e:
-        logger.warning(f"Connexió o execució de Tool Calling amb LM Studio fallida a {endpoint}: {e}")
+        logger.warning(
+            f"Connexió o execució de Tool Calling amb LM Studio fallida a {endpoint}: {e}"
+        )
 
     return None, None, None, None
 
 
 async def executar_agent_local(
-    pregunta: str,
-    db: AsyncSession,
-    empresa_id: uuid.UUID
+    pregunta: str, db: AsyncSession, empresa_id: uuid.UUID
 ) -> Tuple[str, Optional[str], Optional[dict], Optional[dict], List[dict]]:
     """
     Agent determinista sobirà local: selecciona l'eina òptima i sintetitza la resposta
@@ -798,7 +864,23 @@ async def executar_agent_local(
     enllacos: List[dict] = []
 
     # 1. Proximitat / Vehicle més proper
-    if any(k in pregunta_lower for k in ["més a prop", "mes aprop", "mes a prop", "més proper", "mes proper", "proper", "aprop", "proxim", "pròxim", "closest", "cercano", "cerca"]):
+    if any(
+        k in pregunta_lower
+        for k in [
+            "més a prop",
+            "mes aprop",
+            "mes a prop",
+            "més proper",
+            "mes proper",
+            "proper",
+            "aprop",
+            "proxim",
+            "pròxim",
+            "closest",
+            "cercano",
+            "cerca",
+        ]
+    ):
         coords = re.findall(r"[-+]?\d+\.\d+", pregunta)
         if len(coords) >= 2:
             lat = float(coords[0])
@@ -828,7 +910,22 @@ async def executar_agent_local(
         return resposta, tool_name, tool_args, tool_res, enllacos
 
     # 2. Estoc / Inventari
-    if any(k in pregunta_lower for k in ["estoc", "stock", "quantitat", "queden", "queda", "disposem", "cable", "tub", "electrovalvula", "material", "inventari"]):
+    if any(
+        k in pregunta_lower
+        for k in [
+            "estoc",
+            "stock",
+            "quantitat",
+            "queden",
+            "queda",
+            "disposem",
+            "cable",
+            "tub",
+            "electrovalvula",
+            "material",
+            "inventari",
+        ]
+    ):
         stmt_arts = select(Article).where(Article.empresa_id == empresa_id)
         articles_db = (await db.execute(stmt_arts)).scalars().all()
 
@@ -845,22 +942,44 @@ async def executar_agent_local(
                 best_match_len = len(ref_l)
 
         if not target_ref:
-            stopwords = ["tenim", "suficient", "per", "l'obra", "obra", "quant", "quants", "queden", "disposem", "de", "d'", "ens", "queda", "el", "la", "els", "les"]
-            cleaned = " ".join([w for w in pregunta_lower.split() if w not in stopwords and len(w) > 1])
+            stopwords = [
+                "tenim",
+                "suficient",
+                "per",
+                "l'obra",
+                "obra",
+                "quant",
+                "quants",
+                "queden",
+                "disposem",
+                "de",
+                "d'",
+                "ens",
+                "queda",
+                "el",
+                "la",
+                "els",
+                "les",
+            ]
+            cleaned = " ".join(
+                [w for w in pregunta_lower.split() if w not in stopwords and len(w) > 1]
+            )
             target_ref = cleaned or pregunta_lower
 
         tool_name = "get_real_stock"
-        tool_args = {"article_ref": target_ref}
+        tool_args = {"article_ref": target_ref}  # type: ignore
         tool_res = await execute_tool_get_real_stock(db, empresa_id, target_ref)
         enllacos.append({"titol": "Inventari de Magatzem", "url": "/gestio/magatzem"})
 
         if tool_res.get("trobat"):
             tot = tool_res["total_disponible"]
             tot_str = f"{int(tot)}" if float(tot).is_integer() else f"{tot:.1f}"
-            detalls = ", ".join([
-                f"{a['nom']} ({int(a['estoc_disponible']) if float(a['estoc_disponible']).is_integer() else a['estoc_disponible']} {a['unitat_mesura']})"
-                for a in tool_res["articles"]
-            ])
+            detalls = ", ".join(
+                [
+                    f"{a['nom']} ({int(a['estoc_disponible']) if float(a['estoc_disponible']).is_integer() else a['estoc_disponible']} {a['unitat_mesura']})"
+                    for a in tool_res["articles"]
+                ]
+            )
             resposta = (
                 f"Segons la consulta en temps real d'inventari a magatzem (eina get_real_stock), "
                 f"disposem de {tot_str} unitats disponibles en total. Detall d'estoc: {detalls}."
@@ -871,7 +990,10 @@ async def executar_agent_local(
         return resposta, tool_name, tool_args, tool_res, enllacos
 
     # 3. Vehicle per matrícula o informació general de vehicle
-    if any(k in pregunta_lower for k in ["vehicle", "furgoneta", "cotxe", "matricula", "itv", "asseguranca"]):
+    if any(
+        k in pregunta_lower
+        for k in ["vehicle", "furgoneta", "cotxe", "matricula", "itv", "asseguranca"]
+    ):
         stmt_v = select(Vehicle).where(Vehicle.empresa_id == empresa_id)
         vehs = (await db.execute(stmt_v)).scalars().all()
         target_mat = ""
@@ -887,7 +1009,7 @@ async def executar_agent_local(
 
         if target_mat:
             tool_name = "get_vehicle_info"
-            tool_args = {"matricula": target_mat}
+            tool_args = {"matricula": target_mat}  # type: ignore
             tool_res = await execute_tool_get_vehicle_info(db, empresa_id, target_mat)
             enllacos.append({"titol": "Flota de Vehicles", "url": "/gestio/flota"})
             if tool_res.get("trobat"):
@@ -904,13 +1026,17 @@ async def executar_agent_local(
                     f"Documents Registrats: {len(tool_res.get('documents', []))} arxius."
                 )
             else:
-                resposta = tool_res.get("missatge", f"No s'ha trobat informació per la matrícula {target_mat}.")
+                resposta = tool_res.get(
+                    "missatge", f"No s'ha trobat informació per la matrícula {target_mat}."
+                )
             return resposta, tool_name, tool_args, tool_res, enllacos
 
     # 4. Historial de Client / Fitxa 360
-    if any(k in pregunta_lower for k in ["client", "historial", "fitxa 360", "360", "intervencions de"]):
+    if any(
+        k in pregunta_lower for k in ["client", "historial", "fitxa 360", "360", "intervencions de"]
+    ):
         tool_name = "get_client_history"
-        tool_args = {"client_nom": pregunta}
+        tool_args = {"client_nom": pregunta}  # type: ignore
         tool_res = await execute_tool_get_client_history(db, empresa_id, client_nom=pregunta)
         enllacos.append({"titol": "Directori de Clients", "url": "/gestio/clients"})
         if tool_res.get("trobat"):
@@ -922,7 +1048,7 @@ async def executar_agent_local(
     # 5. Garanties
     if any(k in pregunta_lower for k in ["garantia", "garanties", "rma", "fabricant"]):
         tool_name = "get_warranty_status"
-        tool_args = {"numero_serie": None}
+        tool_args = {"numero_serie": None}  # type: ignore
         tool_res = await execute_tool_get_warranty_status(db, empresa_id)
         enllacos.append({"titol": "Auditoria de Garanties", "url": "/gestio/copilot"})
         if tool_res.get("trobat"):
@@ -934,12 +1060,16 @@ async def executar_agent_local(
 
     # 6. Fallback a RAG de coneixement
     tool_name = "get_rag_knowledge"
-    tool_args = {"query": pregunta}
+    tool_args = {"query": pregunta}  # type: ignore
     tool_res = await execute_tool_get_rag_knowledge(db, empresa_id, pregunta)
     if tool_res.get("trobat"):
         enllacos.append({"titol": "Base de Coneixement Corporativa", "url": "/gestio/copilot"})
-        docs_txt = "\n".join([f"• [{d['pregunta']}]: {d['resposta']}" for d in tool_res["documents"]])
-        resposta = f"He trobat aquesta informació a la base de coneixement corporativa:\n\n{docs_txt}"
+        docs_txt = "\n".join(
+            [f"• [{d['pregunta']}]: {d['resposta']}" for d in tool_res["documents"]]
+        )
+        resposta = (
+            f"He trobat aquesta informació a la base de coneixement corporativa:\n\n{docs_txt}"
+        )
     else:
         resposta = "No he trobat protocols específics ni dades directes a la base de coneixement corporativa per a aquesta consulta."
 
@@ -963,6 +1093,7 @@ def aplicar_tenant_context(claims: Dict[str, Any]) -> uuid.UUID:
 # ---------------------------------------------------------------------------
 # DTOs / Esquemes Pydantic
 # ---------------------------------------------------------------------------
+
 
 class SollicitudPeritatgeIncidencia(BaseModel):
     ordre_treball_id: Optional[uuid.UUID] = None
@@ -1000,14 +1131,18 @@ class AprovacioPressupostIn(BaseModel):
 
 class VerificacioStockIn(BaseModel):
     ordre_treball_id: Optional[uuid.UUID] = None
-    materials: List[Dict[str, Any]] = Field(default_factory=list)  # {article_id, quantitat_necessaria}
-
+    materials: List[Dict[str, Any]] = Field(
+        default_factory=list
+    )  # {article_id, quantitat_necessaria}
 
 
 class DocumentRagIn(BaseModel):
-    pregunta: str = Field(validation_alias=AliasChoices('pregunta', 'titol'))
-    resposta: str = Field(validation_alias=AliasChoices('resposta', 'contingut'))
-    paraules_clau: Optional[str] = Field(default=None, validation_alias=AliasChoices('paraules_clau', 'tags'))
+    pregunta: str = Field(validation_alias=AliasChoices("pregunta", "titol"))
+    resposta: str = Field(validation_alias=AliasChoices("resposta", "contingut"))
+    paraules_clau: Optional[str] = Field(
+        default=None, validation_alias=AliasChoices("paraules_clau", "tags")
+    )
+
 
 class ConsultaXatIn(BaseModel):
     pregunta: str
@@ -1017,6 +1152,7 @@ class ConsultaXatIn(BaseModel):
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
+
 
 @router.get("/estat-node")
 async def obtenir_estat_node_ia(
@@ -1085,26 +1221,30 @@ async def auditar_garanties_i_memoria_finca(
             }
 
         for ot in ots:
-            intervencions_històriques.append({
-                "ordre_id": str(ot.id),
-                "codi": ot.codi,
-                "titol": ot.titol,
-                "data": ot.data_planificacio.isoformat(),
-                "estat": ot.estat,
-            })
+            intervencions_històriques.append(
+                {
+                    "ordre_id": str(ot.id),
+                    "codi": ot.codi,
+                    "titol": ot.titol,
+                    "data": ot.data_planificacio.isoformat(),
+                    "estat": ot.estat,
+                }
+            )
 
         # Comprovació de Garantia Interna de Mà d'Obra (<3 mesos / 90 dies) (RF-07)
         darrera_ot = ots[0]
         dies_passats = (avui - darrera_ot.data_planificacio).days
         if dies_passats <= TERMINI_GARANTIA_MA_OBRA_DIES:
-            alertes.append({
-                "tipus": "GARANTIA_INTERNA_SERVEI",
-                "activa": True,
-                "cost_client_euros": 0.00,
-                "dies_restants": TERMINI_GARANTIA_MA_OBRA_DIES - dies_passats,
-                "darrera_intervencio_data": darrera_ot.data_planificacio.isoformat(),
-                "missatge": f"Garantia de mà d'obra vigent (intervingut fa {dies_passats} dies). Si es tracta de la mateixa avaria, s'aplica garantia interna a cost 0 € per al client.",
-            })
+            alertes.append(
+                {
+                    "tipus": "GARANTIA_INTERNA_SERVEI",
+                    "activa": True,
+                    "cost_client_euros": 0.00,
+                    "dies_restants": TERMINI_GARANTIA_MA_OBRA_DIES - dies_passats,
+                    "darrera_intervencio_data": darrera_ot.data_planificacio.isoformat(),
+                    "missatge": f"Garantia de mà d'obra vigent (intervingut fa {dies_passats} dies). Si es tracta de la mateixa avaria, s'aplica garantia interna a cost 0 € per al client.",
+                }
+            )
 
     # 2. Auditoria per Número de Sèrie d'Equip (RF-05, RF-06, EDGE-07)
     if numero_serie:
@@ -1124,34 +1264,40 @@ async def auditar_garanties_i_memoria_finca(
 
             if dies_fins_a_fi >= 0:
                 # Dins de garantia oficial
-                alertes.append({
-                    "tipus": "GARANTIA_FABRICANT",
-                    "activa": True,
-                    "numero_serie": numero_serie,
-                    "equip": f"{eina.nom} ({eina.model or 'Model N/A'})",
-                    "data_fi_garantia": data_fi_garantia.isoformat(),
-                    "dies_restants": dies_fins_a_fi,
-                    "missatge": f"⚠️ ATENCIÓ: L'equip {eina.nom} [SN: {numero_serie}] disposa de garantia oficial del fabricant vigent fins al {data_fi_garantia}. Es proposa tramitar garantia/RMA amb el proveïdor en lloc de facturar la peça nova al client.",
-                })
+                alertes.append(
+                    {
+                        "tipus": "GARANTIA_FABRICANT",
+                        "activa": True,
+                        "numero_serie": numero_serie,
+                        "equip": f"{eina.nom} ({eina.model or 'Model N/A'})",
+                        "data_fi_garantia": data_fi_garantia.isoformat(),
+                        "dies_restants": dies_fins_a_fi,
+                        "missatge": f"⚠️ ATENCIÓ: L'equip {eina.nom} [SN: {numero_serie}] disposa de garantia oficial del fabricant vigent fins al {data_fi_garantia}. Es proposa tramitar garantia/RMA amb el proveïdor en lloc de facturar la peça nova al client.",
+                    }
+                )
             elif dies_fins_a_fi >= -15:
                 # EDGE-07: Garantia de 2 anys recentment expirada (<= 15 dies)
                 dies_expirat = abs(dies_fins_a_fi)
-                alertes.append({
-                    "tipus": "CORTESIA_EXPIRADA",
-                    "activa": False,
-                    "numero_serie": numero_serie,
-                    "dies_expirat": dies_expirat,
-                    "data_fi_garantia": data_fi_garantia.isoformat(),
-                    "missatge": f"La garantia oficial de 2 anys va expirar el {data_fi_garantia} (fa {dies_expirat} dies). Es suggereix consultar comercialment amb el proveïdor si admet l'esmena de la peça per deferència abans de pressupostar nova peça al client.",
-                })
+                alertes.append(
+                    {
+                        "tipus": "CORTESIA_EXPIRADA",
+                        "activa": False,
+                        "numero_serie": numero_serie,
+                        "dies_expirat": dies_expirat,
+                        "data_fi_garantia": data_fi_garantia.isoformat(),
+                        "missatge": f"La garantia oficial de 2 anys va expirar el {data_fi_garantia} (fa {dies_expirat} dies). Es suggereix consultar comercialment amb el proveïdor si admet l'esmena de la peça per deferència abans de pressupostar nova peça al client.",
+                    }
+                )
             else:
-                alertes.append({
-                    "tipus": "GARANTIA_EXPIRADA",
-                    "activa": False,
-                    "numero_serie": numero_serie,
-                    "data_fi_garantia": data_fi_garantia.isoformat(),
-                    "missatge": f"Garantia oficial finalitzada el {data_fi_garantia}.",
-                })
+                alertes.append(
+                    {
+                        "tipus": "GARANTIA_EXPIRADA",
+                        "activa": False,
+                        "numero_serie": numero_serie,
+                        "data_fi_garantia": data_fi_garantia.isoformat(),
+                        "missatge": f"Garantia oficial finalitzada el {data_fi_garantia}.",
+                    }
+                )
 
     return {
         "trobat": True,
@@ -1181,7 +1327,10 @@ async def peritar_incidencia_multimodal(
 
     # EDGE-03: Soroll extrem de tractors o vent (confiança acústica < 0.40)
     es_soroll_sever = dades.confianca_acustica < CONFIANCA_ACUSTICA_LLINDAR
-    transcripcio = dades.text_dictat_operari or "S'observa fuita en la canonada principal del sector 3 sota pressió."
+    transcripcio = (
+        dades.text_dictat_operari
+        or "S'observa fuita en la canonada principal del sector 3 sota pressió."
+    )
 
     if es_soroll_sever:
         transcripcio_amb_avis = f"⚠️ L'àudio conté soroll de fons sever (tractors/vent). Recomanat contrast visual de fotografia pericial. Transcripció parcial: {transcripcio}"
@@ -1190,8 +1339,14 @@ async def peritar_incidencia_multimodal(
 
     # RF-09: Classificació Pericial (Extra Facturable vs Cost No Imputable)
     text_analitzar = (dades.text_dictat_operari or "").lower()
-    es_extra = any(paraula in text_analitzar for paraula in ["arrel", "roca", "pedra", "extern", "preexistent", "pressio"])
-    es_error_colla = any(paraula in text_analitzar for paraula in ["pala", "error", "oblidat", "descompte", "trencat per nosaltres"])
+    es_extra = any(
+        paraula in text_analitzar
+        for paraula in ["arrel", "roca", "pedra", "extern", "preexistent", "pressio"]
+    )
+    es_error_colla = any(
+        paraula in text_analitzar
+        for paraula in ["pala", "error", "oblidat", "descompte", "trencat per nosaltres"]
+    )
 
     if es_extra:
         dictamen = "EXTRA_FACTURABLE"
@@ -1203,7 +1358,9 @@ async def peritar_incidencia_multimodal(
         dictamen = "COST_NO_IMPUTABLE"
         motiu = "Contingència operativa durant el moviment de terres per la pròpia pala de la quadrilla. Cost no imputable al client (assumit per l'empresa)."
         temps_extra = 30
-        materials_extra = [{"article": "Maniguet reparació 32mm", "quantitat": 1, "unitat": "UNITAT"}]
+        materials_extra = [
+            {"article": "Maniguet reparació 32mm", "quantitat": 1, "unitat": "UNITAT"}
+        ]
         cost_estimat = 0.00
     else:
         dictamen = "EXTRA_FACTURABLE"
@@ -1267,7 +1424,9 @@ async def validar_memorandum_enginyer(
     memo = res.scalar_one_or_none()
 
     if not memo:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Memoràndum tècnic no trobat.")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Memoràndum tècnic no trobat."
+        )
 
     if dades.accio.upper() == "APROVAR":
         memo.estat = "APROVAT_ENGINYER"
@@ -1380,16 +1539,21 @@ async def reconciliar_post_obra(
         consum_net = real - retornat
 
         desviacio = consum_net - previst
-        desviacions_materials_llista.append({
-            "nom": nom_mat,
-            "previst": previst,
-            "real_net": consum_net,
-            "desviacio": desviacio,
-        })
+        desviacions_materials_llista.append(
+            {
+                "nom": nom_mat,
+                "previst": previst,
+                "real_net": consum_net,
+                "desviacio": desviacio,
+            }
+        )
 
         if previst > 0:
             ratio_consum = (consum_net / previst) * 100.0
-            if ratio_consum >= LLINDAR_MERMA_CONTINUA_PERCENTATGE and dades.incidencies_registrades == 0:
+            if (
+                ratio_consum >= LLINDAR_MERMA_CONTINUA_PERCENTATGE
+                and dades.incidencies_registrades == 0
+            ):
                 bloqueig_merma = True
                 exces = consum_net - previst
                 detall_merma = f"Consum de {nom_mat} excedit en +{exces:.1f} ({ratio_consum:.0f}%, >250%) sense cap incidència de camp reportada a la fulla de tasca."
@@ -1408,13 +1572,18 @@ async def reconciliar_post_obra(
         "desviacio_materials_import": 145.00,
         "desviacio_ma_obra_import": desviacio_hores * 35.0,
         "despeses_camp_import": dades.despeses_camp,
-        "total_proposat_corregit": 1200.00 + 145.00 + (desviacio_hores * 35.0) + dades.despeses_camp,
+        "total_proposat_corregit": 1200.00
+        + 145.00
+        + (desviacio_hores * 35.0)
+        + dades.despeses_camp,
         "data_proposta": datetime.now(timezone.utc).isoformat(),
         "estat_proposta": "PENDENT_CONFIRMACIO_ENGINYER",
     }
 
     # Upsert a auditories_post_obra
-    q_aud = select(AuditoriaPostObra).where(AuditoriaPostObra.ordre_treball_id == dades.ordre_treball_id)
+    q_aud = select(AuditoriaPostObra).where(
+        AuditoriaPostObra.ordre_treball_id == dades.ordre_treball_id
+    )
     res_aud = await db.execute(q_aud)
     auditoria = res_aud.scalar_one_or_none()
 
@@ -1484,7 +1653,9 @@ async def aprovar_pressupost_corregit_enginyer(
     auditoria = res.scalar_one_or_none()
 
     if not auditoria:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Auditoria post-obra no trobada.")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Auditoria post-obra no trobada."
+        )
 
     if auditoria.bloqueig_consum_excessiu and not dades.confirmar:
         raise HTTPException(
@@ -1505,7 +1676,9 @@ async def aprovar_pressupost_corregit_enginyer(
         "auditoria_id": str(auditoria.id),
         "estat": auditoria.estat,
         "enginyer_id": str(auditoria.enginyer_id) if auditoria.enginyer_id else None,
-        "data_aprovacio": auditoria.data_aprovacio.isoformat() if auditoria.data_aprovacio else None,
+        "data_aprovacio": auditoria.data_aprovacio.isoformat()
+        if auditoria.data_aprovacio
+        else None,
         "missatge": "Pressupost corregit validat per l'Enginyer i tramès oficialment a facturació (Secretaria/Boss).",
     }
 
@@ -1549,7 +1722,9 @@ async def verificar_stock_en_assignacio(
         if not article:
             continue
 
-        saldo_actual = float(estoc.quantitat_fisica - estoc.quantitat_virtual_reservada) if estoc else 0.0
+        saldo_actual = (
+            float(estoc.quantitat_fisica - estoc.quantitat_virtual_reservada) if estoc else 0.0
+        )
 
         if saldo_actual < quantitat_necessaria:
             # Rebuig de commit per manca de stock concurrent
@@ -1567,12 +1742,14 @@ async def verificar_stock_en_assignacio(
 
             from app.models.models import FacturaProveidor, FacturaProveidorLinia
 
-            q_backorder = select(FacturaProveidorLinia).join(
-                FacturaProveidor, FacturaProveidor.id == FacturaProveidorLinia.factura_id
-            ).where(
-                FacturaProveidorLinia.empresa_id == empresa_id,
-                FacturaProveidorLinia.article_id == article.id,
-                FacturaProveidor.estat == "PENDENT"
+            q_backorder = (
+                select(FacturaProveidorLinia)
+                .join(FacturaProveidor, FacturaProveidor.id == FacturaProveidorLinia.factura_id)
+                .where(
+                    FacturaProveidorLinia.empresa_id == empresa_id,
+                    FacturaProveidorLinia.article_id == article.id,
+                    FacturaProveidor.estat == "PENDENT",
+                )
             )
             res_backorder = await db.execute(q_backorder)
             backorder_actiu = res_backorder.scalars().first()
@@ -1580,7 +1757,7 @@ async def verificar_stock_en_assignacio(
             if backorder_actiu and saldo_projectat <= 0:
                 raise HTTPException(
                     status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                    detail=f"❌ Copilot IA: Comanda en trànsit detectada. Existeix un Backorder actiu per l'article '{article.nom}'. S'ha deturat la generació d'una nova comanda de compra per evitar duplicitat d'inventari."
+                    detail=f"❌ Copilot IA: Comanda en trànsit detectada. Existeix un Backorder actiu per l'article '{article.nom}'. S'ha deturat la generació d'una nova comanda de compra per evitar duplicitat d'inventari.",
                 )
 
             # Generar Alerta Preventiva de Recompra Inmediata (RF-15)
@@ -1589,7 +1766,9 @@ async def verificar_stock_en_assignacio(
             comanda_esborrany = {
                 "article_id": str(article.id),
                 "article_nom": article.nom,
-                "quantitat_proposada": (float(article.estoc_optim) - saldo_projectat) if article.estoc_optim > 0 else 50.0,
+                "quantitat_proposada": (float(article.estoc_optim) - saldo_projectat)
+                if article.estoc_optim > 0
+                else 50.0,
                 "preu_cost_pactat": float(article.preu_cost),
                 "data_proposta": datetime.now(timezone.utc).isoformat(),
             }
@@ -1654,7 +1833,6 @@ async def consultar_xat_tecnic(
     res_emp = await db.execute(q_emp)
     empresa = res_emp.scalar_one_or_none()
     vertical = empresa.vertical if empresa else "SEVALOR"
-
 
     # 3. Agent Autònom Copilot amb Tool Calling (OpenAI / LM Studio compatible + Sobirà Local Fallback)
     resposta_ia, tool_name, tool_args, tool_result = await cridar_lm_studio_amb_tools(
@@ -1721,10 +1899,14 @@ async def llistar_alertes_copilot(
     """Llista les alertes actives de garantia i reposició de stock."""
     empresa_id = aplicar_tenant_context(claims)
 
-    q = select(AlertaGarantiaRecompra).where(
-        AlertaGarantiaRecompra.empresa_id == empresa_id,
-        AlertaGarantiaRecompra.estat == estat.upper(),
-    ).order_by(AlertaGarantiaRecompra.created_at.desc())
+    q = (
+        select(AlertaGarantiaRecompra)
+        .where(
+            AlertaGarantiaRecompra.empresa_id == empresa_id,
+            AlertaGarantiaRecompra.estat == estat.upper(),
+        )
+        .order_by(AlertaGarantiaRecompra.created_at.desc())
+    )
 
     res = await db.execute(q)
     alertes = res.scalars().all()
@@ -1747,7 +1929,7 @@ async def llistar_alertes_copilot(
 async def afegir_document_rag(
     dades: DocumentRagIn,
     db: AsyncSession = Depends(get_db_with_tenant_context),
-    claims: Dict[str, Any] = Depends(get_current_user_claims)
+    claims: Dict[str, Any] = Depends(get_current_user_claims),
 ):
     """Permet als administradors afegir protocols i documentació al RAG del Copilot."""
     empresa_id = aplicar_tenant_context(claims)
@@ -1757,22 +1939,25 @@ async def afegir_document_rag(
         pregunta=dades.pregunta,
         resposta=dades.resposta,
         paraules_clau=dades.paraules_clau,
-        actiu=True
+        actiu=True,
     )
     db.add(nou_doc)
     await db.commit()
 
     return {"estat": "OK", "missatge": "Document afegit a la base de coneixement de la IA."}
 
+
 @router.get("/rag/document")
 async def llistar_documents_rag(
     db: AsyncSession = Depends(get_db_with_tenant_context),
-    claims: Dict[str, Any] = Depends(get_current_user_claims)
+    claims: Dict[str, Any] = Depends(get_current_user_claims),
 ):
     """Llista els protocols del RAG actius."""
     empresa_id = aplicar_tenant_context(claims)
 
-    q = select(FaqCorporativaRag).where(FaqCorporativaRag.empresa_id == empresa_id, FaqCorporativaRag.actiu.is_(True))
+    q = select(FaqCorporativaRag).where(
+        FaqCorporativaRag.empresa_id == empresa_id, FaqCorporativaRag.actiu.is_(True)
+    )
     res = await db.execute(q)
     docs = res.scalars().all()
 
@@ -1794,32 +1979,38 @@ class ActionConfirmIn(BaseModel):
     action: str
     payload: dict
 
+
 @router.post("/action/confirm")
 async def confirmar_accio_copilot(
     dades: ActionConfirmIn,
     db: AsyncSession = Depends(get_db_with_tenant_context),
-    claims: dict = Depends(get_current_user_claims)
+    claims: dict = Depends(get_current_user_claims),
 ):
     empresa_id = uuid.UUID(claims["empresa_id"])
     if dades.action == "confirm_replanificar_ot":
         from sqlalchemy import update
 
         from app.models.models import OrdreTreball
+
         ot_id = uuid.UUID(dades.payload["ot_id"])
         nova_data_str = dades.payload["nova_data"]
         try:
             nova_data = date.fromisoformat(nova_data_str)
-        except:
+        except Exception:
             raise HTTPException(400, "Format de data invàlid. Esperat YYYY-MM-DD.")
 
-        stmt = update(OrdreTreball).where(
-            OrdreTreball.id == ot_id,
-            OrdreTreball.empresa_id == empresa_id
-        ).values(data_planificacio=nova_data)
+        stmt = (
+            update(OrdreTreball)
+            .where(OrdreTreball.id == ot_id, OrdreTreball.empresa_id == empresa_id)
+            .values(data_planificacio=nova_data)
+        )
 
         await db.execute(stmt)
         await db.commit()
-        return {"success": True, "missatge": f"S'ha replanificat l'OT correctament al {nova_data_str}."}
+        return {
+            "success": True,
+            "missatge": f"S'ha replanificat l'OT correctament al {nova_data_str}.",
+        }
 
     raise HTTPException(400, "Acció desconeguda o no suportada.")
 
@@ -1834,7 +2025,7 @@ class PressupostIntelligentRequest(BaseModel):
 async def generar_pressupost_intelligent(
     payload: PressupostIntelligentRequest,
     db: AsyncSession = Depends(get_db_with_tenant_context),
-    claims: dict = Depends(get_current_user_claims)
+    claims: dict = Depends(get_current_user_claims),
 ):
     """T035: Genera partides de pressupost basades en feines similars tancades del tenant.
 
@@ -1845,8 +2036,7 @@ async def generar_pressupost_intelligent(
     rol = claims.get("rol", "")
     if rol == "OPERARI":
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Copilot no disponible per a operaris"
+            status_code=status.HTTP_403_FORBIDDEN, detail="Copilot no disponible per a operaris"
         )
 
     empresa_id = uuid.UUID(claims["empresa_id"])
@@ -1892,13 +2082,15 @@ async def generar_pressupost_intelligent(
     hores_suggerides = round(total_hores_mitja / n, 1) if n > 0 else 0.0
 
     if hores_suggerides > 0:
-        partides_ma_obra.append({
-            "descripcio": "Mà d'obra tècnica (basada en mitjana feines similars)",
-            "unitats": hores_suggerides,
-            "unitat": "h",
-            "preu_unitari": None,  # Zero Mock Data: no s'inventa el preu
-            "nota": f"Mitjana de {n} feines similars tancades"
-        })
+        partides_ma_obra.append(
+            {
+                "descripcio": "Mà d'obra tècnica (basada en mitjana feines similars)",
+                "unitats": hores_suggerides,
+                "unitat": "h",
+                "preu_unitari": None,  # Zero Mock Data: no s'inventa el preu
+                "nota": f"Mitjana de {n} feines similars tancades",
+            }
+        )
 
     return {
         "estat": "PENDENT_REVISIO",

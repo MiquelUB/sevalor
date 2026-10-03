@@ -8,10 +8,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.db import get_db
 from app.models.models import Empresa, Usuari
 
-router = APIRouter(
-    prefix="/public",
-    tags=["Validació Pública (CAE / Inspectoria)"]
-)
+router = APIRouter(prefix="/public", tags=["Validació Pública (CAE / Inspectoria)"])
+
 
 @router.get("/identificacio/{operari_id}", response_class=HTMLResponse)
 async def get_identificacio_operari(operari_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
@@ -36,7 +34,7 @@ async def get_identificacio_operari(operari_id: uuid.UUID, db: AsyncSession = De
 
     # Si l'operari no és operari
     if operari.rol != "OPERARI" and operari.rol != "ENGINYER" and operari.rol != "BOSS":
-        pass # Ho deixem obert perquè qualsevol treballador es pugui acreditar
+        pass  # Ho deixem obert perquè qualsevol treballador es pugui acreditar
 
     nom_operari = f"{operari.nom or ''} {operari.cognoms or ''}".strip()
     dni = getattr(operari, "dni", "XXX-XXXX-XX")
@@ -68,7 +66,7 @@ async def get_identificacio_operari(operari_id: uuid.UUID, db: AsyncSession = De
     <body>
         <div class="card">
             <h1>Acreditació Oficial CAE</h1>
-            
+
             <div class="section">
                 <div class="label">Treballador Autoritzat</div>
                 <div class="value">{nom_operari}</div>
@@ -77,14 +75,14 @@ async def get_identificacio_operari(operari_id: uuid.UUID, db: AsyncSession = De
                     <span class="dot"></span> Alta Seguretat Social Activa
                 </div>
             </div>
-            
+
             <div class="section">
                 <div class="label">Empresa Contractant</div>
                 <div class="value">{empresa.nom}</div>
-                <div class="value-sub">NIF: {empresa.nif or 'N/A'}</div>
-                <div class="value-sub">{empresa.adreca or 'Adreça no disponible'}</div>
+                <div class="value-sub">NIF: {empresa.nif or "N/A"}</div>
+                <div class="value-sub">{empresa.adreca or "Adreça no disponible"}</div>
             </div>
-            
+
             <div class="section">
                 <div class="label">Validació Documental (PRL/RC)</div>
                 <ul class="check-list">
@@ -94,7 +92,7 @@ async def get_identificacio_operari(operari_id: uuid.UUID, db: AsyncSession = De
                     <li>EPIs Entregats i Registrats</li>
                 </ul>
             </div>
-            
+
             <div class="footer">
                 Validat Criptogràficament per<br/>
                 <strong style="color: #6b7280; font-size: 0.875rem; margin-top: 4px; display: inline-block;">Sevalor Suite</strong>

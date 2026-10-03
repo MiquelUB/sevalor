@@ -6,8 +6,10 @@ import httpx
 
 logger = logging.getLogger("whisper_service")
 
+
 class WhisperTranscriptionError(Exception):
     pass
+
 
 async def transcriure_audio(
     audio_path: str,
@@ -31,9 +33,7 @@ async def transcriure_audio(
                     data["language"] = language
 
                 response = await client.post(
-                    "http://127.0.0.1:8000/v1/audio/transcriptions",
-                    files=files,
-                    data=data
+                    "http://127.0.0.1:8000/v1/audio/transcriptions", files=files, data=data
                 )
 
                 response.raise_for_status()
@@ -45,7 +45,7 @@ async def transcriure_audio(
                     "text": result.get("text", ""),
                     "language": language or "ca",
                     "confianca_acustica": _confianca_des_de_segments(segments),
-                    "segments": segments
+                    "segments": segments,
                 }
     except (httpx.RequestError, httpx.HTTPStatusError) as e:
         logger.warning(f"Error connectant al node d'IA Whisper, s'activa fallback: {e}")
@@ -54,7 +54,7 @@ async def transcriure_audio(
             "text": "Copilot provisionalment no disponible",
             "language": language or "ca",
             "confianca_acustica": 0.0,
-            "segments": []
+            "segments": [],
         }
     except Exception as e:
         logger.error(f"Error a whisper: {e}")
@@ -63,7 +63,7 @@ async def transcriure_audio(
             "text": "Copilot provisionalment no disponible",
             "language": language or "ca",
             "confianca_acustica": 0.0,
-            "segments": []
+            "segments": [],
         }
 
 

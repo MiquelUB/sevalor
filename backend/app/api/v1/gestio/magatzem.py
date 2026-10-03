@@ -13,12 +13,13 @@ def valida_uuid(id_str: str) -> uuid.UUID:
     except Exception:
         raise HTTPException(status_code=400, detail="Identificador d'empresa invàlid.")
 
-from sqlalchemy import func, or_, select
-from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.db import get_db_with_tenant_context
-from app.core.security import require_roles
-from app.models.models import (
+from sqlalchemy import func, or_, select  # noqa: E402
+from sqlalchemy.ext.asyncio import AsyncSession  # noqa: E402
+
+from app.core.db import get_db_with_tenant_context  # noqa: E402
+from app.core.security import require_roles  # noqa: E402
+from app.models.models import (  # noqa: E402
     AlbaraProveidor,
     Article,
     EstocMagatzem,
@@ -44,7 +45,8 @@ class LiniaOcr(BaseModel):
     quantitat: float
     preu: float
     descompte_percent: float = 0.0
-    tipus: str # "MATERIAL" o "EINA"
+    tipus: str  # "MATERIAL" o "EINA"
+
 
 class ProveidorOcr(BaseModel):
     nif: str
@@ -53,13 +55,15 @@ class ProveidorOcr(BaseModel):
     telefon: Optional[str] = None
     email: Optional[str] = None
 
+
 class ConfirmarDocumentRequest(BaseModel):
     proveidor: ProveidorOcr
-    numero_document: str # Num Albarà o Factura
-    tipus_document: str # "ALBARA" o "FACTURA"
+    numero_document: str  # Num Albarà o Factura
+    tipus_document: str  # "ALBARA" o "FACTURA"
     data_document: date
     numero_albarans_vinculats: List[str] = []
     linies: List[LiniaOcr]
+
 
 class ArticleCreate(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -77,20 +81,26 @@ class ArticleCreate(BaseModel):
     marge_guanys: float = Field(0.0)
     preu_venda: float = Field(0.0)
 
+
 class ArticleResponse(ArticleCreate):
     id: uuid.UUID
     actiu: bool
     estoc_real: float = 0.0
 
+
 # ---------------------------------------------------------------------------
 # Estoc de magatzem (Spec 004 — gestió multimagatzem amb bloqueig pessimista)
 # ---------------------------------------------------------------------------
 
+
 class MovimentEstocRequest(BaseModel):
     article_id: uuid.UUID
-    quantitat: float = Field(..., gt=0, description="Quantitat positiva (entrada o sortida segons 'tipus')")
+    quantitat: float = Field(
+        ..., gt=0, description="Quantitat positiva (entrada o sortida segons 'tipus')"
+    )
     tipus: str = Field("ENTRADA", pattern="^(ENTRADA|SORTIDA|RESERVA)$")
     ubicacio_passadis: Optional[str] = Field(None, max_length=50)
+
 
 class EstocResponse(BaseModel):
     article_id: uuid.UUID
@@ -100,16 +110,17 @@ class EstocResponse(BaseModel):
     quantitat_disponible: float
     ubicacio_passadis: Optional[str]
 
+
 @router.get("/articles", response_model=List[ArticleResponse])
 async def llistar_articles(
     request: Request,
     q: Optional[str] = None,
     limit: int = 50,
     offset: int = 0,
-    db: AsyncSession = Depends(get_db_with_tenant_context)
+    db: AsyncSession = Depends(get_db_with_tenant_context),
 ):
     empresa_id = getattr(request.state, "empresa_id", None) or request.headers.get("X-Empresa-ID")
-    if not empresa_id or empresa_id in ('undefined', 'null', 'None'):
+    if not empresa_id or empresa_id in ("undefined", "null", "None"):
         raise HTTPException(status_code=401, detail="No identificat")
 
     try:
@@ -122,10 +133,7 @@ async def llistar_articles(
     if q:
         search_term = f"%{q}%"
         stmt = stmt.where(
-            or_(
-                Article.referencia_inventari.ilike(search_term),
-                Article.nom.ilike(search_term)
-            )
+            or_(Article.referencia_inventari.ilike(search_term), Article.nom.ilike(search_term))
         )
 
     stmt = stmt.limit(limit).offset(offset).order_by(Article.created_at.desc())
@@ -150,29 +158,40 @@ async def llistar_articles(
         setattr(art, "estoc_real", estocs_map.get(art.id, 0.0))
 
         # Protecció per a camps que poden ser NULL a la BD per errors antics
-        if getattr(art, "estoc_optim") is None: setattr(art, "estoc_optim", 0.0)
-        if getattr(art, "estoc_minim") is None: setattr(art, "estoc_minim", 0.0)
-        if getattr(art, "preu_cost") is None: setattr(art, "preu_cost", 0.0)
-        if getattr(art, "preu_venda") is None: setattr(art, "preu_venda", 0.0)
-        if getattr(art, "descompte_proveidor", None) is None: setattr(art, "descompte_proveidor", 0.0)
-        if getattr(art, "marge_guanys", None) is None: setattr(art, "marge_guanys", 0.0)
-        if getattr(art, "familia") is None: setattr(art, "familia", "GENERAL")
-        if getattr(art, "unitat_mesura") is None: setattr(art, "unitat_mesura", "UNITAT")
-        if getattr(art, "es_lot_caducable") is None: setattr(art, "es_lot_caducable", False)
-        if getattr(art, "actiu") is None: setattr(art, "actiu", True)
-        if getattr(art, "referencia_inventari") is None: setattr(art, "referencia_inventari", "N/A")
-        if getattr(art, "nom") is None: setattr(art, "nom", "N/A")
+        if getattr(art, "estoc_optim") is None:
+            setattr(art, "estoc_optim", 0.0)
+        if getattr(art, "estoc_minim") is None:
+            setattr(art, "estoc_minim", 0.0)
+        if getattr(art, "preu_cost") is None:
+            setattr(art, "preu_cost", 0.0)
+        if getattr(art, "preu_venda") is None:
+            setattr(art, "preu_venda", 0.0)
+        if getattr(art, "descompte_proveidor", None) is None:
+            setattr(art, "descompte_proveidor", 0.0)
+        if getattr(art, "marge_guanys", None) is None:
+            setattr(art, "marge_guanys", 0.0)
+        if getattr(art, "familia") is None:
+            setattr(art, "familia", "GENERAL")
+        if getattr(art, "unitat_mesura") is None:
+            setattr(art, "unitat_mesura", "UNITAT")
+        if getattr(art, "es_lot_caducable") is None:
+            setattr(art, "es_lot_caducable", False)
+        if getattr(art, "actiu") is None:
+            setattr(art, "actiu", True)
+        if getattr(art, "referencia_inventari") is None:
+            setattr(art, "referencia_inventari", "N/A")
+        if getattr(art, "nom") is None:
+            setattr(art, "nom", "N/A")
 
     return articles
 
+
 @router.post("/articles", response_model=ArticleResponse, status_code=status.HTTP_201_CREATED)
 async def alta_article(
-    request: Request,
-    article: ArticleCreate,
-    db: AsyncSession = Depends(get_db_with_tenant_context)
+    request: Request, article: ArticleCreate, db: AsyncSession = Depends(get_db_with_tenant_context)
 ):
     empresa_id = request.state.empresa_id
-    if not empresa_id or empresa_id == 'undefined':
+    if not empresa_id or empresa_id == "undefined":
         raise HTTPException(status_code=401, detail="No identificat")
 
     stmt_ref = select(Article).where(Article.referencia_inventari == article.referencia_inventari)
@@ -192,7 +211,7 @@ async def alta_article(
         preu_cost=article.preu_cost,
         descompte_proveidor=article.descompte_proveidor,
         marge_guanys=article.marge_guanys,
-        preu_venda=article.preu_venda
+        preu_venda=article.preu_venda,
     )
 
     db.add(nou_article)
@@ -200,7 +219,8 @@ async def alta_article(
 
     return nou_article
 
-from app.models.models import EinaCustodia
+
+from app.models.models import EinaCustodia  # noqa: E402
 
 
 class EinaCreate(BaseModel):
@@ -213,18 +233,18 @@ class EinaCreate(BaseModel):
     observacions: Optional[str] = None
     incidencies: Optional[str] = None
 
+
 class EinaResponse(EinaCreate):
     id: uuid.UUID
     estat: str
 
+
 @router.post("/eines", response_model=EinaResponse, status_code=status.HTTP_201_CREATED)
 async def crear_eina(
-    request: Request,
-    payload: EinaCreate,
-    db: AsyncSession = Depends(get_db_with_tenant_context)
+    request: Request, payload: EinaCreate, db: AsyncSession = Depends(get_db_with_tenant_context)
 ):
     empresa_id = getattr(request.state, "empresa_id", None) or request.headers.get("X-Empresa-ID")
-    if not empresa_id or empresa_id in ('undefined', 'null', 'None'):
+    if not empresa_id or empresa_id in ("undefined", "null", "None"):
         raise HTTPException(status_code=401, detail="No identificat")
     emp_uuid = valida_uuid(empresa_id)
 
@@ -237,57 +257,65 @@ async def crear_eina(
         data_fi_garantia=payload.data_fi_garantia,
         observacions=payload.observacions,
         incidencies=payload.incidencies,
-        estat="DISPONIBLE"
+        estat="DISPONIBLE",
     )
     db.add(nova_eina)
     await db.commit()
     return nova_eina
 
 
-
 @router.get("/magatzems/{magatzem_id}/estoc", response_model=List[EstocResponse])
 async def llistar_estoc_magatzem(
-    request: Request,
-    magatzem_id: uuid.UUID,
-    db: AsyncSession = Depends(get_db_with_tenant_context)
+    request: Request, magatzem_id: uuid.UUID, db: AsyncSession = Depends(get_db_with_tenant_context)
 ):
     """Llista l'estoc d'un magatzem (Spec 004)."""
     empresa_id = request.state.empresa_id
-    if not empresa_id or empresa_id == 'undefined':
+    if not empresa_id or empresa_id == "undefined":
         raise HTTPException(status_code=401, detail="No identificat")
 
-    mag_res = await db.execute(select(Magatzem).where(
-        Magatzem.id == magatzem_id, Magatzem.empresa_id == uuid.UUID(empresa_id)
-    ))
+    mag_res = await db.execute(
+        select(Magatzem).where(
+            Magatzem.id == magatzem_id, Magatzem.empresa_id == uuid.UUID(empresa_id)
+        )
+    )
     if not mag_res.scalars().first():
         raise HTTPException(status_code=404, detail="Magatzem no trobat")
 
-    q = select(EstocMagatzem, Article).join(
-        Article, Article.id == EstocMagatzem.article_id
-    ).where(
-        EstocMagatzem.magatzem_id == magatzem_id,
-        EstocMagatzem.empresa_id == uuid.UUID(empresa_id),
+    q = (
+        select(EstocMagatzem, Article)
+        .join(Article, Article.id == EstocMagatzem.article_id)
+        .where(
+            EstocMagatzem.magatzem_id == magatzem_id,
+            EstocMagatzem.empresa_id == uuid.UUID(empresa_id),
+        )
     )
     res = await db.execute(q)
     resultats = []
     for estoc, article in res.all():
-        resultats.append({
-            "article_id": estoc.article_id,
-            "referencia_article": article.referencia_inventari,
-            "quantitat_fisica": float(estoc.quantitat_fisica),
-            "quantitat_virtual_reservada": float(estoc.quantitat_virtual_reservada),
-            "quantitat_disponible": float(estoc.quantitat_fisica) - float(estoc.quantitat_virtual_reservada),
-            "ubicacio_passadis": estoc.ubicacio_passadis,
-        })
+        resultats.append(
+            {
+                "article_id": estoc.article_id,
+                "referencia_article": article.referencia_inventari,
+                "quantitat_fisica": float(estoc.quantitat_fisica),
+                "quantitat_virtual_reservada": float(estoc.quantitat_virtual_reservada),
+                "quantitat_disponible": float(estoc.quantitat_fisica)
+                - float(estoc.quantitat_virtual_reservada),
+                "ubicacio_passadis": estoc.ubicacio_passadis,
+            }
+        )
     return resultats
 
 
-@router.post("/magatzems/{magatzem_id}/moviment", response_model=EstocResponse, status_code=status.HTTP_200_OK)
+@router.post(
+    "/magatzems/{magatzem_id}/moviment",
+    response_model=EstocResponse,
+    status_code=status.HTTP_200_OK,
+)
 async def registrar_moviment_estoc(
     request: Request,
     magatzem_id: uuid.UUID,
     payload: MovimentEstocRequest,
-    db: AsyncSession = Depends(get_db_with_tenant_context)
+    db: AsyncSession = Depends(get_db_with_tenant_context),
 ):
     """Registra un moviment d'estoc (entrada/sortida/reserva) amb bloqueig pessimista (SELECT FOR UPDATE).
 
@@ -296,30 +324,36 @@ async def registrar_moviment_estoc(
     stock concurrentment.
     """
     empresa_id = request.state.empresa_id
-    if not empresa_id or empresa_id == 'undefined':
+    if not empresa_id or empresa_id == "undefined":
         raise HTTPException(status_code=401, detail="No identificat")
 
     # Verificar article pertany a l'empresa
-    art_res = await db.execute(select(Article).where(
-        Article.id == payload.article_id, Article.empresa_id == uuid.UUID(empresa_id)
-    ))
+    art_res = await db.execute(
+        select(Article).where(
+            Article.id == payload.article_id, Article.empresa_id == uuid.UUID(empresa_id)
+        )
+    )
     if not art_res.scalars().first():
         raise HTTPException(status_code=404, detail="Article no trobat")
 
     # Verificar magatzem de l'empresa
-    mag_res = await db.execute(select(Magatzem).where(
-        Magatzem.id == magatzem_id, Magatzem.empresa_id == uuid.UUID(empresa_id)
-    ))
+    mag_res = await db.execute(
+        select(Magatzem).where(
+            Magatzem.id == magatzem_id, Magatzem.empresa_id == uuid.UUID(empresa_id)
+        )
+    )
     if not mag_res.scalars().first():
         raise HTTPException(status_code=404, detail="Magatzem no trobat")
 
     # Cercar estoc existent (amb FOR UPDATE per blocar la fila)
     estoc_res = await db.execute(
-        select(EstocMagatzem).where(
+        select(EstocMagatzem)
+        .where(
             EstocMagatzem.empresa_id == uuid.UUID(empresa_id),
             EstocMagatzem.article_id == payload.article_id,
             EstocMagatzem.magatzem_id == magatzem_id,
-        ).with_for_update()
+        )
+        .with_for_update()
     )
     estoc = estoc_res.scalars().first()
 
@@ -361,7 +395,8 @@ async def registrar_moviment_estoc(
         "article_id": estoc.article_id,
         "quantitat_fisica": float(estoc.quantitat_fisica),
         "quantitat_virtual_reservada": float(estoc.quantitat_virtual_reservada),
-        "quantitat_disponible": float(estoc.quantitat_fisica) - float(estoc.quantitat_virtual_reservada),
+        "quantitat_disponible": float(estoc.quantitat_fisica)
+        - float(estoc.quantitat_virtual_reservada),
         "ubicacio_passadis": estoc.ubicacio_passadis,
     }
 
@@ -369,6 +404,7 @@ async def registrar_moviment_estoc(
 # ---------------------------------------------------------------------------
 # Picking matinal (Spec 004 RF-17 a RF-24)
 # ---------------------------------------------------------------------------
+
 
 class FullaPickingCreate(BaseModel):
     ordre_treball_id: uuid.UUID
@@ -400,18 +436,20 @@ class LiniaPickingResponse(BaseModel):
 async def crear_fulla_picking(
     request: Request,
     payload: FullaPickingCreate,
-    db: AsyncSession = Depends(get_db_with_tenant_context)
+    db: AsyncSession = Depends(get_db_with_tenant_context),
 ):
     """Crea una fulla de picking per a una ordre de treball (RF-20: 1 tasca = 1 fulla)."""
     empresa_id = request.state.empresa_id
-    if not empresa_id or empresa_id == 'undefined':
+    if not empresa_id or empresa_id == "undefined":
         raise HTTPException(status_code=401)
 
     # Verificar que l'ordre de treball pertany a l'empresa
-    ot_res = await db.execute(select(OrdreTreball).where(
-        OrdreTreball.id == payload.ordre_treball_id,
-        OrdreTreball.empresa_id == uuid.UUID(empresa_id),
-    ))
+    ot_res = await db.execute(
+        select(OrdreTreball).where(
+            OrdreTreball.id == payload.ordre_treball_id,
+            OrdreTreball.empresa_id == uuid.UUID(empresa_id),
+        )
+    )
     if not ot_res.scalars().first():
         raise HTTPException(status_code=404, detail="Ordre de treball no trobada")
 
@@ -432,44 +470,53 @@ async def crear_fulla_picking(
     }
 
 
-@router.post("/picking/{picking_id}/linies", response_model=LiniaPickingResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/picking/{picking_id}/linies",
+    response_model=LiniaPickingResponse,
+    status_code=status.HTTP_201_CREATED,
+)
 async def afegir_linia_picking(
     request: Request,
     picking_id: uuid.UUID,
     payload: LiniaPickingCreate,
-    db: AsyncSession = Depends(get_db_with_tenant_context)
+    db: AsyncSession = Depends(get_db_with_tenant_context),
 ):
     """Afegeix una línia de picking a una fulla (RF-17: reserva amb SELECT FOR UPDATE)."""
     empresa_id = request.state.empresa_id
-    if not empresa_id or empresa_id == 'undefined':
+    if not empresa_id or empresa_id == "undefined":
         raise HTTPException(status_code=401)
 
     # Verificar fulla
-    fulla_res = await db.execute(select(FullaPicking).where(
-        FullaPicking.id == picking_id,
-        FullaPicking.empresa_id == uuid.UUID(empresa_id),
-    ))
+    fulla_res = await db.execute(
+        select(FullaPicking).where(
+            FullaPicking.id == picking_id,
+            FullaPicking.empresa_id == uuid.UUID(empresa_id),
+        )
+    )
     fulla = fulla_res.scalars().first()
     if not fulla:
         raise HTTPException(status_code=404, detail="Fulla de picking no trobada")
 
     # Bloqueig pessimista sobre l'estoc per evitar condicions de carrera
     estoc_res = await db.execute(
-        select(EstocMagatzem).where(
+        select(EstocMagatzem)
+        .where(
             EstocMagatzem.empresa_id == uuid.UUID(empresa_id),
             EstocMagatzem.article_id == payload.article_id,
-        ).with_for_update()
+        )
+        .with_for_update()
     )
     estoc = estoc_res.scalars().first()
     if estoc:
         disponible = float(estoc.quantitat_fisica) - float(estoc.quantitat_virtual_reservada)
         if payload.quantitat_prevista > disponible:
             from app.api.v1.gestio.copilot import cridar_lm_studio
+
             # RF-18 / RF-33: Intervenció del Copilot per avaluar Backorders o falta d'estoc
             avís_ia = await cridar_lm_studio(
                 pregunta=f"S'ha intentat extreure {payload.quantitat_prevista} unitats de l'article {estoc.article_id}, però només hi ha {disponible} disponibles físicament. Si no hi ha comandes en trànsit, adverteix el cap de magatzem de forma tècnica i concisa.",
                 vertical="LOGISTICA",
-                context_addicional="El teu objectiu és bloquejar el picking i advertir del trencament d'estoc."
+                context_addicional="El teu objectiu és bloquejar el picking i advertir del trencament d'estoc.",
             )
             if not avís_ia:
                 avís_ia = f"Comanda amb entrega parcial detectada (falta estoc): {disponible} unitats disponibles físiques. Bloqueig de picking matinal activat (Copilot Offline)."
@@ -478,7 +525,9 @@ async def afegir_linia_picking(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail=f"❌ Copilot IA: {avís_ia}",
             )
-        estoc.quantitat_virtual_reservada = float(estoc.quantitat_virtual_reservada) + payload.quantitat_prevista
+        estoc.quantitat_virtual_reservada = (
+            float(estoc.quantitat_virtual_reservada) + payload.quantitat_prevista
+        )
     else:
         raise HTTPException(status_code=422, detail="Article sense estoc al magatzem")
 
@@ -506,19 +555,19 @@ async def afegir_linia_picking(
 
 @router.put("/picking/linies/{linia_id}/pick-in", response_model=LiniaPickingResponse)
 async def confirmar_pick_in(
-    request: Request,
-    linia_id: uuid.UUID,
-    db: AsyncSession = Depends(get_db_with_tenant_context)
+    request: Request, linia_id: uuid.UUID, db: AsyncSession = Depends(get_db_with_tenant_context)
 ):
     """Confirma la recollida de material (pick-in) des de la PWA (RF-23)."""
     empresa_id = request.state.empresa_id
-    if not empresa_id or empresa_id == 'undefined':
+    if not empresa_id or empresa_id == "undefined":
         raise HTTPException(status_code=401)
 
-    linia_res = await db.execute(select(LiniaPicking).where(
-        LiniaPicking.id == linia_id,
-        LiniaPicking.empresa_id == uuid.UUID(empresa_id),
-    ))
+    linia_res = await db.execute(
+        select(LiniaPicking).where(
+            LiniaPicking.id == linia_id,
+            LiniaPicking.empresa_id == uuid.UUID(empresa_id),
+        )
+    )
     linia = linia_res.scalars().first()
     if not linia:
         raise HTTPException(status_code=404, detail="Línia de picking no trobada")
@@ -538,17 +587,19 @@ async def confirmar_devolucio(
     linia_id: uuid.UUID,
     quantitat_retornada: float = 0.0,
     quantitat_mermada: float = 0.0,
-    db: AsyncSession = Depends(get_db_with_tenant_context)
+    db: AsyncSession = Depends(get_db_with_tenant_context),
 ):
     """Registra la devolució de sobrants i mermes (RF-22: pick-out post-obra)."""
     empresa_id = request.state.empresa_id
-    if not empresa_id or empresa_id == 'undefined':
+    if not empresa_id or empresa_id == "undefined":
         raise HTTPException(status_code=401)
 
-    linia_res = await db.execute(select(LiniaPicking).where(
-        LiniaPicking.id == linia_id,
-        LiniaPicking.empresa_id == uuid.UUID(empresa_id),
-    ))
+    linia_res = await db.execute(
+        select(LiniaPicking).where(
+            LiniaPicking.id == linia_id,
+            LiniaPicking.empresa_id == uuid.UUID(empresa_id),
+        )
+    )
     linia = linia_res.scalars().first()
     if not linia:
         raise HTTPException(status_code=404, detail="Línia de picking no trobada")
@@ -558,14 +609,18 @@ async def confirmar_devolucio(
 
     # Reintegrar els sobrants a l'estoc físic (restar la reserva virtual)
     estoc_res = await db.execute(
-        select(EstocMagatzem).where(
+        select(EstocMagatzem)
+        .where(
             EstocMagatzem.empresa_id == uuid.UUID(empresa_id),
             EstocMagatzem.article_id == linia.article_id,
-        ).with_for_update()
+        )
+        .with_for_update()
     )
     estoc = estoc_res.scalars().first()
     if estoc:
-        estoc.quantitat_virtual_reservada = float(estoc.quantitat_virtual_reservada) - float(linia.quantitat_prevista)
+        estoc.quantitat_virtual_reservada = float(estoc.quantitat_virtual_reservada) - float(
+            linia.quantitat_prevista
+        )
         estoc.quantitat_fisica = float(estoc.quantitat_fisica) - quantitat_mermada
         estoc.quantitat_cuarentena = float(estoc.quantitat_cuarentena) + quantitat_mermada
 
@@ -573,36 +628,34 @@ async def confirmar_devolucio(
     return linia
 
 
-
-
-
-
 @router.post("/albara/ocr", response_model=dict, status_code=status.HTTP_202_ACCEPTED)
 async def processar_document_ocr(
     request: Request,
     fitxer: UploadFile = File(...),
-    db: AsyncSession = Depends(get_db_with_tenant_context)
+    db: AsyncSession = Depends(get_db_with_tenant_context),
 ):
     empresa_id = request.state.empresa_id
-    if not empresa_id or empresa_id == 'undefined':
+    if not empresa_id or empresa_id == "undefined":
         raise HTTPException(status_code=401)
 
-    empresa_uuid = uuid.UUID(empresa_id)
+    uuid.UUID(empresa_id)
 
     file_bytes = await fitxer.read()
 
     from app.services.ocr_service import processar_albara_ocr
+
     ocr_result = await processar_albara_ocr(file_bytes)
 
     # Sense motor OCR: no es persisteix cap esborrany ni proveïdor fantasma.
     # L'usuari introdueix les dades i les desa amb /albara/confirmar.
     return {"task_id": None, "status": ocr_result["status"], "ocr_data": ocr_result}
 
+
 @router.post("/albara/confirmar", status_code=status.HTTP_201_CREATED)
 async def confirmar_document(
     request: Request,
     payload: ConfirmarDocumentRequest,
-    db: AsyncSession = Depends(get_db_with_tenant_context)
+    db: AsyncSession = Depends(get_db_with_tenant_context),
 ):
     empresa_id = uuid.UUID(request.state.empresa_id)
 
@@ -617,14 +670,16 @@ async def confirmar_document(
             nif=payload.proveidor.nif,
             telefon=payload.proveidor.telefon,
             email=payload.proveidor.email,
-            especialitat="MATERIALS"
+            especialitat="MATERIALS",
         )
         db.add(prov)
         await db.flush()
     else:
         # Actualitzar dades si falten
-        if payload.proveidor.telefon and not prov.telefon: prov.telefon = payload.proveidor.telefon
-        if payload.proveidor.email and not prov.email: prov.email = payload.proveidor.email
+        if payload.proveidor.telefon and not prov.telefon:
+            prov.telefon = payload.proveidor.telefon
+        if payload.proveidor.email and not prov.email:
+            prov.email = payload.proveidor.email
         await db.flush()
 
     # Crear carpeta del proveïdor al directori sobirà
@@ -644,7 +699,10 @@ async def confirmar_document(
 
     if payload.tipus_document == "FACTURA":
         if not payload.numero_albarans_vinculats:
-            raise HTTPException(status_code=400, detail="La factura necessita referenciar almenys un número d'albarà per creuar dades.")
+            raise HTTPException(
+                status_code=400,
+                detail="La factura necessita referenciar almenys un número d'albarà per creuar dades.",
+            )
 
         quantitat_total_albarans = 0.0
 
@@ -653,32 +711,54 @@ async def confirmar_document(
             stmt_alb = select(AlbaraProveidor).where(AlbaraProveidor.numero_albara == num_albara)
             albara_db = (await db.execute(stmt_alb)).scalars().first()
             if not albara_db:
-                raise HTTPException(status_code=400, detail=f"No s'ha trobat l'albarà {num_albara}. No podem validar la factura.")
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"No s'ha trobat l'albarà {num_albara}. No podem validar la factura.",
+                )
 
             if albara_db.proveidor_id != prov.id:
-                raise HTTPException(status_code=400, detail=f"L'albarà {num_albara} no pertany a aquest proveïdor (NIF diferent).")
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"L'albarà {num_albara} no pertany a aquest proveïdor (NIF diferent).",
+                )
 
             # 2. Comprovar la data
             if payload.data_document <= albara_db.data_albara:
-                raise HTTPException(status_code=400, detail=f"La data de la factura ha de ser posterior a la de l'albarà {num_albara}.")
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"La data de la factura ha de ser posterior a la de l'albarà {num_albara}.",
+                )
 
             # 3. Sumar quantitats del MovimentEstoc associades a aquest albarà
-            stmt_movs = select(MovimentEstoc).where(MovimentEstoc.magatzem_id == magatzem.id, MovimentEstoc.referencia_document == num_albara)
+            stmt_movs = select(MovimentEstoc).where(
+                MovimentEstoc.magatzem_id == magatzem.id,
+                MovimentEstoc.referencia_document == num_albara,
+            )
             moviments_albara = (await db.execute(stmt_movs)).scalars().all()
             quantitat_total_albarans += sum([float(m.quantitat) for m in moviments_albara])
 
         # Com que les eines no generen MovimentEstoc, només sumem les quantitats de MATERIALS de la factura per quadrar-ho
-        quantitat_factura = sum([float(l.quantitat) for l in payload.linies if l.tipus != "EINA"])
+        quantitat_factura = sum([float(lin.quantitat) for lin in payload.linies if lin.tipus != "EINA"])
 
         if abs(quantitat_total_albarans - quantitat_factura) > 0.01:
-            raise HTTPException(status_code=400, detail="DISCORDÀNCIA: Les quantitats de la factura no quadren amb la suma dels albarans vinculats. Revisa-ho manualment.")
+            raise HTTPException(
+                status_code=400,
+                detail="DISCORDÀNCIA: Les quantitats de la factura no quadren amb la suma dels albarans vinculats. Revisa-ho manualment.",
+            )
 
-        base_imposable = sum([(l.quantitat * l.preu) * (1 - (l.descompte_percent/100)) for l in payload.linies])
+        base_imposable = sum(
+            [(lin.quantitat * lin.preu) * (1 - (lin.descompte_percent / 100)) for lin in payload.linies]
+        )
         quota_iva = base_imposable * 0.21
 
-        stmt_fact = select(FacturaProveidor).where(FacturaProveidor.proveidor_id == prov.id, FacturaProveidor.numero_factura == payload.numero_document)
+        stmt_fact = select(FacturaProveidor).where(
+            FacturaProveidor.proveidor_id == prov.id,
+            FacturaProveidor.numero_factura == payload.numero_document,
+        )
         if (await db.execute(stmt_fact)).scalars().first():
-            raise HTTPException(status_code=400, detail="Aquesta factura ja ha estat registrada prèviament.")
+            raise HTTPException(
+                status_code=400, detail="Aquesta factura ja ha estat registrada prèviament."
+            )
 
         factura = FacturaProveidor(
             empresa_id=empresa_id,
@@ -688,28 +768,39 @@ async def confirmar_document(
             base_imposable=base_imposable,
             quota_iva=quota_iva,
             total=base_imposable + quota_iva,
-            albara_numero=",".join(payload.numero_albarans_vinculats)
+            albara_numero=",".join(payload.numero_albarans_vinculats),
         )
         db.add(factura)
         await db.commit()
-        return {"estat": "OK", "missatge": "Factura validada amb els albarans i enviada a Control Econòmic.", "factura_id": str(factura.id), "carpeta": carpeta_proveidor}
+        return {
+            "estat": "OK",
+            "missatge": "Factura validada amb els albarans i enviada a Control Econòmic.",
+            "factura_id": str(factura.id),
+            "carpeta": carpeta_proveidor,
+        }
 
     else:
         # És ALBARA
-        stmt_alb_check = select(AlbaraProveidor).where(AlbaraProveidor.proveidor_id == prov.id, AlbaraProveidor.numero_albara == payload.numero_document)
+        stmt_alb_check = select(AlbaraProveidor).where(
+            AlbaraProveidor.proveidor_id == prov.id,
+            AlbaraProveidor.numero_albara == payload.numero_document,
+        )
         if (await db.execute(stmt_alb_check)).scalars().first():
-            raise HTTPException(status_code=400, detail="Albarà ja pujat. Aquest document ja consta al sistema per aquest proveïdor.")
+            raise HTTPException(
+                status_code=400,
+                detail="Albarà ja pujat. Aquest document ja consta al sistema per aquest proveïdor.",
+            )
 
         nou_albara = AlbaraProveidor(
             empresa_id=empresa_id,
             proveidor_id=prov.id,
             numero_albara=payload.numero_document,
-            data_albara=payload.data_document
+            data_albara=payload.data_document,
         )
         db.add(nou_albara)
 
         for linia in payload.linies:
-            nou_preu = float(linia.preu) * (1.0 - (float(linia.descompte_percent)/100.0))
+            nou_preu = float(linia.preu) * (1.0 - (float(linia.descompte_percent) / 100.0))
 
             if linia.tipus == "EINA":
                 # Spec 004 RF-07: Les Eines es custodien per Serial Number i no sumen stock genèric d'Article
@@ -721,7 +812,7 @@ async def confirmar_document(
                         nom=linia.nom,
                         model="OCR pendent revisió",
                         numero_serie=f"PENDENT_SN_{uuid.uuid4().hex[:8].upper()}",
-                        estat="DISPONIBLE"
+                        estat="DISPONIBLE",
                     )
                     db.add(eina_ocr)
                 await db.flush()
@@ -738,33 +829,39 @@ async def confirmar_document(
                     nom=linia.nom,
                     unitat_mesura="UNITAT",
                     familia="GENERAL",
-                    preu_cost=nou_preu
+                    preu_cost=nou_preu,
                 )
                 db.add(article)
                 await db.flush()
                 articles_creats += 1
             else:
                 # Calcular PMP (Preu Mitjà Ponderat)
-                estoc_res = await db.execute(select(EstocMagatzem).where(EstocMagatzem.article_id == article.id))
+                estoc_res = await db.execute(
+                    select(EstocMagatzem).where(EstocMagatzem.article_id == article.id)
+                )
                 estocs_actuals = estoc_res.scalars().all()
                 estoc_total_actual = sum(float(e.quantitat_fisica) for e in estocs_actuals)
 
                 if estoc_total_actual + float(linia.quantitat) > 0 and nou_preu > 0:
                     valor_actual = estoc_total_actual * float(article.preu_cost)
                     valor_entrada = float(linia.quantitat) * nou_preu
-                    pmp = (valor_actual + valor_entrada) / (estoc_total_actual + float(linia.quantitat))
+                    pmp = (valor_actual + valor_entrada) / (
+                        estoc_total_actual + float(linia.quantitat)
+                    )
                     article.preu_cost = pmp
                 elif nou_preu > 0 and estoc_total_actual <= 0:
                     article.preu_cost = nou_preu
 
-            stmt_estoc = select(EstocMagatzem).where(EstocMagatzem.magatzem_id == magatzem.id, EstocMagatzem.article_id == article.id)
+            stmt_estoc = select(EstocMagatzem).where(
+                EstocMagatzem.magatzem_id == magatzem.id, EstocMagatzem.article_id == article.id
+            )
             estoc = (await db.execute(stmt_estoc)).scalars().first()
             if not estoc:
                 estoc = EstocMagatzem(
                     empresa_id=empresa_id,
                     magatzem_id=magatzem.id,
                     article_id=article.id,
-                    quantitat_fisica=0.0
+                    quantitat_fisica=0.0,
                 )
                 db.add(estoc)
                 await db.flush()
@@ -777,7 +874,7 @@ async def confirmar_document(
                 quantitat=linia.quantitat,
                 usuari_id=None,
                 referencia_document=payload.numero_document,
-                notes="Albarà Proveïdor OCR"
+                notes="Albarà Proveïdor OCR",
             )
             db.add(moviment)
             estoc.quantitat_fisica = float(estoc.quantitat_fisica) + linia.quantitat
@@ -791,18 +888,19 @@ async def confirmar_document(
             "proveidor_id": str(prov.id),
             "articles_creats": articles_creats,
             "moviments_realitzats": moviments_creats,
-            "carpeta": carpeta_proveidor
+            "carpeta": carpeta_proveidor,
         }
+
 
 @router.put("/articles/{article_id}", response_model=ArticleResponse)
 async def modificar_article(
     request: Request,
     article_id: uuid.UUID,
     article: ArticleCreate,
-    db: AsyncSession = Depends(get_db_with_tenant_context)
+    db: AsyncSession = Depends(get_db_with_tenant_context),
 ):
     empresa_id = request.state.empresa_id
-    if not empresa_id or empresa_id == 'undefined':
+    if not empresa_id or empresa_id == "undefined":
         raise HTTPException(status_code=401, detail="No identificat")
 
     stmt = select(Article).where(Article.id == article_id)
@@ -836,13 +934,11 @@ async def modificar_article(
 
     return art_dict
 
+
 @router.get("/eines", response_model=List[EinaResponse])
-async def llistar_eines(
-    request: Request,
-    db: AsyncSession = Depends(get_db_with_tenant_context)
-):
+async def llistar_eines(request: Request, db: AsyncSession = Depends(get_db_with_tenant_context)):
     empresa_id = getattr(request.state, "empresa_id", None) or request.headers.get("X-Empresa-ID")
-    if not empresa_id or empresa_id in ('undefined', 'null', 'None'):
+    if not empresa_id or empresa_id in ("undefined", "null", "None"):
         raise HTTPException(status_code=401, detail="No identificat")
     emp_uuid = valida_uuid(empresa_id)
 
@@ -850,22 +946,26 @@ async def llistar_eines(
     res = await db.execute(stmt)
     return res.scalars().all()
 
+
 class CheckoutPayload(BaseModel):
     operari_id: uuid.UUID
+
 
 @router.post("/eines/{eina_id}/checkout", response_model=EinaResponse)
 async def checkout_eina(
     eina_id: uuid.UUID,
     payload: CheckoutPayload,
     request: Request,
-    db: AsyncSession = Depends(get_db_with_tenant_context)
+    db: AsyncSession = Depends(get_db_with_tenant_context),
 ):
     empresa_id = getattr(request.state, "empresa_id", None) or request.headers.get("X-Empresa-ID")
-    if not empresa_id or empresa_id in ('undefined', 'null', 'None'):
+    if not empresa_id or empresa_id in ("undefined", "null", "None"):
         raise HTTPException(status_code=401, detail="No identificat")
     emp_uuid = valida_uuid(empresa_id)
 
-    stmt = select(EinaCustodia).where(EinaCustodia.id == eina_id, EinaCustodia.empresa_id == emp_uuid)
+    stmt = select(EinaCustodia).where(
+        EinaCustodia.id == eina_id, EinaCustodia.empresa_id == emp_uuid
+    )
     res = await db.execute(stmt)
     eina = res.scalars().first()
     if not eina:
@@ -879,18 +979,19 @@ async def checkout_eina(
     await db.commit()
     return eina
 
+
 @router.post("/eines/{eina_id}/checkin", response_model=EinaResponse)
 async def checkin_eina(
-    eina_id: uuid.UUID,
-    request: Request,
-    db: AsyncSession = Depends(get_db_with_tenant_context)
+    eina_id: uuid.UUID, request: Request, db: AsyncSession = Depends(get_db_with_tenant_context)
 ):
     empresa_id = getattr(request.state, "empresa_id", None) or request.headers.get("X-Empresa-ID")
-    if not empresa_id or empresa_id in ('undefined', 'null', 'None'):
+    if not empresa_id or empresa_id in ("undefined", "null", "None"):
         raise HTTPException(status_code=401, detail="No identificat")
     emp_uuid = valida_uuid(empresa_id)
 
-    stmt = select(EinaCustodia).where(EinaCustodia.id == eina_id, EinaCustodia.empresa_id == emp_uuid)
+    stmt = select(EinaCustodia).where(
+        EinaCustodia.id == eina_id, EinaCustodia.empresa_id == emp_uuid
+    )
     res = await db.execute(stmt)
     eina = res.scalars().first()
     if not eina:
@@ -904,19 +1005,22 @@ async def checkin_eina(
     await db.commit()
     return eina
 
+
 @router.put("/eines/{eina_id}", response_model=EinaResponse)
 async def modificar_eina(
     eina_id: uuid.UUID,
     payload: EinaCreate,
     request: Request,
-    db: AsyncSession = Depends(get_db_with_tenant_context)
+    db: AsyncSession = Depends(get_db_with_tenant_context),
 ):
     empresa_id = getattr(request.state, "empresa_id", None) or request.headers.get("X-Empresa-ID")
-    if not empresa_id or empresa_id in ('undefined', 'null', 'None'):
+    if not empresa_id or empresa_id in ("undefined", "null", "None"):
         raise HTTPException(status_code=401, detail="No identificat")
     emp_uuid = valida_uuid(empresa_id)
 
-    stmt = select(EinaCustodia).where(EinaCustodia.id == eina_id, EinaCustodia.empresa_id == emp_uuid)
+    stmt = select(EinaCustodia).where(
+        EinaCustodia.id == eina_id, EinaCustodia.empresa_id == emp_uuid
+    )
     res = await db.execute(stmt)
     eina = res.scalars().first()
     if not eina:
@@ -933,19 +1037,19 @@ async def modificar_eina(
     await db.commit()
     return eina
 
+
 @router.post("/ocr-albara")
-async def ocr_albara(
-    request: Request,
-    fitxer: UploadFile = File(...)
-):
+async def ocr_albara(request: Request, fitxer: UploadFile = File(...)):
     empresa_id = request.state.empresa_id
-    if not empresa_id or empresa_id == 'undefined':
+    if not empresa_id or empresa_id == "undefined":
         raise HTTPException(status_code=401, detail="No identificat")
 
     from app.services.ocr_service import processar_albara_ocr
+
     file_bytes = await fitxer.read()
     result = await processar_albara_ocr(file_bytes)
     return result
+
 
 class TraspasRequest(BaseModel):
     article_id: uuid.UUID
@@ -953,33 +1057,44 @@ class TraspasRequest(BaseModel):
     desti_magatzem_id: uuid.UUID
     quantitat: float
 
+
 @router.post("/traspas")
 async def traspas_estoc(
     request: Request,
     payload: TraspasRequest,
-    db: AsyncSession = Depends(get_db_with_tenant_context)
+    db: AsyncSession = Depends(get_db_with_tenant_context),
 ):
     empresa_id = request.state.empresa_id
-    if not empresa_id or empresa_id == 'undefined':
+    if not empresa_id or empresa_id == "undefined":
         raise HTTPException(status_code=401, detail="No identificat")
 
     if payload.quantitat <= 0:
         raise HTTPException(status_code=400, detail="La quantitat ha de ser superior a 0")
 
     # Lock source and dest rows to prevent race conditions
-    stmt_origen = select(EstocMagatzem).where(
-        EstocMagatzem.magatzem_id == payload.origen_magatzem_id,
-        EstocMagatzem.article_id == payload.article_id
-    ).with_for_update()
+    stmt_origen = (
+        select(EstocMagatzem)
+        .where(
+            EstocMagatzem.magatzem_id == payload.origen_magatzem_id,
+            EstocMagatzem.article_id == payload.article_id,
+        )
+        .with_for_update()
+    )
 
     origen = (await db.execute(stmt_origen)).scalars().first()
     if not origen or float(origen.quantitat_fisica) < payload.quantitat:
-        raise HTTPException(status_code=400, detail="No hi ha prou estoc a l'origen per fer el traspàs")
+        raise HTTPException(
+            status_code=400, detail="No hi ha prou estoc a l'origen per fer el traspàs"
+        )
 
-    stmt_desti = select(EstocMagatzem).where(
-        EstocMagatzem.magatzem_id == payload.desti_magatzem_id,
-        EstocMagatzem.article_id == payload.article_id
-    ).with_for_update()
+    stmt_desti = (
+        select(EstocMagatzem)
+        .where(
+            EstocMagatzem.magatzem_id == payload.desti_magatzem_id,
+            EstocMagatzem.article_id == payload.article_id,
+        )
+        .with_for_update()
+    )
 
     desti = (await db.execute(stmt_desti)).scalars().first()
     if not desti:
@@ -987,7 +1102,7 @@ async def traspas_estoc(
             empresa_id=uuid.UUID(str(empresa_id)),
             magatzem_id=payload.desti_magatzem_id,
             article_id=payload.article_id,
-            quantitat_fisica=0.0
+            quantitat_fisica=0.0,
         )
         db.add(desti)
         await db.flush()
@@ -1002,7 +1117,7 @@ async def traspas_estoc(
         article_id=payload.article_id,
         tipus_moviment="SORTIDA",
         quantitat=payload.quantitat,
-        notes=f"Traspàs a {payload.desti_magatzem_id}"
+        notes=f"Traspàs a {payload.desti_magatzem_id}",
     )
     mov_entrada = MovimentEstoc(
         empresa_id=uuid.UUID(str(empresa_id)),
@@ -1010,7 +1125,7 @@ async def traspas_estoc(
         article_id=payload.article_id,
         tipus_moviment="ENTRADA",
         quantitat=payload.quantitat,
-        notes=f"Traspàs des de {payload.origen_magatzem_id}"
+        notes=f"Traspàs des de {payload.origen_magatzem_id}",
     )
     db.add(mov_sortida)
     db.add(mov_entrada)
