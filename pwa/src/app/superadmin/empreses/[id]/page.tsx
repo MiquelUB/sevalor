@@ -2,211 +2,465 @@
 
 import React, { useState, useEffect } from "react";
 import Link from "next/link";
-import { ArrowLeft, Save, AlertTriangle, ShieldCheck, PowerOff, Zap, Activity } from "lucide-react";
-import { getAuthHeader } from "@/lib/auth";
-import { getApiBaseUrl } from "@/lib/api";
+import { useRouter } from "next/navigation";
+import {
+  ArrowLeft,
+  Save,
+  AlertTriangle,
+  ShieldCheck,
+  PowerOff,
+  Zap,
+  Activity,
+  Users,
+  HardDrive,
+  Eye,
+  CheckCircle2,
+  FileText,
+  Radio,
+  Building2,
+  Sparkles,
+  Layers,
+  Truck,
+  MessageSquare,
+} from "lucide-react";
+import { apiFetch, setAuthToken } from "@/lib/api";
 
 export default function EmpresaDetailPage({ params }: { params: { id: string } }) {
+  const router = useRouter();
   const [tenant, setTenant] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  
-  const [estat, setEstat] = useState("");
-  const [pla, setPla] = useState("");
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [certificatUrl, setCertificatUrl] = useState<string | null>(null);
+
+  // Form states
+  const [estat, setEstat] = useState("ACTIU");
+  const [pla, setPla] = useState("STARTER");
   const [features, setFeatures] = useState({
     feature_copilot_ia: false,
-    feature_flota: false,
+    feature_flota: true,
     feature_planols: false,
-    feature_telegram: false,
+    feature_telegram: true,
   });
 
-  useEffect(() => {
-    fetchTenant();
-  }, []);
-
   const fetchTenant = async () => {
+    setLoading(true);
+    setErrorMessage(null);
     try {
-      const res = await fetch(getApiBaseUrl() + "/superadmin/tenants", {
-        headers: getAuthHeader(),
-      });
-      const data = await res.json();
-      const t = data.find((x: any) => x.id === params.id);
-      if (t) {
-        setTenant(t);
-        setEstat(t.estat_pagament);
-        setPla(t.pla_subscripcio);
+      const data = await apiFetch<any>(`/superadmin/tenants/${params.id}`);
+      if (data) {
+        setTenant(data);
+        setEstat(data.estat_pagament || data.estat || "ACTIU");
+        setPla(data.pla_subscripcio || data.pla || "STARTER");
         setFeatures({
-          feature_copilot_ia: t.feature_copilot_ia,
-          feature_flota: t.feature_flota,
-          feature_planols: t.feature_planols,
-          feature_telegram: t.feature_telegram,
+          feature_copilot_ia: Boolean(data.feature_copilot_ia),
+          feature_flota: Boolean(data.feature_flota),
+          feature_planols: Boolean(data.feature_planols),
+          feature_telegram: Boolean(data.feature_telegram),
         });
       }
-    } catch (err) {
-      console.error(err);
+    } catch (err: any) {
+      setErrorMessage(err.message || "Error al carregar el tenant.");
     } finally {
       setLoading(false);
     }
   };
 
-  const saveEstat = async () => {
-    try {
-      await fetch(`${getApiBaseUrl()}/superadmin/tenants/${params.id}/estat`, {
-        method: "PUT",
-        headers: { ...getAuthHeader(), "Content-Type": "application/json" },
-        body: JSON.stringify({ estat })
-      });
-    } catch(e) { console.error(e) }
-  };
-
-  const saveQuota = async () => {
-    try {
-      const r = await fetch(`${getApiBaseUrl()}/superadmin/tenants/${params.id}/quota`, {
-        method: "PUT",
-        headers: { ...getAuthHeader(), "Content-Type": "application/json" },
-        body: JSON.stringify({ pla_subscripcio: pla })
-      });
-      if(!r.ok) {
-        const err = await r.json();
-        alert(err.detail || "Error");
-      }
-    } catch(e) { console.error(e) }
-  };
-
-  const saveFeatures = async () => {
-    try {
-      await fetch(`${getApiBaseUrl()}/superadmin/tenants/${params.id}/feature-flags`, {
-        method: "PUT",
-        headers: { ...getAuthHeader(), "Content-Type": "application/json" },
-        body: JSON.stringify(features)
-      });
-    } catch(e) { console.error(e) }
-  };
+  useEffect(() => {
+    fetchTenant();
+  }, [params.id]);
 
   const handleSave = async () => {
     setSaving(true);
-    await Promise.all([saveEstat(), saveQuota(), saveFeatures()]);
-    setSaving(false);
-    alert("Canvis desats correctament.");
-  };
-  
-  const handleDestroy = async () => {
-    if(confirm("ATENCIÓ: Aquesta acció marcarà el tenant com ELIMINAT i programarà la purga de dades. N'estàs segur?")) {
-      await fetch(`${getApiBaseUrl()}/superadmin/tenants/${params.id}/destruccio`, {
-        method: "POST",
-        headers: getAuthHeader()
+    setErrorMessage(null);
+    setSuccessMessage(null);
+    try {
+      // 1. Guardar Estat
+      if (estat !== tenant.estat_pagament) {
+        await apiFetch(`/superadmin/tenants/${params.id}/estat`, {
+          method: "PUT",
+          body: JSON.stringify({ estat }),
+        });
+      }
+
+      // 2. Guardar Quota / Pla (Quota Guard validation on backend)
+      if (pla !== tenant.pla_subscripcio) {
+        await apiFetch(`/superadmin/tenants/${params.id}/quota`, {
+          method: "PUT",
+          body: JSON.stringify({ pla_subscripcio: pla }),
+        });
+      }
+
+      // 3. Guardar Feature Flags
+      await apiFetch(`/superadmin/tenants/${params.id}/feature-flags`, {
+        method: "PUT",
+        body: JSON.stringify(features),
       });
+
+      setSuccessMessage("Configuració del tenant desada correctament a PostgreSQL.");
       fetchTenant();
+    } catch (err: any) {
+      setErrorMessage(err.message || "Error en desar els canvis del tenant.");
+    } finally {
+      setSaving(false);
     }
+  };
+
+  const handleImpersonate = async () => {
+    if (!confirm("Vols iniciar sessió com a administrador tècnic per a aquest tenant? (Màx 2 hores, només lectura sobre finances)")) {
+      return;
+    }
+    try {
+      const data = await apiFetch<any>(`/superadmin/tenants/${params.id}/impersonate`, {
+        method: "POST",
+      });
+      if (data?.access_token) {
+        setAuthToken(data.access_token);
+        router.push("/gestio");
+      }
+    } catch (e: any) {
+      alert("Error d'impersonació: " + (e.message || "Desconegut"));
+    }
+  };
+
+  const handleDestroy = async () => {
+    const confirmText = prompt(
+      `ATENCIÓ: Aquesta acció iniciarà la BAIXA CERTIFICADA del tenant "${tenant?.nom || tenant?.rao_social}".\n` +
+      `Es generarà un certificat de destrucció criptogràfic (RGPD) i s'establirà una custòdia de 30 dies abans de la purga irreversible.\n` +
+      `Per confirmar, escriu exactament: ELIMINAR`
+    );
+
+    if (confirmText !== "ELIMINAR") {
+      alert("Acció cancel·lada.");
+      return;
+    }
+
+    try {
+      const res = await apiFetch<any>(`/superadmin/tenants/${params.id}/destruccio`, {
+        method: "POST",
+      });
+      if (res && res.certificat_url) {
+        setCertificatUrl(res.certificat_url);
+        alert("Tenant marcat com a ELIMINAT. Certificat generat amb èxit.");
+      }
+      fetchTenant();
+    } catch (e: any) {
+      alert("Error en l'offboarding: " + (e.message || "Desconegut"));
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="p-12 text-center text-xs font-mono text-slate-400">
+        Carregant dades del tenant des de PostgreSQL...
+      </div>
+    );
   }
 
-  if (loading) return <div className="p-8 text-slate-500">Carregant...</div>;
-  if (!tenant) return <div className="p-8 text-red-500">Tenant no trobat.</div>;
+  if (!tenant && errorMessage) {
+    return (
+      <div className="p-8 max-w-xl mx-auto space-y-4">
+        <div className="p-4 rounded-xl bg-rose-50 dark:bg-rose-950/70 border border-rose-300 dark:border-rose-800 text-rose-800 dark:text-rose-200 text-xs font-mono">
+          {errorMessage}
+        </div>
+        <Link
+          href="/superadmin/empreses"
+          className="inline-flex items-center gap-1 text-xs font-bold text-slate-600 dark:text-slate-300 hover:underline"
+        >
+          <ArrowLeft className="w-3.5 h-3.5" /> Tornar al llistat
+        </Link>
+      </div>
+    );
+  }
 
   return (
-    <div className="max-w-4xl mx-auto p-4 md:p-8">
-      <Link href="/superadmin/empreses" className="inline-flex items-center gap-1 text-sm text-slate-500 hover:text-slate-900 dark:hover:text-white mb-6 transition-colors">
+    <div className="max-w-5xl mx-auto p-4 md:p-8 space-y-6 w-full">
+      {/* NAVEGACIÓ ENRERE */}
+      <Link
+        href="/superadmin/empreses"
+        className="inline-flex items-center gap-1.5 text-xs font-mono text-slate-500 hover:text-slate-900 dark:hover:text-white transition-colors"
+      >
         <ArrowLeft className="w-4 h-4" />
-        Tornar al llistat
+        <span>Tornar a Gestió de Tenants</span>
       </Link>
 
-      <div className="flex items-center justify-between mb-8">
+      {/* CAPÇALERA DE GOVERNANÇA */}
+      <div className="flex flex-wrap items-center justify-between gap-4 pb-4 border-b border-slate-200 dark:border-slate-800">
         <div>
-          <h1 className="text-2xl font-bold text-slate-900 dark:text-white flex items-center gap-2">
-            {tenant.nom || tenant.rao_social}
-            <span className="text-xs px-2 py-0.5 rounded font-mono bg-slate-100 dark:bg-slate-800 text-slate-500">
-              {tenant.subdomini}.campopro.cat
+          <div className="flex items-center gap-2.5">
+            <h1 className="text-2xl font-black text-slate-900 dark:text-white">
+              {tenant?.nom || tenant?.rao_social}
+            </h1>
+            <span className="text-xs px-2 py-0.5 rounded-lg font-mono bg-slate-100 dark:bg-slate-800 text-emerald-600 dark:text-emerald-400 font-bold border border-slate-200 dark:border-slate-700">
+              {tenant?.subdomini}.campopro.cat
             </span>
-          </h1>
-          <p className="text-sm font-mono text-slate-500 mt-1">ID: {tenant.id}</p>
+          </div>
+          <p className="text-xs font-mono text-slate-500 dark:text-slate-400 mt-1">
+            NIF: {tenant?.nif || "N/A"} • ID: {tenant?.id} • Vertical: {tenant?.vertical || "SEVALOR"}
+          </p>
         </div>
-        <button
-          onClick={handleSave}
-          disabled={saving}
-          className="bg-emerald-600 hover:bg-emerald-700 text-white px-5 py-2 rounded-lg font-bold flex items-center gap-2 transition-colors disabled:opacity-50"
-        >
-          <Save className="w-4 h-4" />
-          {saving ? "Desant..." : "Desar Canvis"}
-        </button>
+
+        <div className="flex items-center gap-3">
+          <button
+            onClick={handleImpersonate}
+            className="px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 text-xs font-mono font-bold flex items-center gap-1.5 border border-slate-300 dark:border-slate-700 transition-colors shadow-sm"
+            title="Sessió segura d'impersonació"
+          >
+            <Eye className="w-3.5 h-3.5 text-blue-500" />
+            <span>Impersonació (2h)</span>
+          </button>
+
+          <button
+            onClick={handleSave}
+            disabled={saving}
+            className="bg-emerald-600 hover:bg-emerald-500 text-white px-5 py-2 rounded-xl text-xs font-bold flex items-center gap-2 transition-colors shadow disabled:opacity-50"
+          >
+            <Save className="w-4 h-4" />
+            <span>{saving ? "Desant a PostgreSQL..." : "Desar Canvis"}</span>
+          </button>
+        </div>
       </div>
 
+      {/* MISSATGES DE FEEDBACK */}
+      {errorMessage && (
+        <div className="p-4 rounded-xl bg-rose-50 dark:bg-rose-950/70 border border-rose-300 dark:border-rose-800 text-rose-800 dark:text-rose-200 text-xs font-mono flex items-center gap-2.5">
+          <AlertTriangle className="w-4 h-4 text-rose-500 shrink-0" />
+          <span>{errorMessage}</span>
+        </div>
+      )}
+
+      {successMessage && (
+        <div className="p-4 rounded-xl bg-emerald-50 dark:bg-emerald-950/70 border border-emerald-300 dark:border-emerald-800 text-emerald-800 dark:text-emerald-200 text-xs font-mono flex items-center gap-2.5">
+          <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />
+          <span>{successMessage}</span>
+        </div>
+      )}
+
+      {certificatUrl && (
+        <div className="p-4 rounded-xl bg-blue-50 dark:bg-blue-950/70 border border-blue-300 dark:border-blue-800 text-blue-800 dark:text-blue-200 text-xs font-mono flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <FileText className="w-4 h-4 text-blue-500" />
+            <span>Certificat de destrucció generat al disc sobirà: {certificatUrl}</span>
+          </div>
+          <Link
+            href={`/api/v1/superadmin/tenants/auditoria/certificats/${params.id}/descarregar`}
+            target="_blank"
+            className="px-3 py-1 bg-blue-600 text-white rounded-lg text-xs font-bold hover:bg-blue-500"
+          >
+            Descarregar PDF
+          </Link>
+        </div>
+      )}
+
+      {/* FORMULARI DE CONFIGURACIÓ DE TENANT */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        {/* ESTAT */}
-        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-6 rounded-xl shadow-sm">
-          <h2 className="text-sm font-bold uppercase tracking-wider text-slate-500 mb-4 flex items-center gap-2">
-            <Activity className="w-4 h-4" />
-            Cicle de Vida
-          </h2>
-          <select 
-            value={estat} 
-            onChange={e => setEstat(e.target.value)}
-            className="w-full bg-slate-50 border border-slate-300 text-slate-900 text-sm rounded-lg focus:ring-emerald-500 focus:border-emerald-500 block p-2.5 dark:bg-slate-800 dark:border-slate-600 dark:placeholder-slate-400 dark:text-white"
-          >
-            <option value="TRIAL">TRIAL (14 dies)</option>
-            <option value="ACTIU">ACTIU</option>
-            <option value="SUSPES">SUSPÈS (Impagament)</option>
-            <option value="ELIMINAT">ELIMINAT</option>
-          </select>
-          <p className="text-xs text-slate-500 mt-2">Canviar a suspès revoca els tokens de tots els operaris immediatament.</p>
+        {/* BLOC 1: CICLE DE VIDA SAAS */}
+        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-5 rounded-2xl shadow-sm space-y-4">
+          <div className="flex items-center justify-between">
+            <h2 className="text-xs font-mono font-bold uppercase tracking-wider text-slate-500 flex items-center gap-2">
+              <Activity className="w-4 h-4 text-emerald-500" />
+              <span>Cicle de Vida SaaS (Estat Pagament)</span>
+            </h2>
+            <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 font-bold">
+              RLS SESSION
+            </span>
+          </div>
+
+          <div>
+            <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1.5">
+              Estat del Client
+            </label>
+            <select
+              value={estat}
+              onChange={(e) => setEstat(e.target.value)}
+              className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-white text-xs rounded-xl p-2.5 font-mono focus:ring-emerald-500 focus:border-emerald-500"
+            >
+              <option value="TRIAL">TRIAL (Període de prova 14 dies)</option>
+              <option value="ACTIU">ACTIU (Subscripció al corrent de pagament)</option>
+              <option value="SUSPES_PAGAMENT">SUSPÈS (Bloqueig per impagament de quota)</option>
+              <option value="MANTENIMENT">MANTENIMENT (Accés temporalment restringit)</option>
+              <option value="BAIXA_OFFBOARDING">BAIXA (En període de custòdia 30 dies)</option>
+              <option value="ELIMINAT">ELIMINAT (Purga certificada RGPD)</option>
+            </select>
+          </div>
+
+          <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed font-sans">
+            La transició a <strong>SUSPES_PAGAMENT</strong> invalida immediatament les sessions JWT dels operaris i impedeix noves connexions, conservant la integritat de les dades segons la clàusula Zero-Trust.
+          </p>
         </div>
 
-        {/* Llicència */}
-        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-6 rounded-xl shadow-sm">
-          <h2 className="text-sm font-bold uppercase tracking-wider text-slate-500 mb-4 flex items-center gap-2">
-            <ShieldCheck className="w-4 h-4" />
-            Pla de Llicència
-          </h2>
-          <select 
-            value={pla} 
-            onChange={e => setPla(e.target.value)}
-            className="w-full bg-slate-50 border border-slate-300 text-slate-900 text-sm rounded-lg focus:ring-emerald-500 focus:border-emerald-500 block p-2.5 dark:bg-slate-800 dark:border-slate-600 dark:placeholder-slate-400 dark:text-white"
-          >
-            <option value="STARTER">STARTER (Max 5)</option>
-            <option value="PRO">PRO (Max 15)</option>
-            <option value="ENTERPRISE">ENTERPRISE (Sense límit)</option>
-          </select>
-          <p className="text-xs text-amber-600 mt-2">Els downgrades fallaran si superen el límit d'operaris actius.</p>
+        {/* BLOC 2: LLICÈNCIA & QUOTA GUARD */}
+        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-5 rounded-2xl shadow-sm space-y-4">
+          <div className="flex items-center justify-between">
+            <h2 className="text-xs font-mono font-bold uppercase tracking-wider text-slate-500 flex items-center gap-2">
+              <ShieldCheck className="w-4 h-4 text-purple-500" />
+              <span>Pla de Llicència & Quota Guard</span>
+            </h2>
+            <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-purple-50 dark:bg-purple-950/60 text-purple-700 dark:text-purple-300 font-bold border border-purple-200 dark:border-purple-800">
+              PROTECTED
+            </span>
+          </div>
+
+          <div>
+            <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1.5">
+              Pla Subscrit
+            </label>
+            <select
+              value={pla}
+              onChange={(e) => setPla(e.target.value)}
+              className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-white text-xs rounded-xl p-2.5 font-mono focus:ring-emerald-500 focus:border-emerald-500"
+            >
+              <option value="STARTER">STARTER (Fins a 5 operaris actius)</option>
+              <option value="PRO">PRO (Fins a 15 operaris actius)</option>
+              <option value="ENTERPRISE">ENTERPRISE (Fins a 50 operaris actius)</option>
+            </select>
+          </div>
+
+          <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 flex items-center justify-between text-xs font-mono">
+            <span className="text-slate-500 dark:text-slate-400">Operaris actius actuals:</span>
+            <span className="font-bold text-slate-900 dark:text-white">
+              {tenant?.operaris_actius || 0} operaris
+            </span>
+          </div>
+
+          <p className="text-[11px] text-amber-600 dark:text-amber-400 leading-relaxed font-sans">
+            <strong>Quota Guard:</strong> El backend rebutjarà qualsevol intent de downgrade si el nombre d'operaris actius ({tenant?.operaris_actius || 0}) supera el límit del nou pla sol·licitat.
+          </p>
         </div>
 
-        {/* Modules */}
-        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-6 rounded-xl shadow-sm md:col-span-2">
-          <h2 className="text-sm font-bold uppercase tracking-wider text-slate-500 mb-4 flex items-center gap-2">
-            <Zap className="w-4 h-4" />
-            Interruptors de Mòduls (Feature Flags)
-          </h2>
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
-            {Object.keys(features).map((key) => (
-              <label key={key} className="flex items-center gap-3 p-3 border border-slate-200 dark:border-slate-700 rounded-lg cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors">
-                <input 
-                  type="checkbox"
-                  className="w-4 h-4 text-emerald-600 rounded focus:ring-emerald-500 dark:focus:ring-emerald-600 dark:ring-offset-slate-800 focus:ring-2 dark:bg-slate-700 dark:border-slate-600"
-                  checked={(features as any)[key]}
-                  onChange={e => setFeatures({...features, [key]: e.target.checked})}
-                />
-                <span className="text-sm font-medium text-slate-700 dark:text-slate-300">
-                  {key.replace('feature_', '').toUpperCase()}
-                </span>
-              </label>
-            ))}
+        {/* BLOC 3: INTERRUPTORS DINÀMICS DE MÒDULS (FEATURE FLAGS) */}
+        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-5 rounded-2xl shadow-sm md:col-span-2 space-y-4">
+          <div className="flex items-center justify-between">
+            <h2 className="text-xs font-mono font-bold uppercase tracking-wider text-slate-500 flex items-center gap-2">
+              <Zap className="w-4 h-4 text-emerald-500" />
+              <span>Interruptors Dinàmics de Mòduls (Feature Flags per Tenant)</span>
+            </h2>
+            <span className="text-[10px] font-mono text-slate-400">
+              Commutació en viu sense reinici de servei
+            </span>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            {/* Copilot IA */}
+            <label className="flex items-start gap-3 p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/60 transition-colors cursor-pointer">
+              <input
+                type="checkbox"
+                checked={features.feature_copilot_ia}
+                onChange={(e) =>
+                  setFeatures({ ...features, feature_copilot_ia: e.target.checked })
+                }
+                className="w-4 h-4 mt-0.5 text-emerald-600 rounded border-slate-300 dark:border-slate-700 focus:ring-emerald-500"
+              />
+              <div>
+                <div className="flex items-center gap-1.5">
+                  <Sparkles className="w-3.5 h-3.5 text-blue-500" />
+                  <span className="text-xs font-bold text-slate-900 dark:text-white">
+                    Copilot d'IA
+                  </span>
+                </div>
+                <p className="text-[10px] text-slate-500 dark:text-slate-400 mt-0.5">
+                  Peritatge de fotos, memòries tècniques & OCR
+                </p>
+              </div>
+            </label>
+
+            {/* Flota Avançada */}
+            <label className="flex items-start gap-3 p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/60 transition-colors cursor-pointer">
+              <input
+                type="checkbox"
+                checked={features.feature_flota}
+                onChange={(e) =>
+                  setFeatures({ ...features, feature_flota: e.target.checked })
+                }
+                className="w-4 h-4 mt-0.5 text-emerald-600 rounded border-slate-300 dark:border-slate-700 focus:ring-emerald-500"
+              />
+              <div>
+                <div className="flex items-center gap-1.5">
+                  <Truck className="w-3.5 h-3.5 text-orange-500" />
+                  <span className="text-xs font-bold text-slate-900 dark:text-white">
+                    Flota Avançada
+                  </span>
+                </div>
+                <p className="text-[10px] text-slate-500 dark:text-slate-400 mt-0.5">
+                  Control d'ITVs, assegurances i geolocalització
+                </p>
+              </div>
+            </label>
+
+            {/* Plànols Tècnics */}
+            <label className="flex items-start gap-3 p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/60 transition-colors cursor-pointer">
+              <input
+                type="checkbox"
+                checked={features.feature_planols}
+                onChange={(e) =>
+                  setFeatures({ ...features, feature_planols: e.target.checked })
+                }
+                className="w-4 h-4 mt-0.5 text-emerald-600 rounded border-slate-300 dark:border-slate-700 focus:ring-emerald-500"
+              />
+              <div>
+                <div className="flex items-center gap-1.5">
+                  <Layers className="w-3.5 h-3.5 text-indigo-500" />
+                  <span className="text-xs font-bold text-slate-900 dark:text-white">
+                    Plànols Tècnics
+                  </span>
+                </div>
+                <p className="text-[10px] text-slate-500 dark:text-slate-400 mt-0.5">
+                  Visor vectorial de xarxes de reg & REBT
+                </p>
+              </div>
+            </label>
+
+            {/* Bot Telegram */}
+            <label className="flex items-start gap-3 p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/60 transition-colors cursor-pointer">
+              <input
+                type="checkbox"
+                checked={features.feature_telegram}
+                onChange={(e) =>
+                  setFeatures({ ...features, feature_telegram: e.target.checked })
+                }
+                className="w-4 h-4 mt-0.5 text-emerald-600 rounded border-slate-300 dark:border-slate-700 focus:ring-emerald-500"
+              />
+              <div>
+                <div className="flex items-center gap-1.5">
+                  <MessageSquare className="w-3.5 h-3.5 text-sky-500" />
+                  <span className="text-xs font-bold text-slate-900 dark:text-white">
+                    Bot de Telegram
+                  </span>
+                </div>
+                <p className="text-[10px] text-slate-500 dark:text-slate-400 mt-0.5">
+                  Canal directe d'incidències amb clients finals
+                </p>
+              </div>
+            </label>
           </div>
         </div>
 
-        {/* DANGER ZONE */}
-        <div className="bg-red-50 dark:bg-red-950/20 border border-red-200 dark:border-red-900/50 p-6 rounded-xl shadow-sm md:col-span-2 mt-4">
-          <h2 className="text-sm font-bold uppercase tracking-wider text-red-600 dark:text-red-400 mb-2 flex items-center gap-2">
-            <AlertTriangle className="w-4 h-4" />
-            Zona de Perill
-          </h2>
-          <p className="text-sm text-red-700 dark:text-red-300 mb-4">
-            L'eliminació d'un tenant generarà un certificat de destrucció de dades (RGPD) i n'esborrarà els arxius transcorreguts 30 dies.
+        {/* BLOC 4: ZONA DE PERILL & OFBOARDING RGPD */}
+        <div className="bg-rose-50/60 dark:bg-rose-950/20 border border-rose-200 dark:border-rose-900/60 p-5 rounded-2xl shadow-sm md:col-span-2 space-y-3">
+          <div className="flex items-center justify-between">
+            <h2 className="text-xs font-mono font-bold uppercase tracking-wider text-rose-700 dark:text-rose-400 flex items-center gap-2">
+              <AlertTriangle className="w-4 h-4" />
+              <span>Zona de Perill • Baixa Certificada & Purga RGPD (Spec 04 US7)</span>
+            </h2>
+            <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-300 border border-rose-300 dark:border-rose-800 font-bold">
+              IRREVERSIBLE
+            </span>
+          </div>
+
+          <p className="text-xs text-rose-700 dark:text-rose-300 leading-relaxed">
+            L'execució d'aquesta ordre marca el tenant com a <strong>ELIMINAT</strong>, genera un Certificat Oficial de Destrucció de Dades en format PDF signat criptogràficament i programa la purga irreversible de bases de dades i fitxers després d'un període de custòdia de 30 dies. El certificat es conserva durant 5 anys per compliment legal.
           </p>
-          <button
-            onClick={handleDestroy}
-            className="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded text-sm font-bold flex items-center gap-2 transition-colors"
-          >
-            <PowerOff className="w-4 h-4" />
-            Forçar Destrucció (Offboarding)
-          </button>
+
+          <div className="pt-2">
+            <button
+              onClick={handleDestroy}
+              className="bg-rose-600 hover:bg-rose-700 text-white px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-2 transition-colors shadow"
+            >
+              <PowerOff className="w-4 h-4" />
+              <span>Executar Baixa Certificada (Offboarding RGPD)</span>
+            </button>
+          </div>
         </div>
       </div>
     </div>

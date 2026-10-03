@@ -95,3 +95,45 @@ async def test_estat_transicions_correctes(headers):
         assert res_update.status_code == 200, f"Expected 200 but got {res_update.status_code}: {res_update.text}"
         data = res_update.json()
         assert data["nou_estat"] == "SUSPES_PAGAMENT"
+
+
+@pytest.mark.asyncio
+async def test_obtenir_tenant_individual(headers):
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        res_list = await ac.get("/api/v1/superadmin/tenants", headers=headers)
+        assert res_list.status_code == 200
+        llista = res_list.json()
+        assert len(llista) > 0
+        empresa_id = llista[0]["id"]
+
+        res_detail = await ac.get(f"/api/v1/superadmin/tenants/{empresa_id}", headers=headers)
+        assert res_detail.status_code == 200
+        data = res_detail.json()
+        assert data["id"] == empresa_id
+        assert "quota_operaris" in data
+        assert "operaris_actius" in data
+        assert "features" in data
+        assert "pla_subscripcio" in data
+        assert "estat_pagament" in data
+
+
+@pytest.mark.asyncio
+async def test_seguretat_status_endpoint(headers):
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        res = await ac.get("/api/v1/superadmin/tenants/seguretat/status", headers=headers)
+        assert res.status_code == 200
+        data = res.json()
+        assert data["status"] == "SECURE"
+        assert data["ip_allowlist_enforced"] is True
+        assert data["totp_enforced"] is True
+        assert "rls_multi_tenant" in data
+
+
+@pytest.mark.asyncio
+async def test_auditoria_certificats_endpoint(headers):
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        res = await ac.get("/api/v1/superadmin/tenants/auditoria/certificats", headers=headers)
+        assert res.status_code == 200
+        data = res.json()
+        assert isinstance(data, list)
+

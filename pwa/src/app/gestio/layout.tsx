@@ -31,6 +31,7 @@ import {
   Layers,
   Building2,
   Sparkles,
+  FileText,
 } from "lucide-react";
 
 function GestioLayoutContent({ children }: { children: React.ReactNode }) {
@@ -63,6 +64,7 @@ function GestioLayoutContent({ children }: { children: React.ReactNode }) {
     { label: "Notificacions & Xat", href: "/gestio/notificacions", icon: Bell, badge: "CHAT" },
     { label: "Copilot IA & Peritatge", href: "/gestio/copilot", icon: Sparkles, badge: "IA" },
     { label: "Comptabilitat & Veri*factu", href: "/gestio/comptabilitat", icon: Receipt, badge: "SIF" },
+    { label: "Contractes Manteniment", href: "/gestio/contractes", icon: FileText, badge: "CTR" },
     { label: "Configuració & Marca", href: "/gestio/configuracio", icon: Settings, badge: "CFG" },
   ];
 

@@ -383,6 +383,8 @@ async def tancar_obra(
 @router.post("/{id}/reconciliacio-post-obra")
 async def reconciliacio_post_obra(
     id: uuid.UUID,
+    request: Request,
+    db: AsyncSession = Depends(get_db_with_tenant_context),
 ):
     """T027-T028: Reconciliació post-obra dels 4 pilars: materials, hores, km i tiquets.
 
