@@ -3,6 +3,7 @@
 import React, { useState } from "react";
 import { AlertTriangle, MapPin, Camera, Save, X } from "lucide-react";
 import { addToSyncQueue } from "@/lib/offline/sync";
+import VoiceRecorder from "@/components/operari/VoiceRecorder";
 
 interface IncidenciaFormProps {
   onSuccess?: () => void;
@@ -13,6 +14,7 @@ export default function IncidenciaForm({ onSuccess, onCancel }: IncidenciaFormPr
   const [titol, setTitol] = useState("");
   const [descripcio, setDescripcio] = useState("");
   const [urgencia, setUrgencia] = useState("MITJANA");
+  const [audioGravat, setAudioGravat] = useState(false);
   const [loading, setLoading] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -23,6 +25,7 @@ export default function IncidenciaForm({ onSuccess, onCancel }: IncidenciaFormPr
         titol,
         descripcio,
         urgencia,
+        audio_path: audioGravat ? "/docs/audio/incidencia_form.webm" : null,
         data_report: new Date().toISOString(),
       };
       
@@ -33,6 +36,7 @@ export default function IncidenciaForm({ onSuccess, onCancel }: IncidenciaFormPr
       setTitol("");
       setDescripcio("");
       setUrgencia("MITJANA");
+      setAudioGravat(false);
       
       if (onSuccess) onSuccess();
     } catch (err) {
@@ -56,6 +60,14 @@ export default function IncidenciaForm({ onSuccess, onCancel }: IncidenciaFormPr
           required
           placeholder="Ex: Trencament de canonada"
           className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+        />
+      </div>
+
+      <div>
+        <VoiceRecorder
+          onRecordComplete={() => setAudioGravat(true)}
+          onClear={() => setAudioGravat(false)}
+          maxSeconds={30}
         />
       </div>
 

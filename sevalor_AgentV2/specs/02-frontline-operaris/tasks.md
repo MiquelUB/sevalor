@@ -147,7 +147,7 @@
 
 ## 📷 Bloc 3: User Story 2 - Execució de Feines & Protocol de Qualitat 3-Fases
 
-- [ ] **T014 [Frontend/Media] Càmera Tècnica HTML5 (`CameraCapture.tsx`) amb Bloqueig de Galeria** (~25 min)  
+- [x] **T014 [Frontend/Media] Càmera Tècnica HTML5 (`CameraCapture.tsx`) amb Bloqueig de Galeria** (~25 min)  
   *Dependència*: `T004`  
   *Requisits Funcionals*: `FR-006`  
   *Skill Mandatòria*: `security-and-hardening` ([`.agents/skills/security-and-hardening/SKILL.md`](file:///.agents/skills/security-and-hardening/SKILL.md))  

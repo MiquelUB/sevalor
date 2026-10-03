@@ -215,3 +215,40 @@ async def pujar_tiquet_ocr(
         "estat_ocr": nou_tiquet.estat_ocr,
         "missatge": "Tiquet pujat amb processament OCR automàtic.",
     }
+
+class TiquetParseRequest(BaseModel):
+    text: str = Field(..., max_length=1000)
+
+
+@router.post("/tiquets/parse", response_model=dict, status_code=status.HTTP_200_OK)
+async def parse_tiquet_text(
+    request: Request,
+    payload: TiquetParseRequest,
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+):
+    """Extracció intel·ligent d'import i categoria de text lliure per a despeses (Spec 03 / Spec 018)."""
+    import re
+
+    text = payload.text
+    # Extreure import
+    match_import = re.search(r"(\d+(?:[.,]\d{1,2})?)\s*(?:€|euros|eur)?", text, re.IGNORECASE)
+    import_val = 0.0
+    if match_import:
+        import_val = float(match_import.group(1).replace(",", "."))
+
+    # Extreure categoria
+    text_lower = text.lower()
+    if any(k in text_lower for k in ["gasoil", "gasolina", "combustible", "dièsel", "diesel", "carburant"]):
+        categoria = "CARBURANT"
+    elif any(k in text_lower for k in ["dinar", "esmorzar", "menjar", "dieta", "restaurant"]):
+        categoria = "DIETES"
+    elif any(k in text_lower for k in ["material", "ferreteria", "tub", "cable", "eina"]):
+        categoria = "MATERIAL"
+    else:
+        categoria = "ALTRES"
+
+    return {
+        "import": import_val,
+        "categoria": categoria,
+        "concepte": text.strip()[:100],
+    }

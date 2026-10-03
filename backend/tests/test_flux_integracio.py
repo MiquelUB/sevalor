@@ -216,7 +216,7 @@ class TestFluxGestio:
             "cost_hora_eur": 22.5,
         })
         # 201 (creat) o 500 (si no hi ha empresa FK) o 429 (rate-limit)
-        assert resp.status_code in (201, 429, 500), f"Alta operari: {resp.status_code} {resp.text}"
+        assert resp.status_code in (201, 429), f"Alta operari: {resp.status_code} {resp.text}"
 
     async def test_09_enginyer_no_pot_alta_operari(self, admin_session, async_client, headers):
         """ENGINYER rep 403 a /gestio/operaris (Spec 008: alta denegada a Enginyer)."""
@@ -242,7 +242,7 @@ class TestFluxGestio:
             "unitat_mesura": "UNITAT", "familia": "GENERAL",
         })
         # 201 (creat) o 500 (si no hi ha empresa FK) o 429 (rate-limit)
-        assert resp.status_code in (201, 429, 500), f"Crear article: {resp.status_code} {resp.text}"
+        assert resp.status_code in (201, 429), f"Crear article: {resp.status_code} {resp.text}"
         # Llistar articles
         resp = await async_client.get("/gestio/magatzem/articles", headers=h)
         assert resp.status_code in (200, 429), f"Llistar articles: {resp.status_code}"
@@ -263,7 +263,7 @@ class TestFluxGestio:
             "ordre_treball_id": otid,
         })
         # 201, o 500 si no hi ha dades, o 429 (rate-limit)
-        assert resp.status_code in (201, 500, 429), f"Crear fulla picking: {resp.status_code} {resp.text}"
+        assert resp.status_code in (201, 429), f"Crear fulla picking: {resp.status_code} {resp.text}"
         if resp.status_code != 201:
             return
         picking_id = resp.json()["id"]
@@ -272,14 +272,14 @@ class TestFluxGestio:
         resp = await async_client.post(f"/gestio/magatzem/picking/{picking_id}/linies", headers=h, json={
             "article_id": aid, "quantitat_prevista": 10,
         })
-        assert resp.status_code in (201, 422, 500, 429), f"Afegir línia picking: {resp.status_code} {resp.text}"
+        assert resp.status_code in (201, 422, 429), f"Afegir línia picking: {resp.status_code} {resp.text}"
         if resp.status_code != 201:
             return
         linia_id = resp.json()["id"]
 
         # Confirma pick-in
         resp = await async_client.put(f"/gestio/magatzem/picking/linies/{linia_id}/pick-in", headers=h)
-        assert resp.status_code in (200, 400, 500, 429), f"Pick-in: {resp.status_code} {resp.text}"
+        assert resp.status_code in (200, 400, 429), f"Pick-in: {resp.status_code} {resp.text}"
 
         # Devolució de sobrants + merma (pick-out)
         resp = await async_client.put(
@@ -287,7 +287,7 @@ class TestFluxGestio:
             headers=h,
         )
         # 200 (correcte), 422 (si la merma supera el previst), o 500/429
-        assert resp.status_code in (200, 422, 500, 429), f"Pick-out: {resp.status_code} {resp.text}"
+        assert resp.status_code in (200, 422, 429), f"Pick-out: {resp.status_code} {resp.text}"
 
     async def test_12_magatzem_moviment_estoc(self, admin_session, async_client, headers):
         """Flux d'estoc: entrada, reserva, i llistat d'estoc disponible (Spec 004)."""
@@ -301,20 +301,20 @@ class TestFluxGestio:
         # Entrada de 50 unitats → estoc 150
         resp = await async_client.post(f"/gestio/magatzem/magatzems/{mid}/moviment",
             headers=h, json={"article_id": aid, "quantitat": 50, "tipus": "ENTRADA"})
-        assert resp.status_code in (200, 500, 429), f"Entrada estoc: {resp.status_code} {resp.text}"
+        assert resp.status_code in (200, 429), f"Entrada estoc: {resp.status_code} {resp.text}"
         if resp.status_code == 200:
             assert resp.json()["quantitat_fisica"] == 150.0
 
         # Reserva de 20 unitats → disponible passa de 150 a 130
         resp = await async_client.post(f"/gestio/magatzem/magatzems/{mid}/moviment",
             headers=h, json={"article_id": aid, "quantitat": 20, "tipus": "RESERVA"})
-        assert resp.status_code in (200, 500, 429), f"Reserva estoc: {resp.status_code} {resp.text}"
+        assert resp.status_code in (200, 429), f"Reserva estoc: {resp.status_code} {resp.text}"
         if resp.status_code == 200:
             assert resp.json()["quantitat_disponible"] == 130.0
 
         # Llistar estoc del magatzem
         resp = await async_client.get(f"/gestio/magatzem/magatzems/{mid}/estoc", headers=h)
-        assert resp.status_code in (200, 500, 429), f"Llistar estoc: {resp.status_code}"
+        assert resp.status_code in (200, 429), f"Llistar estoc: {resp.status_code}"
 
     async def test_13_planols_capes_vectorials(self, admin_session, async_client, headers):
         """Flux de plànols: crear carpeta, plànol, i capa vectorial (Spec 010)."""
@@ -331,7 +331,7 @@ class TestFluxGestio:
             "carpeta_id": cid, "tipus_fitxer": "PDF",
             "fitxer_path": "/docs/test/planol.pdf", "mida_bytes": 1024,
         })
-        assert resp.status_code in (201, 500, 429), f"Crear plànol: {resp.status_code} {resp.text}"
+        assert resp.status_code in (201, 429), f"Crear plànol: {resp.status_code} {resp.text}"
         if resp.status_code != 201:
             return
         planol_id = resp.json().get("id")
@@ -342,11 +342,11 @@ class TestFluxGestio:
             "color_hex": "#ff0000", "gruix_linia": 2, "opacitat_percent": 100,
             "geometries_geojson": {"type": "LineString", "coordinates": [[0, 0], [1, 1]]},
         })
-        assert resp.status_code in (201, 500, 429), f"Crear capa: {resp.status_code} {resp.text}"
+        assert resp.status_code in (201, 429), f"Crear capa: {resp.status_code} {resp.text}"
 
         # Llistar capes del plànol
         resp = await async_client.get(f"/gestio/planols/planols/{planol_id}/capes", headers=h)
-        assert resp.status_code in (200, 500, 429), f"Llistar capes: {resp.status_code}"
+        assert resp.status_code in (200, 429), f"Llistar capes: {resp.status_code}"
         if resp.status_code == 200:
             assert len(resp.json()) >= 1, "Hauria d'haver-hi com a mínim 1 capa"
             capa_id = resp.json()[0].get("id")
@@ -354,7 +354,7 @@ class TestFluxGestio:
             resp = await async_client.put(f"/gestio/planols/planols/{planol_id}/capes/{capa_id}", headers=h, json={
                 "nom": "Capa Editada", "color_hex": "#00ff00", "visible": True,
             })
-            assert resp.status_code in (200, 403, 500, 429), f"Editar capa: {resp.status_code} {resp.text}"
+            assert resp.status_code in (200, 403, 429), f"Editar capa: {resp.status_code} {resp.text}"
             if resp.status_code == 200:
                 assert resp.json()["nom"] == "Capa Editada"
 
@@ -367,7 +367,7 @@ class TestFluxGestio:
         boss_tok = crear_token("BOSS", eid)
         h = {"Authorization": f"Bearer {boss_tok}", "X-Empresa-ID": eid}
         resp = await async_client.get("/gestio/planols/carpetes", headers=h)
-        assert resp.status_code in (200, 500, 429), f"Llistar carpetes: {resp.status_code} {resp.text}"
+        assert resp.status_code in (200, 429), f"Llistar carpetes: {resp.status_code} {resp.text}"
         if resp.status_code == 200:
             assert len(resp.json()) >= 1, "Hauria d'haver-hi com a mínim 1 carpeta"
 
@@ -384,7 +384,7 @@ class TestFluxGestio:
         resp = await async_client.post("/gestio/notificacions/converses", headers=h, json={
             "client_id": cid, "titol": "Conversa de test",
         })
-        assert resp.status_code in (201, 500, 429), f"Crear conversa: {resp.status_code} {resp.text}"
+        assert resp.status_code in (201, 429), f"Crear conversa: {resp.status_code} {resp.text}"
         if resp.status_code != 201:
             return
         conv_id = resp.json().get("id")
@@ -393,11 +393,11 @@ class TestFluxGestio:
         resp = await async_client.post(f"/gestio/notificacions/converses/{conv_id}/missatges", headers=h, json={
             "contingut_text": "Missatge de prova", "tipus_esdeveniment": "MISSATGE_MANUAL",
         })
-        assert resp.status_code in (201, 500, 429), f"Crear missatge: {resp.status_code} {resp.text}"
+        assert resp.status_code in (201, 429), f"Crear missatge: {resp.status_code} {resp.text}"
 
         # Llistar missatges
         resp = await async_client.get(f"/gestio/notificacions/converses/{conv_id}/missatges", headers=h)
-        assert resp.status_code in (200, 500, 429), f"Llistar missatges: {resp.status_code}"
+        assert resp.status_code in (200, 429), f"Llistar missatges: {resp.status_code}"
         if resp.status_code == 200:
             assert len(resp.json()) >= 1, "Hauria d'haver-hi com a mínim 1 missatge"
 
@@ -405,7 +405,7 @@ class TestFluxGestio:
         resp = await async_client.put(f"/gestio/notificacions/converses/{conv_id}/estat", headers=h, json={
             "estat": "VERD_SOLUCIONAT",
         })
-        assert resp.status_code in (200, 500, 429), f"Canviar estat: {resp.status_code} {resp.text}"
+        assert resp.status_code in (200, 429), f"Canviar estat: {resp.status_code} {resp.text}"
         if resp.status_code == 200:
             assert resp.json()["es_arxivada"] == True
 
@@ -414,7 +414,7 @@ class TestFluxGestio:
             f"/gestio/notificacions/converses/{conv_id}/enllac-factura?factura_id={str(uuid.uuid4())}",
             headers=h,
         )
-        assert resp.status_code in (200, 500, 429), f"Enllaç factura: {resp.status_code} {resp.text}"
+        assert resp.status_code in (200, 429), f"Enllaç factura: {resp.status_code} {resp.text}"
         if resp.status_code == 200:
             assert "token" in resp.json()
 
@@ -432,7 +432,7 @@ class TestFluxGestio:
             "nif": _nif(), "iban": "ES6621000418401234567891",
             "especialitat": "MATERIALS",
         })
-        assert resp.status_code in (201, 500, 429), f"Alta proveïdor: {resp.status_code} {resp.text}"
+        assert resp.status_code in (201, 429), f"Alta proveïdor: {resp.status_code} {resp.text}"
         if resp.status_code != 201:
             return
         prov_id = resp.json().get("id")
@@ -449,7 +449,7 @@ class TestFluxGestio:
         resp = await async_client.put(f"/gestio/proveidors/{prov_id}/iban", headers=h, json={
             "nou_iban": "ES2109986543219876543210",
         })
-        assert resp.status_code in (200, 500, 429), f"Canvi IBAN: {resp.status_code} {resp.text}"
+        assert resp.status_code in (200, 429), f"Canvi IBAN: {resp.status_code} {resp.text}"
         if resp.status_code == 200:
             assert resp.json()["iban_xifrat_simetric"] == "ES2109986543219876543210"
 
@@ -468,26 +468,26 @@ class TestFluxGestio:
             "codi": _codi(), "rao_social": "Client IBAN SA", "nif": _nif(),
             "iban": "ES6621000418401234567891",
         })
-        assert resp.status_code in (201, 500, 429), f"Alta client: {resp.status_code} {resp.text}"
+        assert resp.status_code in (201, 429), f"Alta client: {resp.status_code} {resp.text}"
         if resp.status_code != 201:
             return
         client_id = resp.json()["id"]
 
         # BOSS pot obtenir l'IBAN
         resp = await async_client.get(f"/gestio/clients/{client_id}/iban", headers=h_boss)
-        assert resp.status_code in (200, 500, 429), f"BOSS IBAN: {resp.status_code} {resp.text}"
+        assert resp.status_code in (200, 429), f"BOSS IBAN: {resp.status_code} {resp.text}"
         if resp.status_code == 200:
             assert resp.json()["iban_xifrat_simetric"] == "ES6621000418401234567891"
 
         # Enginyer NO pot obtenir l'IBAN (403)
         resp = await async_client.get(f"/gestio/clients/{client_id}/iban", headers=h_eng)
-        assert resp.status_code in (403, 500, 429), f"Enginyer hauria de rebre 403: {resp.status_code} {resp.text}"
+        assert resp.status_code in (403, 429), f"Enginyer hauria de rebre 403: {resp.status_code} {resp.text}"
 
         # BOSS pot canviar l'IBAN
         resp = await async_client.put(f"/gestio/clients/{client_id}/iban", headers=h_boss, json={
             "nou_iban": "ES2109986543219876543210",
         })
-        assert resp.status_code in (200, 500, 429), f"Canvi IBAN: {resp.status_code} {resp.text}"
+        assert resp.status_code in (200, 429), f"Canvi IBAN: {resp.status_code} {resp.text}"
         if resp.status_code == 200:
             assert resp.json()["iban_xifrat_simetric"] == "ES2109986543219876543210"
 
@@ -504,14 +504,14 @@ class TestFluxGestio:
         resp = await async_client.post("/gestio/notificacions/converses", headers=h, json={
             "client_id": cid, "titol": "Conv per Telegram",
         })
-        assert resp.status_code in (201, 500, 429), f"Crear conversa: {resp.status_code} {resp.text}"
+        assert resp.status_code in (201, 429), f"Crear conversa: {resp.status_code} {resp.text}"
         if resp.status_code != 201:
             return
         conv_id = resp.json().get("id")
 
         # Generar invitació
         resp = await async_client.post(f"/gestio/notificacions/converses/{conv_id}/invitar-telegram", headers=h)
-        assert resp.status_code in (200, 201, 500, 429), f"Invitació: {resp.status_code} {resp.text}"
+        assert resp.status_code in (200, 201, 429), f"Invitació: {resp.status_code} {resp.text}"
         if resp.status_code not in (200, 201):
             return
         data = resp.json()

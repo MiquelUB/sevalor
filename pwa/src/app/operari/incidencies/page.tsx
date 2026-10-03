@@ -18,6 +18,7 @@ import {
 import { apiFetch } from "@/lib/api";
 import { compressImageToWebP } from "@/lib/media";
 import CameraInput from "@/components/CameraInput";
+import VoiceRecorder from "@/components/operari/VoiceRecorder";
 
 import { db } from "@/lib/offline/db";
 import { addToSyncQueue } from "@/lib/offline/sync";
@@ -34,6 +35,7 @@ export default function OperariIncidenciesPage() {
   const [descripcio, setDescripcio] = useState("");
   const [tipus, setTipus] = useState("VEHICLE");
   const [audioGravat, setAudioGravat] = useState(false);
+  const [audioBlob, setAudioBlob] = useState<Blob | null>(null);
   const [fotoPujada, setFotoPujada] = useState(false);
   const [enviant, setEnviant] = useState(false);
   const [enviatExit, setEnviatExit] = useState(false);
@@ -58,10 +60,13 @@ export default function OperariIncidenciesPage() {
     // Offline queries
     if (typeof window !== "undefined") {
       try {
-        const queue = await db.sync_queue.filter(i => i.action === 'REPORTAR_INCIDENCIA').toArray();
-        setPendingOffline(queue);
-      } catch (e) {
-        console.error("Error reading offline queue:", e);
+        const queueItems = await db.sync_queue
+          .where("action")
+          .equals("REPORTAR_INCIDENCIA")
+          .toArray();
+        setPendingOffline(queueItems);
+      } catch (err) {
+        console.error("Error carregar offline sync queue:", err);
       }
     }
   };
@@ -70,21 +75,15 @@ export default function OperariIncidenciesPage() {
     carregarHistorial();
   }, []);
 
-  const handleFotoChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files[0]) {
-      try {
-        await compressImageToWebP(e.target.files[0]);
-        setFotoPujada(true);
-        setErrorValidacio(null);
-      } catch {
-        setErrorValidacio("Error en processar la imatge en viu.");
-      }
-    }
+  const handleRecordComplete = (blob: Blob) => {
+    setAudioBlob(blob);
+    setAudioGravat(true);
+    setErrorValidacio(null);
   };
 
-  const handleSimularAudio = () => {
-    setAudioGravat(!audioGravat);
-    setErrorValidacio(null);
+  const handleAudioClear = () => {
+    setAudioBlob(null);
+    setAudioGravat(false);
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -100,16 +99,39 @@ export default function OperariIncidenciesPage() {
     setEnviant(true);
     setErrorValidacio(null);
 
-    const payload = {
-      ambit: tipus,
-      estat: "VERMELL",
-      text_observacions: descripcio.trim() || (audioGravat ? "Nota de veu gravada en camp" : "Fotografia d'avaria aportada"),
-      audio_path: audioGravat ? "/docs/audio/incidencia_live.webm" : null,
-      foto_path: fotoPujada ? "/docs/fotos/incidencia_live.webp" : null,
-    };
+    const isOnline = typeof navigator !== "undefined" && navigator.onLine;
 
     try {
-      await addToSyncQueue("REPORTAR_INCIDENCIA", payload);
+      if (isOnline && audioBlob) {
+        // Enviar per FormData multipart directe (Spec 016)
+        const formData = new FormData();
+        formData.append("ambit", tipus);
+        formData.append("estat", "VERMELL");
+        if (descripcio.trim()) {
+          formData.append("text_observacions", descripcio.trim());
+        }
+        formData.append("audio", audioBlob, "incidencia.webm");
+
+        await apiFetch("/operari/incidencies", {
+          method: "POST",
+          body: formData,
+        });
+      } else {
+        // Enviar per la cua offline o petició JSON
+        const payload = {
+          ambit: tipus,
+          estat: "VERMELL",
+          text_observacions:
+            descripcio.trim() ||
+            (audioGravat
+              ? "Nota de veu gravada en camp"
+              : "Fotografia d'avaria aportada"),
+          audio_path: audioGravat ? "/docs/audio/incidencia_live.webm" : null,
+          foto_path: fotoPujada ? "/docs/fotos/incidencia_live.webp" : null,
+        };
+        await addToSyncQueue("REPORTAR_INCIDENCIA", payload);
+      }
+
       setEnviatExit(true);
       await carregarHistorial();
     } catch (err: any) {
@@ -162,6 +184,7 @@ export default function OperariIncidenciesPage() {
                 setEnviatExit(false);
                 setDescripcio("");
                 setAudioGravat(false);
+                setAudioBlob(null);
                 setFotoPujada(false);
               }}
               className="mt-2 px-4 py-2 bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900 text-xs font-bold rounded-xl"
@@ -175,7 +198,44 @@ export default function OperariIncidenciesPage() {
             className="bg-white dark:bg-slate-900 p-5 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm space-y-4"
           >
             <div>
-              <CameraInput captured={fotoPujada} label="Càmera en Viu" onCapture={(blob) => { setFotoPujada(true); setErrorValidacio(null); }} />
+              <label className="block text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-1.5">
+                Àmbit de l'Avaria
+              </label>
+              <div className="grid grid-cols-3 gap-2">
+                {["VEHICLE", "MATERIAL", "CLIENT"].map((ambit) => (
+                  <button
+                    key={ambit}
+                    type="button"
+                    onClick={() => setTipus(ambit)}
+                    className={`py-2 text-xs font-bold rounded-xl border transition-all ${
+                      tipus === ambit
+                        ? "bg-slate-900 text-white border-slate-900 dark:bg-slate-100 dark:text-slate-900 dark:border-slate-100"
+                        : "border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-300"
+                    }`}
+                  >
+                    {ambit}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div>
+              <CameraInput
+                captured={fotoPujada}
+                label="Càmera en Viu"
+                onCapture={(blob) => {
+                  setFotoPujada(true);
+                  setErrorValidacio(null);
+                }}
+              />
+            </div>
+
+            <div>
+              <VoiceRecorder
+                onRecordComplete={handleRecordComplete}
+                onClear={handleAudioClear}
+                maxSeconds={30}
+              />
             </div>
 
             <div>
@@ -229,46 +289,49 @@ export default function OperariIncidenciesPage() {
           {loadingHistorial && historial.length === 0 && pendingOffline.length === 0 ? (
             <p className="text-xs text-slate-400 py-4 text-center">Carregant incidències...</p>
           ) : historial.length === 0 && pendingOffline.length === 0 ? (
-            <div className="text-center py-6 text-slate-400">
-              <CheckCircle2 className="w-8 h-8 mx-auto text-emerald-500/50 mb-1" />
-              <p className="text-xs font-bold text-slate-600 dark:text-slate-400">Cap incidència activa</p>
-              <p className="text-[10px] text-slate-400 mt-0.5">Estat Dia-0: Totes les feines estan operatives.</p>
+            <div className="py-6 text-center text-slate-400 space-y-1">
+              <CheckCircle2 className="w-8 h-8 mx-auto text-emerald-500/50 mb-2" />
+              <p className="text-xs font-medium text-slate-600 dark:text-slate-300">
+                Sense incidències pendents
+              </p>
+              <p className="text-[11px] text-slate-400">
+                Tot el material i vehicles estan operatius.
+              </p>
             </div>
           ) : (
             <div className="space-y-2">
-              {pendingOffline.map((item) => (
+              {pendingOffline.map((item, idx) => (
                 <div
-                  key={`offline-${item.id}`}
-                  className="p-3 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-900 flex items-start justify-between"
+                  key={`pending-${idx}`}
+                  className="p-3 bg-amber-500/10 border border-amber-500/30 rounded-xl flex items-center justify-between text-xs"
                 >
-                  <div>
-                    <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-300">
-                      {item.payload.ambit}
+                  <div className="space-y-0.5">
+                    <span className="font-bold text-amber-600 dark:text-amber-400">
+                      [Pendent de Sincronització Offline]
                     </span>
-                    <p className="text-xs font-medium text-slate-800 dark:text-slate-200 mt-1">
-                      {item.payload.text_observacions}
+                    <p className="text-slate-600 dark:text-slate-300 truncate max-w-[200px]">
+                      {item.payload?.text_observacions || "Incidència enregistrada"}
                     </p>
                   </div>
-                  <span className="text-[9px] font-mono text-amber-600 dark:text-amber-400">
-                    PENDENT DE SYNC
-                  </span>
+                  <Clock className="w-4 h-4 text-amber-500 shrink-0" />
                 </div>
               ))}
-              {historial.map((item) => (
+
+              {historial.map((inc) => (
                 <div
-                  key={item.id}
-                  className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 flex items-start justify-between"
+                  key={inc.id}
+                  className="p-3 bg-slate-50 dark:bg-slate-800/60 rounded-xl border border-slate-200 dark:border-slate-700/60 flex items-center justify-between text-xs"
                 >
-                  <div>
-                    <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-rose-100 dark:bg-rose-950 text-rose-800 dark:text-rose-300">
-                      {item.ambit}
+                  <div className="space-y-0.5">
+                    <span className="font-bold text-slate-800 dark:text-slate-200">
+                      {inc.ambit} - {inc.estat}
                     </span>
-                    <p className="text-xs font-medium text-slate-800 dark:text-slate-200 mt-1">
-                      {item.text_observacions}
+                    <p className="text-slate-500 dark:text-slate-400 truncate max-w-[200px]">
+                      {inc.text_observacions || "Sense comentari"}
                     </p>
                   </div>
-                  <span className="text-[9px] font-mono text-slate-400">
-                    {item.estat}
+                  <span className="text-[10px] text-slate-400">
+                    {inc.created_at ? new Date(inc.created_at).toLocaleDateString() : ""}
                   </span>
                 </div>
               ))}
