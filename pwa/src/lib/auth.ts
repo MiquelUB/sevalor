@@ -1,5 +1,5 @@
 // Auth stub for pages
-export function getAuthHeader() {
+export function getAuthHeader(): Record<string, string> {
   if (typeof window !== 'undefined') {
     const token = localStorage.getItem('sevalor_access_token');
     const user = JSON.parse(localStorage.getItem('sevalor_user') || '{}');

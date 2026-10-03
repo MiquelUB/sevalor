@@ -44,7 +44,7 @@ export default function NouContractePage() {
       // Fetch finques for this client
       const fetchFinques = async () => {
         try {
-          const res = await fetch(`http://localhost:8000/api/v1/gestio/clients/${formData.client_id}`, {
+          const res = await fetch(`${getApiBaseUrl()}/api/v1/gestio/clients/${formData.client_id}`, {
             headers: getAuthHeader(),
           });
           if (res.ok) {

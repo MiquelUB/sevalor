@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect } from "react";
 import Link from "next/link";
-import { ArrowLeft, Save, AlertTriangle, ShieldCheck, PowerOff, Zap } from "lucide-react";
+import { ArrowLeft, Save, AlertTriangle, ShieldCheck, PowerOff, Zap, Activity } from "lucide-react";
 import { getAuthHeader } from "@/lib/auth";
 import { getApiBaseUrl } from "@/lib/api";
 
