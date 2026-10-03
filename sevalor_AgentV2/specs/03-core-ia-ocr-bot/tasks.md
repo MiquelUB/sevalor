@@ -9,7 +9,7 @@
 
 ## ⚙️ Bloc 1: Cues Celery, Topologia Redis i Polítiques RLS de Workers
 
-- [ ] **T001 [Backend/Celery] Configuració de les 5 Cues Dedicades de Celery a Redis 7** (~25 min)  
+- [x] **T001 [Backend/Celery] Configuració de les 5 Cues Dedicades de Celery a Redis 7** (~25 min)  
   *Dependència*: Cap  
   *Requisits Funcionals*: `FR-003`, `FR-012`  
   *Skill Mandatòria*: `systematic-debugging` ([`.agents/skills/systematic-debugging/SKILL.md`](file:///.agents/skills/systematic-debugging/SKILL.md))  
@@ -19,7 +19,7 @@
   *Cadena de Test*:  
   `backend/.venv/bin/pytest backend/tests/test_024_celery_ping_async.py backend/tests/test_024_celery_ping.py -v`
 
-- [ ] **T002 [Backend/Worker] Injecció de Sessió RLS a les Tasques Asíncrones de Celery** (~20 min)  
+- [x] **T002 [Backend/Worker] Injecció de Sessió RLS a les Tasques Asíncrones de Celery** (~20 min)  
   *Dependència*: `T001`  
   *Requisits Funcionals*: `FR-003`  
   *Skill Mandatòria*: `supabase-postgres-best-practices` ([`.agents/skills/supabase-postgres-best-practices/SKILL.md`](file:///.agents/skills/supabase-postgres-best-practices/SKILL.md))  
@@ -29,7 +29,7 @@
   *Cadena de Test*:  
   `backend/.venv/bin/pytest backend/tests/test_021_rls_isolation.py -v`
 
-- [ ] **T003 [Backend/API] Endpoint de Seguiment d'Estat de Workers (`GET /workers/status/{task_id}`)** (~20 min)  
+- [x] **T003 [Backend/API] Endpoint de Seguiment d'Estat de Workers (`GET /workers/status/{task_id}`)** (~20 min)  
   *Dependència*: `T001`  
   *Requisits Funcionals*: `FR-012`  
   *Skill Mandatòria*: `systematic-debugging` ([`.agents/skills/systematic-debugging/SKILL.md`](file:///.agents/skills/systematic-debugging/SKILL.md))  
@@ -39,7 +39,7 @@
   *Cadena de Test*:  
   `backend/.venv/bin/pytest backend/tests/test_024_workers_status.py -v`
 
-- [ ] **T004 [Backend/Worker] Health Check i Tasca de Ping Asíncron dels Workers** (~20 min)  
+- [x] **T004 [Backend/Worker] Health Check i Tasca de Ping Asíncron dels Workers** (~20 min)  
   *Dependència*: `T001`  
   *Requisits Funcionals*: `FR-012`  
   *Skill Mandatòria*: `systematic-debugging` ([`.agents/skills/systematic-debugging/SKILL.md`](file:///.agents/skills/systematic-debugging/SKILL.md))  
@@ -53,7 +53,7 @@
 
 ## 📄 Bloc 2: Alta Màgica OCR Transversal "Zero Data Entry"
 
-- [ ] **T005 [Backend/OCR] Pipeline Unificat d'Extracció OCR de Documents (`ocr_service.py`)** (~25 min)  
+- [x] **T005 [Backend/OCR] Pipeline Unificat d'Extracció OCR de Documents (`ocr_service.py`)** (~25 min)  
   *Dependència*: `T001`  
   *Requisits Funcionals*: `FR-001`, `SC-001`, `US1`  
   *Skill Mandatòria*: `systematic-debugging` ([`.agents/skills/systematic-debugging/SKILL.md`](file:///.agents/skills/systematic-debugging/SKILL.md))  
@@ -63,7 +63,7 @@
   *Cadena de Test*:  
   `backend/.venv/bin/pytest backend/tests/test_004_gestio_magatzem_ocr.py -v`
 
-- [ ] **T006 [Backend/API] Endpoint d'Alta Ràpida de Vehicles via OCR (`POST /flota/ocr-draft`)** (~25 min)  
+- [x] **T006 [Backend/API] Endpoint d'Alta Ràpida de Vehicles via OCR (`POST /flota/ocr-draft`)** (~25 min)  
   *Dependència*: `T005`  
   *Requisits Funcionals*: `FR-001`, `SC-001`, `US1`  
   *Skill Mandatòria*: `security-and-hardening` ([`.agents/skills/security-and-hardening/SKILL.md`](file:///.agents/skills/security-and-hardening/SKILL.md))  
@@ -73,7 +73,7 @@
   *Cadena de Test*:  
   `backend/.venv/bin/pytest backend/tests/test_006_gestio_flota.py -k "test_ocr" -v`
 
-- [ ] **T007 [Backend/API] Endpoint d'Albarans de Proveïdor OCR (`POST /magatzem/albara/ocr`)** (~25 min)  
+- [x] **T007 [Backend/API] Endpoint d'Albarans de Proveïdor OCR (`POST /magatzem/albara/ocr`)** (~25 min)  
   *Dependència*: `T005`  
   *Requisits Funcionals*: `FR-001`, `SC-001`, `US1`  
   *Skill Mandatòria*: `supabase-postgres-best-practices` ([`.agents/skills/supabase-postgres-best-practices/SKILL.md`](file:///.agents/skills/supabase-postgres-best-practices/SKILL.md))  
@@ -83,7 +83,7 @@
   *Cadena de Test*:  
   `backend/.venv/bin/pytest backend/tests/test_004_gestio_magatzem_ocr.py -k "test_ocr_albara_pendent_auditoria" -v`
 
-- [ ] **T008 [Backend/API] Alta de Proveïdors via OCR a 1 Clic (`POST /proveidors/ocr-draft`)** (~20 min)  
+- [x] **T008 [Backend/API] Alta de Proveïdors via OCR a 1 Clic (`POST /proveidors/ocr-draft`)** (~20 min)  
   *Dependència*: `T005`  
   *Requisits Funcionals*: `FR-001`, `SC-001`, `US1`  
   *Skill Mandatòria*: `security-and-hardening` ([`.agents/skills/security-and-hardening/SKILL.md`](file:///.agents/skills/security-and-hardening/SKILL.md))  
@@ -93,7 +93,7 @@
   *Cadena de Test*:  
   `backend/.venv/bin/pytest backend/tests/test_003_gestio_proveidors.py -v`
 
-- [ ] **T009 [Backend/API] Extracció OCR de Tiquets de Carburant i Despeses de Camp** (~25 min)  
+- [x] **T009 [Backend/API] Extracció OCR de Tiquets de Carburant i Despeses de Camp** (~25 min)  
   *Dependència*: `T005`  
   *Requisits Funcionals*: `FR-001`, `US1`  
   *Skill Mandatòria*: `systematic-debugging` ([`.agents/skills/systematic-debugging/SKILL.md`](file:///.agents/skills/systematic-debugging/SKILL.md))  
@@ -103,7 +103,7 @@
   *Cadena de Test*:  
   `backend/.venv/bin/pytest backend/tests/test_018_operari_tiquets_ocr.py -v`
 
-- [ ] **T010 [Backend/Worker] Generació Asíncrona de Miniatures WebP a `queue_media`** (~20 min)  
+- [x] **T010 [Backend/Worker] Generació Asíncrona de Miniatures WebP a `queue_media`** (~20 min)  
   *Dependència*: `T009`  
   *Requisits Funcionals*: `FR-001`  
   *Skill Mandatòria*: `systematic-debugging` ([`.agents/skills/systematic-debugging/SKILL.md`](file:///.agents/skills/systematic-debugging/SKILL.md))  
@@ -117,7 +117,7 @@
 
 ## 🎙️ Bloc 3: Peritatge Multimodal d'Incidències & Memoràndum Tècnic HITL
 
-- [ ] **T011 [Backend/AI] Servei Whisper v3 Local de Transcripció Fonètica (`whisper_service.py`)** (~25 min)  
+- [x] **T011 [Backend/AI] Servei Whisper v3 Local de Transcripció Fonètica (`whisper_service.py`)** (~25 min)  
   *Dependència*: `T001`  
   *Requisits Funcionals*: `FR-004`, `SC-002`, `SC-003`, `US2`  
   *Skill Mandatòria*: `systematic-debugging` ([`.agents/skills/systematic-debugging/SKILL.md`](file:///.agents/skills/systematic-debugging/SKILL.md))  
@@ -127,7 +127,7 @@
   *Cadena de Test*:  
   `backend/.venv/bin/pytest backend/tests/test_residual.py -k "test_whisper_service" -v`
 
-- [ ] **T012 [Backend/AI] Fallback Sobirà en Cas d'Indisponibilitat del Node d'IA** (~20 min)  
+- [x] **T012 [Backend/AI] Fallback Sobirà en Cas d'Indisponibilitat del Node d'IA** (~20 min)  
   *Dependència*: `T011`  
   *Requisits Funcionals*: `FR-004`, `US2`  
   *Skill Mandatòria*: `systematic-debugging` ([`.agents/skills/systematic-debugging/SKILL.md`](file:///.agents/skills/systematic-debugging/SKILL.md))  
@@ -137,7 +137,7 @@
   *Cadena de Test*:  
   `backend/.venv/bin/pytest backend/tests/test_phase3_copilot_eval.py -k "test_f3_05_fallback_sense_ia" -v`
 
-- [ ] **T013 [Backend/AI] Generador de Memoràndum Tècnic d'Incidència (Extra vs. Cost Intern)** (~25 min)  
+- [x] **T013 [Backend/AI] Generador de Memoràndum Tècnic d'Incidència (Extra vs. Cost Intern)** (~25 min)  
   *Dependència*: `T011`  
   *Requisits Funcionals*: `FR-004`, `US2`  
   *Skill Mandatòria*: `security-review` ([`.agents/skills/security-review/SKILL.md`](file:///.agents/skills/security-review/SKILL.md))  
@@ -147,7 +147,7 @@
   *Cadena de Test*:  
   `backend/.venv/bin/pytest backend/tests/test_phase3_copilot_eval.py -k "test_f3_01_tool_calling_stock_real" -v`
 
-- [ ] **T014 [Backend/API] Endpoint de Peritatge d'Incidències (`POST /copilot/incidencies/peritatge`)** (~25 min)  
+- [x] **T014 [Backend/API] Endpoint de Peritatge d'Incidències (`POST /copilot/incidencies/peritatge`)** (~25 min)  
   *Dependència*: `T013`  
   *Requisits Funcionals*: `FR-004`, `US2`  
   *Skill Mandatòria*: `security-and-hardening` ([`.agents/skills/security-and-hardening/SKILL.md`](file:///.agents/skills/security-and-hardening/SKILL.md))  
@@ -157,7 +157,7 @@
   *Cadena de Test*:  
   `backend/.venv/bin/pytest backend/tests/test_016_operari_incidencies.py -v`
 
-- [ ] **T015 [Backend/API] Validació Humana HITL del Memoràndum Tècnic** (~20 min)  
+- [x] **T015 [Backend/API] Validació Humana HITL del Memoràndum Tècnic** (~20 min)  
   *Dependència*: `T014`  
   *Requisits Funcionals*: `FR-002`, `US2`  
   *Skill Mandatòria*: `security-review` ([`.agents/skills/security-review/SKILL.md`](file:///.agents/skills/security-review/SKILL.md))  
@@ -171,7 +171,7 @@
 
 ## 🤖 Bloc 4: Canal de Telegram per a Clients Finals
 
-- [ ] **T016 [Backend/Bot] Microservei aiogram 3.x amb Webhook HTTPS Securitzat** (~25 min)  
+- [x] **T016 [Backend/Bot] Microservei aiogram 3.x amb Webhook HTTPS Securitzat** (~25 min)  
   *Dependència*: `T001`  
   *Requisits Funcionals*: `FR-008`, `FR-009`, `US3`  
   *Skill Mandatòria*: `security-and-hardening` ([`.agents/skills/security-and-hardening/SKILL.md`](file:///.agents/skills/security-and-hardening/SKILL.md))  
@@ -181,7 +181,7 @@
   *Cadena de Test*:  
   `backend/.venv/bin/pytest backend/tests/test_bot_telegram.py -k "test_webhook_auth" -v`
 
-- [ ] **T017 [Backend/Bot] Vinculació de Client per Deep-Linking d'Un Sol Ús (`/start <token>`)** (~25 min)  
+- [x] **T017 [Backend/Bot] Vinculació de Client per Deep-Linking d'Un Sol Ús (`/start <token>`)** (~25 min)  
   *Dependència*: `T016`  
   *Requisits Funcionals*: `FR-008`, `US3`  
   *Skill Mandatòria*: `security-and-hardening` ([`.agents/skills/security-and-hardening/SKILL.md`](file:///.agents/skills/security-and-hardening/SKILL.md))  
@@ -191,7 +191,7 @@
   *Cadena de Test*:  
   `backend/.venv/bin/pytest backend/tests/test_phase4_telegram_portal_eval.py -k "test_f4_01_aprovacio_pressupost_telegram" -v`
 
-- [ ] **T018 [Backend/Bot] Bloqueig Opac d'Usuaris Desconeguts o No Convidats** (~20 min)  
+- [x] **T018 [Backend/Bot] Bloqueig Opac d'Usuaris Desconeguts o No Convidats** (~20 min)  
   *Dependència*: `T017`  
   *Requisits Funcionals*: `FR-009`, `US3`  
   *Skill Mandatòria*: `security-review` ([`.agents/skills/security-review/SKILL.md`](file:///.agents/skills/security-review/SKILL.md))  
@@ -201,7 +201,7 @@
   *Cadena de Test*:  
   `backend/.venv/bin/pytest backend/tests/test_phase4_telegram_portal_eval.py -k "test_f4_03_pressupost_inexistent_telegram" -v`
 
-- [ ] **T019 [Backend/Bot] Token Bucket Rate Limiter per a Telegram sobre Redis** (~20 min)  
+- [x] **T019 [Backend/Bot] Token Bucket Rate Limiter per a Telegram sobre Redis** (~20 min)  
   *Dependència*: `T016`  
   *Requisits Funcionals*: `FR-008`  
   *Skill Mandatòria*: `security-and-hardening` ([`.agents/skills/security-and-hardening/SKILL.md`](file:///.agents/skills/security-and-hardening/SKILL.md))  
@@ -211,7 +211,7 @@
   *Cadena de Test*:  
   `backend/.venv/bin/pytest backend/tests/test_bot_telegram.py -k "test_rate_limiter" -v`
 
-- [ ] **T020 [Backend/Bot] Blindatge contra Arxius Maliciosos (Magic Bytes & Doble Extensió)** (~25 min)  
+- [x] **T020 [Backend/Bot] Blindatge contra Arxius Maliciosos (Magic Bytes & Doble Extensió)** (~25 min)  
   *Dependència*: `T016`  
   *Requisits Funcionals*: `FR-009`  
   *Skill Mandatòria*: `security-and-hardening` ([`.agents/skills/security-and-hardening/SKILL.md`](file:///.agents/skills/security-and-hardening/SKILL.md))  
@@ -221,7 +221,7 @@
   *Cadena de Test*:  
   `backend/.venv/bin/pytest backend/tests/test_bot_telegram.py -k "test_arxiu_malicios" -v`
 
-- [ ] **T021 [Backend/Bot] Despatx de Pressupostos amb Inline Keyboard Interactiu** (~25 min)  
+- [x] **T021 [Backend/Bot] Despatx de Pressupostos amb Inline Keyboard Interactiu** (~25 min)  
   *Dependència*: `T017`  
   *Requisits Funcionals*: `FR-008`, `SC-004`, `US3`  
   *Skill Mandatòria*: `frontend-design` ([`.agents/skills/frontend-design/SKILL.md`](file:///.agents/skills/frontend-design/SKILL.md))  
@@ -231,7 +231,7 @@
   *Cadena de Test*:  
   `backend/.venv/bin/pytest backend/tests/test_phase4_telegram_portal_eval.py -k "test_f4_04_enviar_pressupost_via_telegram_endpoint" -v`
 
-- [ ] **T022 [Backend/Bot] Resolució de Callback Query d'Acceptació amb Token Digital** (~25 min)  
+- [x] **T022 [Backend/Bot] Resolució de Callback Query d'Acceptació amb Token Digital** (~25 min)  
   *Dependència*: `T021`  
   *Requisits Funcionals*: `FR-008`, `SC-004`, `US3`  
   *Skill Mandatòria*: `supabase-postgres-best-practices` ([`.agents/skills/supabase-postgres-best-practices/SKILL.md`](file:///.agents/skills/supabase-postgres-best-practices/SKILL.md))  
@@ -241,7 +241,7 @@
   *Cadena de Test*:  
   `backend/.venv/bin/pytest backend/tests/test_phase4_telegram_portal_eval.py -k "test_f4_01_aprovacio_pressupost_telegram" -v`
 
-- [ ] **T023 [Backend/Bot] Enllaç de Descàrrega Efímer de 24 Hores per a Factures** (~20 min)  
+- [x] **T023 [Backend/Bot] Enllaç de Descàrrega Efímer de 24 Hores per a Factures** (~20 min)  
   *Dependència*: `T021`  
   *Requisits Funcionals*: `FR-003`, `US3`  
   *Skill Mandatòria*: `security-and-hardening` ([`.agents/skills/security-and-hardening/SKILL.md`](file:///.agents/skills/security-and-hardening/SKILL.md))  
@@ -251,7 +251,7 @@
   *Cadena de Test*:  
   `backend/.venv/bin/pytest backend/tests/test_bot_telegram.py -k "test_enllac_efimer" -v`
 
-- [ ] **T024 [Backend/Bot] Signatura Digital de Conformitat de Tancament d'Obra** (~25 min)  
+- [x] **T024 [Backend/Bot] Signatura Digital de Conformitat de Tancament d'Obra** (~25 min)  
   *Dependència*: `T022`  
   *Requisits Funcionals*: `FR-008`, `US12`  
   *Skill Mandatòria*: `security-and-hardening` ([`.agents/skills/security-and-hardening/SKILL.md`](file:///.agents/skills/security-and-hardening/SKILL.md))  
@@ -265,7 +265,7 @@
 
 ## 🔍 Bloc 5: Memòria Històrica 360°, Garanties i Reconciliació Post-Obra
 
-- [ ] **T025 [Backend/API] Auditoria Històrica 360° d'Instal·lacions (`GET /copilot/garanties/auditoria`)** (~25 min)  
+- [x] **T025 [Backend/API] Auditoria Històrica 360° d'Instal·lacions (`GET /copilot/garanties/auditoria`)** (~25 min)  
   *Dependència*: `T002`  
   *Requisits Funcionals*: `FR-005`, `SC-005`, `US4`  
   *Skill Mandatòria*: `supabase-postgres-best-practices` ([`.agents/skills/supabase-postgres-best-practices/SKILL.md`](file:///.agents/skills/supabase-postgres-best-practices/SKILL.md))  
@@ -275,7 +275,7 @@
   *Cadena de Test*:  
   `backend/.venv/bin/pytest backend/tests/test_phase3_copilot_eval.py -k "test_f3_01_tool_calling_stock_real" -v`
 
-- [ ] **T026 [Backend/Service] Motor d'Alertes de Garanties de Fabricant i Servei Intern** (~25 min)  
+- [x] **T026 [Backend/Service] Motor d'Alertes de Garanties de Fabricant i Servei Intern** (~25 min)  
   *Dependència*: `T025`  
   *Requisits Funcionals*: `FR-005`, `SC-005`, `US4`  
   *Skill Mandatòria*: `security-review` ([`.agents/skills/security-review/SKILL.md`](file:///.agents/skills/security-review/SKILL.md))  
@@ -285,7 +285,7 @@
   *Cadena de Test*:  
   `backend/.venv/bin/pytest backend/tests/test_phase3_copilot_eval.py -k "test_f3_01_tool_calling_stock_real" -v`
 
-- [ ] **T027 [Backend/API] Reconciliació Post-Obra dels 4 Pilars (`POST /reconciliacio/post-obra`)** (~25 min)  
+- [x] **T027 [Backend/API] Reconciliació Post-Obra dels 4 Pilars (`POST /reconciliacio/post-obra`)** (~25 min)  
   *Dependència*: `T002`  
   *Requisits Funcionals*: `FR-006`, `US5`  
   *Skill Mandatòria*: `supabase-postgres-best-practices` ([`.agents/skills/supabase-postgres-best-practices/SKILL.md`](file:///.agents/skills/supabase-postgres-best-practices/SKILL.md))  
@@ -295,7 +295,7 @@
   *Cadena de Test*:  
   `backend/.venv/bin/pytest backend/tests/test_phase2_torre_control_eval.py -k "test_f2_04_fitxa_360_client" -v`
 
-- [ ] **T028 [Backend/Workflow] Alerta de Merma Operativa i Bloqueig de Facturació Directa** (~20 min)  
+- [x] **T028 [Backend/Workflow] Alerta de Merma Operativa i Bloqueig de Facturació Directa** (~20 min)  
   *Dependència*: `T027`  
   *Requisits Funcionals*: `FR-006`, `US5`  
   *Skill Mandatòria*: `security-review` ([`.agents/skills/security-review/SKILL.md`](file:///.agents/skills/security-review/SKILL.md))  
@@ -305,7 +305,7 @@
   *Cadena de Test*:  
   `backend/.venv/bin/pytest backend/tests/test_phase2_torre_control_eval.py -k "test_f2_04_fitxa_360_client" -v`
 
-- [ ] **T029 [Backend/API] Aprovació de Pressupost Corregit i Pas a Pre-Factura** (~20 min)  
+- [x] **T029 [Backend/API] Aprovació de Pressupost Corregit i Pas a Pre-Factura** (~20 min)  
   *Dependència*: `T028`  
   *Requisits Funcionals*: `FR-002`, `FR-006`, `US5`  
   *Skill Mandatòria*: `supabase-postgres-best-practices` ([`.agents/skills/supabase-postgres-best-practices/SKILL.md`](file:///.agents/skills/supabase-postgres-best-practices/SKILL.md))  
@@ -319,7 +319,7 @@
 
 ## 📦 Bloc 6: Alerta Preventiva de Recompra & Tool Calling Autònom
 
-- [ ] **T030 [Backend/Service] Verificació d'Estoc en Assignació d'Obra** (~20 min)  
+- [x] **T030 [Backend/Service] Verificació d'Estoc en Assignació d'Obra** (~20 min)  
   *Dependència*: `T002`  
   *Requisits Funcionals*: `FR-007`, `US6`  
   *Skill Mandatòria*: `supabase-postgres-best-practices` ([`.agents/skills/supabase-postgres-best-practices/SKILL.md`](file:///.agents/skills/supabase-postgres-best-practices/SKILL.md))  
@@ -329,7 +329,7 @@
   *Cadena de Test*:  
   `backend/.venv/bin/pytest backend/tests/test_033_backorder_ai.py -v`
 
-- [ ] **T031 [Backend/Service] Generació d'Esborrany de Comanda de Recompra (HITL)** (~25 min)  
+- [x] **T031 [Backend/Service] Generació d'Esborrany de Comanda de Recompra (HITL)** (~25 min)  
   *Dependència*: `T030`  
   *Requisits Funcionals*: `FR-002`, `FR-007`, `US6`  
   *Skill Mandatòria*: `security-review` ([`.agents/skills/security-review/SKILL.md`](file:///.agents/skills/security-review/SKILL.md))  
@@ -339,7 +339,7 @@
   *Cadena de Test*:  
   `backend/.venv/bin/pytest backend/tests/test_033_backorder_ai.py -k "test_draft_email_sense_auto_enviament" -v`
 
-- [ ] **T032 [Backend/ToolCalling] Eina `get_real_stock` Connectada a PostgreSQL** (~25 min)  
+- [x] **T032 [Backend/ToolCalling] Eina `get_real_stock` Connectada a PostgreSQL** (~25 min)  
   *Dependència*: `T002`  
   *Requisits Funcionals*: `FR-003`, `US9`  
   *Skill Mandatòria*: `supabase-postgres-best-practices` ([`.agents/skills/supabase-postgres-best-practices/SKILL.md`](file:///.agents/skills/supabase-postgres-best-practices/SKILL.md))  
@@ -349,7 +349,7 @@
   *Cadena de Test*:  
   `backend/.venv/bin/pytest backend/tests/test_phase3_copilot_eval.py -k "test_f3_01_tool_calling_stock_real" -v`
 
-- [ ] **T033 [Backend/ToolCalling] Eina `get_closest_vehicle` mitjançant Càlcul Haversine** (~25 min)  
+- [x] **T033 [Backend/ToolCalling] Eina `get_closest_vehicle` mitjançant Càlcul Haversine** (~25 min)  
   *Dependència*: `T002`  
   *Requisits Funcionals*: `FR-003`, `US9`  
   *Skill Mandatòria*: `systematic-debugging` ([`.agents/skills/systematic-debugging/SKILL.md`](file:///.agents/skills/systematic-debugging/SKILL.md))  
@@ -359,7 +359,7 @@
   *Cadena de Test*:  
   `backend/.venv/bin/pytest backend/tests/test_phase3_copilot_eval.py -k "test_f3_02_tool_calling_vehicle_proper" -v`
 
-- [ ] **T034 [Backend/API] Confirmació d'Accions Proposades per Tool Calling (`POST /action/confirm`)** (~20 min)  
+- [x] **T034 [Backend/API] Confirmació d'Accions Proposades per Tool Calling (`POST /action/confirm`)** (~20 min)  
   *Dependència*: `T032`, `T033`  
   *Requisits Funcionals*: `FR-002`, `US9`  
   *Skill Mandatòria*: `security-review` ([`.agents/skills/security-review/SKILL.md`](file:///.agents/skills/security-review/SKILL.md))  
@@ -369,7 +369,7 @@
   *Cadena de Test*:  
   `backend/.venv/bin/pytest backend/tests/test_phase3_copilot_eval.py -k "test_f3_01_tool_calling_stock_real" -v`
 
-- [ ] **T035 [Backend/AI] Generador de "Pressupost Intel·ligent" basat en Històric** (~25 min)  
+- [x] **T035 [Backend/AI] Generador de "Pressupost Intel·ligent" basat en Històric** (~25 min)  
   *Dependència*: `T032`  
   *Requisits Funcionals*: `US9`  
   *Skill Mandatòria*: `supabase-postgres-best-practices` ([`.agents/skills/supabase-postgres-best-practices/SKILL.md`](file:///.agents/skills/supabase-postgres-best-practices/SKILL.md))  
@@ -383,7 +383,7 @@
 
 ## 🛡️ Bloc 7: Copilot RAG Sectorial & Barrera Econòmica Doble Capa
 
-- [ ] **T036 [Backend/Security] Capa 1 (Soft): Classificador Pydantic Anti-Veto Financer** (~25 min)  
+- [x] **T036 [Backend/Security] Capa 1 (Soft): Classificador Pydantic Anti-Veto Financer** (~25 min)  
   *Dependència*: `T002`  
   *Requisits Funcionals*: `FR-010`, `FR-013`, `US7`  
   *Skill Mandatòria*: `security-and-hardening` ([`.agents/skills/security-and-hardening/SKILL.md`](file:///.agents/skills/security-and-hardening/SKILL.md))  
@@ -393,7 +393,7 @@
   *Cadena de Test*:  
   `backend/.venv/bin/pytest backend/tests/test_phase3_copilot_eval.py -k "test_f3_03_veto_financer" -v`
 
-- [ ] **T037 [Backend/Security] Capa 2 (Hard): Infranquejabilitat RLS `economics_boss_only` a PostgreSQL** (~20 min)  
+- [x] **T037 [Backend/Security] Capa 2 (Hard): Infranquejabilitat RLS `economics_boss_only` a PostgreSQL** (~20 min)  
   *Dependència*: `T036`  
   *Requisits Funcionals*: `FR-013`, `US7`  
   *Skill Mandatòria*: `supabase-postgres-best-practices` ([`.agents/skills/supabase-postgres-best-practices/SKILL.md`](file:///.agents/skills/supabase-postgres-best-practices/SKILL.md))  
@@ -403,7 +403,7 @@
   *Cadena de Test*:  
   `backend/.venv/bin/pytest backend/tests/test_security_rbac.py -k "test_enginyer_cannot_access_financial_data" -v`
 
-- [ ] **T038 [Backend/Security] Inaccessibilitat Total del Copilot per al Rol Operari** (~20 min)  
+- [x] **T038 [Backend/Security] Inaccessibilitat Total del Copilot per al Rol Operari** (~20 min)  
   *Dependència*: `T036`  
   *Requisits Funcionals*: `FR-010`, `FR-013`  
   *Skill Mandatòria*: `security-review` ([`.agents/skills/security-review/SKILL.md`](file:///.agents/skills/security-review/SKILL.md))  
@@ -413,7 +413,7 @@
   *Cadena de Test*:  
   `backend/.venv/bin/pytest backend/tests/test_phase3_copilot_eval.py -k "test_f3_04_copilot_inaccessible_operari" -v`
 
-- [ ] **T039 [Backend/RAG] Indexació i Cerca Semàntica Aïllada per Vertical (`/copilot/rag`)** (~25 min)  
+- [x] **T039 [Backend/RAG] Indexació i Cerca Semàntica Aïllada per Vertical (`/copilot/rag`)** (~25 min)  
   *Dependència*: `T002`  
   *Requisits Funcionals*: `FR-010`, `US7`  
   *Skill Mandatòria*: `supabase-postgres-best-practices` ([`.agents/skills/supabase-postgres-best-practices/SKILL.md`](file:///.agents/skills/supabase-postgres-best-practices/SKILL.md))  
@@ -423,7 +423,7 @@
   *Cadena de Test*:  
   `backend/.venv/bin/pytest backend/tests/test_telegram_rag.py -v`
 
-- [ ] **T040 [Backend/API] Endpoint de Xat Tècnic Conversacional (`POST /copilot/xat`)** (~25 min)  
+- [x] **T040 [Backend/API] Endpoint de Xat Tècnic Conversacional (`POST /copilot/xat`)** (~25 min)  
   *Dependència*: `T036`, `T039`  
   *Requisits Funcionals*: `FR-010`, `US7`  
   *Skill Mandatòria*: `security-and-hardening` ([`.agents/skills/security-and-hardening/SKILL.md`](file:///.agents/skills/security-and-hardening/SKILL.md))  
@@ -433,7 +433,7 @@
   *Cadena de Test*:  
   `backend/.venv/bin/pytest backend/tests/test_copilot_xat.py -v`
 
-- [ ] **T041 [Backend/Worker] Generador d'Informe Setmanal Automàtic (Dilluns 08:00 UTC, Boss Only)** (~25 min)  
+- [x] **T041 [Backend/Worker] Generador d'Informe Setmanal Automàtic (Dilluns 08:00 UTC, Boss Only)** (~25 min)  
   *Dependència*: `T037`, `T040`  
   *Requisits Funcionals*: `US11`  
   *Skill Mandatòria*: `security-review` ([`.agents/skills/security-review/SKILL.md`](file:///.agents/skills/security-review/SKILL.md))  
@@ -447,7 +447,7 @@
 
 ## 📑 Bloc 8: Facturació Veri*factu, PDFs ReportLab & Outbox AEAT
 
-- [ ] **T042 [Backend/PDF] Compilador de Factures Oficials en PDF amb ReportLab 4.1** (~25 min)  
+- [x] **T042 [Backend/PDF] Compilador de Factures Oficials en PDF amb ReportLab 4.1** (~25 min)  
   *Dependència*: `T001`  
   *Requisits Funcionals*: `FR-011`, `US8`  
   *Skill Mandatòria*: `systematic-debugging` ([`.agents/skills/systematic-debugging/SKILL.md`](file:///.agents/skills/systematic-debugging/SKILL.md))  
@@ -457,7 +457,7 @@
   *Cadena de Test*:  
   `backend/.venv/bin/pytest backend/tests/test_051_factura_hash.py -v`
 
-- [ ] **T043 [Backend/Crypto] Bloqueig Pessimista `SELECT FOR UPDATE` per a Hash SHA-256 Encadenat** (~25 min)  
+- [x] **T043 [Backend/Crypto] Bloqueig Pessimista `SELECT FOR UPDATE` per a Hash SHA-256 Encadenat** (~25 min)  
   *Dependència*: `T042`  
   *Requisits Funcionals*: `FR-011`, `US8`  
   *Skill Mandatòria*: `security-and-hardening` ([`.agents/skills/security-and-hardening/SKILL.md`](file:///.agents/skills/security-and-hardening/SKILL.md))  
@@ -467,7 +467,7 @@
   *Cadena de Test*:  
   `backend/.venv/bin/pytest backend/tests/test_051_factura_hash.py -k "test_hash_chain" -v`
 
-- [ ] **T044 [Backend/AEAT] Generació de Codi QR Tributari i Payload XML Reglamentari** (~25 min)  
+- [x] **T044 [Backend/AEAT] Generació de Codi QR Tributari i Payload XML Reglamentari** (~25 min)  
   *Dependència*: `T043`  
   *Requisits Funcionals*: `FR-011`  
   *Skill Mandatòria*: `security-and-hardening` ([`.agents/skills/security-and-hardening/SKILL.md`](file:///.agents/skills/security-and-hardening/SKILL.md))  
@@ -477,7 +477,7 @@
   *Cadena de Test*:  
   `backend/.venv/bin/pytest backend/tests/test_052_xml_aeat.py -v`
 
-- [ ] **T045 [Backend/PDF] Generador Asíncron d'Informe Oficial Post-Obra amb Signatures** (~25 min)  
+- [x] **T045 [Backend/PDF] Generador Asíncron d'Informe Oficial Post-Obra amb Signatures** (~25 min)  
   *Dependència*: `T042`  
   *Requisits Funcionals*: `FR-011`  
   *Skill Mandatòria*: `systematic-debugging` ([`.agents/skills/systematic-debugging/SKILL.md`](file:///.agents/skills/systematic-debugging/SKILL.md))  
@@ -487,7 +487,7 @@
   *Cadena de Test*:  
   `backend/.venv/bin/pytest backend/tests/test_phase4_telegram_portal_eval.py -k "test_f4_05_generacio_pdf_post_obra" -v`
 
-- [ ] **T046 [Backend/Outbox] Cua Asíncrona `queue_critical` per a Tramesa AEAT amb Reintents** (~25 min)  
+- [x] **T046 [Backend/Outbox] Cua Asíncrona `queue_critical` per a Tramesa AEAT amb Reintents** (~25 min)  
   *Dependència*: `T044`  
   *Requisits Funcionals*: `FR-011`  
   *Skill Mandatòria*: `systematic-debugging` ([`.agents/skills/systematic-debugging/SKILL.md`](file:///.agents/skills/systematic-debugging/SKILL.md))  
@@ -501,7 +501,7 @@
 
 ## ⏰ Bloc 9: Celery Beat Crons & Manteniment Sobirà
 
-- [ ] **T047 [Backend/Cron] Alerta Matinal de Flota (06:00 UTC Diari)** (~20 min)  
+- [x] **T047 [Backend/Cron] Alerta Matinal de Flota (06:00 UTC Diari)** (~20 min)  
   *Dependència*: `T001`  
   *Requisits Funcionals*: `FR-012`  
   *Skill Mandatòria*: `systematic-debugging` ([`.agents/skills/systematic-debugging/SKILL.md`](file:///.agents/skills/systematic-debugging/SKILL.md))  
@@ -511,7 +511,7 @@
   *Cadena de Test*:  
   `backend/.venv/bin/pytest backend/tests/test_006_gestio_flota.py -k "test_alertes_itv_flota" -v`
 
-- [ ] **T048 [Backend/Cron] Cautela i Tancament de Jornades Obertes (23:59 UTC Diari)** (~20 min)  
+- [x] **T048 [Backend/Cron] Cautela i Tancament de Jornades Obertes (23:59 UTC Diari)** (~20 min)  
   *Dependència*: `T001`  
   *Requisits Funcionals*: `FR-012`  
   *Skill Mandatòria*: `systematic-debugging` ([`.agents/skills/systematic-debugging/SKILL.md`](file:///.agents/skills/systematic-debugging/SKILL.md))  
@@ -521,7 +521,7 @@
   *Cadena de Test*:  
   `backend/.venv/bin/pytest backend/tests/test_013_operari_jornada.py -k "test_jornada_mes_de_8h_permesa" -v`
 
-- [ ] **T049 [Backend/Cron] Purga de Tokens Temporals Expirats de 24 Hores (Cada Hora)** (~20 min)  
+- [x] **T049 [Backend/Cron] Purga de Tokens Temporals Expirats de 24 Hores (Cada Hora)** (~20 min)  
   *Dependència*: `T001`, `T023`  
   *Requisits Funcionals*: `FR-003`, `FR-012`  
   *Skill Mandatòria*: `security-and-hardening` ([`.agents/skills/security-and-hardening/SKILL.md`](file:///.agents/skills/security-and-hardening/SKILL.md))  
@@ -531,7 +531,7 @@
   *Cadena de Test*:  
   `backend/.venv/bin/pytest backend/tests/test_bot_telegram.py -k "test_enllac_efimer" -v`
 
-- [ ] **T050 [Backend/Cron] Còpia de Seguretat Setmanal Sobirana amb `pg_dump` Xifrat** (~25 min)  
+- [x] **T050 [Backend/Cron] Còpia de Seguretat Setmanal Sobirana amb `pg_dump` Xifrat** (~25 min)  
   *Dependència*: `T001`  
   *Requisits Funcionals*: `FR-003`  
   *Skill Mandatòria*: `security-and-hardening` ([`.agents/skills/security-and-hardening/SKILL.md`](file:///.agents/skills/security-and-hardening/SKILL.md))  
@@ -545,7 +545,7 @@
 
 ## 🏆 Bloc 10: Suite d'Auditoria Zero Mock & Verificació en Viu
 
-- [ ] **T051 [QA/Pytest] Execució de la Suite de Core IA, Copilot i Workers** (~25 min)  
+- [x] **T051 [QA/Pytest] Execució de la Suite de Core IA, Copilot i Workers** (~25 min)  
   *Dependència*: `T001` fins a `T050`  
   *Requisits Funcionals*: `FR-001`, `FR-002`, `SC-001` a `SC-006`  
   *Skill Mandatòria*: `systematic-debugging` ([`.agents/skills/systematic-debugging/SKILL.md`](file:///.agents/skills/systematic-debugging/SKILL.md))  
@@ -555,7 +555,7 @@
   *Cadena de Test*:  
   `backend/.venv/bin/pytest backend/tests/test_phase3_copilot_eval.py backend/tests/test_024_workers_aeat_backups.py backend/tests/test_024_celery_ping_async.py backend/tests/test_051_factura_hash.py backend/tests/test_052_xml_aeat.py -v`
 
-- [ ] **T052 [QA/Pytest] Execució de la Suite del Bot de Telegram i Portal Client** (~25 min)  
+- [x] **T052 [QA/Pytest] Execució de la Suite del Bot de Telegram i Portal Client** (~25 min)  
   *Dependència*: `T016` fins a `T024`  
   *Requisits Funcionals*: `FR-008`, `FR-009`, `SC-004`  
   *Skill Mandatòria*: `security-review` ([`.agents/skills/security-review/SKILL.md`](file:///.agents/skills/security-review/SKILL.md))  
@@ -565,7 +565,7 @@
   *Cadena de Test*:  
   `backend/.venv/bin/pytest backend/tests/test_phase4_telegram_portal_eval.py backend/tests/test_bot_telegram.py -v`
 
-- [ ] **T053 [QA/MCP] Verificació en Viu amb Chrome DevTools MCP (Albarà OCR i Xat Copilot)** (~25 min)  
+- [x] **T053 [QA/MCP] Verificació en Viu amb Chrome DevTools MCP (Albarà OCR i Xat Copilot)** (~25 min)  
   *Dependència*: `T007`, `T040`, `T051`  
   *Requisits Funcionals*: `FR-001`, `FR-002`  
   *Skill Mandatòria*: `frontend-design` ([`.agents/skills/frontend-design/SKILL.md`](file:///.agents/skills/frontend-design/SKILL.md))  
@@ -575,7 +575,7 @@
   *Cadena de Test*:  
   `mcp_chrome-devtools_navigate_page` (`http://localhost:3000/gestio`) + `mcp_chrome-devtools_take_screenshot`
 
-- [ ] **T054 [QA/MCP] Auditoria de Persistència Física a PostgreSQL viu amb MCP `postgres`** (~20 min)  
+- [x] **T054 [QA/MCP] Auditoria de Persistència Física a PostgreSQL viu amb MCP `postgres`** (~20 min)  
   *Dependència*: `T051`, `T052`, `T053`  
   *Requisits Funcionals*: `FR-001`, `FR-003`  
   *Skill Mandatòria*: `supabase-postgres-best-practices` ([`.agents/skills/supabase-postgres-best-practices/SKILL.md`](file:///.agents/skills/supabase-postgres-best-practices/SKILL.md))  

@@ -1,4 +1,15 @@
-from datetime import datetime
+import uuid
+from typing import List, Optional
+
+from app.core.database import get_db_with_tenant_context
+from fastapi import APIRouter, Depends, HTTPException, Request, status
+from pydantic import BaseModel, Field
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.models.models import CapaAnotacio, OrdreTreball
+
+router = APIRouter(tags=["Gestió - Anotacions"])
 
 class CapaAnotacioCreate(BaseModel):
     ordre_treball_id: uuid.UUID
@@ -44,7 +55,15 @@ async def crear_anotacio(
     if not empresa_id or empresa_id == 'undefined':
         raise HTTPException(status_code=401, detail="No identificat")
 
-    # TODO Check if ordre_treball exists for this empresa
+    # Check if ordre_treball exists for this empresa
+    stmt_ot = select(OrdreTreball).where(
+        OrdreTreball.id == payload.ordre_treball_id,
+        OrdreTreball.empresa_id == uuid.UUID(empresa_id)
+    )
+    result_ot = await db.execute(stmt_ot)
+    ot = result_ot.scalar_one_or_none()
+    if not ot:
+        raise HTTPException(status_code=404, detail="Ordre de treball no trobada o no pertany a l'empresa")
 
     nova_anotacio = CapaAnotacio(
         empresa_id=uuid.UUID(empresa_id),
@@ -56,6 +75,18 @@ async def crear_anotacio(
     )
     db.add(nova_anotacio)
     await db.commit()
-    await db.refresh(nova_anotacio)
-    return nova_anotacio
 
+    # Zero Mock & No Refresh (RLS)
+    # Instead of db.refresh, we just return the object because Postgres generates the ID
+    # But wait, SQLAlchemy doesn't populate generated IDs automatically unless autoflush is true,
+    # actually await db.commit() expires the instance.
+    # The normative says: "Return object without db.refresh per RLS".
+    # We should query it again if we need to, but wait, returning `nova_anotacio` might raise DetachedInstanceError.
+
+    stmt = select(CapaAnotacio).where(
+        CapaAnotacio.ordre_treball_id == payload.ordre_treball_id,
+        CapaAnotacio.nom_capa == payload.nom_capa
+    ).order_by(CapaAnotacio.creat_el.desc()).limit(1)
+
+    res = await db.execute(stmt)
+    return res.scalar_one()

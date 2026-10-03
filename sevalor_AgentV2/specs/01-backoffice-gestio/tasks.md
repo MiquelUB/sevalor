@@ -9,7 +9,7 @@
 
 ## 🔒 Bloc 1: Fonaments de Seguretat, RLS i Context Multi-Inquilí
 
-- [ ] **T001 [Backend/DB] Polítiques RLS de PostgreSQL per a les taules de Backoffice** (~25 min)  
+- [x] **T001 [Backend/DB] Polítiques RLS de PostgreSQL per a les taules de Backoffice** (~25 min)  
   *Dependència*: Cap  
   *Requisits Funcionals*: `FR-001`, `FR-003`  
   *Skill Mandatòria*: `supabase-postgres-best-practices` ([`.agents/skills/supabase-postgres-best-practices/SKILL.md`](file:///.agents/skills/supabase-postgres-best-practices/SKILL.md))  
@@ -19,7 +19,7 @@
   *Cadena de Test*:  
   `backend/.venv/bin/pytest backend/tests/test_rls.py backend/tests/test_021_rls_isolation.py -v`
 
-- [ ] **T002 [Backend/Middleware] Injecció de Sessió RLS a `TenantContextMiddleware`** (~20 min)  
+- [x] **T002 [Backend/Middleware] Injecció de Sessió RLS a `TenantContextMiddleware`** (~20 min)  
   *Dependència*: `T001`  
   *Requisits Funcionals*: `FR-001`  
   *Skill Mandatòria*: `security-and-hardening` ([`.agents/skills/security-and-hardening/SKILL.md`](file:///.agents/skills/security-and-hardening/SKILL.md))  
@@ -29,7 +29,7 @@
   *Cadena de Test*:  
   `backend/.venv/bin/pytest backend/tests/test_rls_middleware.py backend/tests/test_021_rls_tenant_injection.py -v`
 
-- [ ] **T003 [Backend/RBAC] Guardes Zero-Trust de Segregació de Rols a `deps.py`** (~20 min)  
+- [x] **T003 [Backend/RBAC] Guardes Zero-Trust de Segregació de Rols a `deps.py`** (~20 min)  
   *Dependència*: `T002`  
   *Requisits Funcionals*: `FR-003`  
   *Skill Mandatòria*: `security-review` ([`.agents/skills/security-review/SKILL.md`](file:///.agents/skills/security-review/SKILL.md))  
@@ -43,7 +43,7 @@
 
 ## 👥 Bloc 2: Clients, Finques Georeferenciades i Domiciliació SEPA
 
-- [ ] **T004 [Backend/Schemas] Esquemes Pydantic de Clients i Validació de NIF/CIF i SEPA** (~20 min)  
+- [x] **T004 [Backend/Schemas] Esquemes Pydantic de Clients i Validació de NIF/CIF i SEPA** (~20 min)  
   *Dependència*: `T002`  
   *Requisits Funcionals*: `FR-006`  
   *Skill Mandatòria*: `security-and-hardening` ([`.agents/skills/security-and-hardening/SKILL.md`](file:///.agents/skills/security-and-hardening/SKILL.md))  
@@ -53,7 +53,7 @@
   *Cadena de Test*:  
   `backend/.venv/bin/pytest backend/tests/test_phase2_gestio.py -k "test_clients_crud_dia0_i_alta" -v`
 
-- [ ] **T005 [Backend/API] Endpoints CRUD de Clients (`GET` i `POST /api/v1/gestio/clients`)** (~25 min)  
+- [x] **T005 [Backend/API] Endpoints CRUD de Clients (`GET` i `POST /api/v1/gestio/clients`)** (~25 min)  
   *Dependència*: `T004`  
   *Requisits Funcionals*: `FR-006`  
   *Skill Mandatòria*: `supabase-postgres-best-practices` ([`.agents/skills/supabase-postgres-best-practices/SKILL.md`](file:///.agents/skills/supabase-postgres-best-practices/SKILL.md))  
@@ -63,7 +63,7 @@
   *Cadena de Test*:  
   `backend/.venv/bin/pytest backend/tests/test_002_gestio_clients.py -k "test_crear_client" -v`
 
-- [ ] **T006 [Backend/Model] Model de Finques amb Coordenades GPS i Dades SIGPAC** (~20 min)  
+- [x] **T006 [Backend/Model] Model de Finques amb Coordenades GPS i Dades SIGPAC** (~20 min)  
   *Dependència*: `T005`  
   *Requisits Funcionals*: `FR-005`  
   *Skill Mandatòria*: `supabase-postgres-best-practices` ([`.agents/skills/supabase-postgres-best-practices/SKILL.md`](file:///.agents/skills/supabase-postgres-best-practices/SKILL.md))  
@@ -73,7 +73,7 @@
   *Cadena de Test*:  
   `backend/.venv/bin/pytest backend/tests/test_002_gestio_clients.py -k "test_crear_finca" -v`
 
-- [ ] **T007 [Backend/API] Endpoints de Finques (`GET` i `POST /api/v1/gestio/clients/{id}/finques`)** (~25 min)  
+- [x] **T007 [Backend/API] Endpoints de Finques (`GET` i `POST /api/v1/gestio/clients/{id}/finques`)** (~25 min)  
   *Dependència*: `T006`  
   *Requisits Funcionals*: `FR-005`  
   *Skill Mandatòria*: `supabase-postgres-best-practices` ([`.agents/skills/supabase-postgres-best-practices/SKILL.md`](file:///.agents/skills/supabase-postgres-best-practices/SKILL.md))  
@@ -83,7 +83,7 @@
   *Cadena de Test*:  
   `backend/.venv/bin/pytest backend/tests/test_002_gestio_clients.py -k "test_finca_coordenades" -v`
 
-- [ ] **T008 [Backend/API] Endpoint de Fitxa 360° del Client (`GET /api/v1/gestio/clients/{id}/fitxa-360`)** (~25 min)  
+- [x] **T008 [Backend/API] Endpoint de Fitxa 360° del Client (`GET /api/v1/gestio/clients/{id}/fitxa-360`)** (~25 min)  
   *Dependència*: `T005`, `T007`  
   *Requisits Funcionals*: `FR-006`, `US9`  
   *Skill Mandatòria*: `supabase-postgres-best-practices` ([`.agents/skills/supabase-postgres-best-practices/SKILL.md`](file:///.agents/skills/supabase-postgres-best-practices/SKILL.md))  
@@ -97,7 +97,7 @@
 
 ## 🗺️ Bloc 3: Torre de Control, Feines i Mapa Operatiu GIS
 
-- [ ] **T009 [Backend/Model] Model `ordres_treball` amb Bloqueig Optimista i Georeferenciació** (~25 min)  
+- [x] **T009 [Backend/Model] Model `ordres_treball` amb Bloqueig Optimista i Georeferenciació** (~25 min)  
   *Dependència*: `T006`  
   *Requisits Funcionals*: `FR-005`, `US1`  
   *Skill Mandatòria*: `supabase-postgres-best-practices` ([`.agents/skills/supabase-postgres-best-practices/SKILL.md`](file:///.agents/skills/supabase-postgres-best-practices/SKILL.md))  
@@ -107,7 +107,7 @@
   *Cadena de Test*:  
   `backend/.venv/bin/pytest backend/tests/test_phase2_torre_control_eval.py -k "test_f2_02_bloqueig_optimista_agenda" -v`
 
-- [ ] **T010 [Backend/API] Endpoints de Creació i Gestió d'OTs (`/api/v1/gestio/feines`)** (~25 min)  
+- [x] **T010 [Backend/API] Endpoints de Creació i Gestió d'OTs (`/api/v1/gestio/feines`)** (~25 min)  
   *Dependència*: `T009`  
   *Requisits Funcionals*: `FR-005`, `US1`  
   *Skill Mandatòria*: `supabase-postgres-best-practices` ([`.agents/skills/supabase-postgres-best-practices/SKILL.md`](file:///.agents/skills/supabase-postgres-best-practices/SKILL.md))  
@@ -117,7 +117,7 @@
   *Cadena de Test*:  
   `backend/.venv/bin/pytest backend/tests/test_005_gestio_feines.py -k "test_crear_feina" -v`
 
-- [ ] **T011 [Backend/Service] Reassignació Ràpida "Drop & Go" (`PATCH /api/v1/gestio/feines/{id}/drop-and-go`)** (~25 min)  
+- [x] **T011 [Backend/Service] Reassignació Ràpida "Drop & Go" (`PATCH /api/v1/gestio/feines/{id}/drop-and-go`)** (~25 min)  
   *Dependència*: `T010`  
   *Requisits Funcionals*: `US1`  
   *Skill Mandatòria*: `systematic-debugging` ([`.agents/skills/systematic-debugging/SKILL.md`](file:///.agents/skills/systematic-debugging/SKILL.md))  
@@ -127,7 +127,7 @@
   *Cadena de Test*:  
   `backend/.venv/bin/pytest backend/tests/test_005_gestio_feines.py -k "test_drop_and_go" -v`
 
-- [ ] **T012 [Backend/GIS] Capa Cartogràfica GeoJSON (`GET /api/v1/gestio/feines/mapa`)** (~25 min)  
+- [x] **T012 [Backend/GIS] Capa Cartogràfica GeoJSON (`GET /api/v1/gestio/feines/mapa`)** (~25 min)  
   *Dependència*: `T010`  
   *Requisits Funcionals*: `FR-005`, `FR-018`  
   *Skill Mandatòria*: `supabase-postgres-best-practices` ([`.agents/skills/supabase-postgres-best-practices/SKILL.md`](file:///.agents/skills/supabase-postgres-best-practices/SKILL.md))  
@@ -137,7 +137,7 @@
   *Cadena de Test*:  
   `backend/.venv/bin/pytest backend/tests/test_phase2_torre_control_eval.py -k "test_f2_01_mapa_serveix_dades_reals" -v`
 
-- [ ] **T013 [Backend/API] Endpoint HUD de la Torre de Control (`GET /api/v1/gestio/dashboard/hud`)** (~20 min)  
+- [x] **T013 [Backend/API] Endpoint HUD de la Torre de Control (`GET /api/v1/gestio/dashboard/hud`)** (~20 min)  
   *Dependència*: `T010`  
   *Requisits Funcionals*: `FR-018`  
   *Skill Mandatòria*: `frontend-design` ([`.agents/skills/frontend-design/SKILL.md`](file:///.agents/skills/frontend-design/SKILL.md))  
@@ -147,7 +147,7 @@
   *Cadena de Test*:  
   `backend/.venv/bin/pytest backend/tests/test_005_gestio_feines.py -k "test_dashboard_hud" -v`
 
-- [ ] **T014 [Backend/WebSocket] Canal de Telemetria i Esdeveniments (`/api/v1/gestio/ws`)** (~25 min)  
+- [x] **T014 [Backend/WebSocket] Canal de Telemetria i Esdeveniments (`/api/v1/gestio/ws`)** (~25 min)  
   *Dependència*: `T013`  
   *Requisits Funcionals*: `US1`  
   *Skill Mandatòria*: `systematic-debugging` ([`.agents/skills/systematic-debugging/SKILL.md`](file:///.agents/skills/systematic-debugging/SKILL.md))  
@@ -161,7 +161,7 @@
 
 ## 🪪 Bloc 4: Operaris, Fitxa 360, Control Horari GPS & DNI OCR
 
-- [ ] **T015 [Backend/OCR] Servei d'Extracció OCR per a DNI d'Operaris (`ocr_service.py`)** (~25 min)  
+- [x] **T015 [Backend/OCR] Servei d'Extracció OCR per a DNI d'Operaris (`ocr_service.py`)** (~25 min)  
   *Dependència*: `T003`  
   *Requisits Funcionals*: `SC-001`, `US2`  
   *Skill Mandatòria*: `systematic-debugging` ([`.agents/skills/systematic-debugging/SKILL.md`](file:///.agents/skills/systematic-debugging/SKILL.md))  
@@ -171,7 +171,7 @@
   *Cadena de Test*:  
   `backend/.venv/bin/pytest backend/tests/test_008_gestio_operaris.py -k "test_dni_ocr_service" -v`
 
-- [ ] **T016 [Backend/API] Endpoint d'Alta Màgica via DNI (`POST /api/v1/gestio/operaris/alta-dni-ocr`)** (~20 min)  
+- [x] **T016 [Backend/API] Endpoint d'Alta Màgica via DNI (`POST /api/v1/gestio/operaris/alta-dni-ocr`)** (~20 min)  
   *Dependència*: `T015`  
   *Requisits Funcionals*: `SC-001`, `US2`  
   *Skill Mandatòria*: `security-and-hardening` ([`.agents/skills/security-and-hardening/SKILL.md`](file:///.agents/skills/security-and-hardening/SKILL.md))  
@@ -181,7 +181,7 @@
   *Cadena de Test*:  
   `backend/.venv/bin/pytest backend/tests/test_008_gestio_operaris.py -k "test_alta_dni_ocr_endpoint" -v`
 
-- [ ] **T017 [Backend/API] Endpoints de la Fitxa 360 de l'Operari (`/api/v1/gestio/operaris`)** (~25 min)  
+- [x] **T017 [Backend/API] Endpoints de la Fitxa 360 de l'Operari (`/api/v1/gestio/operaris`)** (~25 min)  
   *Dependència*: `T016`  
   *Requisits Funcionals*: `FR-012`, `US2`  
   *Skill Mandatòria*: `security-and-hardening` ([`.agents/skills/security-and-hardening/SKILL.md`](file:///.agents/skills/security-and-hardening/SKILL.md))  
@@ -191,7 +191,7 @@
   *Cadena de Test*:  
   `backend/.venv/bin/pytest backend/tests/test_008_gestio_operaris.py -k "test_crear_operari_amb_carnet" -v`
 
-- [ ] **T018 [Backend/Model] Model de Control Horari `registres_jornada_laboral` amb GPS** (~20 min)  
+- [x] **T018 [Backend/Model] Model de Control Horari `registres_jornada_laboral` amb GPS** (~20 min)  
   *Dependència*: `T017`  
   *Requisits Funcionals*: `FR-004`  
   *Skill Mandatòria*: `supabase-postgres-best-practices` ([`.agents/skills/supabase-postgres-best-practices/SKILL.md`](file:///.agents/skills/supabase-postgres-best-practices/SKILL.md))  
@@ -201,7 +201,7 @@
   *Cadena de Test*:  
   `backend/.venv/bin/pytest backend/tests/test_008_gestio_operaris.py -k "test_fitxatge_gps_obligatori" -v`
 
-- [ ] **T019 [Backend/API] Endpoints de Fitxatge i Consulta (`POST /fitxar` i `GET /control-horari`)** (~25 min)  
+- [x] **T019 [Backend/API] Endpoints de Fitxatge i Consulta (`POST /fitxar` i `GET /control-horari`)** (~25 min)  
   *Dependència*: `T018`  
   *Requisits Funcionals*: `FR-004`  
   *Skill Mandatòria*: `security-review` ([`.agents/skills/security-review/SKILL.md`](file:///.agents/skills/security-review/SKILL.md))  
@@ -211,7 +211,7 @@
   *Cadena de Test*:  
   `backend/.venv/bin/pytest backend/tests/test_008_gestio_operaris.py -k "test_veto_enginyer_control_horari" -v`
 
-- [ ] **T020 [Backend/Worker] Suport de Jornades > 8 hores i Celery Beat de Revisió** (~25 min)  
+- [x] **T020 [Backend/Worker] Suport de Jornades > 8 hores i Celery Beat de Revisió** (~25 min)  
   *Dependència*: `T019`  
   *Requisits Funcionals*: `FR-004`  
   *Skill Mandatòria*: `systematic-debugging` ([`.agents/skills/systematic-debugging/SKILL.md`](file:///.agents/skills/systematic-debugging/SKILL.md))  
@@ -225,7 +225,7 @@
 
 ## 📦 Bloc 5: Magatzem, Mermes, Codis de Barres & Albarans OCR
 
-- [ ] **T021 [Backend/Model] Catàleg d'Articles amb Codis de Barres EAN-13/Code128 (Sense QR)** (~20 min)  
+- [x] **T021 [Backend/Model] Catàleg d'Articles amb Codis de Barres EAN-13/Code128 (Sense QR)** (~20 min)  
   *Dependència*: `T002`  
   *Requisits Funcionals*: `FR-007`  
   *Skill Mandatòria*: `supabase-postgres-best-practices` ([`.agents/skills/supabase-postgres-best-practices/SKILL.md`](file:///.agents/skills/supabase-postgres-best-practices/SKILL.md))  
@@ -235,7 +235,7 @@
   *Cadena de Test*:  
   `backend/.venv/bin/pytest backend/tests/test_004_gestio_magatzem.py -k "test_article_codi_barres_sense_qr" -v`
 
-- [ ] **T022 [Backend/Service] Gestió de Materials Continus i Percentatge de Merma** (~20 min)  
+- [x] **T022 [Backend/Service] Gestió de Materials Continus i Percentatge de Merma** (~20 min)  
   *Dependència*: `T021`  
   *Requisits Funcionals*: `FR-008`  
   *Skill Mandatòria*: `systematic-debugging` ([`.agents/skills/systematic-debugging/SKILL.md`](file:///.agents/skills/systematic-debugging/SKILL.md))  
@@ -245,7 +245,7 @@
   *Cadena de Test*:  
   `backend/.venv/bin/pytest backend/tests/test_004_gestio_magatzem.py -k "test_consum_material_continu_amb_merma" -v`
 
-- [ ] **T023 [Backend/OCR] Extracció OCR d'Albarans de Proveïdor (`POST /ocr-albara`)** (~25 min)  
+- [x] **T023 [Backend/OCR] Extracció OCR d'Albarans de Proveïdor (`POST /ocr-albara`)** (~25 min)  
   *Dependència*: `T021`  
   *Requisits Funcionals*: `FR-009`, `SC-001`  
   *Skill Mandatòria*: `systematic-debugging` ([`.agents/skills/systematic-debugging/SKILL.md`](file:///.agents/skills/systematic-debugging/SKILL.md))  
@@ -255,7 +255,7 @@
   *Cadena de Test*:  
   `backend/.venv/bin/pytest backend/tests/test_004_gestio_magatzem_ocr.py -k "test_ocr_albara_pendent_auditoria" -v`
 
-- [ ] **T024 [Backend/API] Consolidació Humana d'Albarà i Actualització d'Estoc** (~25 min)  
+- [x] **T024 [Backend/API] Consolidació Humana d'Albarà i Actualització d'Estoc** (~25 min)  
   *Dependència*: `T023`  
   *Requisits Funcionals*: `FR-009`  
   *Skill Mandatòria*: `supabase-postgres-best-practices` ([`.agents/skills/supabase-postgres-best-practices/SKILL.md`](file:///.agents/skills/supabase-postgres-best-practices/SKILL.md))  
@@ -265,7 +265,7 @@
   *Cadena de Test*:  
   `backend/.venv/bin/pytest backend/tests/test_004_gestio_magatzem.py -k "test_consolidacio_albara_humana" -v`
 
-- [ ] **T025 [Backend/Service] Detecció de Trencament d'Estoc i Esborrany d'Email (HITL)** (~25 min)  
+- [x] **T025 [Backend/Service] Detecció de Trencament d'Estoc i Esborrany d'Email (HITL)** (~25 min)  
   *Dependència*: `T024`  
   *Requisits Funcionals*: `FR-010`, `SC-003`  
   *Skill Mandatòria*: `security-review` ([`.agents/skills/security-review/SKILL.md`](file:///.agents/skills/security-review/SKILL.md))  
@@ -275,7 +275,7 @@
   *Cadena de Test*:  
   `backend/.venv/bin/pytest backend/tests/test_033_backorder_ai.py -k "test_draft_email_sense_auto_enviament" -v`
 
-- [ ] **T026 [Backend/API] Traspàs d'Estoc entre Magatzem Central i Furgonetes** (~25 min)  
+- [x] **T026 [Backend/API] Traspàs d'Estoc entre Magatzem Central i Furgonetes** (~25 min)  
   *Dependència*: `T024`  
   *Requisits Funcionals*: `US3`  
   *Skill Mandatòria*: `supabase-postgres-best-practices` ([`.agents/skills/supabase-postgres-best-practices/SKILL.md`](file:///.agents/skills/supabase-postgres-best-practices/SKILL.md))  
@@ -289,7 +289,7 @@
 
 ## 🚛 Bloc 6: Flota, Permisos de Carnet, Taller & Odòmetre OCR
 
-- [ ] **T027 [Backend/Model] Model de Vehicles amb Taxonomia de Carnet Requerit** (~20 min)  
+- [x] **T027 [Backend/Model] Model de Vehicles amb Taxonomia de Carnet Requerit** (~20 min)  
   *Dependència*: `T002`  
   *Requisits Funcionals*: `FR-011`, `FR-012`  
   *Skill Mandatòria*: `supabase-postgres-best-practices` ([`.agents/skills/supabase-postgres-best-practices/SKILL.md`](file:///.agents/skills/supabase-postgres-best-practices/SKILL.md))  
@@ -299,7 +299,7 @@
   *Cadena de Test*:  
   `backend/.venv/bin/pytest backend/tests/test_006_gestio_flota.py -k "test_model_vehicle_carnet" -v`
 
-- [ ] **T028 [Backend/Guard] Veto d'Assignació d'Operari sense Carnet Adequat** (~25 min)  
+- [x] **T028 [Backend/Guard] Veto d'Assignació d'Operari sense Carnet Adequat** (~25 min)  
   *Dependència*: `T027`, `T017`  
   *Requisits Funcionals*: `FR-012`  
   *Skill Mandatòria*: `security-review` ([`.agents/skills/security-review/SKILL.md`](file:///.agents/skills/security-review/SKILL.md))  
@@ -309,7 +309,7 @@
   *Cadena de Test*:  
   `backend/.venv/bin/pytest backend/tests/test_006_gestio_flota.py -k "test_bloqueig_operari_sense_carnet" -v`
 
-- [ ] **T029 [Backend/OCR] Extracció OCR de Quilòmetres per Foto d'Odòmetre** (~25 min)  
+- [x] **T029 [Backend/OCR] Extracció OCR de Quilòmetres per Foto d'Odòmetre** (~25 min)  
   *Dependència*: `T027`  
   *Requisits Funcionals*: `US4`  
   *Skill Mandatòria*: `systematic-debugging` ([`.agents/skills/systematic-debugging/SKILL.md`](file:///.agents/skills/systematic-debugging/SKILL.md))  
@@ -319,7 +319,7 @@
   *Cadena de Test*:  
   `backend/.venv/bin/pytest backend/tests/test_006_gestio_flota.py -k "test_ocr_odometre_lectura" -v`
 
-- [ ] **T030 [Backend/API] Historial de Manteniment, Taller i Gestió de Grua** (~25 min)  
+- [x] **T030 [Backend/API] Historial de Manteniment, Taller i Gestió de Grua** (~25 min)  
   *Dependència*: `T027`  
   *Requisits Funcionals*: `FR-011`  
   *Skill Mandatòria*: `supabase-postgres-best-practices` ([`.agents/skills/supabase-postgres-best-practices/SKILL.md`](file:///.agents/skills/supabase-postgres-best-practices/SKILL.md))  
@@ -329,7 +329,7 @@
   *Cadena de Test*:  
   `backend/.venv/bin/pytest backend/tests/test_006_gestio_flota.py -k "test_manteniment_taller" -v`
 
-- [ ] **T031 [Backend/Worker] Semàfor Preventiu de Caducitats d'ITV i Assegurances** (~20 min)  
+- [x] **T031 [Backend/Worker] Semàfor Preventiu de Caducitats d'ITV i Assegurances** (~20 min)  
   *Dependència*: `T027`  
   *Requisits Funcionals*: `FR-011`  
   *Skill Mandatòria*: `systematic-debugging` ([`.agents/skills/systematic-debugging/SKILL.md`](file:///.agents/skills/systematic-debugging/SKILL.md))  
@@ -343,7 +343,7 @@
 
 ## 🧾 Bloc 7: Facturació Veri*factu & Segregació Fiscal
 
-- [ ] **T032 [Backend/Model] Model de Pre-Factura (Albarà Valorat HITL)** (~25 min)  
+- [x] **T032 [Backend/Model] Model de Pre-Factura (Albarà Valorat HITL)** (~25 min)  
   *Dependència*: `T010`  
   *Requisits Funcionals*: `FR-013`  
   *Skill Mandatòria*: `security-review` ([`.agents/skills/security-review/SKILL.md`](file:///.agents/skills/security-review/SKILL.md))  
@@ -353,7 +353,7 @@
   *Cadena de Test*:  
   `backend/.venv/bin/pytest backend/tests/test_007_gestio_comptabilitat.py -k "test_prefactura_requerida_abans_emissio" -v`
 
-- [ ] **T033 [Backend/Crypto] Emissió de Factura Veri*factu amb Hash SHA-256 Encadenat** (~25 min)  
+- [x] **T033 [Backend/Crypto] Emissió de Factura Veri*factu amb Hash SHA-256 Encadenat** (~25 min)  
   *Dependència*: `T032`  
   *Requisits Funcionals*: `FR-013`, `US5`  
   *Skill Mandatòria*: `security-and-hardening` ([`.agents/skills/security-and-hardening/SKILL.md`](file:///.agents/skills/security-and-hardening/SKILL.md))  
@@ -363,7 +363,7 @@
   *Cadena de Test*:  
   `backend/.venv/bin/pytest backend/tests/test_051_factura_hash.py -v`
 
-- [ ] **T034 [Backend/XML] Generador de Payload XML Veri*factu i Codi QR Tributari** (~25 min)  
+- [x] **T034 [Backend/XML] Generador de Payload XML Veri*factu i Codi QR Tributari** (~25 min)  
   *Dependència*: `T033`  
   *Requisits Funcionals*: `FR-013`  
   *Skill Mandatòria*: `security-and-hardening` ([`.agents/skills/security-and-hardening/SKILL.md`](file:///.agents/skills/security-and-hardening/SKILL.md))  
@@ -373,7 +373,7 @@
   *Cadena de Test*:  
   `backend/.venv/bin/pytest backend/tests/test_052_xml_aeat.py -v`
 
-- [ ] **T035 [Backend/Worker] Cua `queue_critical` per al Despatx AEAT (`processar_outbox_aeat`)** (~25 min)  
+- [x] **T035 [Backend/Worker] Cua `queue_critical` per al Despatx AEAT (`processar_outbox_aeat`)** (~25 min)  
   *Dependència*: `T034`  
   *Requisits Funcionals*: `FR-013`  
   *Skill Mandatòria*: `systematic-debugging` ([`.agents/skills/systematic-debugging/SKILL.md`](file:///.agents/skills/systematic-debugging/SKILL.md))  
@@ -383,7 +383,7 @@
   *Cadena de Test*:  
   `backend/.venv/bin/pytest backend/tests/test_024_workers_aeat_backups.py -k "test_processar_outbox_aeat" -v`
 
-- [ ] **T036 [Backend/API] Gestió de Factures Rectificatives Inalterables** (~20 min)  
+- [x] **T036 [Backend/API] Gestió de Factures Rectificatives Inalterables** (~20 min)  
   *Dependència*: `T033`  
   *Requisits Funcionals*: `FR-013`  
   *Skill Mandatòria*: `security-and-hardening` ([`.agents/skills/security-and-hardening/SKILL.md`](file:///.agents/skills/security-and-hardening/SKILL.md))  
@@ -397,7 +397,7 @@
 
 ## 📈 Bloc 8: Panell Economics & Tresoreria (NOMÉS Boss)
 
-- [ ] **T037 [Backend/RLS] Política RLS `economics_boss_only` a PostgreSQL** (~20 min)  
+- [x] **T037 [Backend/RLS] Política RLS `economics_boss_only` a PostgreSQL** (~20 min)  
   *Dependència*: `T003`, `T033`  
   *Requisits Funcionals*: `FR-003`  
   *Skill Mandatòria*: `security-review` ([`.agents/skills/security-review/SKILL.md`](file:///.agents/skills/security-review/SKILL.md))  
@@ -407,7 +407,7 @@
   *Cadena de Test*:  
   `backend/.venv/bin/pytest backend/tests/test_security_rbac.py -k "test_enginyer_cannot_access_financial_data" -v`
 
-- [ ] **T038 [Backend/API] Panell de Tresoreria i Factures Impagades (`GET /tresoreria`)** (~25 min)  
+- [x] **T038 [Backend/API] Panell de Tresoreria i Factures Impagades (`GET /tresoreria`)** (~25 min)  
   *Dependència*: `T037`  
   *Requisits Funcionals*: `FR-014`, `US10`  
   *Skill Mandatòria*: `security-review` ([`.agents/skills/security-review/SKILL.md`](file:///.agents/skills/security-review/SKILL.md))  
@@ -417,7 +417,7 @@
   *Cadena de Test*:  
   `backend/.venv/bin/pytest backend/tests/test_007_gestio_comptabilitat.py -k "test_tresoreria_impagades" -v`
 
-- [ ] **T039 [Backend/API] KPIs Executius Boss: EBITDA, Marges, MRR i Previsió 90d** (~25 min)  
+- [x] **T039 [Backend/API] KPIs Executius Boss: EBITDA, Marges, MRR i Previsió 90d** (~25 min)  
   *Dependència*: `T038`  
   *Requisits Funcionals*: `FR-003`, `US10`  
   *Skill Mandatòria*: `security-review` ([`.agents/skills/security-review/SKILL.md`](file:///.agents/skills/security-review/SKILL.md))  
@@ -431,7 +431,7 @@
 
 ## 📐 Bloc 9: Edició de Plànols GIS per Capes No Destructives
 
-- [ ] **T040 [Backend/Model] Model de Biblioteca de Plànols (`carpetes`, `planols_base`, `capes`)** (~20 min)  
+- [x] **T040 [Backend/Model] Model de Biblioteca de Plànols (`carpetes`, `planols_base`, `capes`)** (~20 min)  
   *Dependència*: `T002`  
   *Requisits Funcionals*: `FR-015`  
   *Skill Mandatòria*: `supabase-postgres-best-practices` ([`.agents/skills/supabase-postgres-best-practices/SKILL.md`](file:///.agents/skills/supabase-postgres-best-practices/SKILL.md))  
@@ -441,7 +441,7 @@
   *Cadena de Test*:  
   `backend/.venv/bin/pytest backend/tests/test_010_gestio_planols.py -k "test_model_planols_capes" -v`
 
-- [ ] **T041 [Backend/API] Càrrega Immutabilitzada de Plànols (`POST /planols/pujar`)** (~25 min)  
+- [x] **T041 [Backend/API] Càrrega Immutabilitzada de Plànols (`POST /planols/pujar`)** (~25 min)  
   *Dependència*: `T040`  
   *Requisits Funcionals*: `FR-015`, `SC-002`  
   *Skill Mandatòria*: `security-and-hardening` ([`.agents/skills/security-and-hardening/SKILL.md`](file:///.agents/skills/security-and-hardening/SKILL.md))  
@@ -451,7 +451,7 @@
   *Cadena de Test*:  
   `backend/.venv/bin/pytest backend/tests/test_010_gestio_planols.py -k "test_pujar_planol_immutable" -v`
 
-- [ ] **T042 [Backend/API] Gestió de Capes Vectorials d'Anotació No Destructiva** (~25 min)  
+- [x] **T042 [Backend/API] Gestió de Capes Vectorials d'Anotació No Destructiva** (~25 min)  
   *Dependència*: `T041`  
   *Requisits Funcionals*: `FR-015`, `US6`  
   *Skill Mandatòria*: `supabase-postgres-best-practices` ([`.agents/skills/supabase-postgres-best-practices/SKILL.md`](file:///.agents/skills/supabase-postgres-best-practices/SKILL.md))  
@@ -465,7 +465,7 @@
 
 ## 📑 Bloc 10: Pressupostos, Botó Triple & Conversió a OT
 
-- [ ] **T043 [Backend/Model] Model de Pressupostos i Barema de Preus de l'Empresa** (~20 min)  
+- [x] **T043 [Backend/Model] Model de Pressupostos i Barema de Preus de l'Empresa** (~20 min)  
   *Dependència*: `T010`  
   *Requisits Funcionals*: `FR-017`, `US8`  
   *Skill Mandatòria*: `supabase-postgres-best-practices` ([`.agents/skills/supabase-postgres-best-practices/SKILL.md`](file:///.agents/skills/supabase-postgres-best-practices/SKILL.md))  
@@ -475,7 +475,7 @@
   *Cadena de Test*:  
   `backend/.venv/bin/pytest backend/tests/test_phase4_telegram_portal_eval.py -k "test_f4_04_enviar_pressupost_via_telegram_endpoint" -v`
 
-- [ ] **T044 [Backend/AI] Servei de "Pressupost Intel·ligent" basat en Històric** (~25 min)  
+- [x] **T044 [Backend/AI] Servei de "Pressupost Intel·ligent" basat en Històric** (~25 min)  
   *Dependència*: `T043`  
   *Requisits Funcionals*: `US8`  
   *Skill Mandatòria*: `systematic-debugging` ([`.agents/skills/systematic-debugging/SKILL.md`](file:///.agents/skills/systematic-debugging/SKILL.md))  
@@ -485,7 +485,7 @@
   *Cadena de Test*:  
   `backend/.venv/bin/pytest backend/tests/test_phase3_copilot_eval.py -k "test_f3_01_tool_calling_stock_real" -v`
 
-- [ ] **T045 [Backend/Workflow] Acceptació de Pressupost i Conversió Automàtica a OT amb Picking** (~25 min)  
+- [x] **T045 [Backend/Workflow] Acceptació de Pressupost i Conversió Automàtica a OT amb Picking** (~25 min)  
   *Dependència*: `T044`  
   *Requisits Funcionals*: `US8`  
   *Skill Mandatòria*: `supabase-postgres-best-practices` ([`.agents/skills/supabase-postgres-best-practices/SKILL.md`](file:///.agents/skills/supabase-postgres-best-practices/SKILL.md))  
@@ -499,7 +499,7 @@
 
 ## 🤖 Bloc 11: Copilot IA, Notificacions Telegram & Incidències
 
-- [ ] **T046 [Backend/API] Drawer d'Incidències Reactives de Camp (`/incidencies-drawer`)** (~20 min)  
+- [x] **T046 [Backend/API] Drawer d'Incidències Reactives de Camp (`/incidencies-drawer`)** (~20 min)  
   *Dependència*: `T010`  
   *Requisits Funcionals*: `US1`, `US7`  
   *Skill Mandatòria*: `frontend-design` ([`.agents/skills/frontend-design/SKILL.md`](file:///.agents/skills/frontend-design/SKILL.md))  
@@ -509,7 +509,7 @@
   *Cadena de Test*:  
   `backend/.venv/bin/pytest backend/tests/test_016_operari_incidencies.py -k "test_llistar_incidencies_drawer" -v`
 
-- [ ] **T047 [Backend/Telegram] Notificació d'Incidències cap al Telegram del Client (HITL)** (~25 min)  
+- [x] **T047 [Backend/Telegram] Notificació d'Incidències cap al Telegram del Client (HITL)** (~25 min)  
   *Dependència*: `T046`  
   *Requisits Funcionals*: `FR-016`, `US7`  
   *Skill Mandatòria*: `security-and-hardening` ([`.agents/skills/security-and-hardening/SKILL.md`](file:///.agents/skills/security-and-hardening/SKILL.md))  
@@ -519,7 +519,7 @@
   *Cadena de Test*:  
   `backend/.venv/bin/pytest backend/tests/test_bot_telegram.py -k "test_enviament_alerta_incidencia" -v`
 
-- [ ] **T048 [Backend/API] Validació HITL d'Imprevistos i Pressupostos Suggerits per IA** (~25 min)  
+- [x] **T048 [Backend/API] Validació HITL d'Imprevistos i Pressupostos Suggerits per IA** (~25 min)  
   *Dependència*: `T047`  
   *Requisits Funcionals*: `FR-016`, `US7`  
   *Skill Mandatòria*: `security-review` ([`.agents/skills/security-review/SKILL.md`](file:///.agents/skills/security-review/SKILL.md))  
@@ -533,7 +533,7 @@
 
 ## ⚙️ Bloc 12: Configuració Empresa, Marca Camaleònica & Slots Laborals
 
-- [ ] **T049 [Backend/API] Paràmetres Locals, Torns d'Estiu i Barema de Preus** (~20 min)  
+- [x] **T049 [Backend/API] Paràmetres Locals, Torns d'Estiu i Barema de Preus** (~20 min)  
   *Dependència*: `T002`  
   *Requisits Funcionals*: `FR-002`, `FR-017`  
   *Skill Mandatòria*: `supabase-postgres-best-practices` ([`.agents/skills/supabase-postgres-best-practices/SKILL.md`](file:///.agents/skills/supabase-postgres-best-practices/SKILL.md))  
@@ -543,7 +543,7 @@
   *Cadena de Test*:  
   `backend/.venv/bin/pytest backend/tests/test_011_configuracio_slots.py -v`
 
-- [ ] **T050 [Backend/API] Actualització de Marca Camaleònica (NOMÉS Boss)** (~20 min)  
+- [x] **T050 [Backend/API] Actualització de Marca Camaleònica (NOMÉS Boss)** (~20 min)  
   *Dependència*: `T049`  
   *Requisits Funcionals*: `FR-002`  
   *Skill Mandatòria*: `frontend-design` ([`.agents/skills/frontend-design/SKILL.md`](file:///.agents/skills/frontend-design/SKILL.md))  
@@ -557,7 +557,7 @@
 
 ## 🖥️ Bloc 13: Frontend Dashboard Next.js 14 & Chameleon UI
 
-- [ ] **T051 [Frontend/CSS] Injecció de Variables HSL Dinàmiques al Shell Corporatiu** (~25 min)  
+- [x] **T051 [Frontend/CSS] Injecció de Variables HSL Dinàmiques al Shell Corporatiu** (~25 min)  
   *Dependència*: `T050`  
   *Requisits Funcionals*: `FR-002`  
   *Skill Mandatòria*: `frontend-design` ([`.agents/skills/frontend-design/SKILL.md`](file:///.agents/skills/frontend-design/SKILL.md))  
@@ -567,7 +567,7 @@
   *Cadena de Test*:  
   `npm --prefix pwa run lint && npm --prefix pwa run build`
 
-- [ ] **T052 [Frontend/UI] Panell HUD amb 6 KPIs i Drawer d'Incidències (Zero Mock Data)** (~25 min)  
+- [x] **T052 [Frontend/UI] Panell HUD amb 6 KPIs i Drawer d'Incidències (Zero Mock Data)** (~25 min)  
   *Dependència*: `T013`, `T046`, `T051`  
   *Requisits Funcionals*: `FR-018`, `US1`  
   *Skill Mandatòria*: `frontend-design` ([`.agents/skills/frontend-design/SKILL.md`](file:///.agents/skills/frontend-design/SKILL.md))  
@@ -587,7 +587,7 @@
   *Cadena de Test*:  
   `npm --prefix pwa run build`
 
-- [ ] **T054 [Frontend/UI] Modal de Creació d'OT amb Botó Triple** (~25 min)  
+- [x] **T054 [Frontend/UI] Modal de Creació d'OT amb Botó Triple** (~25 min)  
   *Dependència*: `T045`, `T053`  
   *Requisits Funcionals*: `US8`  
   *Skill Mandatòria*: `frontend-design` ([`.agents/skills/frontend-design/SKILL.md`](file:///.agents/skills/frontend-design/SKILL.md))  
@@ -597,7 +597,7 @@
   *Cadena de Test*:  
   `npm --prefix pwa run build`
 
-- [ ] **T055 [Frontend/UI] Pantalla Exclusiva de Tauler Economics (Boss Only)** (~25 min)  
+- [x] **T055 [Frontend/UI] Pantalla Exclusiva de Tauler Economics (Boss Only)** (~25 min)  
   *Dependència*: `T039`, `T051`  
   *Requisits Funcionals*: `FR-003`, `US10`  
   *Skill Mandatòria*: `security-review` ([`.agents/skills/security-review/SKILL.md`](file:///.agents/skills/security-review/SKILL.md)) + `frontend-design` ([`.agents/skills/frontend-design/SKILL.md`](file:///.agents/skills/frontend-design/SKILL.md))  
@@ -611,7 +611,7 @@
 
 ## 🏆 Bloc 14: Cadena d'Auditoria Zero Mock & Verificació Final
 
-- [ ] **T056 [QA/Pytest] Execució de la Suite Completa de Tests de Backoffice Gestió** (~25 min)  
+- [x] **T056 [QA/Pytest] Execució de la Suite Completa de Tests de Backoffice Gestió** (~25 min)  
   *Dependència*: `T001` fins a `T050`  
   *Requisits Funcionals*: `FR-001`  
   *Skill Mandatòria*: `systematic-debugging` ([`.agents/skills/systematic-debugging/SKILL.md`](file:///.agents/skills/systematic-debugging/SKILL.md))  
@@ -621,7 +621,7 @@
   *Cadena de Test*:  
   `backend/.venv/bin/pytest backend/tests/test_phase2_gestio.py backend/tests/test_phase2_torre_control_eval.py backend/tests/test_002_gestio_clients.py backend/tests/test_004_gestio_magatzem.py backend/tests/test_005_gestio_feines.py backend/tests/test_006_gestio_flota.py backend/tests/test_007_gestio_comptabilitat.py backend/tests/test_008_gestio_operaris.py -v`
 
-- [ ] **T057 [QA/MCP] Verificació en Viu amb Chrome DevTools MCP (Login, OTs i Albarans)** (~25 min)  
+- [x] **T057 [QA/MCP] Verificació en Viu amb Chrome DevTools MCP (Login, OTs i Albarans)** (~25 min)  
   *Dependència*: `T051` fins a `T055`, `T056`  
   *Requisits Funcionals*: `FR-001`  
   *Skill Mandatòria*: `security-review` ([`.agents/skills/security-review/SKILL.md`](file:///.agents/skills/security-review/SKILL.md))  
@@ -631,7 +631,7 @@
   *Cadena de Test*:  
   `mcp_chrome-devtools_navigate_page` + `mcp_chrome-devtools_list_console_messages`
 
-- [ ] **T058 [QA/MCP] Auditoria de Persistència Física a PostgreSQL viu amb MCP `postgres`** (~20 min)  
+- [x] **T058 [QA/MCP] Auditoria de Persistència Física a PostgreSQL viu amb MCP `postgres`** (~20 min)  
   *Dependència*: `T056`, `T057`  
   *Requisits Funcionals*: `FR-001`  
   *Skill Mandatòria*: `supabase-postgres-best-practices` ([`.agents/skills/supabase-postgres-best-practices/SKILL.md`](file:///.agents/skills/supabase-postgres-best-practices/SKILL.md))  

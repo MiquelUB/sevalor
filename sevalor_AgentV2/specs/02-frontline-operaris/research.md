@@ -115,12 +115,12 @@
 
 | Check | Requirement | Verification Method |
 |---|---|---|
-| [ ] | Next.js redirects use absolute URLs | Grep for `NextResponse.redirect` and check `new URL(..., request.url)` |
-| [ ] | IndexedDB stores binary data | Check `pwa/src/lib/db.ts` for Blobs in `LocalTiquetDespesa` and `LocalIncidencia` |
-| [ ] | FastAPI multipart imports present | Grep for `UploadFile, File, Form` in routers accepting photos |
-| [ ] | RLS tenant context active | Verify `db: AsyncSession = Depends(get_db_with_tenant_context)` on all operari routers |
-| [ ] | Camera input has anti-fraud tags | Verify `accept="image/*"` and `capture="environment"` in camera inputs |
-| [ ] | Photos compressed to WebP < 1MB | Check client-side canvas compression pipeline before Dexie write |
-| [ ] | 3-Phase photos validated on finish | Ensure `PUT /feines/{id}/finalitzar` checks initial, intermedia, and final photos |
-| [ ] | 4-Color limit on blueprint canvas | Ensure palette is strictly restricted to Red, Blue, Green, Black |
-| [ ] | Dual photo enforced on fuel refuel | Ensure both receipt and odometer photos are required for fuel category |
+| [x] | Next.js redirects use absolute URLs | Grep for `NextResponse.redirect` and check `new URL(..., request.url)` |
+| [x] | IndexedDB stores binary data | Check `pwa/src/lib/db.ts` for Blobs in `LocalTiquetDespesa` and `LocalIncidencia` |
+| [x] | FastAPI multipart imports present | Grep for `UploadFile, File, Form` in routers accepting photos |
+| [x] | RLS tenant context active | Verify `db: AsyncSession = Depends(get_db_with_tenant_context)` on all operari routers |
+| [x] | Camera input has anti-fraud tags | Verify `accept="image/*"` and `capture="environment"` in camera inputs |
+| [x] | Photos compressed to WebP < 1MB | Check client-side canvas compression pipeline before Dexie write |
+| [x] | 3-Phase photos validated on finish | Ensure `PUT /feines/{id}/finalitzar` checks initial, intermedia, and final photos |
+| [x] | 4-Color limit on blueprint canvas | Ensure palette is strictly restricted to Red, Blue, Green, Black |
+| [x] | Dual photo enforced on fuel refuel | Ensure both receipt and odometer photos are required for fuel category |

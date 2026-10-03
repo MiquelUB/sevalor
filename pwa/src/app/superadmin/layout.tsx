@@ -51,16 +51,22 @@ export default function SuperadminLayout({
 
   const navLinks = [
     {
+      label: "Gestió d'Empreses",
+      href: "/superadmin/empreses",
+      icon: Server,
+      spec: "Spec 04",
+    },
+    {
       label: "Onboarding de Tenants",
       href: "/superadmin/tenants/onboarding",
       icon: UserPlus,
-      spec: "Spec 021",
+      spec: "Spec 04",
     },
     {
       label: "Telemetria & Salut",
       href: "/superadmin/telemetria",
       icon: Activity,
-      spec: "Spec 022",
+      spec: "Spec 04",
     },
   ];
 

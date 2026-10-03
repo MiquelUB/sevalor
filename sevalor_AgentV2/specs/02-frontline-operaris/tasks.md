@@ -9,7 +9,7 @@
 
 ## 🔐 Bloc 1: Criptografia Offline, Magatzem Local i Model de Dades
 
-- [ ] **T001 [Backend/DB] Taules d'Operaris i Polítiques RLS a PostgreSQL** (~25 min)  
+- [x] **T001 [Backend/DB] Taules d'Operaris i Polítiques RLS a PostgreSQL** (~25 min)  
   *Dependència*: Cap  
   *Requisits Funcionals*: `FR-001`, `FR-003`  
   *Skill Mandatòria*: `supabase-postgres-best-practices` ([`.agents/skills/supabase-postgres-best-practices/SKILL.md`](file:///.agents/skills/supabase-postgres-best-practices/SKILL.md))  
@@ -19,7 +19,7 @@
   *Cadena de Test*:  
   `backend/.venv/bin/pytest backend/tests/test_rls.py backend/tests/test_019_operari_login.py -k "test_login_tenant_isolation" -v`
 
-- [ ] **T002 [Frontend/Crypto] Mòdul Criptogràfic Web Crypto API (PBKDF2 + AES-GCM 256)** (~25 min)  
+- [x] **T002 [Frontend/Crypto] Mòdul Criptogràfic Web Crypto API (PBKDF2 + AES-GCM 256)** (~25 min)  
   *Dependència*: `T001`  
   *Requisits Funcionals*: `FR-002`, `FR-003`  
   *Skill Mandatòria*: `security-and-hardening` ([`.agents/skills/security-and-hardening/SKILL.md`](file:///.agents/skills/security-and-hardening/SKILL.md))  
@@ -29,7 +29,7 @@
   *Cadena de Test*:  
   `npm --prefix pwa run lint && npm --prefix pwa test -- tests/crypto.test.ts 2>/dev/null || npm --prefix pwa run build`
 
-- [ ] **T003 [Frontend/Crypto] Sentinel de Validació de PIN Offline a IndexedDB** (~20 min)  
+- [x] **T003 [Frontend/Crypto] Sentinel de Validació de PIN Offline a IndexedDB** (~20 min)  
   *Dependència*: `T002`  
   *Requisits Funcionals*: `FR-002`, `FR-003`  
   *Skill Mandatòria*: `security-and-hardening` ([`.agents/skills/security-and-hardening/SKILL.md`](file:///.agents/skills/security-and-hardening/SKILL.md))  
@@ -39,7 +39,7 @@
   *Cadena de Test*:  
   `npm --prefix pwa run build`
 
-- [ ] **T004 [Frontend/DB] Esquema Dexie.js amb Taules Xifrades a IndexedDB** (~20 min)  
+- [x] **T004 [Frontend/DB] Esquema Dexie.js amb Taules Xifrades a IndexedDB** (~20 min)  
   *Dependència*: `T003`  
   *Requisits Funcionals*: `FR-001`, `FR-002`  
   *Skill Mandatòria*: `security-review` ([`.agents/skills/security-review/SKILL.md`](file:///.agents/skills/security-review/SKILL.md))  
@@ -53,7 +53,7 @@
 
 ## 🌅 Bloc 2: User Story 1 - Autenticació DNI + PIN i Morning Briefing Seqüencial
 
-- [ ] **T005 [Backend/Auth] Endpoint d'Enrolament Inicial de Dispositiu (DNI + Codi)** (~25 min)  
+- [x] **T005 [Backend/Auth] Endpoint d'Enrolament Inicial de Dispositiu (DNI + Codi)** (~25 min)  
   *Dependència*: `T001`  
   *Requisits Funcionals*: `FR-003`, `SC-001`  
   *Skill Mandatòria*: `security-and-hardening` ([`.agents/skills/security-and-hardening/SKILL.md`](file:///.agents/skills/security-and-hardening/SKILL.md))  
@@ -63,7 +63,7 @@
   *Cadena de Test*:  
   `backend/.venv/bin/pytest backend/tests/test_019_operari_login.py -k "test_login_operari_valid" -v`
 
-- [ ] **T006 [Backend/Auth] Endpoint de Login per PIN amb Rate Limiting (`SlowAPI`)** (~20 min)  
+- [x] **T006 [Backend/Auth] Endpoint de Login per PIN amb Rate Limiting (`SlowAPI`)** (~20 min)  
   *Dependència*: `T005`  
   *Requisits Funcionals*: `FR-003`, `SC-001`  
   *Skill Mandatòria*: `security-and-hardening` ([`.agents/skills/security-and-hardening/SKILL.md`](file:///.agents/skills/security-and-hardening/SKILL.md))  
@@ -73,7 +73,7 @@
   *Cadena de Test*:  
   `backend/.venv/bin/pytest backend/tests/test_019_operari_login.py -k "test_login_operari_pin_incorrecte_i_bloqueig" -v`
 
-- [ ] **T007 [Frontend/UI] Numpad Tàctil i Pantalla de Login Offline a la PWA** (~25 min)  
+- [x] **T007 [Frontend/UI] Numpad Tàctil i Pantalla de Login Offline a la PWA** (~25 min)  
   *Dependència*: `T003`, `T006`  
   *Requisits Funcionals*: `FR-001`, `FR-003`, `SC-001`  
   *Skill Mandatòria*: `frontend-design` ([`.agents/skills/frontend-design/SKILL.md`](file:///.agents/skills/frontend-design/SKILL.md))  
@@ -83,7 +83,7 @@
   *Cadena de Test*:  
   `npm --prefix pwa run build`
 
-- [ ] **T008 [Backend/API] Endpoint de Fitxatge d'Inici de Torn amb GPS Obligatori** (~25 min)  
+- [x] **T008 [Backend/API] Endpoint de Fitxatge d'Inici de Torn amb GPS Obligatori** (~25 min)  
   *Dependència*: `T001`, `T006`  
   *Requisits Funcionals*: `FR-004`, `FR-007`  
   *Skill Mandatòria*: `supabase-postgres-best-practices` ([`.agents/skills/supabase-postgres-best-practices/SKILL.md`](file:///.agents/skills/supabase-postgres-best-practices/SKILL.md))  
@@ -93,7 +93,7 @@
   *Cadena de Test*:  
   `backend/.venv/bin/pytest backend/tests/test_phase1_operari_pwa_eval.py -k "test_f1_02_fitxatge_gps_i_timestamp" -v`
 
-- [ ] **T009 [Backend/API] Odòmetre Inicial i Checklist Visual del Vehicle** (~25 min)  
+- [x] **T009 [Backend/API] Odòmetre Inicial i Checklist Visual del Vehicle** (~25 min)  
   *Dependència*: `T008`  
   *Requisits Funcionals*: `FR-007`, `US1`  
   *Skill Mandatòria*: `supabase-postgres-best-practices` ([`.agents/skills/supabase-postgres-best-practices/SKILL.md`](file:///.agents/skills/supabase-postgres-best-practices/SKILL.md))  
@@ -103,7 +103,7 @@
   *Cadena de Test*:  
   `backend/.venv/bin/pytest backend/tests/test_015_operari_vehicles_rutines.py -k "test_checkin_odometre" -v`
 
-- [ ] **T010 [Frontend/UI] Pas 1 & 2 Morning Briefing: Fitxatge GPS i Checklist Vehicle** (~25 min)  
+- [x] **T010 [Frontend/UI] Pas 1 & 2 Morning Briefing: Fitxatge GPS i Checklist Vehicle** (~25 min)  
   *Dependència*: `T007`, `T008`, `T009`  
   *Requisits Funcionals*: `FR-004`, `US1`  
   *Skill Mandatòria*: `frontend-design` ([`.agents/skills/frontend-design/SKILL.md`](file:///.agents/skills/frontend-design/SKILL.md))  
@@ -113,7 +113,7 @@
   *Cadena de Test*:  
   `npm --prefix pwa run build`
 
-- [ ] **T011 [Backend/API] Resum de Feines Assignades i Empty State Dia-0** (~20 min)  
+- [x] **T011 [Backend/API] Resum de Feines Assignades i Empty State Dia-0** (~20 min)  
   *Dependència*: `T001`  
   *Requisits Funcionals*: `FR-001`, `US1`  
   *Skill Mandatòria*: `supabase-postgres-best-practices` ([`.agents/skills/supabase-postgres-best-practices/SKILL.md`](file:///.agents/skills/supabase-postgres-best-practices/SKILL.md))  
@@ -123,7 +123,7 @@
   *Cadena de Test*:  
   `backend/.venv/bin/pytest backend/tests/test_phase1_operari_pwa_eval.py -k "test_f1_03_empty_state_dia0" -v`
 
-- [ ] **T012 [Backend/API] Fulla de Picking d'Entrada (Pick In) cap a Furgoneta** (~25 min)  
+- [x] **T012 [Backend/API] Fulla de Picking d'Entrada (Pick In) cap a Furgoneta** (~25 min)  
   *Dependència*: `T011`  
   *Requisits Funcionals*: `US1`  
   *Skill Mandatòria*: `supabase-postgres-best-practices` ([`.agents/skills/supabase-postgres-best-practices/SKILL.md`](file:///.agents/skills/supabase-postgres-best-practices/SKILL.md))  
@@ -133,7 +133,7 @@
   *Cadena de Test*:  
   `backend/.venv/bin/pytest backend/tests/test_014_operari_picking.py -k "test_picking_pick_in_confirmacio" -v`
 
-- [ ] **T013 [Frontend/UI] Pas 3 & 4 Morning Briefing: Resum de Tasca i Pick In Guiat** (~25 min)  
+- [x] **T013 [Frontend/UI] Pas 3 & 4 Morning Briefing: Resum de Tasca i Pick In Guiat** (~25 min)  
   *Dependència*: `T010`, `T011`, `T012`  
   *Requisits Funcionals*: `FR-001`, `US1`  
   *Skill Mandatòria*: `frontend-design` ([`.agents/skills/frontend-design/SKILL.md`](file:///.agents/skills/frontend-design/SKILL.md))  
@@ -157,7 +157,7 @@
   *Cadena de Test*:  
   `npm --prefix pwa run build`
 
-- [ ] **T015 [Frontend/Service] Compressió d'Imatge WebP al Client (< 1 MB) i Metadades GPS** (~20 min)  
+- [x] **T015 [Frontend/Service] Compressió d'Imatge WebP al Client (< 1 MB) i Metadades GPS** (~20 min)  
   *Dependència*: `T014`  
   *Requisits Funcionals*: `FR-007`, `FR-012`  
   *Skill Mandatòria*: `frontend-design` ([`.agents/skills/frontend-design/SKILL.md`](file:///.agents/skills/frontend-design/SKILL.md))  
@@ -167,7 +167,7 @@
   *Cadena de Test*:  
   `npm --prefix pwa run build`
 
-- [ ] **T016 [Backend/Workflow] Iniciar Trajecte i Estat Blau (`PUT /iniciar-trajecte`)** (~20 min)  
+- [x] **T016 [Backend/Workflow] Iniciar Trajecte i Estat Blau (`PUT /iniciar-trajecte`)** (~20 min)  
   *Dependència*: `T001`  
   *Requisits Funcionals*: `US2`  
   *Skill Mandatòria*: `supabase-postgres-best-practices` ([`.agents/skills/supabase-postgres-best-practices/SKILL.md`](file:///.agents/skills/supabase-postgres-best-practices/SKILL.md))  
@@ -177,7 +177,7 @@
   *Cadena de Test*:  
   `backend/.venv/bin/pytest backend/tests/test_phase1_operari_pwa_eval.py -k "test_f1_06_iniciar_trajecte_i_geovalla" -v`
 
-- [ ] **T017 [Backend/Workflow] Començar Feina amb Geovalla de 50 metres (`PUT /comencar`)** (~25 min)  
+- [x] **T017 [Backend/Workflow] Començar Feina amb Geovalla de 50 metres (`PUT /comencar`)** (~25 min)  
   *Dependència*: `T016`  
   *Requisits Funcionals*: `FR-004`, `US2`  
   *Skill Mandatòria*: `supabase-postgres-best-practices` ([`.agents/skills/supabase-postgres-best-practices/SKILL.md`](file:///.agents/skills/supabase-postgres-best-practices/SKILL.md))  
@@ -187,7 +187,7 @@
   *Cadena de Test*:  
   `backend/.venv/bin/pytest backend/tests/test_phase1_operari_pwa_eval.py -k "test_f1_06_iniciar_trajecte_i_geovalla" -v`
 
-- [ ] **T018 [Backend/API] Càrrega Segura de Fotos QA (`POST /feines/{id}/fotos`)** (~25 min)  
+- [x] **T018 [Backend/API] Càrrega Segura de Fotos QA (`POST /feines/{id}/fotos`)** (~25 min)  
   *Dependència*: `T017`  
   *Requisits Funcionals*: `FR-005`, `FR-007`  
   *Skill Mandatòria*: `security-and-hardening` ([`.agents/skills/security-and-hardening/SKILL.md`](file:///.agents/skills/security-and-hardening/SKILL.md))  
@@ -197,7 +197,7 @@
   *Cadena de Test*:  
   `backend/.venv/bin/pytest backend/tests/test_phase1_operari_pwa_eval.py -k "test_f1_04_protocol_3_fotos_i_bloqueig" -v`
 
-- [ ] **T019 [Backend/Workflow] Bloqueig Estricte de Tancament d'OT sense les 3 Fotos Obligatòries** (~20 min)  
+- [x] **T019 [Backend/Workflow] Bloqueig Estricte de Tancament d'OT sense les 3 Fotos Obligatòries** (~20 min)  
   *Dependència*: `T018`  
   *Requisits Funcionals*: `FR-005`, `SC-003`  
   *Skill Mandatòria*: `supabase-postgres-best-practices` ([`.agents/skills/supabase-postgres-best-practices/SKILL.md`](file:///.agents/skills/supabase-postgres-best-practices/SKILL.md))  
@@ -207,7 +207,7 @@
   *Cadena de Test*:  
   `backend/.venv/bin/pytest backend/tests/test_phase1_operari_pwa_eval.py -k "test_f1_04_protocol_3_fotos_i_bloqueig" -v`
 
-- [ ] **T020 [Frontend/UI] Pantalla d'Obra en Curs i Semàfor de les 3 Fotos QA** (~25 min)  
+- [x] **T020 [Frontend/UI] Pantalla d'Obra en Curs i Semàfor de les 3 Fotos QA** (~25 min)  
   *Dependència*: `T014`, `T015`, `T019`  
   *Requisits Funcionals*: `FR-005`, `US2`  
   *Skill Mandatòria*: `frontend-design` ([`.agents/skills/frontend-design/SKILL.md`](file:///.agents/skills/frontend-design/SKILL.md))  
@@ -221,7 +221,7 @@
 
 ## 🌆 Bloc 4: User Story 3 - Evening Checkout Guiat
 
-- [ ] **T021 [Backend/API] Pick Out de Retorn i Balanç Matemàtic de Materials** (~25 min)  
+- [x] **T021 [Backend/API] Pick Out de Retorn i Balanç Matemàtic de Materials** (~25 min)  
   *Dependència*: `T012`  
   *Requisits Funcionals*: `US3`, `SC-005`  
   *Skill Mandatòria*: `supabase-postgres-best-practices` ([`.agents/skills/supabase-postgres-best-practices/SKILL.md`](file:///.agents/skills/supabase-postgres-best-practices/SKILL.md))  
@@ -231,7 +231,7 @@
   *Cadena de Test*:  
   `backend/.venv/bin/pytest backend/tests/test_phase1_operari_pwa_eval.py -k "test_f1_05_balanc_materials_picking" -v`
 
-- [ ] **T022 [Backend/API] Odòmetre Final i Quilometratge Net del Dia** (~20 min)  
+- [x] **T022 [Backend/API] Odòmetre Final i Quilometratge Net del Dia** (~20 min)  
   *Dependència*: `T009`  
   *Requisits Funcionals*: `FR-007`, `US3`  
   *Skill Mandatòria*: `supabase-postgres-best-practices` ([`.agents/skills/supabase-postgres-best-practices/SKILL.md`](file:///.agents/skills/supabase-postgres-best-practices/SKILL.md))  
@@ -241,7 +241,7 @@
   *Cadena de Test*:  
   `backend/.venv/bin/pytest backend/tests/test_015_operari_vehicles_rutines.py -k "test_checkout_odometre_final" -v`
 
-- [ ] **T023 [Backend/API] Resum de Tiquets del Dia i Confirmació de Custòdia de Paper** (~20 min)  
+- [x] **T023 [Backend/API] Resum de Tiquets del Dia i Confirmació de Custòdia de Paper** (~20 min)  
   *Dependència*: `T001`  
   *Requisits Funcionals*: `FR-009`, `US3`  
   *Skill Mandatòria*: `supabase-postgres-best-practices` ([`.agents/skills/supabase-postgres-best-practices/SKILL.md`](file:///.agents/skills/supabase-postgres-best-practices/SKILL.md))  
@@ -251,7 +251,7 @@
   *Cadena de Test*:  
   `backend/.venv/bin/pytest backend/tests/test_018_operari_tiquets_ocr.py -k "test_confirmar_custodia_paper" -v`
 
-- [ ] **T024 [Backend/API] Fitxatge de Sortida amb GPS i Marcatge de Torn Complert** (~20 min)  
+- [x] **T024 [Backend/API] Fitxatge de Sortida amb GPS i Marcatge de Torn Complert** (~20 min)  
   *Dependència*: `T008`, `T021`, `T022`, `T023`  
   *Requisits Funcionals*: `FR-004`, `US3`, `SC-005`  
   *Skill Mandatòria*: `supabase-postgres-best-practices` ([`.agents/skills/supabase-postgres-best-practices/SKILL.md`](file:///.agents/skills/supabase-postgres-best-practices/SKILL.md))  
@@ -261,7 +261,7 @@
   *Cadena de Test*:  
   `backend/.venv/bin/pytest backend/tests/test_phase1_operari_pwa_eval.py -k "test_f1_02_fitxatge_gps_i_timestamp" -v`
 
-- [ ] **T025 [Frontend/UI] Assistent Seqüencial Evening Checkout a la PWA** (~25 min)  
+- [x] **T025 [Frontend/UI] Assistent Seqüencial Evening Checkout a la PWA** (~25 min)  
   *Dependència*: `T021`, `T022`, `T023`, `T024`  
   *Requisits Funcionals*: `FR-004`, `US3`, `SC-005`  
   *Skill Mandatòria*: `frontend-design` ([`.agents/skills/frontend-design/SKILL.md`](file:///.agents/skills/frontend-design/SKILL.md))  
@@ -275,7 +275,7 @@
 
 ## 🚨 Bloc 5: User Story 4 - Resolució d'Incidències "Cicle Vermell-Verd"
 
-- [ ] **T026 [Frontend/Media] Gravadora d'Àudio Real (`MediaRecorder`) per a Notes de Veu** (~25 min)  
+- [x] **T026 [Frontend/Media] Gravadora d'Àudio Real (`MediaRecorder`) per a Notes de Veu** (~25 min)  
   *Dependència*: `T004`  
   *Requisits Funcionals*: `FR-013`, `US4`  
   *Skill Mandatòria*: `frontend-design` ([`.agents/skills/frontend-design/SKILL.md`](file:///.agents/skills/frontend-design/SKILL.md))  
@@ -285,7 +285,7 @@
   *Cadena de Test*:  
   `npm --prefix pwa run build`
 
-- [ ] **T027 [Backend/API] Endpoint d'Incidències Multimodal en Estat Inicial Vermell** (~25 min)  
+- [x] **T027 [Backend/API] Endpoint d'Incidències Multimodal en Estat Inicial Vermell** (~25 min)  
   *Dependència*: `T001`  
   *Requisits Funcionals*: `FR-007`, `FR-008`, `US4`  
   *Skill Mandatòria*: `security-and-hardening` ([`.agents/skills/security-and-hardening/SKILL.md`](file:///.agents/skills/security-and-hardening/SKILL.md))  
@@ -295,7 +295,7 @@
   *Cadena de Test*:  
   `backend/.venv/bin/pytest backend/tests/test_phase1_operari_pwa_eval.py -k "test_f1_01_incidencia_multipart_i_buit" -v`
 
-- [ ] **T028 [Backend/Worker] Tasca Celery de Transcripció Whisper v3 (`transcriure_audio_task`)** (~25 min)  
+- [x] **T028 [Backend/Worker] Tasca Celery de Transcripció Whisper v3 (`transcriure_audio_task`)** (~25 min)  
   *Dependència*: `T027`  
   *Requisits Funcionals*: `FR-013`  
   *Skill Mandatòria*: `systematic-debugging` ([`.agents/skills/systematic-debugging/SKILL.md`](file:///.agents/skills/systematic-debugging/SKILL.md))  
@@ -305,7 +305,7 @@
   *Cadena de Test*:  
   `backend/.venv/bin/pytest backend/tests/test_016_operari_incidencies.py -k "test_transcripcio_audio_incidencia" -v`
 
-- [ ] **T029 [Backend/Workflow] Resolució d'Incidència i Commutació a Estat Verd** (~20 min)  
+- [x] **T029 [Backend/Workflow] Resolució d'Incidència i Commutació a Estat Verd** (~20 min)  
   *Dependència*: `T027`  
   *Requisits Funcionals*: `FR-008`, `US4`  
   *Skill Mandatòria*: `supabase-postgres-best-practices` ([`.agents/skills/supabase-postgres-best-practices/SKILL.md`](file:///.agents/skills/supabase-postgres-best-practices/SKILL.md))  
@@ -319,7 +319,7 @@
 
 ## ⛽ Bloc 6: User Story 5 - Tiquets de Despesa & Control de Límit
 
-- [ ] **T030 [Backend/API] Càrrega de Tiquets de Despesa i Flag de Límit (>100 €)** (~25 min)  
+- [x] **T030 [Backend/API] Càrrega de Tiquets de Despesa i Flag de Límit (>100 €)** (~25 min)  
   *Dependència*: `T001`  
   *Requisits Funcionals*: `FR-009`, `US5`  
   *Skill Mandatòria*: `supabase-postgres-best-practices` ([`.agents/skills/supabase-postgres-best-practices/SKILL.md`](file:///.agents/skills/supabase-postgres-best-practices/SKILL.md))  
@@ -329,7 +329,7 @@
   *Cadena de Test*:  
   `backend/.venv/bin/pytest backend/tests/test_018_operari_tiquets_ocr.py -k "test_tiquet_limit_flag" -v`
 
-- [ ] **T031 [Backend/Worker] Worker Celery OCR de Tiquets (`processar_ocr_tiquet_task`)** (~25 min)  
+- [x] **T031 [Backend/Worker] Worker Celery OCR de Tiquets (`processar_ocr_tiquet_task`)** (~25 min)  
   *Dependència*: `T030`  
   *Requisits Funcionals*: `FR-009`  
   *Skill Mandatòria*: `systematic-debugging` ([`.agents/skills/systematic-debugging/SKILL.md`](file:///.agents/skills/systematic-debugging/SKILL.md))  
@@ -339,7 +339,7 @@
   *Cadena de Test*:  
   `backend/.venv/bin/pytest backend/tests/test_018_operari_tiquets_ocr.py -k "test_ocr_extracccio_tiquet" -v`
 
-- [ ] **T032 [Frontend/UI] Captura Ràpida de Tiquets Sense Text a la PWA** (~25 min)  
+- [x] **T032 [Frontend/UI] Captura Ràpida de Tiquets Sense Text a la PWA** (~25 min)  
   *Dependència*: `T014`, `T030`  
   *Requisits Funcionals*: `FR-009`, `US5`  
   *Skill Mandatòria*: `frontend-design` ([`.agents/skills/frontend-design/SKILL.md`](file:///.agents/skills/frontend-design/SKILL.md))  
@@ -353,7 +353,7 @@
 
 ## 🗺️ Bloc 7: User Story 6 - Plànols GIS As-Built & Llanterna Integrada
 
-- [ ] **T033 [Frontend/Media] Control de Llanterna Contínua (`torch` MediaStream)** (~20 min)  
+- [x] **T033 [Frontend/Media] Control de Llanterna Contínua (`torch` MediaStream)** (~20 min)  
   *Dependència*: `T014`  
   *Requisits Funcionals*: `FR-011`  
   *Skill Mandatòria*: `frontend-design` ([`.agents/skills/frontend-design/SKILL.md`](file:///.agents/skills/frontend-design/SKILL.md))  
@@ -363,7 +363,7 @@
   *Cadena de Test*:  
   `npm --prefix pwa run build`
 
-- [ ] **T034 [Frontend/GIS] Visor de Plànols As-Built amb Posició GPS de l'Operari** (~25 min)  
+- [x] **T034 [Frontend/GIS] Visor de Plànols As-Built amb Posició GPS de l'Operari** (~25 min)  
   *Dependència*: `T004`  
   *Requisits Funcionals*: `FR-007`, `FR-010`, `US6`  
   *Skill Mandatòria*: `frontend-design` ([`.agents/skills/frontend-design/SKILL.md`](file:///.agents/skills/frontend-design/SKILL.md))  
@@ -373,7 +373,7 @@
   *Cadena de Test*:  
   `npm --prefix pwa run build`
 
-- [ ] **T035 [Backend/API] Creació de Capes Vectorials As-Built Sense Modificar Plànol Base** (~25 min)  
+- [x] **T035 [Backend/API] Creació de Capes Vectorials As-Built Sense Modificar Plànol Base** (~25 min)  
   *Dependència*: `T001`  
   *Requisits Funcionals*: `FR-010`, `US6`  
   *Skill Mandatòria*: `supabase-postgres-best-practices` ([`.agents/skills/supabase-postgres-best-practices/SKILL.md`](file:///.agents/skills/supabase-postgres-best-practices/SKILL.md))  
@@ -383,7 +383,7 @@
   *Cadena de Test*:  
   `backend/.venv/bin/pytest backend/tests/test_phase3_operari.py -k "test_intervencions_actives_gis_i_marca" -v`
 
-- [ ] **T036 [Frontend/Export] Exportació de Vista de Plànol Anotat a Incidència** (~25 min)  
+- [x] **T036 [Frontend/Export] Exportació de Vista de Plànol Anotat a Incidència** (~25 min)  
   *Dependència*: `T027`, `T034`, `T035`  
   *Requisits Funcionals*: `FR-014`, `US6`  
   *Skill Mandatòria*: `frontend-design` ([`.agents/skills/frontend-design/SKILL.md`](file:///.agents/skills/frontend-design/SKILL.md))  
@@ -397,7 +397,7 @@
 
 ## 🔄 Bloc 8: Pipeline de Sincronització Offline & Service Worker
 
-- [ ] **T037 [Frontend/SW] Service Worker amb Cua FIFO a Dexie (`sync_queue`)** (~25 min)  
+- [x] **T037 [Frontend/SW] Service Worker amb Cua FIFO a Dexie (`sync_queue`)** (~25 min)  
   *Dependència*: `T004`  
   *Requisits Funcionals*: `FR-002`, `SC-002`  
   *Skill Mandatòria*: `security-and-hardening` ([`.agents/skills/security-and-hardening/SKILL.md`](file:///.agents/skills/security-and-hardening/SKILL.md))  
@@ -407,7 +407,7 @@
   *Cadena de Test*:  
   `npm --prefix pwa run build`
 
-- [ ] **T038 [Backend/Sync] Endpoint de Sincronització Atòmica Massiva (`POST /sync/push`)** (~25 min)  
+- [x] **T038 [Backend/Sync] Endpoint de Sincronització Atòmica Massiva (`POST /sync/push`)** (~25 min)  
   *Dependència*: `T001`  
   *Requisits Funcionals*: `FR-002`, `SC-002`  
   *Skill Mandatòria*: `supabase-postgres-best-practices` ([`.agents/skills/supabase-postgres-best-practices/SKILL.md`](file:///.agents/skills/supabase-postgres-best-practices/SKILL.md))  
@@ -421,7 +421,7 @@
 
 ## 🏆 Bloc 9: Suite d'Auditoria Zero Mock & Verificació en Viu
 
-- [ ] **T039 [QA/Pytest] Execució de Tota la Suite de Tests d'Operaris** (~25 min)  
+- [x] **T039 [QA/Pytest] Execució de Tota la Suite de Tests d'Operaris** (~25 min)  
   *Dependència*: `T001` fins a `T038`  
   *Requisits Funcionals*: `FR-001`, `SC-001` a `SC-005`  
   *Skill Mandatòria*: `systematic-debugging` ([`.agents/skills/systematic-debugging/SKILL.md`](file:///.agents/skills/systematic-debugging/SKILL.md))  
@@ -431,7 +431,7 @@
   *Cadena de Test*:  
   `backend/.venv/bin/pytest backend/tests/test_phase1_operari_pwa_eval.py backend/tests/test_019_operari_login.py backend/tests/test_013_operari_jornada.py backend/tests/test_014_operari_picking.py backend/tests/test_015_operari_vehicles_rutines.py backend/tests/test_016_operari_incidencies.py backend/tests/test_018_operari_tiquets_ocr.py -v`
 
-- [ ] **T040 [QA/MCP] Prova en Viu amb Chrome DevTools MCP (Login Offline i 3 Fotos)** (~25 min)  
+- [x] **T040 [QA/MCP] Prova en Viu amb Chrome DevTools MCP (Login Offline i 3 Fotos)** (~25 min)  
   *Dependència*: `T039`  
   *Requisits Funcionals*: `FR-001`, `FR-005`, `FR-006`  
   *Skill Mandatòria*: `security-review` ([`.agents/skills/security-review/SKILL.md`](file:///.agents/skills/security-review/SKILL.md))  
@@ -441,7 +441,7 @@
   *Cadena de Test*:  
   `mcp_chrome-devtools_navigate_page` (`http://localhost:3000/operari/login`) + `mcp_chrome-devtools_take_screenshot`
 
-- [ ] **T041 [QA/MCP] Auditoria de Persistència a PostgreSQL viu amb MCP `postgres`** (~20 min)  
+- [x] **T041 [QA/MCP] Auditoria de Persistència a PostgreSQL viu amb MCP `postgres`** (~20 min)  
   *Dependència*: `T040`  
   *Requisits Funcionals*: `FR-001`  
   *Skill Mandatòria*: `supabase-postgres-best-practices` ([`.agents/skills/supabase-postgres-best-practices/SKILL.md`](file:///.agents/skills/supabase-postgres-best-practices/SKILL.md))  
