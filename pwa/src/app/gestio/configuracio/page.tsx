@@ -84,7 +84,7 @@ export default function ConfiguracioPage() {
 
   useEffect(() => {
     // Carregar dades de l'empresa des del backend
-    apiFetch("/configuracio/empresa")
+    apiFetch("/gestio/configuracio/empresa")
       .then((data: any) => {
         if (data.nom) setNomEmpresa(data.nom);
         if (data.nif) setNifEmpresa(data.nif);
@@ -95,7 +95,7 @@ export default function ConfiguracioPage() {
         if (data.accent_hsl) setAccentHsl(data.accent_hsl);
       })
       .catch(() => {
-        // TODO: endpoint pendent d'implementar al backend
+        console.error("Error carregant configuració");
       });
   }, []);
 
@@ -113,7 +113,7 @@ export default function ConfiguracioPage() {
   const [usuaris, setUsuaris] = useState<UsuariAdmin[]>([]);
 
   useEffect(() => {
-    apiFetch<UsuariAdmin[]>("/configuracio/usuaris")
+    apiFetch<UsuariAdmin[]>("/gestio/configuracio/usuaris")
       .then(setUsuaris)
       .catch(() => setUsuaris([])); // Fallback buit
   }, []);
@@ -133,7 +133,7 @@ export default function ConfiguracioPage() {
   const [slots, setSlots] = useState<SlotJornadaItem[]>([]);
 
   useEffect(() => {
-    apiFetch<SlotJornadaItem[]>("/configuracio/slots-jornada")
+    apiFetch<SlotJornadaItem[]>("/gestio/configuracio/slots")
       .then(setSlots)
       .catch(() => setSlots([])); // Fallback buit
   }, []);
@@ -146,7 +146,7 @@ export default function ConfiguracioPage() {
 
   useEffect(() => {
     // Carregar configuració de Telegram del backend
-    apiFetch("/configuracio/telegram")
+    apiFetch("/gestio/configuracio/telegram")
       .then((data: any) => {
         if (data.estat) setTelegramEstat(data.estat);
         // Token i secret es mantenen ocults; el backend només exposa l'estat
@@ -253,7 +253,7 @@ export default function ConfiguracioPage() {
     };
 
     try {
-      const nou = await apiFetch<UsuariAdmin>("/configuracio/usuaris", {
+      const nou = await apiFetch<UsuariAdmin>("/gestio/configuracio/usuaris", {
         method: "POST",
         body: JSON.stringify(payload),
       });
@@ -286,7 +286,7 @@ export default function ConfiguracioPage() {
     }
 
     try {
-      await apiFetch(`/configuracio/usuaris/${id}`, { method: "DELETE" });
+      await apiFetch(`/gestio/configuracio/usuaris/${id}`, { method: "DELETE" });
       setUsuaris(usuaris.filter((u) => u.id !== id));
       mostrarFeedback("EXIT", "Usuari retirat de la gestió corporativa.");
     } catch {
@@ -302,7 +302,7 @@ export default function ConfiguracioPage() {
     }
 
     try {
-      const data = await apiFetch<{ secret: string }>(`/configuracio/usuaris/${u.id}/2fa/reiniciar`, { method: "POST" });
+      const data = await apiFetch<{ secret: string }>(`/gestio/configuracio/usuaris/${u.id}/reset-2fa`, { method: "POST" });
       setModalQr2fa({
         obert: true,
         usuariNom: u.nom_complet,
@@ -318,7 +318,7 @@ export default function ConfiguracioPage() {
   const handleProvarTelegram = async () => {
     setTelegramTestant(true);
     try {
-      await apiFetch("/configuracio/telegram/provar", { method: "POST" });
+      await apiFetch("/gestio/configuracio/telegram/provar", { method: "POST" });
       setTelegramEstat("OPERATIU");
       mostrarFeedback("EXIT", "Connexió getMe satisfactòria amb el Bot de Telegram (HTTP 200).");
     } catch {
@@ -589,7 +589,7 @@ export default function ConfiguracioPage() {
                   disabled={esEnginyer || contrastRatio < 4.5}
                   onClick={async () => {
                     try {
-                      await apiFetch("/configuracio/empresa/marca", {
+                      await apiFetch("/gestio/configuracio/marca", {
                         method: "PUT",
                         body: JSON.stringify({ primari_hsl: primariHsl, secundari_hsl: secundariHsl, accent_hsl: accentHsl }),
                       });
@@ -1071,7 +1071,7 @@ export default function ConfiguracioPage() {
                 disabled={esEnginyer}
                 onClick={async () => {
                   try {
-                    await apiFetch("/configuracio/telegram", {
+                    await apiFetch("/gestio/configuracio/telegram", {
                       method: "PUT",
                       body: JSON.stringify({ token: telegramToken, secret: telegramSecret }),
                     });

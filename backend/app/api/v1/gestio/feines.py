@@ -36,7 +36,6 @@ class FeinaCreate(BaseModel):
 class FeinaResponse(FeinaCreate):
     id: uuid.UUID
     versio: int = 1
-    versio: int = 1
 
 
 @router.get("", response_model=List[FeinaResponse])
@@ -175,8 +174,7 @@ class AgendarFeinaResponse(BaseModel):
 
 @router.put("/{feina_id}/agendar", response_model=AgendarFeinaResponse)
 async def agendar_feina(
-    feina_id: uuid.UUID
-    versio: int = 1,
+    feina_id: uuid.UUID,
     payload: AgendarFeinaRequest,
     request: Request,
     db: AsyncSession = Depends(get_db_with_tenant_context),
@@ -289,8 +287,7 @@ class DropAndGoRequest(BaseModel):
 
 @router.patch("/{id}/drop-and-go")
 async def drop_and_go(
-    id: uuid.UUID
-    versio: int = 1,
+    id: uuid.UUID,
     payload: DropAndGoRequest,
     request: Request,
     db: AsyncSession = Depends(get_db_with_tenant_context),
@@ -338,8 +335,7 @@ class TancarObraRequest(BaseModel):
 
 @router.put("/{id}/tancar-obra")
 async def tancar_obra(
-    id: uuid.UUID
-    versio: int = 1,
+    id: uuid.UUID,
     payload: TancarObraRequest,
     request: Request,
     db: AsyncSession = Depends(get_db_with_tenant_context),
@@ -386,8 +382,7 @@ async def tancar_obra(
 # ── T027-T028: Reconciliació Post-Obra dels 4 Pilars ──────────────────────
 @router.post("/{id}/reconciliacio-post-obra")
 async def reconciliacio_post_obra(
-    id: uuid.UUID
-    versio: int = 1, request: Request, db: AsyncSession = Depends(get_db_with_tenant_context)
+    id: uuid.UUID,
 ):
     """T027-T028: Reconciliació post-obra dels 4 pilars: materials, hores, km i tiquets.
 

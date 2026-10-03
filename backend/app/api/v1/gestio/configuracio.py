@@ -331,7 +331,7 @@ async def actualitzar_dades_empresa(
     db: AsyncSession = Depends(get_db),
 ):
     """Actualitza dades bàsiques de l'empresa (Boss i Secretaria; Enginyer 403)."""
-    validar_permisos_gestio(claims, requereix_escriptura=True)
+    validar_permisos_gestio(claims, requereix_escriptura=True, nomes_boss=True)
     empresa_id = claims.get("empresa_id")
 
     if empresa_id:
