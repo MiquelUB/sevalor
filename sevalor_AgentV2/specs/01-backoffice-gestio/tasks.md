@@ -577,7 +577,7 @@
   *Cadena de Test*:  
   `npm --prefix pwa run build`
 
-- [ ] **T053 [Frontend/GIS] Mapa Cartogràfic Interactiu amb Drop & Go** (~25 min)  
+- [x] **T053 [Frontend/GIS] Mapa Cartogràfic Interactiu amb Drop & Go** (~25 min)  
   *Dependència*: `T011`, `T012`, `T052`  
   *Requisits Funcionals*: `FR-005`, `US1`  
   *Skill Mandatòria*: `frontend-design` ([`.agents/skills/frontend-design/SKILL.md`](file:///.agents/skills/frontend-design/SKILL.md))  
