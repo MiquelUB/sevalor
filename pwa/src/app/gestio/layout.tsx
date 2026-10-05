@@ -73,6 +73,8 @@ function GestioLayoutContent({ children }: { children: React.ReactNode }) {
   const [empresa, setEmpresa] = useState<{ nom?: string; nif?: string } | null>(null);
 
   useEffect(() => {
+    if (pathname === "/gestio/login") return;
+
     try {
       const stored = localStorage.getItem("sevalor_user");
       if (stored) {
@@ -84,8 +86,6 @@ function GestioLayoutContent({ children }: { children: React.ReactNode }) {
         }
       }
     } catch {}
-
-    if (pathname === "/gestio/login") return;
 
     apiFetch("/auth/me")
       .then((me: any) => {

@@ -150,6 +150,13 @@ async function runTests() {
     assert(res.headers.get('location')?.includes('/gestio'));
   });
 
+  // T0.12: Superadmin que visita /gestio/login no és redirigit a /gestio
+  await testCase("T0.12: Superadmin que entra a /gestio/login no és redirigit directament a /gestio", async () => {
+    const req = new MockNextRequest('/gestio/login', { sevalor_access_token: superadminToken });
+    const res = await middleware(req as any);
+    assert(res.status === 200, `Status era ${res.status}`);
+  });
+
   console.log(`\n=== RESULTATS: ${passed}/${total} TESTS PASSATS SATISFACTORIAMENT ===`);
   if (passed !== total) {
     process.exit(1);

@@ -100,7 +100,7 @@ export async function middleware(request: NextRequest) {
     const isLoginPage = pathname === '/gestio/login' || pathname.startsWith('/gestio/login/');
 
     if (isLoginPage) {
-      if (payload && ['BOSS', 'SECRETARIA', 'ENGINYER', 'COMPTABILITAT', 'SUPERADMIN'].includes(role)) {
+      if (payload && ['BOSS', 'SECRETARIA', 'ENGINYER', 'COMPTABILITAT'].includes(role)) {
         return NextResponse.redirect(new URL('/gestio', request.url));
       }
       return NextResponse.next();

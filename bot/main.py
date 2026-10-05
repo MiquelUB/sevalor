@@ -13,7 +13,10 @@ from aiogram.fsm.storage.redis import RedisStorage, DefaultKeyBuilder
 from aiogram.fsm.state import State, StatesGroup
 from redis.asyncio import Redis
 
-from bot.security import RedisRateLimiter, detectar_doble_extensio, validar_magic_bytes
+try:
+    from bot.security import RedisRateLimiter, detectar_doble_extensio, validar_magic_bytes
+except ImportError:
+    from security import RedisRateLimiter, detectar_doble_extensio, validar_magic_bytes
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("telegram_bot_v2")
