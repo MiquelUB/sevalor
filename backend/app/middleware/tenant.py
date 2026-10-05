@@ -11,8 +11,12 @@ class TenantMiddleware(BaseHTTPMiddleware):
     """Intercepta peticions HTTP per extreure l'empresa_id del tenant i associar-lo al request.state."""
 
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
+        if request.method == "OPTIONS":
+            return await call_next(request)
+
         empresa_id: str | None = None
         is_superadmin: bool = False
+        is_impersonation: bool = False
         jwt_empresa_id: str | None = None
 
         auth_header = request.headers.get("Authorization")
@@ -27,7 +31,9 @@ class TenantMiddleware(BaseHTTPMiddleware):
                 )
 
                 if payload.get("rol") == "SUPERADMIN":
-                    is_superadmin = True
+                    is_impersonation = bool(payload.get("is_impersonation", False))
+                    if not is_impersonation:
+                        is_superadmin = True
 
                 extret_id = payload.get("empresa_id")
                 if extret_id:
@@ -66,6 +72,7 @@ class TenantMiddleware(BaseHTTPMiddleware):
 
         request.state.empresa_id = empresa_id
         request.state.is_superadmin = is_superadmin
+        request.state.is_impersonation = is_impersonation
 
         if is_superadmin:
             path = request.url.path

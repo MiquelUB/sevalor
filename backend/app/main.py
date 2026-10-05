@@ -82,13 +82,6 @@ app = FastAPI(
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)  # type: ignore[arg-type]
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=settings.BACKEND_CORS_ORIGINS,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 app.add_middleware(TenantMiddleware)
 app.add_middleware(SlowAPIMiddleware)
 
@@ -108,6 +101,16 @@ async def metrics_middleware(request, call_next):  # type: ignore[no-untyped-def
         return response
     finally:
         _metrics.record((_time.perf_counter() - inici) * 1000.0, status_code)
+
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.BACKEND_CORS_ORIGINS,
+    allow_origin_regex=r"^https?://([a-zA-Z0-9-]+\.)*(80opze\.easypanel\.host|sevalor\.app)(:\d+)?$",
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 app.include_router(health_router, prefix=settings.API_V1_STR)

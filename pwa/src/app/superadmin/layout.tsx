@@ -266,11 +266,11 @@ export default function SuperadminLayout({
             <span>2FA TOTP</span>
           </div>
 
-          {/* Accés ràpid a l'Oficina Tècnica */}
+          {/* Accés ràpid a l'Oficina Tècnica (via impersonació) */}
           <Link
-            href="/gestio"
+            href="/superadmin/empreses"
             className="flex items-center gap-1.5 text-xs text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white px-2.5 py-1 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
-            title="Obrir tauler d'Oficina Tècnica"
+            title="Seleccionar empresa per accedir a l'Oficina Tècnica (Impersonació)"
           >
             <ExternalLink className="w-3.5 h-3.5 text-blue-500" />
             <span className="hidden sm:inline font-medium">Oficina Tècnica</span>

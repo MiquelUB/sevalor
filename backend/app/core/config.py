@@ -50,6 +50,10 @@ class Settings(BaseSettings):
         "http://127.0.0.1:4000",
         "http://localhost:8000",
         "https://sevalor-sevalor-pwa.80opze.easypanel.host",
+        "https://sevalor.app",
+        "https://gestio.sevalor.app",
+        "https://operari.sevalor.app",
+        "https://superadmin.sevalor.app",
     ]
 
     @field_validator("BACKEND_CORS_ORIGINS", mode="before")

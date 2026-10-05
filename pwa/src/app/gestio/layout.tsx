@@ -76,7 +76,12 @@ function GestioLayoutContent({ children }: { children: React.ReactNode }) {
     try {
       const stored = localStorage.getItem("sevalor_user");
       if (stored) {
-        setUsuari(JSON.parse(stored));
+        const u = JSON.parse(stored);
+        setUsuari(u);
+        if (u.rol === "SUPERADMIN" && !u.is_impersonation) {
+          router.push("/superadmin/telemetria");
+          return;
+        }
       }
     } catch {}
 
@@ -87,12 +92,15 @@ function GestioLayoutContent({ children }: { children: React.ReactNode }) {
         if (me) {
           setUsuari(me);
           if (me.rol) setRolActiu(me.rol);
+          if (me.rol === "SUPERADMIN" && !me.is_impersonation) {
+            router.push("/superadmin/telemetria");
+          }
         }
       })
       .catch(() => {});
 
     apiFetch("/spotlight/items")
-      .then((data: any[]) => setItemsSpotlight(data))
+      .then((data: any[]) => setItemsSpotlight(data || []))
       .catch(() => setItemsSpotlight([]));
     apiFetch("/gestio/configuracio/empresa")
       .then((data: any) => setEmpresa(data))
