@@ -23,8 +23,9 @@ import {
   CheckCircle2,
   Menu,
   X,
+  HardHat,
 } from "lucide-react";
-import { clearAuthToken } from "@/lib/api";
+import { clearAuthToken, setAuthToken, apiFetch } from "@/lib/api";
 
 export default function SuperadminLayout({
   children,
@@ -67,9 +68,39 @@ export default function SuperadminLayout({
     }
   };
 
+  const handleQuickImpersonate = async (targetPath: string = "/gestio") => {
+    try {
+      const tenants = await apiFetch<any[]>("/superadmin/tenants");
+      if (!tenants || tenants.length === 0) {
+        alert("No hi ha cap empresa tenant registrada.");
+        return;
+      }
+      const tenant = tenants[0];
+      const data = await apiFetch<any>(`/superadmin/tenants/${tenant.id}/impersonate`, {
+        method: "POST",
+      });
+      if (data?.access_token) {
+        setAuthToken(data.access_token);
+        localStorage.setItem(
+          "sevalor_user",
+          JSON.stringify({
+            ...data,
+            is_impersonation: true,
+            empresa_id: tenant.id,
+            rol: "SUPERADMIN",
+          })
+        );
+        localStorage.setItem("sevalor_tenant_id", tenant.id);
+        window.location.href = targetPath;
+      }
+    } catch (e: any) {
+      alert("Error en l'accés ràpid: " + (e.message || "Error desconegut"));
+    }
+  };
+
   const handleLogout = () => {
     clearAuthToken();
-    router.push("/superadmin/login");
+    window.location.href = "/gestio/login";
   };
 
   const navSections = [
@@ -267,14 +298,24 @@ export default function SuperadminLayout({
           </div>
 
           {/* Accés ràpid a l'Oficina Tècnica (via impersonació) */}
-          <Link
-            href="/superadmin/empreses"
-            className="flex items-center gap-1.5 text-xs text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white px-2.5 py-1 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
-            title="Seleccionar empresa per accedir a l'Oficina Tècnica (Impersonació)"
+          <button
+            onClick={() => handleQuickImpersonate("/gestio")}
+            className="flex items-center gap-1.5 text-xs text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-950/60 hover:bg-blue-100 dark:hover:bg-blue-900/60 border border-blue-200 dark:border-blue-800 px-2.5 py-1 rounded-lg transition-colors font-medium"
+            title="Entrar a l'Oficina Tècnica (/gestio) com a Superadmin impersonat"
           >
             <ExternalLink className="w-3.5 h-3.5 text-blue-500" />
-            <span className="hidden sm:inline font-medium">Oficina Tècnica</span>
-          </Link>
+            <span className="hidden sm:inline">Oficina Tècnica</span>
+          </button>
+
+          {/* Accés ràpid a la PWA d'Operaris (via impersonació) */}
+          <button
+            onClick={() => handleQuickImpersonate("/operari/feines")}
+            className="flex items-center gap-1.5 text-xs text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/60 hover:bg-emerald-100 dark:hover:bg-emerald-900/60 border border-emerald-200 dark:border-emerald-800 px-2.5 py-1 rounded-lg transition-colors font-medium"
+            title="Entrar a la PWA d'Operaris (/operari/feines) com a Superadmin impersonat"
+          >
+            <HardHat className="w-3.5 h-3.5 text-emerald-500" />
+            <span className="hidden sm:inline">PWA Operaris</span>
+          </button>
 
           {/* Commutador Tema Clar / Fosc */}
           <button

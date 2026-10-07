@@ -29,7 +29,6 @@ class FeinaCreate(BaseModel):
     estat: str = Field("PENDENT", max_length=30)
     data_planificacio: date
     cap_de_colla_id: uuid.UUID
-    versio: int = 1
     vehicle_id: Optional[uuid.UUID] = None
 
 

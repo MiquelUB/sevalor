@@ -117,7 +117,14 @@ export default function EmpresaDetailPage({ params }: { params: { id: string } }
       });
       if (data?.access_token) {
         setAuthToken(data.access_token);
-        router.push("/gestio");
+        localStorage.setItem("sevalor_user", JSON.stringify({
+          ...data,
+          is_impersonation: true,
+          empresa_id: params.id,
+          rol: "SUPERADMIN",
+        }));
+        localStorage.setItem("sevalor_tenant_id", params.id);
+        window.location.href = "/gestio";
       }
     } catch (e: any) {
       alert("Error d'impersonació: " + (e.message || "Desconegut"));

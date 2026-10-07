@@ -124,6 +124,7 @@ class UserMeResponse(BaseModel):
     rol: str
     nom: str | None = None
     email: str | None = None
+    is_impersonation: bool = False
 
 
 @router.get("/me", response_model=UserMeResponse)
@@ -136,6 +137,8 @@ async def get_me(
     except Exception:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token invàlid")
 
+    is_impersonation = bool(claims.get("is_impersonation", False))
+
     stmt = select(Usuari).where(Usuari.id == user_uuid)
     result = await db.execute(stmt)
     usuari = result.scalars().first()
@@ -147,12 +150,14 @@ async def get_me(
             rol=claims.get("rol", "OPERARI").upper(),
             nom=claims.get("nom", "Usuari"),
             email=claims.get("email"),
+            is_impersonation=is_impersonation,
         )
 
     return UserMeResponse(
         id=str(usuari.id),
-        empresa_id=str(usuari.empresa_id) if usuari.empresa_id else None,
+        empresa_id=claims.get("empresa_id") or (str(usuari.empresa_id) if usuari.empresa_id else None),
         rol=usuari.rol.upper(),
         nom=usuari.nom,
         email=usuari.email,
+        is_impersonation=is_impersonation,
     )

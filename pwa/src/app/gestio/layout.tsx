@@ -46,11 +46,11 @@ function GestioLayoutContent({ children }: { children: React.ReactNode }) {
       setIsEmbed(window.location.search.includes("embed=true") || window.self !== window.top);
     }
   }, []);
-  const [usuari, setUsuari] = useState<{ nom?: string; rol?: string } | null>(null);
+  const [usuari, setUsuari] = useState<{ nom?: string; rol?: string; is_impersonation?: boolean } | null>(null);
 
   const handleLogout = () => {
     clearAuthToken();
-    router.push("/gestio/login");
+    window.location.href = "/gestio/login";
   };
 
   const navLinks = [
@@ -75,12 +75,28 @@ function GestioLayoutContent({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (pathname === "/gestio/login") return;
 
+    let tokenIsImpersonation = false;
+    if (typeof window !== "undefined") {
+      try {
+        const match = document.cookie.match(new RegExp('(^| )sevalor_access_token=([^;]+)'));
+        const token = match ? decodeURIComponent(match[2]) : null;
+        if (token) {
+          const parts = token.split(".");
+          if (parts.length === 3) {
+            const payload = JSON.parse(atob(parts[1].replace(/-/g, "+").replace(/_/g, "/")));
+            tokenIsImpersonation = Boolean(payload?.is_impersonation);
+          }
+        }
+      } catch {}
+    }
+
     try {
       const stored = localStorage.getItem("sevalor_user");
       if (stored) {
         const u = JSON.parse(stored);
-        setUsuari(u);
-        if (u.rol === "SUPERADMIN" && !u.is_impersonation) {
+        const isImpersonating = Boolean(u.is_impersonation || tokenIsImpersonation);
+        setUsuari({ ...u, is_impersonation: isImpersonating });
+        if (u.rol === "SUPERADMIN" && !isImpersonating) {
           router.push("/superadmin/telemetria");
           return;
         }
@@ -90,9 +106,10 @@ function GestioLayoutContent({ children }: { children: React.ReactNode }) {
     apiFetch("/auth/me")
       .then((me: any) => {
         if (me) {
-          setUsuari(me);
+          const isImpersonating = Boolean(me.is_impersonation || tokenIsImpersonation);
+          setUsuari({ ...me, is_impersonation: isImpersonating });
           if (me.rol) setRolActiu(me.rol);
-          if (me.rol === "SUPERADMIN" && !me.is_impersonation) {
+          if (me.rol === "SUPERADMIN" && !isImpersonating) {
             router.push("/superadmin/telemetria");
           }
         }
@@ -128,6 +145,36 @@ function GestioLayoutContent({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-100 font-sans transition-colors duration-200 flex flex-col">
+      {/* BANNER D'IMPERSONACIÓ PER A SUPERADMIN */}
+      {usuari?.is_impersonation && (
+        <div className="bg-amber-500 text-slate-950 font-semibold px-4 py-1.5 text-xs flex items-center justify-between z-50 shadow-sm shrink-0">
+          <div className="flex items-center gap-2">
+            <Shield className="w-4 h-4 text-slate-950 shrink-0" />
+            <span>
+              Sessió d&apos;Impersonació Tècnica (Superadmin) · Tenant: <strong>{empresa?.nom || "Actiu"}</strong>
+            </span>
+          </div>
+          <div className="flex items-center gap-3">
+            <Link
+              href="/operari/feines"
+              className="underline font-bold text-slate-950 hover:text-black flex items-center gap-1"
+            >
+              <ExternalLink className="w-3.5 h-3.5" />
+              Provar PWA Operaris
+            </Link>
+            <button
+              onClick={() => {
+                clearAuthToken();
+                window.location.href = "/superadmin/login";
+              }}
+              className="px-2 py-0.5 bg-slate-900 text-white rounded text-[11px] font-bold hover:bg-slate-800 transition-colors"
+            >
+              Sortir a Superadmin
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* CAPÇALERA SUPERIOR */}
       <header className="h-14 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between px-4 z-40 sticky top-0 shadow-sm transition-colors">
         <div className="flex items-center gap-4">

@@ -137,7 +137,7 @@ export async function middleware(request: NextRequest) {
     const isLoginPage = pathname === '/operari/login' || pathname.startsWith('/operari/login/');
 
     if (isLoginPage) {
-      if (payload && ['OPERARI', 'CAPATAZ', 'SUPERADMIN'].includes(role)) {
+      if (payload && ['OPERARI', 'CAPATAZ'].includes(role)) {
         return NextResponse.redirect(new URL('/operari/feines', request.url));
       }
       return NextResponse.next();
@@ -145,6 +145,11 @@ export async function middleware(request: NextRequest) {
 
     if (!payload) {
       return createRedirectWithClearedCookie('/operari/login');
+    }
+
+    const isImpersonating = Boolean(payload?.is_impersonation);
+    if (role === 'SUPERADMIN' && !isImpersonating) {
+      return NextResponse.redirect(new URL('/superadmin/telemetria', request.url));
     }
 
     const allowedRoles = ['OPERARI', 'CAPATAZ', 'SUPERADMIN'];

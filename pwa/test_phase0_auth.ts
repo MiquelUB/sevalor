@@ -54,6 +54,7 @@ async function runTests() {
   const enginyerToken = createToken({ sub: 'e1', rol: 'ENGINYER', exp: now + 3600 });
   const operariToken = createToken({ sub: 'o1', rol: 'OPERARI', exp: now + 3600 });
   const superadminToken = createToken({ sub: 's1', rol: 'SUPERADMIN', exp: now + 3600 });
+  const superadminImpersonationToken = createToken({ sub: 's1', rol: 'SUPERADMIN', is_impersonation: true, empresa_id: 'e1', exp: now + 3600 });
   const expiredToken = createToken({ sub: 'b1', rol: 'BOSS', exp: now - 3600 });
   const forgedToken = bossToken.substring(0, bossToken.length - 6) + 'xxxxxx';
   const wrongSecretToken = createToken({ sub: 'b1', rol: 'BOSS', exp: now + 3600 }, 'wrong-secret-key-123456789012345');
@@ -153,6 +154,28 @@ async function runTests() {
   // T0.12: Superadmin que visita /gestio/login no és redirigit a /gestio
   await testCase("T0.12: Superadmin que entra a /gestio/login no és redirigit directament a /gestio", async () => {
     const req = new MockNextRequest('/gestio/login', { sevalor_access_token: superadminToken });
+    const res = await middleware(req as any);
+    assert(res.status === 200, `Status era ${res.status}`);
+  });
+
+  // T0.13: Superadmin que visita /operari/login no és redirigit a /operari/feines
+  await testCase("T0.13: Superadmin que entra a /operari/login no és redirigit directament a /operari/feines", async () => {
+    const req = new MockNextRequest('/operari/login', { sevalor_access_token: superadminToken });
+    const res = await middleware(req as any);
+    assert(res.status === 200, `Status era ${res.status}`);
+  });
+
+  // T0.14: Superadmin sense impersonació intentant accedir a /operari/feines és redirigit a telemetria
+  await testCase("T0.14: Superadmin sense impersonació intentant entrar a /operari/feines és redirigit a telemetria", async () => {
+    const req = new MockNextRequest('/operari/feines', { sevalor_access_token: superadminToken });
+    const res = await middleware(req as any);
+    assert(res.status === 307);
+    assert(res.headers.get('location')?.includes('/superadmin/telemetria'));
+  });
+
+  // T0.15: Superadmin amb impersonació tècnica pot accedir a /operari/feines
+  await testCase("T0.15: Superadmin amb impersonació tècnica pot accedir a /operari/feines", async () => {
+    const req = new MockNextRequest('/operari/feines', { sevalor_access_token: superadminImpersonationToken });
     const res = await middleware(req as any);
     assert(res.status === 200, `Status era ${res.status}`);
   });

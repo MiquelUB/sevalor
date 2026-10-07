@@ -96,8 +96,16 @@ export function clearAuthToken(): void {
   if (typeof window === "undefined") return;
   localStorage.removeItem("sevalor_auth_token");
   localStorage.removeItem("sevalor_user");
+  localStorage.removeItem("sevalor_tenant_id");
+  if (typeof sessionStorage !== "undefined") {
+    sessionStorage.clear();
+  }
   if (typeof document !== "undefined") {
-    document.cookie = "sevalor_access_token=; path=/; max-age=0; SameSite=Strict";
+    document.cookie = "sevalor_access_token=; path=/; max-age=0; expires=Thu, 01 Jan 1970 00:00:00 GMT";
+    document.cookie = "sevalor_access_token=; path=/; max-age=0; expires=Thu, 01 Jan 1970 00:00:00 GMT; SameSite=Lax";
+    document.cookie = "sevalor_access_token=; path=/; max-age=0; expires=Thu, 01 Jan 1970 00:00:00 GMT; SameSite=Strict";
+    document.cookie = "sevalor_access_token=; path=/; max-age=0; expires=Thu, 01 Jan 1970 00:00:00 GMT; Secure; SameSite=Lax";
+    document.cookie = "sevalor_access_token=; path=/; max-age=0; expires=Thu, 01 Jan 1970 00:00:00 GMT; Secure; SameSite=Strict";
   }
 }
 
