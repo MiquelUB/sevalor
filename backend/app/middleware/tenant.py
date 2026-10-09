@@ -18,6 +18,7 @@ class TenantMiddleware(BaseHTTPMiddleware):
         is_superadmin: bool = False
         is_impersonation: bool = False
         jwt_empresa_id: str | None = None
+        user_role: str | None = None
 
         auth_header = request.headers.get("Authorization")
         if auth_header and auth_header.startswith("Bearer "):
@@ -30,7 +31,11 @@ class TenantMiddleware(BaseHTTPMiddleware):
                     options={"verify_aud": False},
                 )
 
-                if payload.get("rol") == "SUPERADMIN":
+                raw_role = payload.get("rol")
+                if raw_role:
+                    user_role = str(raw_role).upper()
+
+                if user_role == "SUPERADMIN":
                     is_impersonation = bool(payload.get("is_impersonation", False))
                     if not is_impersonation:
                         is_superadmin = True
@@ -49,7 +54,7 @@ class TenantMiddleware(BaseHTTPMiddleware):
                 empresa_id = header_tenant.strip()
 
         elif auth_header:
-            empresa_id = jwt_empresa_id
+            empresa_id = jwt_empresa_id or request.headers.get("X-Empresa-ID")
 
         elif not auth_header:
             # Per a usuaris anònims (ex. pantalla de login PWA), acceptem X-Empresa-ID
@@ -73,6 +78,7 @@ class TenantMiddleware(BaseHTTPMiddleware):
         request.state.empresa_id = empresa_id
         request.state.is_superadmin = is_superadmin
         request.state.is_impersonation = is_impersonation
+        request.state.user_role = user_role
 
         if is_superadmin:
             path = request.url.path
@@ -90,10 +96,11 @@ class TenantMiddleware(BaseHTTPMiddleware):
                     },
                 )
 
-        from app.core.context import superadmin_context, tenant_context
+        from app.core.context import role_context, superadmin_context, tenant_context
 
         token_tenant = tenant_context.set(empresa_id)
         token_superadmin = superadmin_context.set(is_superadmin)
+        token_role = role_context.set(user_role)
 
         try:
             response = await call_next(request)
@@ -101,3 +108,4 @@ class TenantMiddleware(BaseHTTPMiddleware):
         finally:
             tenant_context.reset(token_tenant)
             superadmin_context.reset(token_superadmin)
+            role_context.reset(token_role)

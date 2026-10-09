@@ -3,6 +3,7 @@ import uuid
 
 import httpx
 from sqlalchemy import select
+from sqlalchemy import text as sa_text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -55,7 +56,9 @@ class TelegramService:
     async def processar_comanda_start(
         self, db: AsyncSession, chat_id: int, payload_text: str
     ) -> str:
+        await db.execute(sa_text("RESET ROLE;"))
         parts = payload_text.split(" ")
+
         if len(parts) < 2:
             return "Benvingut al Bot de Sevalor. Necessites un enllaç d'invitació vàlid per enllaçar el teu compte."
 
@@ -89,10 +92,12 @@ class TelegramService:
 
         from app.models.models import FaqCorporativaRag
 
+        await db.execute(sa_text("RESET ROLE;"))
         # Obtenir client per chat_id
         stmt = select(Client).where(
             Client.telegram_chat_id == chat_id, Client.estat_canal_telegram == "ACTIU"
         )
+
         client_db = (await db.execute(stmt)).scalars().first()
 
         if not client_db:
@@ -193,10 +198,12 @@ class TelegramService:
 
         from app.models.models import Client, Pressupost
 
+        await db.execute(sa_text("RESET ROLE;"))
         # Verificar que el client està enllaçat
         stmt = select(Client).where(
             Client.telegram_chat_id == chat_id, Client.estat_canal_telegram == "ACTIU"
         )
+
         client_db = (await db.execute(stmt)).scalars().first()
 
         if not client_db:

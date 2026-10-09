@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, Request, status
+from sqlalchemy import text as sa_text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -11,6 +12,9 @@ router = APIRouter(prefix="/webhooks/telegram", tags=["Telegram Webhooks"])
 @router.post("")
 async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db)) -> dict[str, str]:
     """Rep els missatges/updates de Telegram."""
+    # Webhook extern sense capçalera de tenant prèvia: resetejar rol per a la resolució
+    await db.execute(sa_text("RESET ROLE;"))
+
     secret_token = getattr(settings, "TELEGRAM_WEBHOOK_SECRET", None)
     if secret_token:
         header_token = request.headers.get("x-telegram-bot-api-secret-token")
@@ -51,14 +55,14 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
     if "message" in data:
         message = data["message"]
         chat_id = message.get("chat", {}).get("id")
-        text = message.get("text", "")
+        msg_text = message.get("text", "")
 
         if chat_id:
-            if text.startswith("/start"):
-                resposta = await telegram_service.processar_comanda_start(db, chat_id, text)
+            if msg_text.startswith("/start"):
+                resposta = await telegram_service.processar_comanda_start(db, chat_id, msg_text)
                 accio = "linked"
             else:
-                resposta = await telegram_service.processar_missatge_general(db, chat_id, text)
+                resposta = await telegram_service.processar_missatge_general(db, chat_id, msg_text)
                 accio = "processed"
 
             await telegram_service.send_message(chat_id, resposta)

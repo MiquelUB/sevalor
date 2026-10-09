@@ -45,12 +45,13 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
     Injecta automàticament el context RLS."""
     async with AsyncSessionLocal() as session:
         try:
-            from app.core.context import superadmin_context, tenant_context
+            from app.core.context import role_context, superadmin_context, tenant_context
 
             empresa_id = tenant_context.get()
             is_superadmin = superadmin_context.get()
+            role = role_context.get()
 
-            await set_tenant_context(session, empresa_id, is_superadmin)
+            await set_tenant_context(session, empresa_id, is_superadmin, role=role)
             yield session
         finally:
             await session.close()
@@ -63,16 +64,27 @@ async def get_db_with_tenant_context(request: Request) -> AsyncGenerator[AsyncSe
 
 
 async def set_tenant_context(
-    session: AsyncSession, empresa_id: str | None, is_superadmin: bool = False
+    session: AsyncSession,
+    empresa_id: str | None,
+    is_superadmin: bool = False,
+    role: str | None = None,
 ) -> None:
-    """Injecta la variable de sessió app.current_empresa_id per activar les polítiques RLS de PostgreSQL."""
+    """Injecta les variables de sessió app.current_empresa_id i app.current_user_role per activar les polítiques RLS de PostgreSQL."""
     if is_superadmin:
         await session.execute(text("RESET ROLE;"))
         await session.execute(text("SELECT set_config('app.is_superadmin', 'true', true);"))
+        await session.execute(text("SELECT set_config('app.current_user_role', 'SUPERADMIN', true);"))
     else:
         # Assignar el rol d'aplicació per fer complir RLS a PostgreSQL (els superusuaris ignorarien RLS)
         await session.execute(text("SET ROLE sevalor_app;"))
         await session.execute(text("SELECT set_config('app.is_superadmin', 'false', true);"))
+        if role:
+            await session.execute(
+                text("SELECT set_config('app.current_user_role', :val, true);"),
+                {"val": str(role).upper()},
+            )
+        else:
+            await session.execute(text("SELECT set_config('app.current_user_role', '', true);"))
 
     if empresa_id:
         await session.execute(
@@ -81,3 +93,4 @@ async def set_tenant_context(
         )
     else:
         await session.execute(text("SELECT set_config('app.current_empresa_id', '', true);"))
+

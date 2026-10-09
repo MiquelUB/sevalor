@@ -44,7 +44,17 @@ async def client_db(db_session: AsyncSession, empresa: Empresa):
 
 @pytest.fixture
 async def auth_headers(boss: Usuari):
-    return {"Authorization": f"Bearer {boss.id}", "X-Empresa-ID": str(boss.empresa_id)}
+    import jwt
+    from app.core.config import settings
+
+    payload = {
+        "sub": str(boss.id),
+        "empresa_id": str(boss.empresa_id),
+        "rol": "BOSS",
+        "exp": 9999999999,
+    }
+    token = jwt.encode(payload, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
+    return {"Authorization": f"Bearer {token}", "X-Empresa-ID": str(boss.empresa_id)}
 
 @pytest.fixture
 async def contractes(db_session: AsyncSession, empresa: Empresa, client_db: Client):

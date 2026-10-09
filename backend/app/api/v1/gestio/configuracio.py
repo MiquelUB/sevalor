@@ -14,7 +14,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from pydantic import BaseModel, Field
 from slowapi import Limiter
 from slowapi.util import get_remote_address
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db, set_tenant_context
@@ -865,7 +865,8 @@ async def acces_emergencia_2fa_boss(
     db: AsyncSession = Depends(get_db),
 ):
     """Accés d'emergència de l'últim Boss mitjançant codi de recuperació estàtic (EDGE-01)."""
-    # Cercar l'usuari Boss pel seu NIF
+    # Cercar l'usuari Boss pel seu NIF (endpoint d'emergència sense sessió autenticada prèvia)
+    await db.execute(text("RESET ROLE;"))
     res = await db.execute(
         select(Usuari, Empresa)
         .join(Empresa, Usuari.empresa_id == Empresa.id)

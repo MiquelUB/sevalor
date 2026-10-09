@@ -120,13 +120,28 @@ def override_get_db(db_session: AsyncSession):
     """Sobrescriu TOTES les dependències de BD perquè apuntin a la sessió de test.
 
     Sobrescriu tant get_db com get_db_with_tenant_context perquè els endpoints
-    que usin qualsevol de les dues vegin la mateixa transacció aïllada.
+    que usin qualsevol de les dues vegin la mateixa transacció aïllada i injectin
+    el context RLS de tenant i rol.
     """
 
     async def _get_test_db():
+        from app.core.context import role_context, superadmin_context, tenant_context
+        from app.core.db import set_tenant_context
+
+        empresa_id = tenant_context.get()
+        is_superadmin = superadmin_context.get()
+        role = role_context.get()
+        await set_tenant_context(db_session, empresa_id, is_superadmin, role=role)
         yield db_session
 
     async def _get_test_db_tenant_context():
+        from app.core.context import role_context, superadmin_context, tenant_context
+        from app.core.db import set_tenant_context
+
+        empresa_id = tenant_context.get()
+        is_superadmin = superadmin_context.get()
+        role = role_context.get()
+        await set_tenant_context(db_session, empresa_id, is_superadmin, role=role)
         yield db_session
 
     app.dependency_overrides[get_db] = _get_test_db
@@ -138,8 +153,11 @@ def override_get_db(db_session: AsyncSession):
 @pytest_asyncio.fixture(scope="function")
 async def admin_session(db_session: AsyncSession) -> AsyncGenerator[AsyncSession, None]:
     """Sessió de BD amb permisos de SUPERADMIN per a fixtures d'administració."""
+    await db_session.execute(text("RESET ROLE;"))
     await db_session.execute(text("SET LOCAL app.is_superadmin = 'true';"))
+    await db_session.execute(text("SET LOCAL app.current_user_role = 'SUPERADMIN';"))
     yield db_session
+
 
 
 @pytest.fixture(scope="function")

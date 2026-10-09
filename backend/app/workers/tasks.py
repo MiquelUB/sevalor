@@ -8,10 +8,13 @@ from app.workers.celery_app import celery_app
 
 
 @asynccontextmanager
-async def get_worker_session(empresa_id: str | None = None, is_superadmin: bool = False):
+async def get_worker_session(
+    empresa_id: str | None = None, is_superadmin: bool = False, role: str | None = "BOSS"
+):
     async with AsyncSessionLocal() as session:
-        await set_tenant_context(session, empresa_id, is_superadmin)
+        await set_tenant_context(session, empresa_id, is_superadmin, role=role)
         yield session
+
 
 
 logger = logging.getLogger("workers.tasks")
