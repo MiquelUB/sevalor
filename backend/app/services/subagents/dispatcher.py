@@ -229,7 +229,9 @@ class CopilotDispatcher:
                     return content, None, None, None
 
         except Exception as e:
-            logger.warning(f"Connexió amb LM Studio fallida al subagent {subagent.id}: {e}")
+            logger.warning(
+                f"Connexió amb LM Studio fallida a {endpoint} (subagent {subagent.id}): {e}"
+            )
 
         return None, None, None, None
 
