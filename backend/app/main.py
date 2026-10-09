@@ -106,7 +106,7 @@ async def metrics_middleware(request, call_next):  # type: ignore[no-untyped-def
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.BACKEND_CORS_ORIGINS,
-    allow_origin_regex=r"^https?://([a-zA-Z0-9-]+\.)*(80opze\.easypanel\.host|sevalor\.app)(:\d+)?$",
+    allow_origin_regex=r"^https?://([a-zA-Z0-9-]+\.)*([a-zA-Z0-9-]+\.[a-zA-Z]{2,}|80opze\.easypanel\.host)(:\d+)?$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

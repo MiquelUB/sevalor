@@ -22,6 +22,7 @@ import {
   Layers,
   Truck,
   MessageSquare,
+  Globe,
 } from "lucide-react";
 import { apiFetch, setAuthToken } from "@/lib/api";
 
@@ -37,6 +38,8 @@ export default function EmpresaDetailPage({ params }: { params: { id: string } }
   // Form states
   const [estat, setEstat] = useState("ACTIU");
   const [pla, setPla] = useState("STARTER");
+  const [dominiCustom, setDominiCustom] = useState("");
+  const [subdomini, setSubdomini] = useState("");
   const [features, setFeatures] = useState({
     feature_copilot_ia: false,
     feature_flota: true,
@@ -53,6 +56,8 @@ export default function EmpresaDetailPage({ params }: { params: { id: string } }
         setTenant(data);
         setEstat(data.estat_pagament || data.estat || "ACTIU");
         setPla(data.pla_subscripcio || data.pla || "STARTER");
+        setDominiCustom(data.domini_custom || "");
+        setSubdomini(data.subdomini || "");
         setFeatures({
           feature_copilot_ia: Boolean(data.feature_copilot_ia),
           feature_flota: Boolean(data.feature_flota),
@@ -97,6 +102,20 @@ export default function EmpresaDetailPage({ params }: { params: { id: string } }
         method: "PUT",
         body: JSON.stringify(features),
       });
+
+      // 4. Guardar Domini / Subdomini si han canviat
+      if (
+        dominiCustom !== (tenant.domini_custom || "") ||
+        subdomini !== (tenant.subdomini || "")
+      ) {
+        await apiFetch(`/superadmin/tenants/${params.id}/domini`, {
+          method: "PUT",
+          body: JSON.stringify({
+            domini_custom: dominiCustom.trim() || null,
+            subdomini: subdomini.trim() || undefined,
+          }),
+        });
+      }
 
       setSuccessMessage("Configuració del tenant desada correctament a PostgreSQL.");
       fetchTenant();
@@ -195,12 +214,17 @@ export default function EmpresaDetailPage({ params }: { params: { id: string } }
       {/* CAPÇALERA DE GOVERNANÇA */}
       <div className="flex flex-wrap items-center justify-between gap-4 pb-4 border-b border-slate-200 dark:border-slate-800">
         <div>
-          <div className="flex items-center gap-2.5">
+          <div className="flex items-center gap-2.5 flex-wrap">
             <h1 className="text-2xl font-black text-slate-900 dark:text-white">
               {tenant?.nom || tenant?.rao_social}
             </h1>
-            <span className="text-xs px-2 py-0.5 rounded-lg font-mono bg-slate-100 dark:bg-slate-800 text-emerald-600 dark:text-emerald-400 font-bold border border-slate-200 dark:border-slate-700">
-              {tenant?.subdomini}.campopro.cat
+            <span className="text-xs px-2.5 py-1 rounded-lg font-mono bg-emerald-50 dark:bg-emerald-950/70 text-emerald-700 dark:text-emerald-400 font-bold border border-emerald-300 dark:border-emerald-800 flex items-center gap-1.5">
+              <span>{tenant?.domini_custom || `${tenant?.subdomini}.sevalor.app`}</span>
+              {tenant?.domini_custom && (
+                <span className="px-1.5 py-0.2 rounded bg-emerald-200 dark:bg-emerald-900 text-emerald-900 dark:text-emerald-200 text-[9px] uppercase font-bold">
+                  Domini Propi
+                </span>
+              )}
             </span>
           </div>
           <p className="text-xs font-mono text-slate-500 dark:text-slate-400 mt-1">
@@ -334,6 +358,84 @@ export default function EmpresaDetailPage({ params }: { params: { id: string } }
           <p className="text-[11px] text-amber-600 dark:text-amber-400 leading-relaxed font-sans">
             <strong>Quota Guard:</strong> El backend rebutjarà qualsevol intent de downgrade si el nombre d'operaris actius ({tenant?.operaris_actius || 0}) supera el límit del nou pla sol·licitat.
           </p>
+        </div>
+
+        {/* BLOC: DOMINI D'EMPRESA & CONFIGURACIÓ DNS CNAME */}
+        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-5 rounded-2xl shadow-sm md:col-span-2 space-y-4">
+          <div className="flex items-center justify-between">
+            <h2 className="text-xs font-mono font-bold uppercase tracking-wider text-slate-500 flex items-center gap-2">
+              <Globe className="w-4 h-4 text-emerald-500" />
+              <span>Domini Propi de l'Empresa &amp; Subdomini (DNS CNAME)</span>
+            </h2>
+            <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-emerald-50 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-400 font-bold border border-emerald-200 dark:border-emerald-800">
+              FQDN SOBIRÀ
+            </span>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
+            <div>
+              <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1.5">
+                Domini d'Accés de l'Empresa (FQDN Complet)
+              </label>
+              <div className="flex items-center rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 overflow-hidden focus-within:border-emerald-500">
+                <span className="px-3 text-slate-400 font-mono text-[11px] bg-slate-100 dark:bg-slate-800/80 border-r border-slate-200 dark:border-slate-700 py-2.5">
+                  https://
+                </span>
+                <input
+                  type="text"
+                  placeholder="ex. sevalor.soler.cat"
+                  value={dominiCustom}
+                  onChange={(e) => setDominiCustom(e.target.value.toLowerCase().trim())}
+                  className="w-full bg-transparent p-2.5 text-slate-900 dark:text-white font-mono font-bold focus:outline-none"
+                />
+              </div>
+              <span className="text-[10px] text-slate-500 mt-1 block">
+                Exemple: <strong>sevalor.soler.cat</strong> (deixar buit si s'utilitza només subdomini de sevalor.app).
+              </span>
+            </div>
+
+            <div>
+              <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1.5">
+                Slug / Subdomini Intern RLS (Base de Dades)
+              </label>
+              <input
+                type="text"
+                placeholder="ex. soler"
+                value={subdomini}
+                onChange={(e) => setSubdomini(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ""))}
+                className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-white text-xs rounded-xl p-2.5 font-mono focus:ring-emerald-500 focus:border-emerald-500"
+              />
+              <span className="text-[10px] text-slate-500 mt-1 block">
+                Identificador únic d'inquilí emmagatzemat a <code>empreses.subdomini</code>.
+              </span>
+            </div>
+          </div>
+
+          {/* Guia CNAME */}
+          <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 text-xs font-mono space-y-2">
+            <div className="flex items-center justify-between text-[11px]">
+              <span className="font-bold text-slate-700 dark:text-slate-300">
+                Configuració CNAME requerida al DNS del client ({dominiCustom || "sevalor.soler.cat"}):
+              </span>
+              <span className="text-emerald-600 dark:text-emerald-400 font-bold">Let's Encrypt TLS-ALPN-01</span>
+            </div>
+            <div className="grid grid-cols-3 gap-2 text-[11px]">
+              <div className="p-2 rounded bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800">
+                <span className="text-slate-400 text-[10px] block">Tipus</span>
+                <span className="font-bold text-emerald-600">CNAME</span>
+              </div>
+              <div className="p-2 rounded bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800">
+                <span className="text-slate-400 text-[10px] block">Nom</span>
+                <span className="font-bold text-slate-800 dark:text-slate-200">
+                  {dominiCustom ? dominiCustom.split(".")[0] : "sevalor"}
+                </span>
+              </div>
+              <div className="p-2 rounded bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800">
+                <span className="text-slate-400 text-[10px] block">Destí (Target)</span>
+                <span className="font-bold text-slate-800 dark:text-slate-200">edge.sevalor.app</span>
+              </div>
+            </div>
+          </div>
         </div>
 
         {/* BLOC 3: INTERRUPTORS DINÀMICS DE MÒDULS (FEATURE FLAGS) */}

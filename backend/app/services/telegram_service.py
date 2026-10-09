@@ -137,7 +137,7 @@ class TelegramService:
         # Com cridar_lm_studio genera un system_prompt dins, la millor manera és injectar aquest súper-prompt al "context_addicional"
         # i fer que la instrucció tingui més pes. O refer la trucada aquí mateix de forma independent per major seguretat.
 
-        lm_url = getattr(settings, "LMSTUDIO_URL", None) or getattr(settings, "LM_STUDIO_URL", None)
+        lm_url = getattr(settings, "LM_STUDIO_URL", None) or getattr(settings, "LMSTUDIO_URL", None) or "http://127.0.0.1:1234/v1"
         if not lm_url:
             if context_rag:
                 return f"L'assistent no està disponible en aquest moment, però he trobat això al manual:\n\n{context_rag}"
@@ -150,7 +150,7 @@ class TelegramService:
             if base_url.endswith("/v1")
             else f"{base_url}/v1/chat/completions"
         )
-        model_name = getattr(settings, "LM_STUDIO_MODEL", "default")
+        model_name = getattr(settings, "LM_STUDIO_MODEL", "deepseek-coder-v2-lite-instruct")
         api_key = getattr(settings, "LM_STUDIO_API_KEY", "lm-studio")
 
         payload = {

@@ -23,6 +23,7 @@ interface CertificatDestruccio {
   nom: string;
   nif: string;
   subdomini: string;
+  domini_custom?: string;
   data_baixa: string;
   estat: string;
   certificat_disponible: boolean;
@@ -170,7 +171,7 @@ export default function SuperadminAuditoriaPage() {
                     <tr key={c.tenant_id} className="hover:bg-slate-50 dark:hover:bg-slate-800/40 transition-colors">
                       <td className="p-4">
                         <div className="font-bold text-slate-900 dark:text-white text-sm">{c.nom}</div>
-                        <div className="text-[11px] font-mono text-slate-500">{c.nif} • {c.subdomini}.campopro.cat</div>
+                        <div className="text-[11px] font-mono text-slate-500">{c.nif} • {c.domini_custom || `${c.subdomini}.sevalor.app`}</div>
                       </td>
                       <td className="p-4 font-mono text-[11px] text-slate-600 dark:text-slate-400">
                         {new Date(c.data_baixa).toLocaleDateString("ca-ES", {

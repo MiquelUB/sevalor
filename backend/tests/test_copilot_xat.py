@@ -44,7 +44,7 @@ async def test_copilot_xat(admin_session, headers, boss_token):
         assert res2.status_code == 200
         data2 = res2.json()
         assert "resposta" in data2
-        
+
         # Pregunta 3: Validació sense context
         res3 = await ac.post("/api/v1/gestio/copilot/xat", json={"pregunta": "Qui ets?"}, headers=headers)
         assert res3.status_code == 200
@@ -70,3 +70,10 @@ async def test_copilot_xat(admin_session, headers, boss_token):
         # Verificacions estructurals
         for r in [res, res2, res3, res4]:
             assert "error" not in r.json() or not r.json()["error"]
+
+        # Verificació de connectivitat amb el node d'IA local (/ia-status)
+        res_status = await ac.get("/api/v1/gestio/copilot/ia-status", headers=headers)
+        assert res_status.status_code == 200
+        data_status = res_status.json()
+        assert data_status["estat"] in ("ONLINE", "OFFLINE")
+        assert "url" in data_status

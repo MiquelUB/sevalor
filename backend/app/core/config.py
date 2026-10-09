@@ -30,9 +30,9 @@ class Settings(BaseSettings):
     WHISPER_URL: str = "http://localhost:8008"
 
     # LM Studio / LLM Local (API compatible OpenAI)
-    LM_STUDIO_URL: str = "http://localhost:1234/v1"
+    LM_STUDIO_URL: str = "http://127.0.0.1:1234/v1"
     LMSTUDIO_URL: str | None = None
-    LM_STUDIO_MODEL: str = "default"
+    LM_STUDIO_MODEL: str = "deepseek-coder-v2-lite-instruct"
     LM_STUDIO_API_KEY: str = "lm-studio"
 
     # Criptografia i Tokens

@@ -677,7 +677,7 @@ async def cridar_lm_studio(
     pregunta: str, vertical: str = "SEVALOR", context_addicional: Optional[str] = None
 ) -> Optional[str]:
     """Cridar LM Studio per a generació de text estàndard / suport."""
-    lm_url = getattr(settings, "LMSTUDIO_URL", None) or getattr(settings, "LM_STUDIO_URL", None)
+    lm_url = getattr(settings, "LM_STUDIO_URL", None) or getattr(settings, "LMSTUDIO_URL", None) or "http://127.0.0.1:1234/v1"
     if not lm_url:
         return None
 
@@ -695,8 +695,8 @@ async def cridar_lm_studio(
     if context_addicional:
         system_prompt += f"\nContext addicional:\n{context_addicional}"
 
-    model_name = getattr(settings, "LMSTUDIO_MODEL", "qwen2.5-coder-7b-instruct")
-    api_key = getattr(settings, "LMSTUDIO_API_KEY", "lm-studio")
+    model_name = getattr(settings, "LM_STUDIO_MODEL", None) or getattr(settings, "LMSTUDIO_MODEL", "deepseek-coder-v2-lite-instruct")
+    api_key = getattr(settings, "LM_STUDIO_API_KEY", "lm-studio")
 
     payload = {
         "model": model_name,
@@ -738,7 +738,7 @@ async def cridar_lm_studio_amb_tools(
     Executa el cicle d'Agent de Tool Calling amb LM Studio (OpenAI-compatible).
     Retorna (resposta_final, tool_name, tool_args, tool_result).
     """
-    lm_url = getattr(settings, "LMSTUDIO_URL", None) or getattr(settings, "LM_STUDIO_URL", None)
+    lm_url = getattr(settings, "LM_STUDIO_URL", None) or getattr(settings, "LMSTUDIO_URL", None) or "http://127.0.0.1:1234/v1"
     if not lm_url:
         return None, None, None, None
 
@@ -759,7 +759,7 @@ async def cridar_lm_studio_amb_tools(
         "Respon sempre en català de forma professional, tècnica i precisa, basant-te exclusivament en les dades obtingudes de les eines."
     )
 
-    model_name = getattr(settings, "LM_STUDIO_MODEL", "default")
+    model_name = getattr(settings, "LM_STUDIO_MODEL", "deepseek-coder-v2-lite-instruct")
     api_key = getattr(settings, "LM_STUDIO_API_KEY", "lm-studio")
 
     messages = [
@@ -1844,7 +1844,7 @@ async def consultar_xat_tecnic(
     )
 
     enllacos = []
-    if resposta_ia:
+    if resposta_ia and tool_name:
         resposta = resposta_ia
         if tool_name == "get_real_stock":
             enllacos.append({"titol": "Inventari de Magatzem", "url": "/gestio/magatzem"})
@@ -1857,10 +1857,35 @@ async def consultar_xat_tecnic(
         elif tool_name == "get_rag_knowledge":
             enllacos.append({"titol": "Base de Coneixement Corporativa", "url": "/gestio/copilot"})
     else:
-        # Fallback determinista sobirà local (quan el servei LM Studio està inactiu o offline)
-        resposta, tool_name, tool_args, tool_result, enllacos = await executar_agent_local(
-            dades.pregunta, db, empresa_id
-        )
+        # Fallback determinista sobirà local (quan el model no crida tool natiu o està offline)
+        (
+            resp_local,
+            t_name_loc,
+            t_args_loc,
+            t_res_loc,
+            enllacos_loc,
+        ) = await executar_agent_local(dades.pregunta, db, empresa_id)
+
+        # Si l'agent local identifica una eina operativa específica (estoc, flota, clients, garanties) o FAQ RAG trobada:
+        if t_name_loc != "get_rag_knowledge" or (t_res_loc and t_res_loc.get("trobat")):
+            resposta = resp_local
+            tool_name = t_name_loc
+            tool_args = t_args_loc
+            tool_result = t_res_loc
+            enllacos = enllacos_loc
+        elif resposta_ia:
+            # Pregunta general / conversacional resolta satisfactòriament per LM Studio
+            resposta = resposta_ia
+            tool_name = None
+            tool_args = None
+            tool_result = None
+            enllacos = []
+        else:
+            resposta = resp_local
+            tool_name = t_name_loc
+            tool_args = t_args_loc
+            tool_result = t_res_loc
+            enllacos = enllacos_loc
 
     # 4. Registre d'Auditoria complet a la BD
     consulta_db = ConsultaXatCopilot(
@@ -1887,6 +1912,44 @@ async def consultar_xat_tecnic(
         "tool_resultat": tool_result,
         "enllacos": enllacos,
         "declinat_per_vertical": False,
+    }
+
+
+@router.get("/ia-status")
+async def obtenir_estat_ia() -> Dict[str, Any]:
+    """Comprova la connectivitat en viu amb el node local LM Studio (http://127.0.0.1:1234)."""
+    lm_url = getattr(settings, "LM_STUDIO_URL", None) or getattr(settings, "LMSTUDIO_URL", None) or "http://127.0.0.1:1234/v1"
+    base_url = lm_url.rstrip("/")
+    models_url = f"{base_url}/models" if base_url.endswith("/v1") else f"{base_url}/v1/models"
+
+    try:
+        start_t = datetime.now()
+        async with httpx.AsyncClient(timeout=4.0) as client:
+            resp = await client.get(models_url)
+            elapsed_ms = int((datetime.now() - start_t).total_seconds() * 1000)
+            if resp.status_code == 200:
+                data = resp.json()
+                models = [m.get("id") for m in data.get("data", [])]
+                return {
+                    "estat": "ONLINE",
+                    "url": lm_url,
+                    "model_actiu": getattr(settings, "LM_STUDIO_MODEL", "deepseek-coder-v2-lite-instruct"),
+                    "models_disponibles": models,
+                    "latencia_ms": elapsed_ms,
+                }
+    except Exception as e:
+        return {
+            "estat": "OFFLINE",
+            "url": lm_url,
+            "error": str(e),
+            "latencia_ms": None,
+        }
+
+    return {
+        "estat": "OFFLINE",
+        "url": lm_url,
+        "error": "Resposta no vàlida del node d'IA",
+        "latencia_ms": None,
     }
 
 

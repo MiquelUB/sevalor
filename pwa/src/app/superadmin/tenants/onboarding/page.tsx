@@ -49,9 +49,11 @@ export default function SuperadminTenantOnboardingPage() {
   const [emailGerent, setEmailGerent] = useState<string>("");
   const [telefon, setTelefon] = useState<string>("");
 
-  // Pas 2: Subdomini & SSL
-  const [subdomini, setSubdomini] = useState<string>("");
-  const [dominiPersonalitzat, setDominiPersonalitzat] = useState<string>("");
+  // Pas 2: Domini Propi & Subdomini Dedicat
+  const [tipusDomini, setTipusDomini] = useState<"PROPI" | "SEVALOR">("PROPI");
+  const [dominiEmpresa, setDominiEmpresa] = useState<string>(""); // ex: "soler.cat"
+  const [subdominiPrefix, setSubdominiPrefix] = useState<string>("sevalor"); // ex: "sevalor"
+  const [subdomini, setSubdomini] = useState<string>(""); // slug intern, ex: "soler"
   const [sslStatus, setSslStatus] = useState<"IDLE" | "PROCESSING" | "ACTIVE">("ACTIVE");
 
   // Pas 3: Postgres Schema & RLS
@@ -72,17 +74,51 @@ export default function SuperadminTenantOnboardingPage() {
   const [invitationUrl, setInvitationUrl] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
+  // FQDN complet calculat en temps real
+  const fqdnResultant =
+    tipusDomini === "PROPI"
+      ? dominiEmpresa.trim()
+        ? `${(subdominiPrefix.trim() || "sevalor").toLowerCase()}.${dominiEmpresa.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/\/.*$/, "")}`
+        : ""
+      : `${(subdomini.trim() || "tenant").toLowerCase().replace(/[^a-z0-9-]/g, "")}.sevalor.app`;
+
+  // Slug intern deduït
+  const slugCalculat =
+    subdomini.trim().toLowerCase().replace(/[^a-z0-9-]/g, "") ||
+    (dominiEmpresa.trim()
+      ? dominiEmpresa.trim().split(".")[0].toLowerCase().replace(/[^a-z0-9-]/g, "")
+      : raoSocial.trim().split(" ")[0].toLowerCase().replace(/[^a-z0-9-]/g, "")) ||
+    "empresa";
+
   // Executar Dry-Run
   const handleExecuteDryRun = () => {
     setDryRunRunning(true);
     setDryRunSuccess(null);
     setErrorMessage(null);
-    if (!raoSocial.trim() || !nif.trim() || !subdomini.trim() || !emailGerent.trim()) {
+
+    if (!raoSocial.trim() || !nif.trim() || !emailGerent.trim()) {
       setDryRunRunning(false);
       setDryRunSuccess(false);
-      setErrorMessage("Cal indicar Raó Social, NIF, Subdomini i Email abans de verificar.");
+      setErrorMessage("Cal indicar Raó Social, NIF i Email del gerent abans de verificar.");
       return;
     }
+
+    if (tipusDomini === "PROPI") {
+      if (!dominiEmpresa.trim() || !dominiEmpresa.includes(".")) {
+        setDryRunRunning(false);
+        setDryRunSuccess(false);
+        setErrorMessage("Cal indicar un domini propi d'empresa vàlid (exemple: soler.cat).");
+        return;
+      }
+    } else {
+      if (!subdomini.trim()) {
+        setDryRunRunning(false);
+        setDryRunSuccess(false);
+        setErrorMessage("Cal indicar un subdomini vàlid per a sevalor.app.");
+        return;
+      }
+    }
+
     setDryRunRunning(false);
     setDryRunSuccess(true);
   };
@@ -96,12 +132,16 @@ export default function SuperadminTenantOnboardingPage() {
       const nom = nomParts[0] || "Gerent";
       const cognoms = nomParts.slice(1).join(" ") || "General";
 
+      const subdominiFinal = slugCalculat;
+      const dominiCustomFinal = tipusDomini === "PROPI" && fqdnResultant ? fqdnResultant : undefined;
+
       const data = await apiFetch<any>("/superadmin/tenants/onboarding", {
         method: "POST",
         body: JSON.stringify({
           rao_social: raoSocial.trim(),
           nif: nif.trim().toUpperCase(),
-          subdomini: subdomini.trim().toLowerCase(),
+          subdomini: subdominiFinal,
+          domini_custom: dominiCustomFinal,
           vertical: vertical.trim(),
           magatzem_families_default: magatzemFamilies.trim() || undefined,
           agent_prompt_system: agentPrompt.trim() || undefined,
@@ -117,7 +157,8 @@ export default function SuperadminTenantOnboardingPage() {
       });
 
       setProvisionedSuccess(true);
-      setInvitationUrl(data?.tenant?.enllac_activacio_2fa || `https://${subdomini.trim().toLowerCase()}.sevalor.cat/activacio`);
+      const hostAcceso = dominiCustomFinal || `${subdominiFinal}.sevalor.app`;
+      setInvitationUrl(data?.tenant?.enllac_activacio_2fa || `https://${hostAcceso}/activacio`);
     } catch (err: any) {
       setErrorMessage(err.message || "Error durant el provisionament del tenant.");
     } finally {
@@ -201,7 +242,7 @@ export default function SuperadminTenantOnboardingPage() {
               <div className="flex items-center gap-2">
                 <CheckCircle2 className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
                 <span>
-                  <strong>Dry-Run completat amb èxit (0 errors):</strong> Subdomini <em>{subdomini}.sevalor.app</em> disponible, NIF <em>{nif}</em> vàlid, esquema <em>{schemaNom}</em> lliure de col·lisions.
+                  <strong>Dry-Run completat amb èxit (0 errors):</strong> Domini corporatiu <em>{fqdnResultant}</em> disponible, NIF <em>{nif}</em> vàlid, esquema RLS lliure de col·lisions.
                 </span>
               </div>
               <button onClick={() => setDryRunSuccess(null)} className="underline text-emerald-700 dark:text-emerald-300">
@@ -251,7 +292,7 @@ export default function SuperadminTenantOnboardingPage() {
                     </span>
                     <div className="flex flex-col text-left truncate">
                       <span className="text-[10px] text-slate-400 uppercase">Pas 02</span>
-                      <span className="truncate font-semibold">Subdomini &amp; SSL</span>
+                      <span className="truncate font-semibold">Domini &amp; SSL</span>
                     </div>
                   </button>
 
@@ -381,8 +422,8 @@ export default function SuperadminTenantOnboardingPage() {
                 </div>
               </div>
 
-              {/* DETALL PAS 2: Subdomini & SSL (Spec 021 RF-04) */}
-              <div className="bg-white dark:bg-slate-900 rounded-xl shadow-sm p-6 border border-slate-200 dark:border-slate-800 space-y-4 transition-colors">
+              {/* DETALL PAS 2: Domini Propi & Subdomini Dedicat (Spec 021 RF-04) */}
+              <div className="bg-white dark:bg-slate-900 rounded-xl shadow-sm p-6 border border-slate-200 dark:border-slate-800 space-y-5 transition-colors">
                 <div className="flex items-center justify-between border-b border-slate-200 dark:border-slate-800 pb-3">
                   <div className="flex items-center gap-2">
                     <span className="w-6 h-6 rounded-full bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-400 flex items-center justify-center font-bold text-xs">
@@ -390,57 +431,249 @@ export default function SuperadminTenantOnboardingPage() {
                     </span>
                     <div>
                       <h2 className="text-sm font-bold uppercase tracking-wider text-slate-800 dark:text-slate-200">
-                        2. Subdomini Institucional &amp; Certificat SSL (Let's Encrypt)
+                        2. Domini Propi de l'Empresa &amp; Subdomini Dedicat
                       </h2>
                       <span className="text-[10px] font-mono text-slate-500">
-                        Traefik v3.1 Ingress Router &amp; Certbot Asíncron a Celery
+                        Arquitectura Multi-Tenant amb Sobirania de Marca (FQDN Propi de Client)
                       </span>
                     </div>
                   </div>
                   <div className="flex items-center gap-1.5 px-2.5 py-1 rounded bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-400 font-mono text-[10px] font-bold">
                     <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping"></span>
-                    <span>Cua Asíncrona Activa</span>
+                    <span>SSL Let's Encrypt Actiu</span>
                   </div>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
-                  <div>
-                    <label className="block font-semibold text-slate-600 dark:text-slate-400 mb-1">Subdomini Sol·licitat</label>
-                    <div className="flex items-center rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 overflow-hidden">
-                      <input
-                        type="text"
-                        value={subdomini}
-                        onChange={(e) => setSubdomini(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ""))}
-                        className="flex-1 p-2 bg-transparent text-slate-800 dark:text-slate-200 font-mono font-bold focus:outline-none"
-                      />
-                      <span className="px-3 text-slate-400 font-mono bg-slate-100 dark:bg-slate-800/80 border-l border-slate-200 dark:border-slate-700 py-2">
-                        .sevalor.app
-                      </span>
-                    </div>
-                    <span className="text-[10px] text-slate-500 mt-1 block">CNAME configurat cap a edge.sevalor.app</span>
-                  </div>
+                {/* Selector d'Estratègia de Domini */}
+                <div>
+                  <label className="block font-semibold text-slate-600 dark:text-slate-400 text-xs mb-2">
+                    Estratègia d'Accés i Hostatjament
+                  </label>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                    <button
+                      type="button"
+                      onClick={() => setTipusDomini("PROPI")}
+                      className={`p-3 rounded-xl border text-left transition-all ${
+                        tipusDomini === "PROPI"
+                          ? "border-emerald-600 bg-emerald-50 dark:bg-emerald-950/60 text-emerald-900 dark:text-emerald-200 font-bold shadow-sm"
+                          : "border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/40 text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"
+                      }`}
+                    >
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="font-bold flex items-center gap-1.5">
+                          <Globe className="w-4 h-4 text-emerald-600" />
+                          <span>Domini Propi de l'Empresa</span>
+                        </span>
+                        <span className="text-[9px] px-1.5 py-0.5 rounded bg-emerald-100 dark:bg-emerald-900 text-emerald-800 dark:text-emerald-200 uppercase font-mono font-bold">
+                          Recomanat
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-slate-500 font-normal">
+                        Cada empresa utilitza el seu propi domini corporatiu (ex: <em>soler.cat</em>) amb subdomini dedicat (ex: <em>sevalor.soler.cat</em>).
+                      </p>
+                    </button>
 
-                  <div>
-                    <label className="block font-semibold text-slate-600 dark:text-slate-400 mb-1">ACME Provider &amp; Resolver</label>
-                    <div className="p-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50 flex items-center justify-between">
-                      <span className="font-mono text-slate-800 dark:text-slate-200">Let's Encrypt TLS-ALPN-01</span>
-                      <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-400 font-bold">
-                        Hetzner DNS API
-                      </span>
-                    </div>
-                    <span className="text-[10px] text-slate-500 mt-1 block">Auto-renovació TLS cada 60 dies</span>
+                    <button
+                      type="button"
+                      onClick={() => setTipusDomini("SEVALOR")}
+                      className={`p-3 rounded-xl border text-left transition-all ${
+                        tipusDomini === "SEVALOR"
+                          ? "border-emerald-600 bg-emerald-50 dark:bg-emerald-950/60 text-emerald-900 dark:text-emerald-200 font-bold shadow-sm"
+                          : "border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/40 text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"
+                      }`}
+                    >
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="font-bold flex items-center gap-1.5">
+                          <Server className="w-4 h-4 text-slate-400" />
+                          <span>Subdomini Sevalor.app</span>
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-slate-500 font-normal">
+                        Per a empreses que no disposen de domini propi, s'hostatja com a subdomini directe (ex: <em>soler.sevalor.app</em>).
+                      </p>
+                    </button>
                   </div>
                 </div>
+
+                {/* Camps del Formulari de Domini */}
+                {tipusDomini === "PROPI" ? (
+                  <div className="space-y-4">
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-xs">
+                      {/* Domini Propi de l'Empresa */}
+                      <div className="sm:col-span-2">
+                        <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                          Domini Corporatiu de l'Empresa <span className="text-emerald-600">*</span>
+                        </label>
+                        <div className="flex items-center rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 overflow-hidden focus-within:border-emerald-500">
+                          <span className="px-3 text-slate-400 font-mono text-[11px] bg-slate-50 dark:bg-slate-800/80 border-r border-slate-200 dark:border-slate-700 py-2">
+                            https://
+                          </span>
+                          <input
+                            type="text"
+                            placeholder="ex. soler.cat o grupsoler.com"
+                            value={dominiEmpresa}
+                            onChange={(e) =>
+                              setDominiEmpresa(
+                                e.target.value
+                                  .toLowerCase()
+                                  .replace(/^https?:\/\//, "")
+                                  .replace(/\/.*$/, "")
+                                  .replace(/[^a-z0-9.-]/g, "")
+                              )
+                            }
+                            className="flex-1 p-2 bg-transparent text-slate-800 dark:text-slate-200 font-mono font-bold focus:outline-none"
+                          />
+                        </div>
+                        <span className="text-[10px] text-slate-500 mt-1 block">
+                          El domini arrel propietat del client on es crearà el registre CNAME.
+                        </span>
+                      </div>
+
+                      {/* Subdomini de Servei */}
+                      <div>
+                        <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                          Subdomini de Servei <span className="text-emerald-600">*</span>
+                        </label>
+                        <div className="flex items-center rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 overflow-hidden focus-within:border-emerald-500">
+                          <input
+                            type="text"
+                            placeholder="sevalor"
+                            value={subdominiPrefix}
+                            onChange={(e) =>
+                              setSubdominiPrefix(
+                                e.target.value
+                                  .toLowerCase()
+                                  .replace(/[^a-z0-9-]/g, "")
+                              )
+                            }
+                            className="flex-1 p-2 bg-transparent text-slate-800 dark:text-slate-200 font-mono font-bold focus:outline-none"
+                          />
+                        </div>
+                        <span className="text-[10px] text-slate-500 mt-1 block">
+                          Prefix recomanat: <strong>sevalor</strong> (o <em>app</em>, <em>erp</em>).
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Identificador / Slug RLS intern */}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
+                      <div>
+                        <label className="block font-semibold text-slate-600 dark:text-slate-400 mb-1">
+                          Slug Intern del Tenant (Base de Dades &amp; RLS)
+                        </label>
+                        <input
+                          type="text"
+                          placeholder={slugCalculat}
+                          value={subdomini}
+                          onChange={(e) => setSubdomini(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ""))}
+                          className="w-full p-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-200 font-mono text-xs focus:outline-none focus:border-emerald-500"
+                        />
+                        <span className="text-[10px] text-slate-500 mt-1 block">
+                          Clau unívoca d'aïllament a la taula <code>empreses.subdomini</code> (deduïda: <strong>{slugCalculat}</strong>).
+                        </span>
+                      </div>
+
+                      <div>
+                        <label className="block font-semibold text-slate-600 dark:text-slate-400 mb-1">
+                          ACME Resolver &amp; Certbot
+                        </label>
+                        <div className="p-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50 flex items-center justify-between">
+                          <span className="font-mono text-slate-800 dark:text-slate-200 text-xs">Let's Encrypt TLS-ALPN-01</span>
+                          <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-400 font-bold">
+                            Hetzner Ingress
+                          </span>
+                        </div>
+                        <span className="text-[10px] text-slate-500 mt-1 block">
+                          Certificat TLS automàtic vàlid per a <strong>{fqdnResultant || "sevalor.domini.cat"}</strong>.
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Targeta Destacada: URL Resultant d'Accés */}
+                    <div className="p-4 rounded-xl bg-gradient-to-r from-emerald-950/30 to-slate-900 border border-emerald-800/60 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs font-mono">
+                      <div>
+                        <span className="text-slate-400 uppercase text-[10px] font-bold tracking-wider block">
+                          Adreça Web Resultant per a l'Empresa:
+                        </span>
+                        <div className="text-emerald-400 font-bold text-sm mt-0.5 flex items-center gap-2">
+                          <Globe className="w-4 h-4 text-emerald-400 shrink-0" />
+                          <span>https://{fqdnResultant || "sevalor.soler.cat"}</span>
+                        </div>
+                      </div>
+                      <div className="px-3 py-1 rounded bg-emerald-900/60 border border-emerald-700 text-emerald-300 text-[11px] font-bold">
+                        Persistit a <code>domini_custom</code>
+                      </div>
+                    </div>
+
+                    {/* Guia Tècnica DNS CNAME per al client */}
+                    <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 text-xs font-mono space-y-2">
+                      <div className="flex items-center justify-between">
+                        <span className="font-bold text-slate-800 dark:text-slate-200 uppercase text-[11px] flex items-center gap-1.5">
+                          <ExternalLink className="w-3.5 h-3.5 text-emerald-600" />
+                          <span>Instruccions de Delegació DNS per a l'Empresa</span>
+                        </span>
+                        <span className="text-[10px] text-slate-500">Cloudflare / Nominalia / Hetzner DNS</span>
+                      </div>
+                      <p className="text-[11px] text-slate-600 dark:text-slate-400 font-sans">
+                        El client ha d'afegir aquest registre CNAME a la zona DNS del seu domini <strong>{dominiEmpresa || "soler.cat"}</strong>:
+                      </p>
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1">
+                        <div className="p-2 rounded bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800">
+                          <span className="text-slate-400 text-[10px] block">Tipus</span>
+                          <span className="font-bold text-emerald-600 dark:text-emerald-400">CNAME</span>
+                        </div>
+                        <div className="p-2 rounded bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800">
+                          <span className="text-slate-400 text-[10px] block">Nom / Host</span>
+                          <span className="font-bold text-slate-800 dark:text-slate-200">{subdominiPrefix || "sevalor"}</span>
+                        </div>
+                        <div className="p-2 rounded bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 sm:col-span-2">
+                          <span className="text-slate-400 text-[10px] block">Apunta cap a (Target)</span>
+                          <span className="font-bold text-slate-800 dark:text-slate-200">edge.sevalor.app</span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  /* Mode Alternatiu: Subdomini directe sota sevalor.app */
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
+                    <div>
+                      <label className="block font-semibold text-slate-600 dark:text-slate-400 mb-1">Subdomini Sol·licitat</label>
+                      <div className="flex items-center rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 overflow-hidden">
+                        <input
+                          type="text"
+                          value={subdomini}
+                          onChange={(e) => setSubdomini(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ""))}
+                          className="flex-1 p-2 bg-transparent text-slate-800 dark:text-slate-200 font-mono font-bold focus:outline-none"
+                        />
+                        <span className="px-3 text-slate-400 font-mono bg-slate-100 dark:bg-slate-800/80 border-l border-slate-200 dark:border-slate-700 py-2">
+                          .sevalor.app
+                        </span>
+                      </div>
+                      <span className="text-[10px] text-slate-500 mt-1 block">CNAME configurat automàticament a edge.sevalor.app</span>
+                    </div>
+
+                    <div>
+                      <label className="block font-semibold text-slate-600 dark:text-slate-400 mb-1">ACME Provider &amp; Resolver</label>
+                      <div className="p-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50 flex items-center justify-between">
+                        <span className="font-mono text-slate-800 dark:text-slate-200">Let's Encrypt TLS-ALPN-01</span>
+                        <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-400 font-bold">
+                          Hetzner DNS API
+                        </span>
+                      </div>
+                      <span className="text-[10px] text-slate-500 mt-1 block">Auto-renovació TLS cada 60 dies</span>
+                    </div>
+                  </div>
+                )}
 
                 {/* Terminal Console en Viu (Micro-logs de Certbot & Ingress) */}
                 <div className="pt-2">
                   <div className="flex items-center justify-between text-[11px] font-mono text-slate-500 mb-1">
-                    <span className="font-bold uppercase">Registre d'Execució Ingress (Live Stream Celery)</span>
+                    <span className="font-bold uppercase">Registre d'Execució Ingress &amp; TLS (Live Stream Celery)</span>
                     <span>Job ID: job_ssl_982441</span>
                   </div>
                   <div className="bg-slate-950 text-emerald-400 p-3.5 rounded-xl font-mono text-[11px] space-y-1 shadow-inner border border-slate-800">
-                    <div className="text-slate-400">[10:44:02] ACME client requesting cert for {subdomini}.sevalor.app</div>
-                    <div className="text-slate-300">[10:44:03] DNS challenge verified via Hetzner Cloud API (Record ID: 894120)</div>
+                    <div className="text-slate-400">[10:44:02] ACME client requesting cert for {fqdnResultant || "sevalor.soler.cat"}</div>
+                    <div className="text-slate-300">[10:44:03] DNS challenge verified via Hetzner Cloud API (Target: edge.sevalor.app)</div>
                     <div className="text-amber-400">[10:44:05] Certbot: waiting for Let's Encrypt CA validation response...</div>
                     <div className="text-emerald-400 flex items-center gap-1.5">
                       <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>

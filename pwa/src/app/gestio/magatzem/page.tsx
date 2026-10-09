@@ -150,7 +150,18 @@ export default function GestioMagatzemPage() {
       
       if (!res.ok) throw new Error("Error processant l'albarà");
       const data = await res.json();
-      setResultatOcr(data);
+      const ocrNormalitzat = {
+        proveidor: data.proveidor || {
+          nif: data.ocr_data?.proveidor_nif || "",
+          nom: data.ocr_data?.proveidor_nom || "Proveïdor per revisar",
+        },
+        numero_document: data.numero_document || data.ocr_data?.numero_albara || "",
+        tipus_document: data.tipus_document || "ALBARA",
+        data_document: data.data_document || data.ocr_data?.data_albara || new Date().toISOString().split("T")[0],
+        linies: data.linies || data.ocr_data?.linies || [],
+        numero_albarans_vinculats: data.numero_albarans_vinculats || [],
+      };
+      setResultatOcr(ocrNormalitzat);
     } catch (err: any) {
       setError(err.message || "Error al processar l'albarà OCR");
     } finally {
@@ -163,16 +174,24 @@ export default function GestioMagatzemPage() {
     setProcessantOcr(true);
     setError(null);
     try {
+      const provNom = resultatOcr.proveidor?.nom || (typeof resultatOcr.proveidor === "string" ? resultatOcr.proveidor : "Proveïdor General");
+      const provNif = resultatOcr.proveidor?.nif || "B00000000";
       await apiFetch("/gestio/magatzem/albara/confirmar", {
         method: "POST",
         body: JSON.stringify({
-          proveidor: resultatOcr.proveidor,
-          numero_document: resultatOcr.numero_document,
-          tipus_document: resultatOcr.tipus_document,
-          data_document: resultatOcr.data_document,
+          proveidor: {
+            nif: provNif,
+            nom: provNom,
+            adreca: resultatOcr.proveidor?.adreca || "",
+            telefon: resultatOcr.proveidor?.telefon || "",
+            email: resultatOcr.proveidor?.email || "",
+          },
+          numero_document: resultatOcr.numero_document || `ALB-${Date.now()}`,
+          tipus_document: resultatOcr.tipus_document || "ALBARA",
+          data_document: resultatOcr.data_document || new Date().toISOString().split("T")[0],
           numero_albarans_vinculats: resultatOcr.numero_albarans_vinculats || [],
-          linies: resultatOcr.linies
-        })
+          linies: resultatOcr.linies || [],
+        }),
       });
       setModalOcr(false);
       setResultatOcr(null);
@@ -701,9 +720,9 @@ export default function GestioMagatzemPage() {
               ) : (
                 <div className="space-y-4">
                   <div className="p-4 bg-slate-50 dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 text-xs">
-                    <p><strong>Proveïdor:</strong> {resultatOcr.proveidor.nom}</p>
-                    <p><strong>Número:</strong> {resultatOcr.numero_document}</p>
-                    <p><strong>Data:</strong> {resultatOcr.data_document}</p>
+                    <p><strong>Proveïdor:</strong> {resultatOcr.proveidor?.nom || (typeof resultatOcr.proveidor === "string" ? resultatOcr.proveidor : "Pendent de revisió")}</p>
+                    <p><strong>Número:</strong> {resultatOcr.numero_document || "Sense número"}</p>
+                    <p><strong>Data:</strong> {resultatOcr.data_document || "Pendent"}</p>
                     <p className="mt-2 font-bold">Línies detectades: {resultatOcr.linies?.length || 0}</p>
                   </div>
                   <div className="flex justify-end gap-2">

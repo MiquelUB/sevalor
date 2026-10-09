@@ -33,7 +33,12 @@ QUOTES_PER_PLA = {
 class OnboardingTenantRequest(BaseModel):
     rao_social: str = Field(..., min_length=2, max_length=100)
     nif: str = Field(..., min_length=9, max_length=20)
-    subdomini: str = Field(..., min_length=3, max_length=63, pattern="^[a-z0-9-]+$")
+    subdomini: str = Field(..., min_length=2, max_length=63, pattern="^[a-z0-9-]+$")
+    domini_custom: Optional[str] = Field(
+        None,
+        max_length=100,
+        pattern=r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$",
+    )
     vertical: str = Field("SEVALOR", max_length=100)
     magatzem_families_default: Optional[str] = None
     agent_prompt_system: Optional[str] = None
@@ -45,6 +50,15 @@ class OnboardingTenantRequest(BaseModel):
     boss_email: str = Field(..., pattern=r"^[\w\.-]+@[\w\.-]+\.\w+$")
     boss_telefon: Optional[str] = None
     feature_flags: Optional[Dict[str, bool]] = None
+
+
+class UpdateDominiTenantRequest(BaseModel):
+    domini_custom: Optional[str] = Field(
+        None,
+        max_length=100,
+        pattern=r"^$|^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$",
+    )
+    subdomini: Optional[str] = Field(None, min_length=2, max_length=63, pattern=r"^[a-z0-9-]+$")
 
 
 class UpdateEstatTenantRequest(BaseModel):
@@ -259,6 +273,17 @@ async def crear_nou_tenant(
             detail=f"El subdomini '{subdomini_norm}' ja està en ús.",
         )
 
+    domini_custom_norm = payload.domini_custom.strip().lower() if payload.domini_custom else None
+    if domini_custom_norm:
+        res_dom = await db.execute(
+            select(Empresa).where(Empresa.domini_custom == domini_custom_norm)
+        )
+        if res_dom.scalars().first():
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"El domini '{domini_custom_norm}' ja està en ús.",
+            )
+
     nou_id = uuid.uuid4()
     quota_bytes = payload.quota_disc_gb * 1024 * 1024 * 1024
     vertical_norm = payload.vertical.strip().upper()
@@ -269,6 +294,7 @@ async def crear_nou_tenant(
         nom=payload.rao_social.strip(),
         nif=payload.nif.strip().upper(),
         subdomini=subdomini_norm,
+        domini_custom=domini_custom_norm,
         pla_subscripcio=pla_norm,
         estat_pagament="TRIAL",
         quota_disc_bytes_autoritzada=quota_bytes,
@@ -347,7 +373,8 @@ async def crear_nou_tenant(
         "exp": expire,
     }
     jwt_token = jwt.encode(payload_jwt, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
-    enllac_activacio = f"https://{subdomini_norm}.campopro.cat/activacio?token={jwt_token}"
+    domini_base = domini_custom_norm or f"{subdomini_norm}.sevalor.app"
+    enllac_activacio = f"https://{domini_base}/activacio?token={jwt_token}"
 
     return {
         "status": "CREATED",
@@ -355,12 +382,74 @@ async def crear_nou_tenant(
             "id": emp_id_str,
             "rao_social": payload.rao_social,
             "subdomini": subdomini_norm,
+            "domini_custom": domini_custom_norm,
+            "domini_complet": domini_base,
             "vertical": vertical_norm,
             "pla_subscripcio": pla_norm,
             "quota_operaris": QUOTES_PER_PLA[pla_norm],
             "enllac_activacio_2fa": enllac_activacio,
             "estat_inicial": "TRIAL",
         },
+    }
+
+
+@router.put("/{empresa_id}/domini", response_model=Dict[str, Any])
+async def actualitzar_domini_tenant(
+    empresa_id: str,
+    payload: UpdateDominiTenantRequest,
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+    claims: Dict[str, Any] = Depends(require_roles(["SUPERADMIN"])),
+) -> Dict[str, Any]:
+    """Actualitza el domini personalitzat de l'empresa o el seu subdomini intern."""
+    try:
+        emp_uuid = uuid.UUID(empresa_id)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="UUID invàlid.")
+
+    res = await db.execute(select(Empresa).where(Empresa.id == emp_uuid))
+    emp = res.scalars().first()
+    if not emp:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant no trobat.")
+
+    if payload.domini_custom is not None:
+        dom_clean = payload.domini_custom.strip().lower() or None
+        if dom_clean:
+            res_check = await db.execute(
+                select(Empresa).where(Empresa.domini_custom == dom_clean, Empresa.id != emp_uuid)
+            )
+            if res_check.scalars().first():
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"El domini '{dom_clean}' ja està assignat a una altra empresa.",
+                )
+        emp.domini_custom = dom_clean
+
+    if payload.subdomini is not None:
+        sub_clean = payload.subdomini.strip().lower()
+        if sub_clean in {"api", "admin", "www", "app", "superadmin", "billing"}:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"El subdomini '{sub_clean}' està reservat pel sistema.",
+            )
+        res_sub_check = await db.execute(
+            select(Empresa).where(Empresa.subdomini == sub_clean, Empresa.id != emp_uuid)
+        )
+        if res_sub_check.scalars().first():
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"El subdomini '{sub_clean}' ja està assignat a una altra empresa.",
+            )
+        emp.subdomini = sub_clean
+
+    emp.updated_at = datetime.now(timezone.utc)
+    await db.commit()
+
+    return {
+        "status": "OK",
+        "empresa_id": empresa_id,
+        "domini_custom": emp.domini_custom,
+        "subdomini": emp.subdomini,
+        "domini_complet": emp.domini_custom or f"{emp.subdomini}.sevalor.app",
     }
 
 

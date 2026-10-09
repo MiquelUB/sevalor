@@ -30,6 +30,7 @@ interface Tenant {
   rao_social: string;
   nif?: string;
   subdomini: string;
+  domini_custom?: string;
   vertical: string;
   estat: string;
   estat_pagament: string;
@@ -198,8 +199,8 @@ export default function EmpresesPage() {
             <table className="w-full text-left text-xs font-medium">
               <thead className="bg-slate-50 dark:bg-slate-800/60 border-b border-slate-200 dark:border-slate-800 text-slate-500 dark:text-slate-400 font-mono text-[11px] uppercase tracking-wider">
                 <tr>
-                  <th className="p-4 font-semibold">Tenant & Subdomini</th>
-                  <th className="p-4 font-semibold">Pla & Quota</th>
+                  <th className="p-4 font-semibold">Tenant &amp; Domini</th>
+                  <th className="p-4 font-semibold">Pla &amp; Quota</th>
                   <th className="p-4 font-semibold">Estat</th>
                   <th className="p-4 font-semibold text-center">Disc Hetzner</th>
                   <th className="p-4 font-semibold">Mòduls Actius</th>
@@ -211,19 +212,25 @@ export default function EmpresesPage() {
                   const pla = t.pla_subscripcio || t.pla || "STARTER";
                   const estat = t.estat_pagament || t.estat || "TRIAL";
                   const nom = t.nom || t.rao_social || "Sense nom";
+                  const dominiAccio = t.domini_custom || `${t.subdomini}.sevalor.app`;
 
                   return (
                     <tr
                       key={t.id}
                       className="hover:bg-slate-50 dark:hover:bg-slate-800/40 transition-colors"
                     >
-                      {/* Nom, NIF & Subdomini */}
+                      {/* Nom, NIF & Domini */}
                       <td className="p-4">
                         <div className="font-bold text-slate-900 dark:text-white text-sm">
                           {nom}
                         </div>
-                        <div className="flex items-center gap-2 mt-0.5 text-slate-500 font-mono text-[11px]">
-                          <span>{t.subdomini}.campopro.cat</span>
+                        <div className="flex items-center gap-2 mt-0.5 text-slate-500 font-mono text-[11px] flex-wrap">
+                          <span className="text-emerald-700 dark:text-emerald-400 font-bold">{dominiAccio}</span>
+                          {t.domini_custom && (
+                            <span className="px-1.5 py-0.2 rounded bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300 text-[9px] font-bold">
+                              Domini Propi
+                            </span>
+                          )}
                           {t.nif && <span className="text-slate-400">• {t.nif}</span>}
                           <span className="px-1.5 py-0.2 rounded bg-slate-100 dark:bg-slate-800 text-[10px]">
                             {t.vertical}

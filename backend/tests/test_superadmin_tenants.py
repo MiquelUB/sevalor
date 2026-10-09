@@ -137,3 +137,69 @@ async def test_auditoria_certificats_endpoint(headers):
         data = res.json()
         assert isinstance(data, list)
 
+
+@pytest.mark.asyncio
+async def test_onboarding_tenant_amb_domini_propi(headers):
+    unique_suffix = str(uuid.uuid4())[:8]
+    subdomini = f"soler-{unique_suffix}"
+    domini_custom = f"sevalor.soler-{unique_suffix}.cat"
+
+    payload = {
+        "rao_social": f"Soler Instal·lacions {unique_suffix} S.L.",
+        "nif": "B" + str(uuid.uuid4())[:8].upper(),
+        "subdomini": subdomini,
+        "domini_custom": domini_custom,
+        "vertical": "ELECTRICPRO",
+        "pla_subscripcio": "PRO",
+        "quota_disc_gb": 50,
+        "boss_nif": "12345678A",
+        "boss_nom": "Pere",
+        "boss_cognoms": "Soler",
+        "boss_email": f"pere@{subdomini}.cat",
+        "boss_telefon": "+34611223344",
+        "feature_flags": {
+            "copilot_ia": True,
+            "flota_avancada": True,
+            "planols_tecnics": True,
+            "telegram_bot": True
+        }
+    }
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        response = await ac.post("/api/v1/superadmin/tenants/onboarding", json=payload, headers=headers)
+        assert response.status_code == 201, f"Expected 201 but got {response.status_code}: {response.text}"
+        data = response.json()
+        assert data["status"] == "CREATED"
+        tenant = data["tenant"]
+        assert tenant["domini_custom"] == domini_custom
+        assert tenant["domini_complet"] == domini_custom
+        assert tenant["enllac_activacio_2fa"].startswith(f"https://{domini_custom}/activacio?token=")
+
+        empresa_id = tenant["id"]
+
+        # Comprovar que /superadmin/tenants/{id} retorna el domini_custom
+        res_get = await ac.get(f"/api/v1/superadmin/tenants/{empresa_id}", headers=headers)
+        assert res_get.status_code == 200
+        assert res_get.json()["domini_custom"] == domini_custom
+
+        # Comprovar actualització del domini via PUT /{id}/domini
+        nou_domini = f"app.soler-{unique_suffix}.cat"
+        res_put = await ac.put(
+            f"/api/v1/superadmin/tenants/{empresa_id}/domini",
+            json={"domini_custom": nou_domini},
+            headers=headers,
+        )
+        assert res_put.status_code == 200
+        assert res_put.json()["domini_custom"] == nou_domini
+
+        # Comprovar rebuig de duplicats de domini
+        payload_dup = {
+            **payload,
+            "nif": "B" + str(uuid.uuid4())[:8].upper(),
+            "subdomini": f"altre-{unique_suffix}",
+            "domini_custom": nou_domini,
+            "boss_email": f"altre@{subdomini}.cat",
+        }
+        res_dup = await ac.post("/api/v1/superadmin/tenants/onboarding", json=payload_dup, headers=headers)
+        assert res_dup.status_code == 409
+        assert "ja està en ús" in res_dup.json()["detail"]
+

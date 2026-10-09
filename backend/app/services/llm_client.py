@@ -12,8 +12,11 @@ class LLMClientError(Exception):
 
 
 class LLMClient:
-    def __init__(self, base_url: str = "http://localhost:1234/v1", timeout: int = 30):
-        self.base_url = base_url.rstrip("/")
+    def __init__(self, base_url: Optional[str] = None, timeout: int = 30):
+        from app.core.config import settings
+
+        url: str = str(base_url or getattr(settings, "LM_STUDIO_URL", None) or "http://127.0.0.1:1234/v1")
+        self.base_url = url.rstrip("/")
         self.timeout = timeout
 
         # Max input length to prevent injection or context limit issues

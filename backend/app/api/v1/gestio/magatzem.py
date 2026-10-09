@@ -646,9 +646,23 @@ async def processar_document_ocr(
 
     ocr_result = await processar_albara_ocr(file_bytes)
 
-    # Sense motor OCR: no es persisteix cap esborrany ni proveïdor fantasma.
-    # L'usuari introdueix les dades i les desa amb /albara/confirmar.
-    return {"task_id": None, "status": ocr_result["status"], "ocr_data": ocr_result}
+    # Retorna l'estructura estandarditzada per a la interfície
+    return {
+        "task_id": "ocr-" + str(uuid.uuid4())[:8],
+        "status": ocr_result.get("status", "PENDENT_REVISIO_MANUAL"),
+        "ocr_data": ocr_result,
+        "proveidor": {
+            "nif": ocr_result.get("proveidor_nif") or "B00000000",
+            "nom": ocr_result.get("proveidor_nom") or "Proveïdor per revisar",
+            "adreca": "",
+            "telefon": "",
+            "email": "",
+        },
+        "numero_document": ocr_result.get("numero_albara") or f"ALB-{date.today().strftime('%Y%m%d')}-01",
+        "tipus_document": "ALBARA",
+        "data_document": ocr_result.get("data_albara") or date.today().isoformat(),
+        "linies": ocr_result.get("linies") or [],
+    }
 
 
 @router.post("/albara/confirmar", status_code=status.HTTP_201_CREATED)
