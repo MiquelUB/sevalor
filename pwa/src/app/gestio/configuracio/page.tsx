@@ -28,10 +28,12 @@ import {
   X,
   Radio,
   ExternalLink,
+  Cpu,
+  Server,
 } from "lucide-react";
 
 // Tipus de pestanyes
-type PestanyaConfig = "marca" | "personal" | "jornada" | "telegram";
+type PestanyaConfig = "marca" | "personal" | "jornada" | "telegram" | "node_ia";
 
 interface UsuariAdmin {
   id: string;
@@ -152,6 +154,31 @@ export default function ConfiguracioPage() {
         // Token i secret es mantenen ocults; el backend només exposa l'estat
       })
       .catch(() => setTelegramEstat("NO_CONFIGURAT"));
+  }, []);
+
+  // Node d'IA Sobirà / Ordinador Dedicat (Constitució §2.V)
+  const [nodeIaUrl, setNodeIaUrl] = useState("");
+  const [nodeIaActiu, setNodeIaActiu] = useState(false);
+  const [agentPromptSystem, setAgentPromptSystem] = useState("");
+  const [nodeIaEstat, setNodeIaEstat] = useState<"OPERATIU" | "ERROR_CONNEXIO" | "NO_CONFIGURAT">("NO_CONFIGURAT");
+  const [nodeIaLatencia, setNodeIaLatencia] = useState<number | null>(null);
+  const [nodeIaModelInfo, setNodeIaModelInfo] = useState<string | null>(null);
+  const [nodeIaTestant, setNodeIaTestant] = useState(false);
+  const [nodeIaDesant, setNodeIaDesant] = useState(false);
+
+  useEffect(() => {
+    apiFetch("/gestio/configuracio/node-ia")
+      .then((data: any) => {
+        if (data.node_ia_url) setNodeIaUrl(data.node_ia_url);
+        if (data.node_ia_actiu !== undefined) setNodeIaActiu(Boolean(data.node_ia_actiu));
+        if (data.agent_prompt_system) setAgentPromptSystem(data.agent_prompt_system);
+        if (data.te_ordinador_dedicat) {
+          setNodeIaEstat("OPERATIU");
+        } else {
+          setNodeIaEstat("NO_CONFIGURAT");
+        }
+      })
+      .catch(() => setNodeIaEstat("NO_CONFIGURAT"));
   }, []);
 
   // Missatge flash de feedback
@@ -329,6 +356,58 @@ export default function ConfiguracioPage() {
     }
   };
 
+  // Node d'IA Sobirà / Ordinador Dedicat (Constitució §2.V)
+  const handleDesarNodeIa = async () => {
+    if (esEnginyer) {
+      mostrarFeedback("ERROR", "Veto d'Enginyer (HTTP 403): La configuració del node d'IA està reservada al Boss.");
+      return;
+    }
+    setNodeIaDesant(true);
+    try {
+      await apiFetch("/gestio/configuracio/node-ia", {
+        method: "PUT",
+        body: JSON.stringify({
+          node_ia_url: nodeIaUrl.trim() || null,
+          node_ia_actiu: nodeIaActiu,
+          agent_prompt_system: agentPromptSystem.trim() || null,
+        }),
+      });
+      mostrarFeedback("EXIT", "Paràmetres de l'ordinador dedicat d'IA desats correctament.");
+    } catch (err: any) {
+      mostrarFeedback("ERROR", err.message || "Error en desar el node d'IA dedicat.");
+    } finally {
+      setNodeIaDesant(false);
+    }
+  };
+
+  const handleProvarNodeIa = async () => {
+    if (!nodeIaUrl.trim()) {
+      mostrarFeedback("ERROR", "Cal introduir la URL de l'ordinador dedicat abans de provar la connexió.");
+      return;
+    }
+    setNodeIaTestant(true);
+    try {
+      const res: any = await apiFetch("/gestio/configuracio/node-ia/provar", {
+        method: "POST",
+      });
+      if (res.estat === "OPERATIU") {
+        setNodeIaEstat("OPERATIU");
+        setNodeIaLatencia(res.latencia_ms);
+        const models = res.models_disponibles || [];
+        setNodeIaModelInfo(models.length > 0 ? models.join(", ") : "Model OpenAI compatible actiu");
+        mostrarFeedback("EXIT", res.missatge || `Connexió establerta amb l'ordinador de la seu (${res.latencia_ms}ms)`);
+      } else {
+        setNodeIaEstat("ERROR_CONNEXIO");
+        mostrarFeedback("ERROR", res.missatge || "No s'ha pogut connectar amb l'ordinador dedicat.");
+      }
+    } catch (err: any) {
+      setNodeIaEstat("ERROR_CONNEXIO");
+      mostrarFeedback("ERROR", err.message || "Error de xarxa en provar l'ordinador dedicat.");
+    } finally {
+      setNodeIaTestant(false);
+    }
+  };
+
   return (
     <div className="space-y-6 pb-12">
       {/* CAPÇALERA SUPERIOR D'ALTA DENSITAT */}
@@ -463,6 +542,25 @@ export default function ConfiguracioPage() {
             <span
               className={`w-2 h-2 rounded-full ${
                 telegramEstat === "OPERATIU" ? "bg-emerald-500" : "bg-red-500"
+              }`}
+            />
+          </button>
+
+          <button
+            onClick={() => setPestanyaActiva("node_ia")}
+            className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-all ${
+              pestanyaActiva === "node_ia"
+                ? "bg-emerald-600 text-white shadow-md shadow-emerald-600/20"
+                : "text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"
+            }`}
+          >
+            <Cpu className="w-3.5 h-3.5" />
+            <span>5. Node d'IA Sobirà (Ordinador Dedicat)</span>
+            <span
+              className={`w-2 h-2 rounded-full ${
+                nodeIaActiu && nodeIaUrl
+                  ? nodeIaEstat === "OPERATIU" ? "bg-emerald-500" : "bg-red-500"
+                  : "bg-slate-400"
               }`}
             />
           </button>
@@ -1083,6 +1181,184 @@ export default function ConfiguracioPage() {
                 className="px-4 py-2 rounded-xl text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white transition-colors disabled:opacity-50 shadow-sm"
               >
                 Desar Paràmetres Bot
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* 5. NODE D'IA SOBIRÀ (ORDINADOR DEDICAT DE LA SEU — CONSTITUCIÓ §2.V)      */}
+      {/* ========================================================================= */}
+      {pestanyaActiva === "node_ia" && (
+        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-6 shadow-sm space-y-6">
+          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+            <div>
+              <div className="flex items-center gap-2">
+                <h2 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                  <Cpu className="w-5 h-5 text-emerald-600" />
+                  Node d'IA Sobirà (Ordinador Dedicat de l'Empresa)
+                </h2>
+                <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold uppercase bg-purple-100 text-purple-800 dark:bg-purple-950/70 dark:text-purple-300 border border-purple-300 dark:border-purple-800">
+                  Constitució §2.V
+                </span>
+              </div>
+              <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+                La intel·ligència artificial s'executa exclusivament a l'ordinador físic de les vostres oficines o tallers.
+              </p>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <span
+                className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold ${
+                  nodeIaEstat === "OPERATIU"
+                    ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-950/80 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800"
+                    : nodeIaEstat === "ERROR_CONNEXIO"
+                    ? "bg-rose-100 text-rose-800 dark:bg-rose-950/80 dark:text-rose-300 border border-rose-300 dark:border-rose-800"
+                    : "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300 border border-slate-300 dark:border-slate-700"
+                }`}
+              >
+                <span
+                  className={`w-2 h-2 rounded-full ${
+                    nodeIaEstat === "OPERATIU"
+                      ? "bg-emerald-500 animate-pulse"
+                      : nodeIaEstat === "ERROR_CONNEXIO"
+                      ? "bg-rose-500"
+                      : "bg-slate-400"
+                  }`}
+                />
+                <span>
+                  {nodeIaEstat === "OPERATIU"
+                    ? "ORDINADOR DEDICAT CONNECTAT"
+                    : nodeIaEstat === "ERROR_CONNEXIO"
+                    ? "ORDINADOR DESCONNECTAT / APAGAT"
+                    : "SENSE ORDINADOR DEDICAT"}
+                </span>
+              </span>
+            </div>
+          </div>
+
+          {/* MANIFEST CONSTITUCIONAL DE SOBIRANIA */}
+          <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/80 space-y-2">
+            <div className="flex items-center gap-2 text-xs font-bold text-slate-800 dark:text-slate-200">
+              <ShieldCheck className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+              <span>Principi Constitucional de Sobirania Absoluta (Zero Cloud Egress)</span>
+            </div>
+            <p className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed">
+              Per mandat fundacional de Sevalor Suite, <strong>a Hetzner no s'allotja cap model d'IA processant dades de la vostra empresa</strong>. 
+              Totes les consultes d'enginyeria, auditories de marge i peritatges s'encaminen directament cap a l'ordinador dedicat físic que teniu a la seu de la vostra empresa mitjançant connexió xifrada privada.
+            </p>
+          </div>
+
+          <div className="space-y-4">
+            {/* INTERRUPTOR D'ACTIVACIÓ */}
+            <div className="flex items-center justify-between p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/40">
+              <div>
+                <span className="text-xs font-bold text-slate-800 dark:text-white">
+                  Activar Ordinador Dedicat Local
+                </span>
+                <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                  Habilita les crides del Copilot exclusivament cap a la URL del vostre ordinador local.
+                </p>
+              </div>
+              <label className="relative inline-flex items-center cursor-pointer">
+                <input
+                  type="checkbox"
+                  disabled={esEnginyer}
+                  checked={nodeIaActiu}
+                  onChange={(e) => setNodeIaActiu(e.target.checked)}
+                  className="sr-only peer"
+                />
+                <div className="w-11 h-6 bg-slate-300 peer-focus:outline-none rounded-full peer dark:bg-slate-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-600"></div>
+              </label>
+            </div>
+
+            {/* URL DE L'ORDINADOR DEDICAT */}
+            <div className="space-y-1.5">
+              <label className="text-xs font-bold text-slate-700 dark:text-slate-300 flex items-center justify-between">
+                <span>URL de l'Ordinador Dedicat (LM Studio / Ollama Local)</span>
+                <span className="text-[10px] font-normal text-slate-400">Endpoint OpenAI-compatible</span>
+              </label>
+              <input
+                type="text"
+                disabled={esEnginyer}
+                placeholder="Ex: https://ia.la-teva-empresa.cat/v1 o túnel xifrat privat"
+                value={nodeIaUrl}
+                onChange={(e) => setNodeIaUrl(e.target.value)}
+                className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-mono text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500 disabled:opacity-50"
+              />
+              <p className="text-[10px] text-slate-400">
+                Punt d'accés del vostre ordinador de la seu. Podeu utilitzar un túnel de xarxa xifrat (Cloudflare Tunnel privat o Tailscale/Wireguard) per exposar de forma segura el port 1234 de LM Studio.
+              </p>
+            </div>
+
+            {/* DIAGNÒSTIC EN TEMPS REAL */}
+            {nodeIaModelInfo && (
+              <div className="p-3.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 flex items-center justify-between text-xs">
+                <div className="space-y-0.5">
+                  <span className="font-bold text-emerald-900 dark:text-emerald-200">
+                    Model Detectat a l'Ordinador de la Seu:
+                  </span>
+                  <p className="font-mono text-emerald-700 dark:text-emerald-400 text-[11px]">
+                    {nodeIaModelInfo}
+                  </p>
+                </div>
+                {nodeIaLatencia !== null && (
+                  <span className="px-2.5 py-1 rounded-lg bg-emerald-200/60 dark:bg-emerald-900/60 text-emerald-900 dark:text-emerald-200 font-mono text-[10px] font-bold">
+                    Latència: {nodeIaLatencia} ms
+                  </span>
+                )}
+              </div>
+            )}
+
+            {/* DIRECTRIUS D'EMPRESA PER AL COPILOT */}
+            <div className="space-y-1.5">
+              <label className="text-xs font-bold text-slate-700 dark:text-slate-300 flex items-center justify-between">
+                <span>Directrius Específiques de l'Empresa (Agent System Prompt)</span>
+                <span className="text-[10px] font-normal text-slate-400">Opcional</span>
+              </label>
+              <textarea
+                rows={3}
+                disabled={esEnginyer}
+                placeholder="Ex: Recorda sempre prioritza els proveïdors locals de proximitat. En cas de canonades de reg, verificar pressió nominal PN10 abans de pressupostar..."
+                value={agentPromptSystem}
+                onChange={(e) => setAgentPromptSystem(e.target.value)}
+                className="w-full px-3.5 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500 disabled:opacity-50"
+              />
+              <p className="text-[10px] text-slate-400">
+                Aquestes directrius s'injecten a cada consulta al Copilot juntament amb la vertical tècnica de la vostra empresa.
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center justify-between pt-4 border-t border-slate-200 dark:border-slate-800">
+            <div className="flex items-center gap-1.5 text-xs text-slate-500">
+              <Server className="w-3.5 h-3.5 text-emerald-500" />
+              <span>Aïllament estricte per empresa a PostgreSQL RLS</span>
+            </div>
+
+            <div className="flex gap-2">
+              <button
+                type="button"
+                disabled={nodeIaTestant || !nodeIaUrl}
+                onClick={handleProvarNodeIa}
+                className="flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold bg-slate-800 hover:bg-slate-700 text-white transition-colors disabled:opacity-50 shadow-sm"
+              >
+                {nodeIaTestant ? (
+                  <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                ) : (
+                  <Cpu className="w-3.5 h-3.5" />
+                )}
+                <span>Provar Connexió amb l'Ordinador</span>
+              </button>
+
+              <button
+                type="button"
+                disabled={esEnginyer || nodeIaDesant}
+                onClick={handleDesarNodeIa}
+                className="px-4 py-2 rounded-xl text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white transition-colors disabled:opacity-50 shadow-sm"
+              >
+                {nodeIaDesant ? "Desant..." : "Desar Paràmetres del Node"}
               </button>
             </div>
           </div>

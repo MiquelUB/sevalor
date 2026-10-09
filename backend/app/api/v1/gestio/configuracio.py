@@ -3,6 +3,7 @@
 import os
 import secrets
 import string
+import time as time_lib
 import uuid
 from datetime import date, time
 from typing import Any, Dict, Optional
@@ -175,6 +176,12 @@ class EmpresaUpdateRequest(BaseModel):
     subdomini: Optional[str] = None
 
 
+class NodeIaConfigRequest(BaseModel):
+    node_ia_url: Optional[str] = Field(None, max_length=255, description="URL de l'ordinador dedicat (ex: https://ia.empresa.cat/v1)")
+    node_ia_actiu: bool = Field(False, description="Activa o desactiva l'ordinador dedicat local")
+    agent_prompt_system: Optional[str] = Field(None, description="Directrius específiques del negoci per a l'assistent")
+
+
 class MarcaUpdateRequest(BaseModel):
     primari_hsl: str = Field(..., description="Format: '210 100% 15%'")
     secundari_hsl: str = Field(..., description="Format: '38 92% 50%'")
@@ -321,6 +328,8 @@ async def obtenir_dades_empresa(
         "telegram_bot_actiu": empresa.telegram_bot_actiu,
         "telegram_estat_connexio": empresa.telegram_estat_connexio,
         "te_adn_marca": bool(empresa.adn_paleta_proposta),
+        "node_ia_url": empresa.node_ia_url,
+        "node_ia_actiu": empresa.node_ia_actiu,
     }
 
 
@@ -1101,5 +1110,120 @@ async def provar_connexio_telegram(
         return {
             "estat": "ERROR_CONNEXIO",
             "missatge": "Timeout o error de connexió en contactar amb Telegram API (EDGE-09)",
+            "detall": str(exc),
+        }
+
+
+# ---------------------------------------------------------------------------
+# 8. PARÀMETRES DEL NODE D'IA SOBIRÀ / ORDINADOR DEDICAT (CONSTITUCIÓ §2.V)
+# ---------------------------------------------------------------------------
+
+
+@router.get("/node-ia")
+async def obtenir_configuracio_node_ia(
+    claims: Dict[str, Any] = Depends(get_current_user_claims),
+    db: AsyncSession = Depends(get_db),
+):
+    """Consulta els paràmetres de l'ordinador dedicat per a la IA sobirana."""
+    validar_permisos_gestio(claims, requereix_escriptura=False)
+    empresa_id = claims.get("empresa_id")
+
+    if empresa_id:
+        await set_tenant_context(db, empresa_id)
+
+    res = await db.execute(select(Empresa).where(Empresa.id == uuid.UUID(empresa_id)))
+    empresa = res.scalar_one_or_none()
+    if not empresa:
+        raise HTTPException(status_code=404, detail="Empresa no trobada")
+
+    return {
+        "node_ia_url": empresa.node_ia_url,
+        "node_ia_actiu": empresa.node_ia_actiu,
+        "agent_prompt_system": empresa.agent_prompt_system,
+        "vertical": empresa.vertical,
+        "te_ordinador_dedicat": bool(empresa.node_ia_url and empresa.node_ia_actiu),
+    }
+
+
+@router.put("/node-ia")
+async def actualitzar_configuracio_node_ia(
+    payload: NodeIaConfigRequest,
+    claims: Dict[str, Any] = Depends(get_current_user_claims),
+    db: AsyncSession = Depends(get_db),
+):
+    """Guarda els paràmetres de l'ordinador dedicat de l'empresa (Constitució §2.V: Només Boss)."""
+    validar_permisos_gestio(claims, requereix_escriptura=True, nomes_boss=True)
+    empresa_id = claims.get("empresa_id")
+
+    if empresa_id:
+        await set_tenant_context(db, empresa_id)
+
+    res = await db.execute(select(Empresa).where(Empresa.id == uuid.UUID(empresa_id)))
+    empresa = res.scalar_one_or_none()
+    if not empresa:
+        raise HTTPException(status_code=404, detail="Empresa no trobada")
+
+    empresa.node_ia_url = payload.node_ia_url.strip() if payload.node_ia_url else None
+    empresa.node_ia_actiu = payload.node_ia_actiu
+    if payload.agent_prompt_system is not None:
+        empresa.agent_prompt_system = payload.agent_prompt_system.strip()
+
+    await db.commit()
+
+    return {
+        "status": "OK",
+        "missatge": "Configuració de l'ordinador dedicat d'IA desada correctament",
+        "node_ia_actiu": empresa.node_ia_actiu,
+        "node_ia_url": empresa.node_ia_url,
+    }
+
+
+@router.post("/node-ia/provar")
+async def provar_connexio_node_ia(
+    claims: Dict[str, Any] = Depends(get_current_user_claims),
+    db: AsyncSession = Depends(get_db),
+):
+    """Test asíncron de connectivitat contra l'ordinador dedicat de la seu de l'empresa (GET /v1/models amb timeout de 4s)."""
+    validar_permisos_gestio(claims, requereix_escriptura=True, nomes_boss=True)
+    empresa_id = claims.get("empresa_id")
+
+    if empresa_id:
+        await set_tenant_context(db, empresa_id)
+
+    res = await db.execute(select(Empresa).where(Empresa.id == uuid.UUID(empresa_id)))
+    empresa = res.scalar_one_or_none()
+    if not empresa or not empresa.node_ia_url:
+        return {
+            "estat": "NO_CONFIGURAT",
+            "missatge": "No hi ha cap URL d'ordinador dedicat configurat per a aquesta empresa",
+        }
+
+    base_url = empresa.node_ia_url.strip().rstrip("/")
+    endpoint = f"{base_url}/models" if base_url.endswith("/v1") else f"{base_url}/v1/models"
+
+    start_time = time_lib.time()
+    try:
+        async with httpx.AsyncClient(timeout=4.0) as client:
+            resp = await client.get(endpoint)
+            latencia_ms = int((time_lib.time() - start_time) * 1000)
+            if resp.status_code == 200:
+                data = resp.json()
+                models_list = [m.get("id") for m in data.get("data", [])] if isinstance(data, dict) else []
+                return {
+                    "estat": "OPERATIU",
+                    "latencia_ms": latencia_ms,
+                    "models_disponibles": models_list,
+                    "missatge": f"Connexió establerta amb èxit amb l'ordinador dedicat de l'empresa ({latencia_ms}ms)",
+                }
+            else:
+                return {
+                    "estat": "ERROR_RESPOSTA",
+                    "latencia_ms": latencia_ms,
+                    "missatge": f"L'ordinador dedicat ha retornat codi HTTP {resp.status_code}",
+                }
+    except Exception as exc:
+        return {
+            "estat": "ERROR_CONNEXIO",
+            "missatge": "No s'ha pogut establir connexió amb l'ordinador dedicat. Verifiqueu que el servidor local de la seu estigui encès i el túnel o xarxa privada estigui actiu.",
             "detall": str(exc),
         }

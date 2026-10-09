@@ -23,6 +23,7 @@ import {
   Truck,
   MessageSquare,
   Globe,
+  Cpu,
 } from "lucide-react";
 import { apiFetch, setAuthToken } from "@/lib/api";
 
@@ -45,6 +46,8 @@ export default function EmpresaDetailPage({ params }: { params: { id: string } }
     feature_flota: true,
     feature_planols: false,
     feature_telegram: true,
+    node_ia_url: "",
+    node_ia_actiu: false,
   });
 
   const fetchTenant = async () => {
@@ -63,6 +66,8 @@ export default function EmpresaDetailPage({ params }: { params: { id: string } }
           feature_flota: Boolean(data.feature_flota),
           feature_planols: Boolean(data.feature_planols),
           feature_telegram: Boolean(data.feature_telegram),
+          node_ia_url: data.node_ia_url || "",
+          node_ia_actiu: Boolean(data.node_ia_actiu),
         });
       }
     } catch (err: any) {
@@ -542,6 +547,41 @@ export default function EmpresaDetailPage({ params }: { params: { id: string } }
                 </p>
               </div>
             </label>
+          </div>
+
+          {/* CONFIGURACIÓ DE L'ORDINADOR DEDICAT D'IA SOBIRÀ (CONSTITUCIÓ §2.V) */}
+          <div className="pt-4 border-t border-slate-200 dark:border-slate-800 space-y-3">
+            <div className="flex items-center justify-between">
+              <label className="text-xs font-bold text-slate-800 dark:text-slate-200 flex items-center gap-2">
+                <Cpu className="w-4 h-4 text-emerald-500" />
+                <span>Ordinador Dedicat de la Seu (Constitució §2.V - Zero Cloud Egress)</span>
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer text-xs">
+                <input
+                  type="checkbox"
+                  checked={features.node_ia_actiu}
+                  onChange={(e) =>
+                    setFeatures({ ...features, node_ia_actiu: e.target.checked })
+                  }
+                  className="w-4 h-4 text-emerald-600 rounded border-slate-300 dark:border-slate-700 focus:ring-emerald-500"
+                />
+                <span className="font-semibold text-slate-700 dark:text-slate-300">Activat</span>
+              </label>
+            </div>
+            <div>
+              <input
+                type="text"
+                placeholder="URL de l'ordinador dedicat (ex. https://ia.empresa.cat/v1)"
+                value={features.node_ia_url}
+                onChange={(e) =>
+                  setFeatures({ ...features, node_ia_url: e.target.value.trim() })
+                }
+                className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-white text-xs rounded-xl p-2.5 font-mono focus:ring-emerald-500 focus:border-emerald-500"
+              />
+              <p className="text-[10px] text-slate-400 mt-1">
+                La IA mai s'executa a Hetzner. Aquesta URL apunta exclusivament a l'equip físic situat a la seu del client.
+              </p>
+            </div>
           </div>
         </div>
 

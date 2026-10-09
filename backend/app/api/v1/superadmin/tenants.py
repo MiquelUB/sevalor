@@ -77,6 +77,8 @@ class UpdateFeatureFlagsRequest(BaseModel):
     feature_flota: bool
     feature_planols: bool
     feature_telegram: bool
+    node_ia_url: Optional[str] = None
+    node_ia_actiu: Optional[bool] = None
 
 
 def crear_directoris_sobirans(empresa_id: str) -> List[str]:
@@ -506,6 +508,8 @@ async def obtenir_tenant(
         "feature_flota": bool(emp.feature_flota),
         "feature_planols": bool(emp.feature_planols),
         "feature_telegram": bool(emp.feature_telegram),
+        "node_ia_url": emp.node_ia_url,
+        "node_ia_actiu": bool(emp.node_ia_actiu),
         "features": {
             "copilot_ia": bool(emp.feature_copilot_ia),
             "flota_avancada": bool(emp.feature_flota),
@@ -627,6 +631,10 @@ async def update_feature_flags(
     empresa.feature_flota = payload.feature_flota
     empresa.feature_planols = payload.feature_planols
     empresa.feature_telegram = payload.feature_telegram
+    if payload.node_ia_url is not None:
+        empresa.node_ia_url = payload.node_ia_url.strip() if payload.node_ia_url else None
+    if payload.node_ia_actiu is not None:
+        empresa.node_ia_actiu = payload.node_ia_actiu
     empresa.updated_at = datetime.now(timezone.utc)
 
     await db.commit()
@@ -639,6 +647,8 @@ async def update_feature_flags(
             "flota": empresa.feature_flota,
             "planols": empresa.feature_planols,
             "telegram": empresa.feature_telegram,
+            "node_ia_actiu": empresa.node_ia_actiu,
+            "node_ia_url": empresa.node_ia_url,
         },
     }
 

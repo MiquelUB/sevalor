@@ -746,14 +746,16 @@ async def cridar_lm_studio_amb_tools(
     Executa el cicle d'Agent de Tool Calling amb LM Studio (OpenAI-compatible).
     Retorna (resposta_final, tool_name, tool_args, tool_result).
     """
-    lm_url = (
-        getattr(settings, "LM_STUDIO_URL", None)
-        or getattr(settings, "LMSTUDIO_URL", None)
-        or "http://127.0.0.1:1234/v1"
-    )
-    if not lm_url:
+    # NORMA CONSTITUCIONAL SUPREMA: La IA només corre si l'empresa té ordinador dedicat.
+    res = await db.execute(select(Empresa).where(Empresa.id == empresa_id))
+    empresa = res.scalar_one_or_none()
+    if not empresa or not empresa.node_ia_actiu or not empresa.node_ia_url or not empresa.node_ia_url.strip():
+        logger.info(
+            f"Empresa {empresa_id} sense ordinador dedicat actiu. Zero egress a Hetzner (Constitució §2.V)."
+        )
         return None, None, None, None
 
+    lm_url = empresa.node_ia_url.strip()
     base_url = lm_url.rstrip("/")
     endpoint = (
         f"{base_url}/chat/completions"
@@ -1172,22 +1174,37 @@ async def obtenir_estat_node_ia(
     db: AsyncSession = Depends(get_db_with_tenant_context),
     claims: Dict[str, Any] = Depends(get_current_user_claims),
 ):
-    """Retorna l'estat operatiu del Node d'IA Sobirà Local (RF-01, RF-02)."""
+    """Retorna l'estat operatiu del Node d'IA Sobirà Local (Constitució §2.V)."""
     empresa_id = aplicar_tenant_context(claims)
 
     res = await db.execute(select(Empresa).where(Empresa.id == empresa_id))
     empresa = res.scalar_one_or_none()
     vertical = empresa.vertical if empresa else "SEVALOR"
+    node_actiu = bool(empresa and empresa.node_ia_actiu and empresa.node_ia_url)
+
+    if not node_actiu:
+        return {
+            "node_actiu": False,
+            "estat": "SENSE_ORDINADOR_DEDICAT",
+            "sobirania_dades": "100% Local a la seu de l'empresa (Zero Cloud Egress)",
+            "proveidor": "Ordinador Local Dedicat (No vinculat)",
+            "model_llm": "LM Studio / Ollama (Pendent de vinculació)",
+            "vertical_activa": vertical,
+            "latencia_inferencia_ms": None,
+            "cpu_only_enforced": True,
+            "ai_act_compliance": "RGPD Nivell Alt / Article 5 AI Act",
+            "missatge": "Es requereix un ordinador dedicat a la seu de l'empresa per activar el Copilot Sobirà.",
+        }
 
     return {
         "node_actiu": True,
-        "proveidor": "Hetzner Falkenstein (Alemanya - UE)",
-        "sobirania_dades": "100% Local (Zero Public Cloud Egress)",
-        "model_whisper": "Whisper v3 INT8 (CPU-Only / faster-whisper)",
+        "estat": "ORDINADOR_DEDICAT_ACTIU",
+        "url_ordinador": empresa.node_ia_url if empresa else None,
+        "proveidor": "Ordinador Local Dedicat de l'Empresa",
+        "sobirania_dades": "100% Local a la seu de l'empresa (Zero Cloud Egress)",
         "model_llm": "Local Sovereign LLM (LM Studio / Ollama)",
         "vertical_activa": vertical,
         "latencia_inferencia_ms": 142,
-        "cua_prioritat_celery": "TASQUES_CAMP_ALTA_PRIORITAT > XAT_WEB_BAIXA_PRIORITAT",
         "cpu_only_enforced": True,
         "ai_act_compliance": "RGPD Nivell Alt / Article 5 AI Act",
     }

@@ -8,10 +8,11 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
 from fastapi import HTTPException, status
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.models.models import ConsultaXatCopilot
+from app.models.models import ConsultaXatCopilot, Empresa
 from app.services.subagents.base import BaseSubagent
 from app.services.subagents.subagent_auditoria_marge import SubagentAuditoriaMarge
 from app.services.subagents.subagent_client_telegram import SubagentClientTelegram
@@ -116,15 +117,19 @@ class CopilotDispatcher:
         historial: Optional[List[dict]] = None,
         agent_prompt_system: Optional[str] = None,
     ) -> Tuple[Optional[str], Optional[str], Optional[dict], Optional[dict]]:
-        """Invoca el node LM Studio amb l'esquema reduït i el prompt del subagent."""
-        lm_url = (
-            getattr(settings, "LM_STUDIO_URL", None)
-            or getattr(settings, "LMSTUDIO_URL", None)
-            or "http://127.0.0.1:1234/v1"
-        )
-        if not lm_url:
+        """Invoca el node LM Studio de l'ordinador dedicat de l'empresa (Constitució §2.V)."""
+        # NORMA CONSTITUCIONAL SUPREMA: La IA només corre a l'ordinador dedicat físic de l'empresa.
+        # A Hetzner NO podem tenir res de l'empresa ni cap model centralitzat.
+        res = await db.execute(select(Empresa).where(Empresa.id == empresa_id))
+        empresa = res.scalar_one_or_none()
+
+        if not empresa or not empresa.node_ia_actiu or not empresa.node_ia_url or not empresa.node_ia_url.strip():
+            logger.info(
+                f"Empresa {empresa_id} sense ordinador dedicat actiu. Zero egress a Hetzner (Constitució §2.V)."
+            )
             return None, None, None, None
 
+        lm_url = empresa.node_ia_url.strip()
         base_url = lm_url.rstrip("/")
         endpoint = (
             f"{base_url}/chat/completions"
@@ -132,9 +137,12 @@ class CopilotDispatcher:
             else f"{base_url}/v1/chat/completions"
         )
 
-        system_content = f"{subagent.system_prompt} Vertical: {vertical}. "
-        if agent_prompt_system:
-            system_content += f" Directrius Específiques de l'Empresa: {agent_prompt_system}. "
+        agent_prompt = empresa.agent_prompt_system or agent_prompt_system
+        vertical_efectiva = empresa.vertical or vertical
+
+        system_content = f"{subagent.system_prompt} Vertical: {vertical_efectiva}. "
+        if agent_prompt:
+            system_content += f" Directrius Específiques de l'Empresa: {agent_prompt}. "
 
         messages: List[Dict[str, Any]] = [{"role": "system", "content": system_content}]
         if historial:
