@@ -21,7 +21,6 @@ from app.models.models import (
     Article,
     AuditoriaPostObra,
     Client,
-    ConsultaXatCopilot,
     EinaCustodia,
     Empresa,
     EstocMagatzem,
@@ -30,6 +29,7 @@ from app.models.models import (
     OrdreTreball,
     Vehicle,
 )
+from app.services.subagents.dispatcher import copilot_dispatcher
 
 router = APIRouter(
     prefix="/gestio/copilot",
@@ -242,7 +242,9 @@ TOOLS_SCHEMA = [
 
 
 async def execute_tool_get_unbilled_money(
-    db: AsyncSession, empresa_id: uuid.UUID, mes: int = None  # type: ignore
+    db: AsyncSession,
+    empresa_id: uuid.UUID,
+    mes: int = None,  # type: ignore
 ) -> dict:
     from sqlalchemy import and_, func, select
 
@@ -677,7 +679,11 @@ async def cridar_lm_studio(
     pregunta: str, vertical: str = "SEVALOR", context_addicional: Optional[str] = None
 ) -> Optional[str]:
     """Cridar LM Studio per a generació de text estàndard / suport."""
-    lm_url = getattr(settings, "LM_STUDIO_URL", None) or getattr(settings, "LMSTUDIO_URL", None) or "http://127.0.0.1:1234/v1"
+    lm_url = (
+        getattr(settings, "LM_STUDIO_URL", None)
+        or getattr(settings, "LMSTUDIO_URL", None)
+        or "http://127.0.0.1:1234/v1"
+    )
     if not lm_url:
         return None
 
@@ -695,7 +701,9 @@ async def cridar_lm_studio(
     if context_addicional:
         system_prompt += f"\nContext addicional:\n{context_addicional}"
 
-    model_name = getattr(settings, "LM_STUDIO_MODEL", None) or getattr(settings, "LMSTUDIO_MODEL", "deepseek-coder-v2-lite-instruct")
+    model_name = getattr(settings, "LM_STUDIO_MODEL", None) or getattr(
+        settings, "LMSTUDIO_MODEL", "deepseek-coder-v2-lite-instruct"
+    )
     api_key = getattr(settings, "LM_STUDIO_API_KEY", "lm-studio")
 
     payload = {
@@ -738,7 +746,11 @@ async def cridar_lm_studio_amb_tools(
     Executa el cicle d'Agent de Tool Calling amb LM Studio (OpenAI-compatible).
     Retorna (resposta_final, tool_name, tool_args, tool_result).
     """
-    lm_url = getattr(settings, "LM_STUDIO_URL", None) or getattr(settings, "LMSTUDIO_URL", None) or "http://127.0.0.1:1234/v1"
+    lm_url = (
+        getattr(settings, "LM_STUDIO_URL", None)
+        or getattr(settings, "LMSTUDIO_URL", None)
+        or "http://127.0.0.1:1234/v1"
+    )
     if not lm_url:
         return None, None, None, None
 
@@ -1147,6 +1159,7 @@ class DocumentRagIn(BaseModel):
 class ConsultaXatIn(BaseModel):
     pregunta: str
     imatge_b64: Optional[str] = None
+    historial: Optional[List[Dict[str, Any]]] = None
 
 
 # ---------------------------------------------------------------------------
@@ -1800,125 +1813,37 @@ async def consultar_xat_tecnic(
     db: AsyncSession = Depends(get_db_with_tenant_context),
     claims: Dict[str, Any] = Depends(get_current_user_claims),
 ):
-    """Finestra de xat tècnic amb RAG local, veto d'enginyer i aïllament de vertical (RF-16, RF-19, RF-20, RF-20.1, EDGE-05, EDGE-10)."""
+    """Finestra de xat tècnic amb orquestrador multi-agent de subagents, RAG local, veto financer i aïllament de vertical."""
     empresa_id = aplicar_tenant_context(claims)
     usuari_id_str = claims.get("sub")
     usuari_id = uuid.UUID(usuari_id_str) if usuari_id_str else uuid.uuid4()
     rol_usuari = claims.get("rol", "").upper()
 
-    # 1. Veto Financer d'Enginyer (RF-20.1 / EDGE-05)
-    pregunta_net = dades.pregunta.lower()
-    if rol_usuari == "ENGINYER":
-        es_financera = any(clau in pregunta_net for clau in PARAULES_CLAU_FINANCERES_VETO)
-        if es_financera:
-            # Registrem l'intent denegat per seguretat
-            log_denegat = ConsultaXatCopilot(
-                empresa_id=empresa_id,
-                usuari_id=usuari_id,
-                pregunta=dades.pregunta,
-                resposta="Consulta no autoritzada per política de rols de seguretat.",
-                vertical="SEVALOR",
-                denegat_per_rol=True,
-            )
-            db.add(log_denegat)
-            await db.commit()
-
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Consulta no autoritzada per política de rols de seguretat",
-            )
-
-    # 2. Aïllament Estricte per Vertical (RF-16, RF-17, EDGE-10)
     q_emp = select(Empresa).where(Empresa.id == empresa_id)
     res_emp = await db.execute(q_emp)
     empresa = res_emp.scalar_one_or_none()
     vertical = empresa.vertical if empresa else "SEVALOR"
 
-    # 3. Agent Autònom Copilot amb Tool Calling (OpenAI / LM Studio compatible + Sobirà Local Fallback)
-    resposta_ia, tool_name, tool_args, tool_result = await cridar_lm_studio_amb_tools(
+    return await copilot_dispatcher.dispatch(
         pregunta=dades.pregunta,
         db=db,
         empresa_id=empresa_id,
+        usuari_id=usuari_id,
+        rol_usuari=rol_usuari,
         vertical=vertical,
+        historial=dades.historial,
         agent_prompt_system=empresa.agent_prompt_system if empresa else None,
     )
-
-    enllacos = []
-    if resposta_ia and tool_name:
-        resposta = resposta_ia
-        if tool_name == "get_real_stock":
-            enllacos.append({"titol": "Inventari de Magatzem", "url": "/gestio/magatzem"})
-        elif tool_name in ("get_vehicle_info", "get_closest_vehicle"):
-            enllacos.append({"titol": "Flota de Vehicles", "url": "/gestio/flota"})
-        elif tool_name == "get_client_history":
-            enllacos.append({"titol": "Directori de Clients", "url": "/gestio/clients"})
-        elif tool_name == "get_warranty_status":
-            enllacos.append({"titol": "Auditoria de Garanties", "url": "/gestio/copilot"})
-        elif tool_name == "get_rag_knowledge":
-            enllacos.append({"titol": "Base de Coneixement Corporativa", "url": "/gestio/copilot"})
-    else:
-        # Fallback determinista sobirà local (quan el model no crida tool natiu o està offline)
-        (
-            resp_local,
-            t_name_loc,
-            t_args_loc,
-            t_res_loc,
-            enllacos_loc,
-        ) = await executar_agent_local(dades.pregunta, db, empresa_id)
-
-        # Si l'agent local identifica una eina operativa específica (estoc, flota, clients, garanties) o FAQ RAG trobada:
-        if t_name_loc != "get_rag_knowledge" or (t_res_loc and t_res_loc.get("trobat")):
-            resposta = resp_local
-            tool_name = t_name_loc
-            tool_args = t_args_loc
-            tool_result = t_res_loc
-            enllacos = enllacos_loc
-        elif resposta_ia:
-            # Pregunta general / conversacional resolta satisfactòriament per LM Studio
-            resposta = resposta_ia
-            tool_name = None
-            tool_args = None
-            tool_result = None
-            enllacos = []
-        else:
-            resposta = resp_local
-            tool_name = t_name_loc
-            tool_args = t_args_loc
-            tool_result = t_res_loc
-            enllacos = enllacos_loc
-
-    # 4. Registre d'Auditoria complet a la BD
-    consulta_db = ConsultaXatCopilot(
-        empresa_id=empresa_id,
-        usuari_id=usuari_id,
-        pregunta=dades.pregunta,
-        resposta=resposta,
-        vertical=vertical,
-        temps_inferencia_ms=115,
-        enllacos_relacionats=enllacos,
-        tool_name=tool_name,
-        tool_args=tool_args,
-        tool_result=tool_result,
-    )
-    db.add(consulta_db)
-    await db.commit()
-
-    return {
-        "resposta": resposta,
-        "vertical": vertical,
-        "temps_inferencia_ms": 115,
-        "tool_utilitzada": tool_name,
-        "tool_args": tool_args,
-        "tool_resultat": tool_result,
-        "enllacos": enllacos,
-        "declinat_per_vertical": False,
-    }
 
 
 @router.get("/ia-status")
 async def obtenir_estat_ia() -> Dict[str, Any]:
     """Comprova la connectivitat en viu amb el node local LM Studio (http://127.0.0.1:1234)."""
-    lm_url = getattr(settings, "LM_STUDIO_URL", None) or getattr(settings, "LMSTUDIO_URL", None) or "http://127.0.0.1:1234/v1"
+    lm_url = (
+        getattr(settings, "LM_STUDIO_URL", None)
+        or getattr(settings, "LMSTUDIO_URL", None)
+        or "http://127.0.0.1:1234/v1"
+    )
     base_url = lm_url.rstrip("/")
     models_url = f"{base_url}/models" if base_url.endswith("/v1") else f"{base_url}/v1/models"
 
@@ -1933,7 +1858,9 @@ async def obtenir_estat_ia() -> Dict[str, Any]:
                 return {
                     "estat": "ONLINE",
                     "url": lm_url,
-                    "model_actiu": getattr(settings, "LM_STUDIO_MODEL", "deepseek-coder-v2-lite-instruct"),
+                    "model_actiu": getattr(
+                        settings, "LM_STUDIO_MODEL", "deepseek-coder-v2-lite-instruct"
+                    ),
                     "models_disponibles": models,
                     "latencia_ms": elapsed_ms,
                 }
