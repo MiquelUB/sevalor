@@ -41,6 +41,9 @@ export default function EmpresaDetailPage({ params }: { params: { id: string } }
   const [pla, setPla] = useState("STARTER");
   const [dominiCustom, setDominiCustom] = useState("");
   const [subdomini, setSubdomini] = useState("");
+  const [primariHsl, setPrimariHsl] = useState("142 71% 25%");
+  const [secundariHsl, setSecundariHsl] = useState("38 92% 50%");
+  const [accentHsl, setAccentHsl] = useState("160 84% 39%");
   const [features, setFeatures] = useState({
     feature_copilot_ia: false,
     feature_flota: true,
@@ -61,6 +64,9 @@ export default function EmpresaDetailPage({ params }: { params: { id: string } }
         setPla(data.pla_subscripcio || data.pla || "STARTER");
         setDominiCustom(data.domini_custom || "");
         setSubdomini(data.subdomini || "");
+        if (data.primari_hsl) setPrimariHsl(data.primari_hsl);
+        if (data.secundari_hsl) setSecundariHsl(data.secundari_hsl);
+        if (data.accent_hsl) setAccentHsl(data.accent_hsl);
         setFeatures({
           feature_copilot_ia: Boolean(data.feature_copilot_ia),
           feature_flota: Boolean(data.feature_flota),
@@ -121,6 +127,16 @@ export default function EmpresaDetailPage({ params }: { params: { id: string } }
           }),
         });
       }
+
+      // 5. Guardar Marca Camaleó (Constitució §2.VIII)
+      await apiFetch(`/superadmin/empreses/${params.id}/camaleo`, {
+        method: "PUT",
+        body: JSON.stringify({
+          primari_hsl: primariHsl.trim(),
+          secundari_hsl: secundariHsl.trim(),
+          accent_hsl: accentHsl.trim(),
+        }),
+      });
 
       setSuccessMessage("Configuració del tenant desada correctament a PostgreSQL.");
       fetchTenant();
@@ -440,6 +456,125 @@ export default function EmpresaDetailPage({ params }: { params: { id: string } }
                 <span className="font-bold text-slate-800 dark:text-slate-200">edge.sevalor.app</span>
               </div>
             </div>
+          </div>
+        </div>
+
+        {/* BLOC: IDENTITAT CORPORATIVA CAMALEÒNICA (CONSTITUCIÓ §2.VIII) */}
+        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-5 rounded-2xl shadow-sm md:col-span-2 space-y-4">
+          <div className="flex items-center justify-between">
+            <h2 className="text-xs font-mono font-bold uppercase tracking-wider text-slate-500 flex items-center gap-2">
+              <Sparkles className="w-4 h-4 text-emerald-500" />
+              <span>Identitat de Marca &amp; Tokens Camaleó (Constitució §2.VIII)</span>
+            </h2>
+            <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-emerald-50 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-400 font-bold border border-emerald-200 dark:border-emerald-800">
+              CHAMELEON CSS TOKENS
+            </span>
+          </div>
+
+          <p className="text-xs text-slate-500">
+            Defineix els valors HSL corporatius injectats dinàmicament a la PWA i Gestió d'aquest inquilí segons la Constitució §2.VIII.
+          </p>
+
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            {/* Primari */}
+            <div className="p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/40 space-y-2">
+              <div className="flex items-center justify-between">
+                <label className="text-xs font-bold text-slate-700 dark:text-slate-300">
+                  Primari HSL
+                </label>
+                <div
+                  className="w-4 h-4 rounded-full border border-white shadow-sm"
+                  style={{ backgroundColor: `hsl(${primariHsl})` }}
+                />
+              </div>
+              <input
+                type="text"
+                value={primariHsl}
+                onChange={(e) => setPrimariHsl(e.target.value)}
+                placeholder="ex. 142 71% 25%"
+                className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-white text-xs rounded-xl p-2 font-mono font-bold"
+              />
+              <span className="text-[10px] text-slate-400 block font-mono">--color-primary</span>
+            </div>
+
+            {/* Secundari */}
+            <div className="p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/40 space-y-2">
+              <div className="flex items-center justify-between">
+                <label className="text-xs font-bold text-slate-700 dark:text-slate-300">
+                  Secundari HSL
+                </label>
+                <div
+                  className="w-4 h-4 rounded-full border border-white shadow-sm"
+                  style={{ backgroundColor: `hsl(${secundariHsl})` }}
+                />
+              </div>
+              <input
+                type="text"
+                value={secundariHsl}
+                onChange={(e) => setSecundariHsl(e.target.value)}
+                placeholder="ex. 38 92% 50%"
+                className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-white text-xs rounded-xl p-2 font-mono font-bold"
+              />
+              <span className="text-[10px] text-slate-400 block font-mono">--color-secondary</span>
+            </div>
+
+            {/* Accent */}
+            <div className="p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/40 space-y-2">
+              <div className="flex items-center justify-between">
+                <label className="text-xs font-bold text-slate-700 dark:text-slate-300">
+                  Accent HSL
+                </label>
+                <div
+                  className="w-4 h-4 rounded-full border border-white shadow-sm"
+                  style={{ backgroundColor: `hsl(${accentHsl})` }}
+                />
+              </div>
+              <input
+                type="text"
+                value={accentHsl}
+                onChange={(e) => setAccentHsl(e.target.value)}
+                placeholder="ex. 160 84% 39%"
+                className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-white text-xs rounded-xl p-2 font-mono font-bold"
+              />
+              <span className="text-[10px] text-slate-400 block font-mono">--color-accent</span>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 pt-2">
+            <span className="text-[10px] text-slate-400 font-bold uppercase">Preconfigurats:</span>
+            <button
+              type="button"
+              onClick={() => {
+                setPrimariHsl("142 71% 25%");
+                setSecundariHsl("38 92% 50%");
+                setAccentHsl("160 84% 39%");
+              }}
+              className="px-2.5 py-1 rounded-lg text-[10px] font-mono bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300 hover:opacity-80"
+            >
+              CampoPro (Verd Agro)
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setPrimariHsl("210 100% 15%");
+                setSecundariHsl("38 92% 50%");
+                setAccentHsl("190 90% 50%");
+              }}
+              className="px-2.5 py-1 rounded-lg text-[10px] font-mono bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-300 hover:opacity-80"
+            >
+              ElectricPro (Blau Indústria)
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setPrimariHsl("199 89% 28%");
+                setSecundariHsl("170 80% 40%");
+                setAccentHsl("45 93% 47%");
+              }}
+              className="px-2.5 py-1 rounded-lg text-[10px] font-mono bg-cyan-100 text-cyan-800 dark:bg-cyan-950 dark:text-cyan-300 hover:opacity-80"
+            >
+              HydroPro (Turquesa Fontaneria)
+            </button>
           </div>
         </div>
 

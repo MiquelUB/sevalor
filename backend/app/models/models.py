@@ -370,6 +370,9 @@ class Article(Base):
     parent_material_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True), ForeignKey("articles.id", ondelete="SET NULL")
     )
+    proveidor_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("proveidors.id", ondelete="SET NULL")
+    )
     preu_cost: Mapped[float] = mapped_column(Numeric(10, 2), default=0.0, server_default=text("0"))
     descompte_proveidor: Mapped[float] = mapped_column(
         Numeric(10, 2), default=0.0, server_default=text("0")

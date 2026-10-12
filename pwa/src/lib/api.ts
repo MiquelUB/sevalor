@@ -117,8 +117,13 @@ export async function apiFetch<T = any>(
   options: RequestInit = {}
 ): Promise<T> {
   const baseUrl = getApiBaseUrl();
-  const normalizedPath = path.startsWith("/") ? path : `/${path}`;
-  const url = `${baseUrl}${normalizedPath}`;
+  let cleanPath = path.startsWith("/") ? path : `/${path}`;
+  if (cleanPath.startsWith("/api/v1/")) {
+    cleanPath = cleanPath.slice(7);
+  } else if (cleanPath === "/api/v1") {
+    cleanPath = "";
+  }
+  const url = `${baseUrl}${cleanPath}`;
 
   const headers: Record<string, string> = {
     "Content-Type": "application/json",

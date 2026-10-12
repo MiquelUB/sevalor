@@ -71,7 +71,7 @@ export default function ConfiguracioPage() {
   const esEnginyer = rolActiu === "ENGINYER";
   const esBoss = rolActiu === "BOSS";
 
-  const [pestanyaActiva, setPestanyaActiva] = useState<PestanyaConfig>("marca");
+  const [pestanyaActiva, setPestanyaActiva] = useState<PestanyaConfig>("jornada");
 
   // Estat d'Empresa & Marca Camaleònica (carregat del backend)
   const [nomEmpresa, setNomEmpresa] = useState("");
@@ -572,6 +572,14 @@ export default function ConfiguracioPage() {
       {/* ========================================================================= */}
       {pestanyaActiva === "marca" && (
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          {/* Banner de Governança Superadmin per a la Marca Camaleó */}
+          <div className="lg:col-span-3 p-4 rounded-2xl bg-indigo-50 dark:bg-indigo-950/40 border border-indigo-200 dark:border-indigo-800 flex items-start gap-3">
+            <Building className="w-5 h-5 text-indigo-600 dark:text-indigo-400 shrink-0 mt-0.5" />
+            <div className="text-xs text-indigo-900 dark:text-indigo-200">
+              <strong className="font-bold">Governança Centralitzada de Marca (Superadmin — Constitució §2.VIII):</strong> La configuració d'alta d'imatge corporativa, logotips oficials i tokens de color Camaleó per al teu tenant és gestionada per l'administrador de la plataforma a través de Superadmin. Aquí pots consultar la paleta HSL activa i simular el contrast d'accessibilitat.
+            </div>
+          </div>
+
           {/* Panell de Control de Colors HSL & Contrast WCAG */}
           <div className="lg:col-span-2 space-y-6">
             <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm space-y-5">

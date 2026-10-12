@@ -80,12 +80,14 @@ class ArticleCreate(BaseModel):
     descompte_proveidor: float = Field(0.0)
     marge_guanys: float = Field(0.0)
     preu_venda: float = Field(0.0)
+    proveidor_id: Optional[uuid.UUID] = None
 
 
 class ArticleResponse(ArticleCreate):
     id: uuid.UUID
     actiu: bool
     estoc_real: float = 0.0
+    proveidor_nom: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
@@ -153,9 +155,19 @@ async def llistar_articles(
         for article_id, qt in res_estocs.all():
             estocs_map[article_id] = float(qt or 0.0)
 
+    # Mapejar proveïdors
+    prov_ids = [a.proveidor_id for a in articles if getattr(a, "proveidor_id", None)]
+    prov_map = {}
+    if prov_ids:
+        stmt_prov = select(Proveidor.id, Proveidor.rao_social).where(Proveidor.id.in_(prov_ids))
+        res_prov = await db.execute(stmt_prov)
+        for pid, rsocial in res_prov.all():
+            prov_map[pid] = rsocial
+
     for art in articles:
         # Assignem estoc_real dinàmicament a l'objecte ORM
         setattr(art, "estoc_real", estocs_map.get(art.id, 0.0))
+        setattr(art, "proveidor_nom", prov_map.get(getattr(art, "proveidor_id", None)))
 
         # Protecció per a camps que poden ser NULL a la BD per errors antics
         if getattr(art, "estoc_optim") is None:
@@ -212,6 +224,7 @@ async def alta_article(
         descompte_proveidor=article.descompte_proveidor,
         marge_guanys=article.marge_guanys,
         preu_venda=article.preu_venda,
+        proveidor_id=article.proveidor_id,
     )
 
     db.add(nou_article)
@@ -934,6 +947,8 @@ async def modificar_article(
     art_db.descompte_proveidor = article.descompte_proveidor
     art_db.marge_guanys = article.marge_guanys
     art_db.preu_venda = article.preu_venda
+    if article.proveidor_id is not None:
+        art_db.proveidor_id = article.proveidor_id
 
     await db.commit()
 
@@ -945,6 +960,9 @@ async def modificar_article(
 
     art_dict = {c.name: getattr(art_db, c.name) for c in art_db.__table__.columns}
     art_dict["estoc_real"] = float(estoc_real)
+    if art_db.proveidor_id:
+        prov_nom = (await db.execute(select(Proveidor.rao_social).where(Proveidor.id == art_db.proveidor_id))).scalar()
+        art_dict["proveidor_nom"] = prov_nom
 
     return art_dict
 

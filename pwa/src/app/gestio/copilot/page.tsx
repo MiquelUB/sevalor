@@ -38,18 +38,14 @@ export default function CopilotEntrenament() {
             tags: (form.elements.namedItem("tags") as HTMLInputElement).value
           };
           try {
-            const res = await apiFetch("/gestio/copilot/rag", {
+            await apiFetch("/gestio/copilot/rag", {
               method: "POST",
               body: JSON.stringify(dades)
             });
-            if (res.ok) {
-              alert("Document afegit correctament a la xarxa neuronal local.");
-              form.reset();
-            } else {
-              alert("Error afegint document.");
-            }
-          } catch (err) {
-            alert("Error de xarxa en contactar amb el backend.");
+            alert("Document afegit correctament a la xarxa neuronal local.");
+            form.reset();
+          } catch (err: any) {
+            alert(`Error afegint document: ${err.message || 'Error de xarxa'}`);
           }
         }} className="space-y-4">
           <div>

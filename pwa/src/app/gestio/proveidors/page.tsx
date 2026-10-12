@@ -223,7 +223,7 @@ export default function GestioProveidorsPage() {
     if (!provSeleccionatBec || !trucadaFeta) return;
 
     try {
-      const res = await apiFetch("/gestio/proveidors/autoritzar-canvi-iban", {
+      await apiFetch("/gestio/proveidors/autoritzar-canvi-iban", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -234,23 +234,21 @@ export default function GestioProveidorsPage() {
         }),
       });
 
-      if (res.ok) {
-        setProveidors((prev) =>
-          prev.map((p) => {
-            if (p.id === provSeleccionatBec.id) {
-              const nouIbanAprovat = p.detall_antifrau?.iban_nou || p.iban_visible;
-              return {
-                ...p,
-                bloqueig_bec: false,
-                iban_visible: nouIbanAprovat,
-                detall_antifrau: undefined,
-              };
-            }
-            return p;
-          })
-        );
-        setModalBecObert(false);
-      }
+      setProveidors((prev) =>
+        prev.map((p) => {
+          if (p.id === provSeleccionatBec.id) {
+            const nouIbanAprovat = p.detall_antifrau?.iban_nou || p.iban_visible;
+            return {
+              ...p,
+              bloqueig_bec: false,
+              iban_visible: nouIbanAprovat,
+              detall_antifrau: undefined,
+            };
+          }
+          return p;
+        })
+      );
+      setModalBecObert(false);
     } catch {
       setModalBecObert(false);
     }

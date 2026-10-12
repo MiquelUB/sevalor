@@ -161,13 +161,11 @@ export default function GestioFlotaPage() {
   const fetchVehicles = async () => {
     setCarregant(true);
     try {
-      const res = await apiFetch("/gestio/flota/vehicles");
-      if (res.ok) {
-        const data = await res.json();
-        setVehicles(data);
-      }
-    } catch {
-      // Backend offline o construcció estàtica
+      const data = await apiFetch<VehicleItem[]>("/gestio/flota");
+      setVehicles(Array.isArray(data) ? data : []);
+    } catch (err) {
+      console.error("Error carregant vehicles:", err);
+      setVehicles([]);
     } finally {
       setCarregant(false);
     }
@@ -183,7 +181,7 @@ export default function GestioFlotaPage() {
     if (!vehicleSeleccionatItv) return;
 
     try {
-      const res = await apiFetch("/gestio/flota/registrar-itv", {
+      await apiFetch("/gestio/flota/registrar-itv", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -193,32 +191,26 @@ export default function GestioFlotaPage() {
           defectes_detectats: defectesItv,
         }),
       });
-
-      if (res.ok) {
-        setModalItvObert(false);
-        fetchVehicles();
-      } else {
-        // Fallback optimista si no hi ha backend
-        setVehicles((prev) =>
-          prev.map((v) => {
-            if (v.id === vehicleSeleccionatItv.id) {
-              const nouEstat =
-                veredicteItv === "FAVORABLE"
-                  ? "OPERATIU"
-                  : veredicteItv === "LEVE"
-                  ? "LEVE"
-                  : veredicteItv === "DESFAVORABLE"
-                  ? "DESFAVORABLE"
-                  : "INACTIVAT";
-              return { ...v, estat: nouEstat, data_proxima_itv: dataNovaItv };
-            }
-            return v;
-          })
-        );
-        setModalItvObert(false);
-      }
+      setModalItvObert(false);
+      fetchVehicles();
     } catch {
-      // Error de xarxa
+      // Fallback optimista si no hi ha backend
+      setVehicles((prev) =>
+        prev.map((v) => {
+          if (v.id === vehicleSeleccionatItv.id) {
+            const nouEstat =
+              veredicteItv === "FAVORABLE"
+                ? "OPERATIU"
+                : veredicteItv === "LEVE"
+                ? "LEVE"
+                : veredicteItv === "DESFAVORABLE"
+                ? "DESFAVORABLE"
+                : "INACTIVAT";
+            return { ...v, estat: nouEstat, data_proxima_itv: dataNovaItv };
+          }
+          return v;
+        })
+      );
       setModalItvObert(false);
     }
   };
@@ -269,7 +261,7 @@ export default function GestioFlotaPage() {
     if (!novaMatricula || !novaMarca || !nouModel) return;
 
     try {
-      const res = await apiFetch("/gestio/flota", {
+      await apiFetch("/gestio/flota", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -290,15 +282,10 @@ export default function GestioFlotaPage() {
         }),
       });
 
-      if (res.ok) {
-        setModalNouVehicleObert(false);
-        fetchVehicles();
-      } else {
-        const errorData = await res.json();
-        alert("Error al crear el vehicle: " + (errorData.detail || "Error desconegut"));
-      }
-    } catch (err) {
-      alert("Excepció de xarxa: " + err);
+      setModalNouVehicleObert(false);
+      fetchVehicles();
+    } catch (err: any) {
+      alert("Error al crear el vehicle: " + (err.message || "Error desconegut"));
     }
   };
 

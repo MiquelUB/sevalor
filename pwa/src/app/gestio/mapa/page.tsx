@@ -20,11 +20,12 @@ export default function GestioMapaPage() {
     setLoading(true);
     try {
       const [feinesData, operarisData] = await Promise.all([
-        apiFetch<Feina[]>("/gestio/feines?limit=100"),
-        apiFetch<Operari[]>("/gestio/operaris"),
+        apiFetch<any>("/gestio/feines?limit=100").catch(() => []),
+        apiFetch<any>("/gestio/operaris").catch(() => []),
       ]);
-      setFeines(feinesData || []);
-      setOperaris((operarisData || []).filter((o) => o.rol === "OPERARI" && o.estat === "ACTIU"));
+      const opsList = Array.isArray(operarisData) ? operarisData : (operarisData?.operaris || []);
+      setFeines(Array.isArray(feinesData) ? feinesData : []);
+      setOperaris(opsList.filter((o: any) => o.estat === "ACTIU"));
     } catch (e) {
       console.error("Error carregant dades del mapa:", e);
     } finally {

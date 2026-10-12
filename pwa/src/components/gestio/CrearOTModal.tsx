@@ -104,22 +104,15 @@ export function CrearOTModal({ onClose, onSuccess }: CrearOTModalProps) {
       const { planol_id, ...backendPayload } = payload;
 
       // 1. Create OT
-      const res = await apiFetch("/api/v1/gestio/feines", {
+      const createdOT = await apiFetch<any>("/gestio/feines", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(backendPayload)
       });
 
-      if (!res.ok) {
-        const errorData = await res.json();
-        throw new Error(`Error creant OT: ${errorData.detail || 'Desconegut'}`);
-      }
-
-      const createdOT = await res.json();
-
       // 2. Create Fulla de Picking if materials assigned
       if (liniesPicking.length > 0) {
-        const pickRes = await apiFetch("/api/v1/gestio/magatzem/picking", {
+        const createdPick = await apiFetch<any>("/gestio/magatzem/picking", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -128,15 +121,9 @@ export function CrearOTModal({ onClose, onSuccess }: CrearOTModalProps) {
           })
         });
 
-        if (!pickRes.ok) {
-          throw new Error("S'ha creat l'OT però hi ha hagut un error en inicialitzar el picking.");
-        }
-
-        const createdPick = await pickRes.json();
-
         // 3. Insert Picking Lines
         for (const linia of liniesPicking) {
-          await apiFetch(`/api/v1/gestio/magatzem/picking/${createdPick.id}/linies`, {
+          await apiFetch(`/gestio/magatzem/picking/${createdPick.id}/linies`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({

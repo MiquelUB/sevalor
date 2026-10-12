@@ -520,7 +520,13 @@ export default function GestioClientsPage() {
                 </div>
 
               </div>
-            ) : null}
+            ) : (
+              <div className="p-8 text-center text-slate-400 bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800">
+                <Package className="w-8 h-8 mx-auto mb-2 text-slate-300" />
+                <p className="text-xs font-bold text-slate-600 dark:text-slate-400">Sense dades de la Fitxa 360°</p>
+                <p className="text-[11px] text-slate-400 mt-1">No s'han trobat finques o intervencions recents per a aquest client.</p>
+              </div>
+            )}
 
           </div>
         ) : (

@@ -27,6 +27,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from app.api.v1.gestio.operaris import hash_pin
 from app.core.db import AsyncSessionLocal
 from app.models.models import (
+    AlbaraProveidor,
     Article,
     Client,
     Empresa,
@@ -34,6 +35,7 @@ from app.models.models import (
     FaqCorporativaRag,
     Magatzem,
     OrdreTreball,
+    Proveidor,
     Usuari,
     Vehicle,
 )
@@ -230,6 +232,49 @@ async def seed_demo():
             await session.flush()
             print(f"📦 Magatzem creat: {magatzem.nom}")
 
+        # 4.1 Proveïdor de Materials Agrícoles
+        stmt_prov = select(Proveidor).where(
+            Proveidor.empresa_id == empresa_id,
+            Proveidor.nif == "A25123456",
+        )
+        prov = (await session.execute(stmt_prov)).scalars().first()
+        if not prov:
+            prov = Proveidor(
+                id=uuid.uuid4(),
+                empresa_id=empresa_id,
+                codi="PRV-001",
+                rao_social="Suministros Agrícolas del Segre SL",
+                nif="A25123456",
+                telefon="+34 973 22 11 00",
+                email="comandes@segresuministros.cat",
+                especialitat="MATERIALS",
+                actiu=True,
+            )
+            session.add(prov)
+            await session.flush()
+            print(f"🏭 Proveïdor creat: {prov.rao_social} (NIF: {prov.nif})")
+        else:
+            print(f"🏭 Proveïdor existent: {prov.rao_social}")
+
+        # 4.2 Albarà de Proveïdor inicial (Entrada a Magatzem)
+        stmt_alb = select(AlbaraProveidor).where(
+            AlbaraProveidor.empresa_id == empresa_id,
+            AlbaraProveidor.numero_albara == "ALB-2026-9042",
+        )
+        alb = (await session.execute(stmt_alb)).scalars().first()
+        if not alb:
+            alb = AlbaraProveidor(
+                id=uuid.uuid4(),
+                empresa_id=empresa_id,
+                proveidor_id=prov.id,
+                numero_albara="ALB-2026-9042",
+                data_albara=date(2026, 3, 15),
+                estat="CONCILIAT",
+            )
+            session.add(alb)
+            await session.flush()
+            print(f"📄 Albarà de proveïdor creat: {alb.numero_albara}")
+
         # 5. Articles d'Inventari i Estoc Real
         articles_demo = [
             {
@@ -316,6 +361,7 @@ async def seed_demo():
                 art = Article(
                     id=uuid.uuid4(),
                     empresa_id=empresa_id,
+                    proveidor_id=prov.id,
                     referencia_inventari=art_data["ref"],
                     nom=art_data["nom"],
                     familia=art_data["familia"],
@@ -337,7 +383,10 @@ async def seed_demo():
                     ubicacio_passadis=art_data["ubicacio"],
                 )
                 session.add(estoc)
-                print(f"🔧 Article afegit amb estoc: {art.nom} ({art_data['quantitat']} {art.unitat_mesura})")
+                print(f"🔧 Article afegit amb estoc i proveïdor: {art.nom} ({art_data['quantitat']} {art.unitat_mesura})")
+            else:
+                art.proveidor_id = prov.id
+                print(f"🔧 Article actualitzat amb proveïdor: {art.nom}")
 
         # 6. Vehicles de Flota
         vehicles_demo = [

@@ -17,7 +17,7 @@ from fastapi import (
     UploadFile,
     status,
 )
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -47,6 +47,7 @@ class VehicleCreate(BaseModel):
     tipus: str = Field("THERMIC", max_length=30)
     distintiu_ambiental: Optional[str] = Field(None, max_length=10)
     estat: str = Field("OPERATIU", max_length=30)
+    conductor_habitual_id: Optional[uuid.UUID] = None
     data_proxima_itv: Optional[date] = None
     estat_itv: str = Field("FAVORABLE", max_length=50)
     data_caducitat_asseguranca: Optional[date] = None
@@ -68,12 +69,16 @@ class VehicleResponse(VehicleCreate):
     id: uuid.UUID
     horometre_acumulat: float
     odometre_acumulat: int
+    conductor_nom: Optional[str] = None
     consum_l_100km: Optional[float] = None
     consum_mitjana_historica: Optional[float] = None
     consum_adblue_litres: float = 0.0
 
+    model_config = ConfigDict(from_attributes=True)
+
 
 @router.get("", response_model=List[VehicleResponse])
+@router.get("/vehicles", response_model=List[VehicleResponse])
 async def llistar_flota(
     request: Request,
     q: Optional[str] = None,
@@ -85,7 +90,11 @@ async def llistar_flota(
     if not empresa_id or empresa_id == "undefined":
         raise HTTPException(status_code=401, detail="No identificat")
 
-    stmt = select(Vehicle).where(Vehicle.empresa_id == uuid.UUID(empresa_id))
+    stmt = (
+        select(Vehicle, Usuari.nom, Usuari.cognoms)
+        .outerjoin(Usuari, Vehicle.conductor_habitual_id == Usuari.id)
+        .where(Vehicle.empresa_id == uuid.UUID(empresa_id))
+    )
 
     if q:
         search_term = f"%{q}%"
@@ -100,7 +109,13 @@ async def llistar_flota(
     stmt = stmt.limit(limit).offset(offset).order_by(Vehicle.created_at.desc())
 
     result = await db.execute(stmt)
-    vehicles = result.scalars().all()
+    rows = result.all()
+    vehicles = []
+    for veh, u_nom, u_cognoms in rows:
+        c_nom = f"{u_nom or ''} {u_cognoms or ''}".strip() or None
+        v_dict = {c.name: getattr(veh, c.name) for c in veh.__table__.columns}
+        v_dict["conductor_nom"] = c_nom
+        vehicles.append(VehicleResponse.model_validate(v_dict))
 
     return vehicles
 

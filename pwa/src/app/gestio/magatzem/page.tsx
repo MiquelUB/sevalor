@@ -30,6 +30,8 @@ interface Article {
   descompte_proveidor: number;
   marge_guanys: number;
   preu_venda: number;
+  proveidor_id?: string | null;
+  proveidor_nom?: string | null;
   actiu?: boolean;
   es_lot_caducable?: boolean;
   estoc_real?: number;
@@ -41,6 +43,7 @@ export default function GestioMagatzemPage() {
   const [customFamilies, setCustomFamilies] = useState<string[]>([]);
   const [articles, setArticles] = useState<Article[]>([]);
   const [eines, setEines] = useState<any[]>([]);
+  const [proveidors, setProveidors] = useState<any[]>([]);
   const [activeTab, setActiveTab] = useState<"MATERIALS" | "EINES">("MATERIALS");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -79,6 +82,7 @@ export default function GestioMagatzemPage() {
     marge_guanys: 0,
     preu_venda: 0,
     es_lot_caducable: false,
+    proveidor_id: "",
   });
 
   // Efecte per autocalcular el preu de venda
@@ -94,15 +98,17 @@ export default function GestioMagatzemPage() {
     setLoading(true);
     setError(null);
     try {
-      const [articlesData, einesData, operarisData, configData] = await Promise.all([
+      const [articlesData, einesData, operarisData, configData, proveidorsData] = await Promise.all([
         apiFetch<Article[]>("/gestio/magatzem/articles").catch(() => []),
         apiFetch<any[]>("/gestio/magatzem/eines").catch(() => []),
         apiFetch<any[]>("/gestio/operaris").catch(() => []),
-        apiFetch<any>("/gestio/configuracio/empresa").catch(() => null)
+        apiFetch<any>("/gestio/configuracio/empresa").catch(() => null),
+        apiFetch<any[]>("/gestio/proveidors").catch(() => [])
       ]);
       setArticles(articlesData || []);
       setEines(einesData || []);
       setOperaris(operarisData || []);
+      setProveidors(proveidorsData || []);
       
       if (configData) {
         if (configData.vertical) setVertical(configData.vertical);
@@ -225,6 +231,7 @@ export default function GestioMagatzemPage() {
           marge_guanys: Number(articleEditant.marge_guanys),
           preu_venda: Number(articleEditant.preu_venda),
           es_lot_caducable: articleEditant.es_lot_caducable || false,
+          proveidor_id: articleEditant.proveidor_id || null,
         }),
       });
       setModalEditarArticle(false);
@@ -301,6 +308,7 @@ export default function GestioMagatzemPage() {
             descompte_proveidor: Number(nouArticle.descompte_proveidor),
             marge_guanys: Number(nouArticle.marge_guanys),
             preu_venda: Number(nouArticle.preu_venda),
+            proveidor_id: nouArticle.proveidor_id || null,
           }),
         });
       }
@@ -323,6 +331,7 @@ export default function GestioMagatzemPage() {
         marge_guanys: 0,
         preu_venda: 0,
         es_lot_caducable: false,
+        proveidor_id: "",
       });
       await carregarArticles();
     } catch (err: any) {
@@ -559,6 +568,7 @@ export default function GestioMagatzemPage() {
                     <tr className="bg-slate-50 dark:bg-slate-800/60 border-b border-slate-200 dark:border-slate-800 font-bold text-slate-600 dark:text-slate-300">
                       <th className="p-3">Ref. Inventari</th>
                       <th className="p-3">Descripció Article</th>
+                      <th className="p-3">Proveïdor</th>
                       <th className="p-3">Família</th>
                       <th className="p-3">Unitat</th>
                       <th className="p-3 text-right">Estoc Real</th>
@@ -576,6 +586,11 @@ export default function GestioMagatzemPage() {
                         </td>
                         <td className="p-3 font-medium text-slate-900 dark:text-white">
                           {art.nom}
+                        </td>
+                        <td className="p-3">
+                          <span className="text-xs font-semibold text-slate-700 dark:text-slate-300">
+                            {art.proveidor_nom || "—"}
+                          </span>
                         </td>
                         <td className="p-3">
                           <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300">
@@ -853,6 +868,25 @@ export default function GestioMagatzemPage() {
                     className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-medium"
                   />
                 </div>
+                {nouArticle.tipus_creacio === "MATERIAL" && (
+                  <div className="col-span-2">
+                    <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-400 mb-1">
+                      Proveïdor Habitual (Comandes / Mínim Estoc)
+                    </label>
+                    <select
+                      value={nouArticle.proveidor_id}
+                      onChange={(e) => setNouArticle({ ...nouArticle, proveidor_id: e.target.value })}
+                      className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-medium"
+                    >
+                      <option value="">Sense proveïdor assignat</option>
+                      {proveidors.map((p) => (
+                        <option key={p.id} value={p.id}>
+                          {p.rao_social} ({p.nif})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
                 {nouArticle.tipus_creacio === "EINA" && (
                   <div>
                     <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-400 mb-1">
@@ -1067,6 +1101,36 @@ export default function GestioMagatzemPage() {
                         className="w-full p-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs"
                         required
                       />
+                    </div>
+                    <div className="col-span-2">
+                      <label className="block text-xs font-bold text-slate-600 dark:text-slate-400 mb-1">
+                        Proveïdor Habitual (Comandes / Mínim Estoc)
+                      </label>
+                      <select
+                        value={articleEditant.proveidor_id || ""}
+                        onChange={(e) => {
+                          const provId = e.target.value || null;
+                          const p = proveidors.find((x) => x.id === provId);
+                          setArticleEditant({
+                            ...articleEditant,
+                            proveidor_id: provId,
+                            proveidor_nom: p ? p.rao_social : null,
+                          });
+                        }}
+                        className="w-full p-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-medium"
+                      >
+                        <option value="">Sense proveïdor assignat</option>
+                        {proveidors.map((p) => (
+                          <option key={p.id} value={p.id}>
+                            {p.rao_social} ({p.nif})
+                          </option>
+                        ))}
+                      </select>
+                      {articleEditant.proveidor_nom && (
+                        <p className="text-[11px] text-emerald-600 dark:text-emerald-400 mt-1 font-medium">
+                          Proveïdor vinculat: <strong>{articleEditant.proveidor_nom}</strong>
+                        </p>
+                      )}
                     </div>
                     <div>
                       <label className="block text-xs font-bold text-slate-600 dark:text-slate-400 mb-1">Família</label>

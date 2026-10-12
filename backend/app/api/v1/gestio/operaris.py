@@ -1,12 +1,12 @@
 import secrets
 import string
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import List, Optional
 
 import bcrypt
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -36,12 +36,23 @@ class OperariResponse(BaseModel):
     id: uuid.UUID
     nif: str
     nom: str
-    cognoms: str
-    rol: str
-    estat: str
-    telefon: Optional[str]
-    pin_bloquejat: bool
-    intents_pin_fallits: int
+    cognoms: str = ""
+    email: Optional[str] = None
+    telefon: Optional[str] = None
+    rol: str = "OPERARI"
+    especialitat: Optional[str] = "SISTEMES_REG"
+    estat_operatiu: Optional[str] = "DISPONIBLE"
+    estat: str = "ACTIU"
+    cost_hora_eur: float = 22.50
+    carnet_conduir: str = "B"
+    carnet_caducitat: Optional[date] = None
+    prl_certificat_vigencia: Optional[date] = None
+    pin_bloquejat: bool = False
+    intents_pin_fallits: int = 0
+    cap_de_grup_id: Optional[uuid.UUID] = None
+    vehicle_assignat_id: Optional[uuid.UUID] = None
+
+    model_config = ConfigDict(from_attributes=True)
 
 
 def generar_pin() -> str:
@@ -67,7 +78,14 @@ async def llistar_operaris(
 ):
     empresa_id = await verificar_permisos_boss(request)
 
-    stmt = select(Usuari).where(Usuari.empresa_id == uuid.UUID(empresa_id), Usuari.rol == "OPERARI")
+    stmt = (
+        select(Usuari)
+        .where(
+            Usuari.empresa_id == uuid.UUID(empresa_id),
+            Usuari.rol.in_(["OPERARI", "CAP_DE_COLLA"]),
+        )
+        .order_by(Usuari.nom.asc())
+    )
     result = await db.execute(stmt)
     operaris = result.scalars().all()
 

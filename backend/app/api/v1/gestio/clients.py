@@ -278,6 +278,7 @@ class Fitxa360Response(BaseModel):
 
 
 @router.get("/{client_id}/fitxa-360", response_model=Fitxa360Response)
+@router.get("/{client_id}/fitxa360", response_model=Fitxa360Response)
 async def obtenir_fitxa_360_client(
     request: Request, client_id: uuid.UUID, db: AsyncSession = Depends(get_db_with_tenant_context)
 ):
