@@ -50,14 +50,19 @@ async def consultar_copilot_operari(
     empresa = res_emp.scalar_one_or_none()
     vertical = empresa.vertical if empresa else "SEVALOR"
 
+    usuari_nom = claims.get("nom") or claims.get("email")
+
     return await copilot_dispatcher.dispatch(
         pregunta=dades.pregunta,
         db=db,
         empresa_id=empresa_id,
         usuari_id=usuari_id,
         rol_usuari=rol_usuari,
+        usuari_nom=usuari_nom,
+        context_id=dades.context_id,
         vertical=vertical,
         historial=dades.historial,
         agent_prompt_system=empresa.agent_prompt_system if empresa else None,
         allow_operari=True,
     )
+

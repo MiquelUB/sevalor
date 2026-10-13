@@ -1,7 +1,7 @@
 """Subagent Concierge de Clients i Integració Telegram."""
 
 import uuid
-from typing import List, Optional, Tuple
+from typing import Any, List, Optional, Tuple
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -40,7 +40,14 @@ class SubagentClientTelegram(BaseSubagent):
         return any(k in q for k in paraules_clau)
 
     async def execute_tool(
-        self, tool_name: str, args: dict, db: AsyncSession, empresa_id: uuid.UUID
+        self,
+        tool_name: str,
+        args: dict,
+        db: AsyncSession,
+        empresa_id: uuid.UUID,
+        caller_role: Optional[str] = None,
+        caller_user_id: Optional[uuid.UUID] = None,
+        **kwargs: Any,
     ) -> dict:
         if tool_name == "notify_technician_arrival":
             return await self.tool_notify_technician_arrival(
@@ -116,7 +123,13 @@ class SubagentClientTelegram(BaseSubagent):
         }
 
     async def run_sovereign(
-        self, pregunta: str, db: AsyncSession, empresa_id: uuid.UUID
+        self,
+        pregunta: str,
+        db: AsyncSession,
+        empresa_id: uuid.UUID,
+        caller_role: Optional[str] = None,
+        caller_user_id: Optional[uuid.UUID] = None,
+        **kwargs: Any,
     ) -> Tuple[str, Optional[str], Optional[dict], Optional[dict], List[dict]]:
         enllacos: List[dict] = [{"titol": "Canal Telegram Clients", "url": "/gestio/clients"}]
         tool_name = "notify_technician_arrival"

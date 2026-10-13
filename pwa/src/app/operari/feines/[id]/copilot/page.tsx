@@ -53,10 +53,15 @@ export default function CopilotPage() {
     setIsLoading(true);
 
     try {
+      const historial = messages.slice(-6).map((m) => ({
+        role: m.role === "user" ? "user" : "assistant",
+        content: m.content,
+      }));
       const data: any = await apiFetch("/operari/copilot/xat", {
         method: "POST",
-        body: JSON.stringify({ pregunta: userMsg.content, context_id: feinaId }),
+        body: JSON.stringify({ pregunta: userMsg.content, context_id: feinaId, historial }),
       });
+
 
       const botMsg: Message = {
         id: (Date.now() + 1).toString(),

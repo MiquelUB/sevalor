@@ -294,6 +294,15 @@ Aquest mòdul es governa per quatre principis fundacionals innegociables:
   - Capa 2 (Hard): RLS (Row Level Security) a PostgreSQL amb la policy `economics_boss_only`. Si el rol no és Boss, retorna 0 rows per a taules econòmiques, sent infranquejable.
   - Resposta estàndard en cas de rebuig: "Aquesta informació és restringida a la Direcció de l'empresa."
 
+- **FR-014 (Ubiquitous) — Context de sessió del Copilot**: Cada consulta al Copilot inclourà al model la data i hora local (Europe/Madrid), el nom, rol i identificador de l'usuari, el nom de l'empresa i la vertical, i la directriu de respondre exclusivament amb dades obtingudes de les eines del sistema.
+- **FR-015 (Event-driven) — Memòria de conversa**: Quan l'usuari enviï un missatge al Copilot, el client adjuntarà com a màxim els 6 torns anteriors de la conversa i el sistema els utilitzarà per resoldre referències ("i d'aquest?", "i demà?").
+- **FR-016 (Event-driven) — Context d'ordre de treball**: Quan un operari consulti el Copilot des de la fitxa d'una ordre de treball, el sistema carregarà aquella OT (client, finca, estat, planificació i material de picking) com a context, sempre que l'OT estigui assignada a aquell operari.
+- **FR-017 (Ubiquitous) — Cobertura de dades operatives**: El Copilot disposarà d'eines de només lectura, sota RLS, per consultar: ordres de treball i agenda, equip i fitxatges del dia, incidències obertes, moviments i alertes d'estoc, documents de proveïdor, manteniments i consum de vehicles, clients i finques, pressupostos pendents i eines en custòdia.
+- **FR-018 (Ubiquitous) — Encaminament per puntuació**: El dispatcher puntuarà cada subagent segons la intenció de la consulta, seleccionarà els dos més rellevants i oferirà al model la unió de les seves eines, filtrada pels rols autoritzats (`allowed_roles`) de cada subagent.
+- **FR-019 (Unwanted-behaviour) — Fonamentació obligatòria**: Si el model no crida cap eina en una consulta d'un domini de dades, el sistema executarà l'eina sobirana determinista i mai retornarà dades d'empresa generades de memòria pel model. El model podrà encadenar fins a 3 rondes d'eines.
+- **FR-020 (State-driven) — Límit de latència**: Mentre el node d'IA no respongui dins de 15 segons, el sistema abandonarà la crida i resoldrà la consulta amb el camí sobirà determinista, registrant `es_error_timeout`.
+- **FR-021 (Security) — Abast de l'operari**: Si el rol és OPERARI o CAP_DE_COLLA, el Copilot només podrà consultar les OTs, el fitxatge i les eines pròpies, el material i vehicle de les seves OTs, l'estoc, els protocols RAG i les incidències pròpies; mai dades econòmiques ni d'altres operaris. Els imports econòmics (costos, imports de tiquets i pressupostos) només es retornaran al rol BOSS. L'accés de camp es fa exclusivament per `/api/v1/operari/copilot/xat`; `/api/v1/gestio/copilot/*` continua vetat a operaris (T038).
+
 ---
 
 ## 6. Entitats Clau de Negoci (Zero Tech Details)

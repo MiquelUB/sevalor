@@ -31,21 +31,25 @@ def calcular_distancia_haversine(lat1: float, lon1: float, lat2: float, lon2: fl
 class SubagentFlotaDespatx(BaseSubagent):
     id = "subagent_flota_despatx"
     nom = "Subagent de Flota i Desplaçaments"
-    descripcio = "Especialista en geolocalització de vehicles, càlcul Haversine de proximitat i control d'ITV/assegurances."
+    descripcio = "Especialista en geolocalització de vehicles, càlcul Haversine de proximitat, manteniment i control d'ITV/assegurances."
     allowed_roles = ["SECRETARIA", "ENGINYER", "BOSS", "OPERARI", "CAP_DE_COLLA", "ADMIN"]
     tools_schema = SCHEMAS_FLOTA_DESPATX
     system_prompt = (
         "Ets l'assistent expert en Flota i Despatx de SEVALOR. "
-        "Optimitza el desplaçament de vehicles, audita venciments d'ITV i assegurances i localitza "
-        "el vehicle més proper a una urgència. Respon en català de forma concisa i precisa."
+        "Optimitza el desplaçament de vehicles, audita venciments d'ITV i assegurances, consulta consums de combustible, "
+        "historials de reparacions i localitza el vehicle més proper a una urgència. "
+        "Respon sempre en català de forma concisa i precisa basant-te exclusivament en les dades reals de la flota."
     )
 
     def can_handle(self, query: str, rol: str) -> bool:
         q = query.lower()
         paraules_clau = [
             "vehicle",
+            "vehicles",
             "furgoneta",
+            "furgonetes",
             "cotxe",
+            "cotxes",
             "matricula",
             "matrícula",
             "itv",
@@ -67,11 +71,28 @@ class SubagentFlotaDespatx(BaseSubagent):
             "en servei",
             "assignat",
             "assignats",
+            "combustible",
+            "gasolina",
+            "gasoil",
+            "consum",
+            "adblue",
+            "reparació",
+            "reparacions",
+            "taller",
+            "odometre",
+            "odòmetre",
         ]
         return any(k in q for k in paraules_clau)
 
     async def execute_tool(
-        self, tool_name: str, args: dict, db: AsyncSession, empresa_id: uuid.UUID
+        self,
+        tool_name: str,
+        args: dict,
+        db: AsyncSession,
+        empresa_id: uuid.UUID,
+        caller_role: Optional[str] = None,
+        caller_user_id: Optional[uuid.UUID] = None,
+        **kwargs: Any,
     ) -> dict:
         if tool_name == "get_closest_vehicle":
             lat = float(args.get("lat", 0.0))
@@ -84,6 +105,20 @@ class SubagentFlotaDespatx(BaseSubagent):
             return await self.tool_audit_itv_insurance_fleet(db, empresa_id, dies)
         elif tool_name == "get_fleet_status":
             return await self.tool_get_fleet_status(db, empresa_id, args.get("filtres_estat"))
+        elif tool_name == "get_vehicle_maintenance":
+            return await self.tool_get_vehicle_maintenance(
+                db,
+                empresa_id,
+                matricula=args.get("matricula"),
+                limit=int(args.get("limit", 5)),
+                caller_role=caller_role,
+            )
+        elif tool_name == "get_fuel_consumption":
+            return await self.tool_get_fuel_consumption(
+                db,
+                empresa_id,
+                matricula=args.get("matricula"),
+            )
         return {"error": f"Eina no suportada pel subagent de flota: {tool_name}"}
 
     async def tool_get_closest_vehicle(
@@ -202,7 +237,7 @@ class SubagentFlotaDespatx(BaseSubagent):
             "historial_reparacions": v.historial_reparacions,
             "regim_adquisicio": v.regim_adquisicio,
             "renting_limit_km": v.renting_limit_km,
-            "consum_l_100km": v.consum_l_100km,
+            "consum_l_100km": float(v.consum_l_100km) if v.consum_l_100km is not None else None,
         }
 
     async def tool_audit_itv_insurance_fleet(
@@ -323,8 +358,96 @@ class SubagentFlotaDespatx(BaseSubagent):
             "missatge": missatge,
         }
 
+    async def tool_get_vehicle_maintenance(
+        self,
+        db: AsyncSession,
+        empresa_id: uuid.UUID,
+        matricula: Optional[str] = None,
+        limit: int = 5,
+        caller_role: Optional[str] = None,
+    ) -> dict:
+        stmt = select(Vehicle).where(Vehicle.empresa_id == empresa_id)
+        if matricula and matricula.strip():
+            stmt = stmt.where(Vehicle.matricula.ilike(f"%{matricula.strip()}%"))
+        stmt = stmt.order_by(Vehicle.matricula.asc()).limit(limit)
+        res = await db.execute(stmt)
+        vehicles = res.scalars().all()
+
+        llista = []
+        for v in vehicles:
+            item = {
+                "id": str(v.id),
+                "matricula": v.matricula,
+                "marca": v.marca,
+                "model": v.model,
+                "estat": v.estat,
+                "odometre_km": v.odometre_acumulat,
+                "proxima_itv": v.data_proxima_itv.isoformat() if v.data_proxima_itv else None,
+                "estat_itv": v.estat_itv,
+                "caducitat_asseguranca": v.data_caducitat_asseguranca.isoformat() if v.data_caducitat_asseguranca else None,
+                "historial_reparacions": v.historial_reparacions or "Sense reparacions recents registrades",
+            }
+            if caller_role in ("BOSS", "ADMIN"):
+                item["regim_adquisicio"] = v.regim_adquisicio
+                item["renting_limit_km"] = v.renting_limit_km
+            llista.append(item)
+
+        return {
+            "trobat": len(llista) > 0,
+            "total": len(llista),
+            "manteniments": llista,
+            "missatge": (
+                f"S'ha obtingut l'estat de manteniment de {len(llista)} vehicles."
+                if llista
+                else "No s'han trobat vehicles per a la consulta de manteniment."
+            ),
+        }
+
+    async def tool_get_fuel_consumption(
+        self,
+        db: AsyncSession,
+        empresa_id: uuid.UUID,
+        matricula: Optional[str] = None,
+    ) -> dict:
+        stmt = select(Vehicle).where(Vehicle.empresa_id == empresa_id)
+        if matricula and matricula.strip():
+            stmt = stmt.where(Vehicle.matricula.ilike(f"%{matricula.strip()}%"))
+        res = await db.execute(stmt)
+        vehicles = res.scalars().all()
+
+        llista = []
+        for v in vehicles:
+            llista.append(
+                {
+                    "matricula": v.matricula,
+                    "marca": v.marca,
+                    "model": v.model,
+                    "consum_l_100km": float(v.consum_l_100km) if v.consum_l_100km is not None else None,
+                    "consum_mitjana_historica": float(v.consum_mitjana_historica) if v.consum_mitjana_historica is not None else None,
+                    "consum_adblue_litres": float(v.consum_adblue_litres) if v.consum_adblue_litres is not None else None,
+                    "odometre_km": v.odometre_acumulat,
+                }
+            )
+
+        return {
+            "trobat": len(llista) > 0,
+            "total": len(llista),
+            "consums": llista,
+            "missatge": (
+                f"S'han consultat les mètriques de consum de {len(llista)} vehicles."
+                if llista
+                else "No s'han trobat dades de consum per als vehicles sol·licitats."
+            ),
+        }
+
     async def run_sovereign(
-        self, pregunta: str, db: AsyncSession, empresa_id: uuid.UUID
+        self,
+        pregunta: str,
+        db: AsyncSession,
+        empresa_id: uuid.UUID,
+        caller_role: Optional[str] = None,
+        caller_user_id: Optional[uuid.UUID] = None,
+        **kwargs: Any,
     ) -> Tuple[str, Optional[str], Optional[dict], Optional[dict], List[dict]]:
         pregunta_lower = pregunta.lower()
         enllacos: List[dict] = [{"titol": "Flota de Vehicles", "url": "/gestio/flota"}]
@@ -379,7 +502,37 @@ class SubagentFlotaDespatx(BaseSubagent):
 
             return resposta, tool_name, tool_args, tool_res, enllacos
 
-        # 2. Vehicle per matrícula o informació de vehicle
+        # 2. Consum de combustible / AdBlue
+        if any(
+            k in pregunta_lower
+            for k in ["consum", "gasolina", "gasoil", "combustible", "adblue", "litres"]
+        ):
+            tool_name = "get_fuel_consumption"
+            tool_args = {"matricula": None}
+            tool_res = await self.tool_get_fuel_consumption(db, empresa_id)
+            if tool_res.get("trobat"):
+                detalls = ", ".join(
+                    [
+                        f"{c['matricula']} ({c['consum_l_100km'] or 'N/D'} L/100km)"
+                        for c in tool_res["consums"][:4]
+                    ]
+                )
+                resposta = f"Dades de consum de combustible de la flota: {detalls}."
+            else:
+                resposta = "No s'han trobat mètriques de consum registrades a la flota."
+            return resposta, tool_name, tool_args, tool_res, enllacos
+
+        # 3. Manteniment / Reparacions / Historial de taller
+        if any(
+            k in pregunta_lower
+            for k in ["manteniment", "reparacio", "reparacions", "taller", "avaria", "avaries"]
+        ):
+            tool_name = "get_vehicle_maintenance"
+            tool_args = {"matricula": None, "limit": 5}
+            tool_res = await self.tool_get_vehicle_maintenance(db, empresa_id, limit=5, caller_role=caller_role)
+            return tool_res.get("missatge", "Consulta de manteniment completada."), tool_name, tool_args, tool_res, enllacos
+
+        # 4. Vehicle específic per matrícula
         stmt_v = select(Vehicle).where(Vehicle.empresa_id == empresa_id)
         vehs = (await db.execute(stmt_v)).scalars().all()
         target_mat = ""
@@ -404,10 +557,8 @@ class SubagentFlotaDespatx(BaseSubagent):
                     f"ITV: {tool_res.get('estat_itv')} (Propera: {tool_res.get('data_proxima_itv') or 'Pendent'}). "
                     f"Assegurança: {tool_res.get('companyia_asseguradora') or 'No consta'} (Caduca: {tool_res.get('data_caducitat_asseguranca') or 'No consta'}). "
                     f"Carnet Requerit: {tool_res.get('carnet_necessari')}. "
-                    f"Règim: {tool_res.get('regim_adquisicio')} (Límit: {tool_res.get('renting_limit_km') or 'N/A'} km). "
                     f"Consum: {tool_res.get('consum_l_100km') or 'N/A'} L/100km. "
-                    f"Odòmetre: {tool_res['odometre_acumulat']} km. "
-                    f"Documents Registrats: {len(tool_res.get('documents', []))} arxius."
+                    f"Odòmetre: {tool_res['odometre_acumulat']} km."
                 )
             else:
                 resposta = tool_res.get(
@@ -415,7 +566,7 @@ class SubagentFlotaDespatx(BaseSubagent):
                 )
             return resposta, tool_name, tool_args, tool_res, enllacos
 
-        # 3. ITV o assegurances de la flota (NOMÉS si es pregunta expressament per aquests conceptes)
+        # 5. ITV o assegurances de la flota (NOMÉS si es pregunta expressament per aquests conceptes)
         if any(
             k in pregunta_lower
             for k in [
@@ -427,7 +578,6 @@ class SubagentFlotaDespatx(BaseSubagent):
                 "polissa",
                 "pòlissa",
                 "inspecci",
-                "manteniment",
             ]
         ):
             tool_name = "audit_itv_insurance_fleet"
@@ -441,7 +591,7 @@ class SubagentFlotaDespatx(BaseSubagent):
                 enllacos,
             )
 
-        # 4. Estat general de la flota / vehicles en ruta / vehicles disponibles
+        # 6. Estat general de la flota / vehicles en ruta / vehicles disponibles
         tool_name = "get_fleet_status"
         tool_args = {"filtres_estat": None}
         tool_res = await self.tool_get_fleet_status(db, empresa_id)

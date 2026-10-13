@@ -391,56 +391,9 @@ async def execute_tool_get_real_stock(
 async def execute_tool_get_vehicle_info(
     db: AsyncSession, empresa_id: uuid.UUID, matricula: str
 ) -> dict:
-    stmt = select(Vehicle).where(
-        Vehicle.empresa_id == empresa_id, Vehicle.matricula.ilike(f"%{matricula.strip()}%")
-    )
-    res = await db.execute(stmt)
-    v = res.scalars().first()
-    if not v:
-        return {
-            "trobat": False,
-            "matricula_cercada": matricula,
-            "missatge": f"No s'ha trobat cap vehicle amb la matrícula '{matricula}'.",
-        }
+    """Pont de compatibilitat cap enrere que delega directament al subagent de flota."""
+    return await copilot_dispatcher.subagent_flota.tool_get_vehicle_info(db, empresa_id, matricula)
 
-    from app.models.models import DocumentFlota
-
-    stmt_docs = select(DocumentFlota).where(
-        DocumentFlota.vehicle_id == v.id, DocumentFlota.empresa_id == empresa_id
-    )
-    res_docs = await db.execute(stmt_docs)
-    docs = res_docs.scalars().all()
-    docs_list = [
-        {
-            "tipus": d.tipus_document,
-            "nom_arxiu": d.nom_arxiu,
-            "data": d.data_document.isoformat() if d.data_document else None,
-        }
-        for d in docs
-    ]
-
-    return {
-        "trobat": True,
-        "vehicle_id": str(v.id),
-        "documents": docs_list,
-        "matricula": v.matricula,
-        "marca": v.marca,
-        "model": v.model,
-        "tipus": v.tipus,
-        "estat": v.estat,
-        "data_proxima_itv": v.data_proxima_itv.isoformat() if v.data_proxima_itv else None,
-        "odometre_acumulat": v.odometre_acumulat,
-        "estat_itv": v.estat_itv,
-        "data_caducitat_asseguranca": v.data_caducitat_asseguranca.isoformat()
-        if v.data_caducitat_asseguranca
-        else None,
-        "companyia_asseguradora": v.companyia_asseguradora,
-        "carnet_necessari": v.carnet_necessari,
-        "historial_reparacions": v.historial_reparacions,
-        "regim_adquisicio": v.regim_adquisicio,
-        "renting_limit_km": v.renting_limit_km,
-        "consum_l_100km": v.consum_l_100km,
-    }
 
 
 async def execute_tool_get_closest_vehicle(
@@ -1162,6 +1115,8 @@ class ConsultaXatIn(BaseModel):
     pregunta: str
     imatge_b64: Optional[str] = None
     historial: Optional[List[Dict[str, Any]]] = None
+    context_id: Optional[str] = None
+
 
 
 # ---------------------------------------------------------------------------
@@ -1841,16 +1796,21 @@ async def consultar_xat_tecnic(
     empresa = res_emp.scalar_one_or_none()
     vertical = empresa.vertical if empresa else "SEVALOR"
 
+    usuari_nom = claims.get("nom") or claims.get("email")
+
     return await copilot_dispatcher.dispatch(
         pregunta=dades.pregunta,
         db=db,
         empresa_id=empresa_id,
         usuari_id=usuari_id,
         rol_usuari=rol_usuari,
+        usuari_nom=usuari_nom,
+        context_id=dades.context_id,
         vertical=vertical,
         historial=dades.historial,
         agent_prompt_system=empresa.agent_prompt_system if empresa else None,
     )
+
 
 
 @router.get("/ia-status")

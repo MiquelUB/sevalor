@@ -2,7 +2,7 @@
 
 import re
 import uuid
-from typing import List, Optional, Tuple
+from typing import Any, List, Optional, Tuple
 
 from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -54,7 +54,14 @@ class SubagentAuditoriaMarge(BaseSubagent):
         return any(k in q for k in paraules_clau)
 
     async def execute_tool(
-        self, tool_name: str, args: dict, db: AsyncSession, empresa_id: uuid.UUID
+        self,
+        tool_name: str,
+        args: dict,
+        db: AsyncSession,
+        empresa_id: uuid.UUID,
+        caller_role: Optional[str] = None,
+        caller_user_id: Optional[uuid.UUID] = None,
+        **kwargs: Any,
     ) -> dict:
         if tool_name == "get_unbilled_money":
             return await self.tool_get_unbilled_money(db, empresa_id, args.get("mes"))
@@ -158,7 +165,13 @@ class SubagentAuditoriaMarge(BaseSubagent):
         }
 
     async def run_sovereign(
-        self, pregunta: str, db: AsyncSession, empresa_id: uuid.UUID
+        self,
+        pregunta: str,
+        db: AsyncSession,
+        empresa_id: uuid.UUID,
+        caller_role: Optional[str] = None,
+        caller_user_id: Optional[uuid.UUID] = None,
+        **kwargs: Any,
     ) -> Tuple[str, Optional[str], Optional[dict], Optional[dict], List[dict]]:
         enllacos: List[dict] = [{"titol": "Control Financer i Marge", "url": "/gestio/economica"}]
 

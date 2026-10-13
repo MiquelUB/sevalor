@@ -47,7 +47,14 @@ class SubagentPeritatgeCamp(BaseSubagent):
         return any(k in q for k in paraules_clau)
 
     async def execute_tool(
-        self, tool_name: str, args: dict, db: AsyncSession, empresa_id: uuid.UUID
+        self,
+        tool_name: str,
+        args: dict,
+        db: AsyncSession,
+        empresa_id: uuid.UUID,
+        caller_role: Optional[str] = None,
+        caller_user_id: Optional[uuid.UUID] = None,
+        **kwargs: Any,
     ) -> dict:
         if tool_name == "get_warranty_status":
             return await self.tool_get_warranty_status(
@@ -200,7 +207,13 @@ class SubagentPeritatgeCamp(BaseSubagent):
         }
 
     async def run_sovereign(
-        self, pregunta: str, db: AsyncSession, empresa_id: uuid.UUID
+        self,
+        pregunta: str,
+        db: AsyncSession,
+        empresa_id: uuid.UUID,
+        caller_role: Optional[str] = None,
+        caller_user_id: Optional[uuid.UUID] = None,
+        **kwargs: Any,
     ) -> Tuple[str, Optional[str], Optional[dict], Optional[dict], List[dict]]:
         enllacos: List[dict] = [{"titol": "Auditoria de Garanties", "url": "/gestio/copilot"}]
 

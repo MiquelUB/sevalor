@@ -60,10 +60,18 @@ export default function CopilotWidget({ isMobile = false }: { isMobile?: boolean
 
     try {
       const endpoint = isMobile ? "/operari/copilot/xat" : "/gestio/copilot/xat";
+      const historial = conversaXat
+        .filter((m) => !m.error && m.text)
+        .slice(-6)
+        .map((m) => ({
+          role: m.sender === "user" ? "user" : "assistant",
+          content: m.text,
+        }));
       const dades: any = await apiFetch(endpoint, {
         method: "POST",
-        body: JSON.stringify({ pregunta: textFinal, imatge_b64: imatgeB64 }),
+        body: JSON.stringify({ pregunta: textFinal, imatge_b64: imatgeB64, historial }),
       });
+
       const requiresConf = dades?.metadata?.tool_resultat?.requires_confirmation;
       setConversaXat((prev) => [
         ...prev,

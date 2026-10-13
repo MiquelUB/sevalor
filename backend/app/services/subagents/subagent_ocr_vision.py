@@ -2,7 +2,7 @@
 
 import re
 import uuid
-from typing import List, Optional, Tuple
+from typing import Any, List, Optional, Tuple
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -39,11 +39,22 @@ class SubagentOcrVision(BaseSubagent):
             "digitalitzar",
             "escanejar",
             "llegir document",
+            "extreu",
+            "extreure",
+            "línies",
+            "linies",
         ]
         return any(k in q for k in paraules_clau)
 
     async def execute_tool(
-        self, tool_name: str, args: dict, db: AsyncSession, empresa_id: uuid.UUID
+        self,
+        tool_name: str,
+        args: dict,
+        db: AsyncSession,
+        empresa_id: uuid.UUID,
+        caller_role: Optional[str] = None,
+        caller_user_id: Optional[uuid.UUID] = None,
+        **kwargs: Any,
     ) -> dict:
         text_ocr = args.get("text_ocr", "")
         if tool_name == "extract_albara_lines":
@@ -124,7 +135,13 @@ class SubagentOcrVision(BaseSubagent):
         }
 
     async def run_sovereign(
-        self, pregunta: str, db: AsyncSession, empresa_id: uuid.UUID
+        self,
+        pregunta: str,
+        db: AsyncSession,
+        empresa_id: uuid.UUID,
+        caller_role: Optional[str] = None,
+        caller_user_id: Optional[uuid.UUID] = None,
+        **kwargs: Any,
     ) -> Tuple[str, Optional[str], Optional[dict], Optional[dict], List[dict]]:
         enllacos: List[dict] = [{"titol": "Digitalització de Documents", "url": "/gestio/magatzem"}]
 

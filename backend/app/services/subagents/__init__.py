@@ -9,6 +9,7 @@ from app.services.subagents.subagent_general_rag import SubagentGeneralRag
 from app.services.subagents.subagent_logistica_estoc import SubagentLogisticaEstoc
 from app.services.subagents.subagent_ocr_vision import SubagentOcrVision
 from app.services.subagents.subagent_peritatge_camp import SubagentPeritatgeCamp
+from app.services.subagents.subagent_planificacio_equip import SubagentPlanificacioEquip
 
 __all__ = [
     "BaseSubagent",
@@ -21,4 +22,6 @@ __all__ = [
     "SubagentLogisticaEstoc",
     "SubagentOcrVision",
     "SubagentPeritatgeCamp",
+    "SubagentPlanificacioEquip",
 ]
+

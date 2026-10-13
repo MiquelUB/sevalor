@@ -24,14 +24,27 @@ class BaseSubagent(ABC):
 
     @abstractmethod
     async def execute_tool(
-        self, tool_name: str, args: dict, db: AsyncSession, empresa_id: uuid.UUID
+        self,
+        tool_name: str,
+        args: dict,
+        db: AsyncSession,
+        empresa_id: uuid.UUID,
+        caller_role: Optional[str] = None,
+        caller_user_id: Optional[uuid.UUID] = None,
+        **kwargs: Any,
     ) -> dict:
         """Executa l'eina indicada contra la base de dades sota context RLS."""
         pass
 
     @abstractmethod
     async def run_sovereign(
-        self, pregunta: str, db: AsyncSession, empresa_id: uuid.UUID
+        self,
+        pregunta: str,
+        db: AsyncSession,
+        empresa_id: uuid.UUID,
+        caller_role: Optional[str] = None,
+        caller_user_id: Optional[uuid.UUID] = None,
+        **kwargs: Any,
     ) -> Tuple[str, Optional[str], Optional[dict], Optional[dict], List[dict]]:
         """
         Execució sobirana local determinista (Zero Mock Data) quan LM Studio
@@ -39,3 +52,4 @@ class BaseSubagent(ABC):
         Retorna (resposta, tool_name, tool_args, tool_resultat, enllacos).
         """
         pass
+

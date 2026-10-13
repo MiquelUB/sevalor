@@ -584,3 +584,54 @@
   **Hecho cuando:** Les consultes SQL confirmen que els registres existeixen a la base de dades i que cap usuari no-Boss pot llegir dades financeres.  
   *Cadena de Test*:  
   `mcp_postgres_query` amb `SELECT count(*) FROM memorandum_tecnic WHERE empresa_id = '...'`
+
+---
+
+## 🤖 Bloc 10: Copilot Multi-Agent v2 (Context, Cobertura i Fonamentació)
+
+- [x] **T060 [Backend/IA] Context de sessió i memòria de conversa** (~25 min)  
+  *Requisits Funcionals*: `FR-014`, `FR-015`  
+  *Descripció*: Injectar data/hora Europe/Madrid, usuari, rol, empresa i vertical al system prompt del dispatcher; acceptar `historial` (màx. 6 torns) i enviar-lo des del `CopilotWidget` i la pàgina de copilot de l'operari.  
+  *Cadena de Test*: `backend/.venv/bin/pytest backend/tests/test_copilot_v2.py -k "context" -v`
+
+- [x] **T061 [Backend/Security] Abast d'operari i `allowed_roles` efectius** (~25 min)  
+  *Requisits Funcionals*: `FR-018`, `FR-021`  
+  *Skill Mandatòria*: `security-review`  
+  *Descripció*: Filtrar subagents i eines per rol; forçar `operari_id = usuari actual` a les eines d'agenda, fitxatge i custòdia; ocultar imports econòmics a rols no BOSS.  
+  *Cadena de Test*: `backend/.venv/bin/pytest backend/tests/test_copilot_v2.py -k "operari" -v`
+
+- [x] **T062 [Backend/IA] Context d'ordre de treball (`context_id`)** (~20 min)  
+  *Requisits Funcionals*: `FR-016`  
+  *Descripció*: L'endpoint `/operari/copilot/xat` carrega l'OT indicada (només si és de l'operari) i la injecta com a context.  
+  *Cadena de Test*: `backend/.venv/bin/pytest backend/tests/test_copilot_v2.py -k "context_ot" -v`
+
+- [x] **T063 [Backend/IA] Subagent de Planificació i Equip** (~30 min)  
+  *Requisits Funcionals*: `FR-017`  
+  *Skill Mandatòria*: `supabase-postgres-best-practices`  
+  *Descripció*: Nou `subagent_planificacio_equip` amb `get_work_orders`, `get_work_order_detail`, `get_team_today`, `get_timesheet`, `get_open_incidents`.  
+  *Cadena de Test*: `backend/.venv/bin/pytest backend/tests/test_copilot_v2.py -k "planificacio" -v`
+
+- [x] **T064 [Backend/IA] Ampliació d'eines d'estoc, flota i clients** (~30 min)  
+  *Requisits Funcionals*: `FR-017`, `FR-021`  
+  *Descripció*: `get_stock_movements`, `get_low_stock_alerts`, `get_supplier_docs`, `get_vehicle_maintenance`, `get_fuel_consumption`, `search_clients`, `get_pending_budgets`, `get_tools_custody`.  
+  *Cadena de Test*: `backend/.venv/bin/pytest backend/tests/test_copilot_v2.py -k "eines" -v`
+
+- [x] **T065 [Backend/IA] Router per puntuació (top-2) i bucle multi-ronda** (~30 min)  
+  *Requisits Funcionals*: `FR-018`, `FR-019`  
+  *Descripció*: Substituir el first-match per puntuació ponderada; unir eines dels 2 millors subagents; fins a 3 rondes i múltiples `tool_calls`; fonamentació sobirana obligatòria.  
+  *Cadena de Test*: `backend/.venv/bin/pytest backend/tests/test_copilot_v2.py -k "router" -v`
+
+- [x] **T066 [Backend/IA] Timeout de 15 s i registre de qualitat** (~15 min)  
+  *Requisits Funcionals*: `FR-020`  
+  *Descripció*: Pressupost global de 15 s per a les crides LLM; registrar `es_error_timeout` a `ConsultaXatCopilot`.  
+  *Cadena de Test*: `backend/.venv/bin/pytest backend/tests/test_copilot_v2.py -k "timeout" -v`
+
+- [x] **T067 [Backend/Refactor] Eliminació del motor d'eines legacy de `gestio/copilot.py`** (~15 min)  
+  *Descripció*: Suprimir `TOOLS_SCHEMA`, `execute_tool_*`, `executar_eina`, `cridar_lm_studio_amb_tools` i `executar_agent_local` (substituïts pels subagents). Es manté `cridar_lm_studio`.  
+  *Cadena de Test*: `backend/.venv/bin/pytest -v`
+
+- [x] **T068 [QA/Pytest] Suite d'avaluació Copilot v2 i regressió completa** (~25 min)  
+  *Dependència*: `T060`–`T067`  
+  *Descripció*: Joc de preguntes reals en català (encaminament + eina + dades) i execució de la suite completa al 100% en verd.  
+  *Cadena de Test*: `backend/.venv/bin/pytest -v`
+
