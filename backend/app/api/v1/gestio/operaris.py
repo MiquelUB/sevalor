@@ -93,7 +93,7 @@ async def llistar_operaris(
 
     # Afegir coordenades de feines actives per relacionar visualment l'operari al mapa
     response_list = []
-    for op in operaris:
+    for idx, op in enumerate(operaris):
         op_resp = OperariResponse.model_validate(op)
         stmt_ot = select(OrdreTreball).where(
             OrdreTreball.empresa_id == uuid.UUID(empresa_id),
@@ -102,9 +102,24 @@ async def llistar_operaris(
         ).order_by(OrdreTreball.created_at.desc())
         ot_res = await db.execute(stmt_ot)
         ot_activa = ot_res.scalars().first()
-        if ot_activa and ot_activa.latitud is not None and ot_activa.longitud is not None:
-            op_resp.latitud = float(ot_activa.latitud) + 0.002
-            op_resp.longitud = float(ot_activa.longitud) + 0.002
+        if ot_activa:
+            if ot_activa.latitud is not None and ot_activa.longitud is not None:
+                op_resp.latitud = float(ot_activa.latitud) + 0.002
+                op_resp.longitud = float(ot_activa.longitud) + 0.002
+            elif ot_activa.adreca and "," in ot_activa.adreca:
+                try:
+                    parts = [float(p.strip()) for p in ot_activa.adreca.split(",")]
+                    if len(parts) >= 2:
+                        op_resp.latitud = parts[0] + 0.002
+                        op_resp.longitud = parts[1] + 0.002
+                except (ValueError, TypeError):
+                    pass
+
+        if op_resp.latitud is None or op_resp.longitud is None:
+            # Coordenades de base operativa / seu central (Lleida)
+            op_resp.latitud = 41.6176 + ((idx % 7) - 3) * 0.003
+            op_resp.longitud = 0.6200 + ((idx % 7) - 3) * 0.003
+
         response_list.append(op_resp)
 
     return response_list

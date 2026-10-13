@@ -12,11 +12,17 @@ export default function GestioMapaPage() {
   const [operaris, setOperaris] = useState<Operari[]>([]);
   const [loading, setLoading] = useState(true);
   const [isEmbed, setIsEmbed] = useState(false);
+  const [initialOperariId, setInitialOperariId] = useState<string | null>(null);
 
   useEffect(() => {
     fetchData();
     if (typeof window !== "undefined") {
       setIsEmbed(window.location.search.includes("embed=true"));
+      const params = new URLSearchParams(window.location.search);
+      const opId = params.get("operari_id");
+      if (opId) {
+        setInitialOperariId(opId);
+      }
     }
   }, []);
 
@@ -74,6 +80,7 @@ export default function GestioMapaPage() {
             onDropAssignment={handleDropAssignment}
             modeVisor={modeVisor}
             onModeVisorChange={setModeVisor}
+            initialOperariId={initialOperariId}
           />
         )}
       </div>
@@ -104,6 +111,7 @@ export default function GestioMapaPage() {
           onDropAssignment={handleDropAssignment}
           modeVisor={modeVisor}
           onModeVisorChange={setModeVisor}
+          initialOperariId={initialOperariId}
         />
       )}
     </div>

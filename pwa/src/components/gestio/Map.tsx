@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import {
   MapPin,
   Clock,
@@ -25,7 +25,8 @@ import {
   X,
   Filter,
   Eye,
-  Radio,
+  UserCheck,
+  Navigation,
 } from "lucide-react";
 
 export interface Feina {
@@ -61,6 +62,18 @@ interface MapProps {
   onDropAssignment: (feinaId: string, versio: number, operariId: string) => Promise<void>;
   modeVisor?: "SAT" | "TOPO";
   onModeVisorChange?: (mode: "SAT" | "TOPO") => void;
+  initialOperariId?: string | null;
+}
+
+// Funció matemàtica de conversió lat/lng a rajoles Web Mercator (EPSG:3857)
+function latLngToTile(lat: number, lng: number, zoom: number) {
+  const n = Math.pow(2, zoom);
+  const tileX = Math.floor(((lng + 180) / 360) * n);
+  const latRad = (lat * Math.PI) / 180;
+  const tileY = Math.floor(
+    ((1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) / 2) * n
+  );
+  return { x: tileX, y: tileY };
 }
 
 export default function GestioMap({
@@ -69,19 +82,31 @@ export default function GestioMap({
   onDropAssignment,
   modeVisor = "SAT",
   onModeVisorChange,
+  initialOperariId = null,
 }: MapProps) {
   const [draggingId, setDraggingId] = useState<string | null>(null);
-  const [tabSidebar, setTabSidebar] = useState<"PENDENTS" | "TOTES" | "ASSIGNADES">("PENDENTS");
+  
+  // Pestanyes del panell lateral: "FEINES" o "OPERARIS"
+  const [sidebarMode, setSidebarMode] = useState<"FEINES" | "OPERARIS">("FEINES");
+  const [tabSidebarFeines, setTabSidebarFeines] = useState<"PENDENTS" | "TOTES" | "ASSIGNADES">("PENDENTS");
   const [filtreOperariId, setFiltreOperariId] = useState<string | null>(null);
+
+  // Seleccions actives
   const [selectedFeinaId, setSelectedFeinaId] = useState<string | null>(null);
   const [selectedOperariId, setSelectedOperariId] = useState<string | null>(null);
+
+  // Centre del visor dinàmic (per defecte Seu Central a Lleida / Segrià: 41.6176, 0.6200)
+  const [centerCoord, setCenterCoord] = useState<{ lat: number; lng: number }>({
+    lat: 41.6176,
+    lng: 0.6200,
+  });
 
   // Zoom & Pan
   const [zoom, setZoom] = useState<number>(13);
   const [panX, setPanX] = useState<number>(0);
   const [panY, setPanY] = useState<number>(0);
 
-  // Capes del mapa
+  // Capes GIS del mapa
   const [showMenuCapes, setShowMenuCapes] = useState<boolean>(false);
   const [capes, setCapes] = useState({
     feines: true,
@@ -90,61 +115,16 @@ export default function GestioMap({
     cobertura: false,
   });
 
-  // Coordenades base per a Lleida / Segrià
-  const baseTiles: Record<number, { x: number; y: number }> = {
-    12: { x: 2055, y: 1533 },
-    13: { x: 4110, y: 3067 },
-    14: { x: 8220, y: 6135 },
-  };
+  // Càlcul de rajola central a partir de les coordenades reals
+  const baseTile = latLngToTile(centerCoord.lat, centerCoord.lng, zoom);
+  const centerTileX = baseTile.x + panX;
+  const centerTileY = baseTile.y + panY;
 
-  const base = baseTiles[zoom] || baseTiles[13];
-  const centerTileX = base.x + panX;
-  const centerTileY = base.y + panY;
-
-  // Càlcul de coordenades geogràfiques del centre actual (HUD)
+  // Càlcul de coordenades del centre actual del visor (HUD)
   const n = Math.pow(2, zoom);
-  const centerLng = ((centerTileX + 0.5) / n) * 360 - 180;
-  const centerLatRad = Math.atan(Math.sinh(Math.PI * (1 - 2 * ((centerTileY + 0.5) / n))));
-  const centerLat = (centerLatRad * 180) / Math.PI;
-
-  const handleDragStart = (e: React.DragEvent, feina: Feina) => {
-    e.dataTransfer.setData("feinaId", feina.id);
-    e.dataTransfer.setData("versio", feina.versio.toString());
-    setDraggingId(feina.id);
-  };
-
-  const handleDragEnd = () => {
-    setDraggingId(null);
-  };
-
-  const handleDragOver = (e: React.DragEvent) => {
-    e.preventDefault();
-  };
-
-  const handleDrop = async (e: React.DragEvent, operariId: string) => {
-    e.preventDefault();
-    const feinaId = e.dataTransfer.getData("feinaId");
-    const versioStr = e.dataTransfer.getData("versio");
-    if (!feinaId || !versioStr) return;
-    await onDropAssignment(feinaId, parseInt(versioStr, 10), operariId);
-    setSelectedOperariId(operariId);
-  };
-
-  const handleZoomIn = () => {
-    if (zoom < 14) setZoom((z) => z + 1);
-  };
-
-  const handleZoomOut = () => {
-    if (zoom > 12) setZoom((z) => z - 1);
-  };
-
-  const handleRecenter = () => {
-    setPanX(0);
-    setPanY(0);
-    setZoom(13);
-    setSelectedFeinaId(null);
-    setSelectedOperariId(null);
-  };
+  const currentCenterLng = ((centerTileX + 0.5) / n) * 360 - 180;
+  const currentCenterLatRad = Math.atan(Math.sinh(Math.PI * (1 - 2 * ((centerTileY + 0.5) / n))));
+  const currentCenterLat = (currentCenterLatRad * 180) / Math.PI;
 
   // Projecció de coordenades (lat, lng) al grid 3x3 (viewBox 768x768)
   const projectCoords = (lat: number, lng: number) => {
@@ -240,7 +220,7 @@ export default function GestioMap({
     };
   });
 
-  // Pins de les quadrilles d'operaris actius
+  // Pins de les quadrilles d'operaris actius amb posició garantida
   const pinsQuadrilles = operaris
     .filter((o) => o.estat === "ACTIU")
     .map((op, idx) => {
@@ -254,8 +234,8 @@ export default function GestioMap({
           lat = c.lat + 0.0025;
           lng = c.lng + 0.0025;
         } else {
-          lat = 41.6176 + (idx - 1) * 0.009;
-          lng = 0.6200 + (idx - 1) * 0.009;
+          lat = 41.6176 + ((idx % 7) - 3) * 0.004;
+          lng = 0.6200 + ((idx % 7) - 3) * 0.004;
         }
       }
 
@@ -275,13 +255,86 @@ export default function GestioMap({
       };
     });
 
-  // Llistat filtrat de feines per al panell lateral
+  // Funció clau: Centrar el mapa i enfocar un operari immediatament
+  const focusOperari = (operariId: string) => {
+    setSelectedOperariId(operariId);
+    setSelectedFeinaId(null);
+    const opPin = pinsQuadrilles.find((p) => p.id === operariId);
+    if (opPin) {
+      setCenterCoord({ lat: opPin.lat, lng: opPin.lng });
+      setPanX(0);
+      setPanY(0);
+    }
+  };
+
+  // Funció clau: Centrar el mapa i enfocar una feina
+  const focusFeina = (feinaId: string) => {
+    setSelectedFeinaId(feinaId);
+    const fPin = pinsFeines.find((p) => p.id === feinaId);
+    if (fPin) {
+      setCenterCoord({ lat: fPin.lat, lng: fPin.lng });
+      setPanX(0);
+      setPanY(0);
+      if (fPin.cap_de_colla_id) {
+        setSelectedOperariId(fPin.cap_de_colla_id);
+      }
+    }
+  };
+
+  // Suport per carregar un operari inicial per paràmetre URL
+  useEffect(() => {
+    if (initialOperariId) {
+      focusOperari(initialOperariId);
+    }
+  }, [initialOperariId, operaris.length]);
+
+  const handleDragStart = (e: React.DragEvent, feina: Feina) => {
+    e.dataTransfer.setData("feinaId", feina.id);
+    e.dataTransfer.setData("versio", feina.versio.toString());
+    setDraggingId(feina.id);
+  };
+
+  const handleDragEnd = () => {
+    setDraggingId(null);
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+  };
+
+  const handleDrop = async (e: React.DragEvent, operariId: string) => {
+    e.preventDefault();
+    const feinaId = e.dataTransfer.getData("feinaId");
+    const versioStr = e.dataTransfer.getData("versio");
+    if (!feinaId || !versioStr) return;
+    await onDropAssignment(feinaId, parseInt(versioStr, 10), operariId);
+    focusOperari(operariId);
+  };
+
+  const handleZoomIn = () => {
+    if (zoom < 14) setZoom((z) => z + 1);
+  };
+
+  const handleZoomOut = () => {
+    if (zoom > 12) setZoom((z) => z - 1);
+  };
+
+  const handleRecenter = () => {
+    setCenterCoord({ lat: 41.6176, lng: 0.6200 });
+    setPanX(0);
+    setPanY(0);
+    setZoom(13);
+    setSelectedFeinaId(null);
+    setSelectedOperariId(null);
+  };
+
+  // Llistat filtrat de feines
   const feinesFiltrades = feines.filter((f) => {
     if (filtreOperariId && f.cap_de_colla_id !== filtreOperariId) {
       return false;
     }
-    if (tabSidebar === "PENDENTS") return !f.cap_de_colla_id;
-    if (tabSidebar === "ASSIGNADES") return !!f.cap_de_colla_id;
+    if (tabSidebarFeines === "PENDENTS") return !f.cap_de_colla_id;
+    if (tabSidebarFeines === "ASSIGNADES") return !!f.cap_de_colla_id;
     return true; // "TOTES"
   });
 
@@ -290,151 +343,260 @@ export default function GestioMap({
 
   return (
     <div className="flex-1 flex flex-col md:flex-row gap-4 relative">
-      {/* 1. Panell Lateral de Feines i Filtres d'Operari */}
+      {/* 1. Panell Lateral de Navegació (Feines i Operaris) */}
       <div className="w-full md:w-80 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4 flex flex-col shadow-sm">
-        <div className="flex items-center justify-between mb-3">
-          <h2 className="text-sm font-bold uppercase tracking-wider text-slate-700 dark:text-slate-300 flex items-center gap-1.5">
-            <Briefcase className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
-            Ordres de Treball
-          </h2>
-          <span className="bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 px-2 py-0.5 rounded-full text-xs font-mono font-bold">
-            {feinesFiltrades.length}
-          </span>
-        </div>
-
-        {/* Filtre per Cap de Colla / Operari */}
-        <div className="mb-3">
-          <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block mb-1 flex items-center gap-1">
-            <Filter className="w-3 h-3 text-slate-400" />
-            Filtrar per Operari / Colla
-          </label>
-          <select
-            value={filtreOperariId || ""}
-            onChange={(e) => {
-              const val = e.target.value || null;
-              setFiltreOperariId(val);
-              if (val) setSelectedOperariId(val);
-            }}
-            className="w-full text-xs bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-2.5 py-1.5 text-slate-800 dark:text-slate-200 font-medium focus:ring-2 focus:ring-emerald-500 outline-none transition-all cursor-pointer"
-          >
-            <option value="">Tots els operaris ({operaris.length})</option>
-            {operaris.map((op) => {
-              const count = feines.filter((f) => f.cap_de_colla_id === op.id).length;
-              return (
-                <option key={op.id} value={op.id}>
-                  {op.nom} {op.cognoms || ""} — {count} feines
-                </option>
-              );
-            })}
-          </select>
-        </div>
-
-        {/* Pestanyes d'Estat */}
-        <div className="grid grid-cols-3 gap-1 bg-slate-100 dark:bg-slate-800/80 p-1 rounded-lg mb-3">
+        
+        {/* Selector de Mode Lateral: FEINES vs OPERARIS */}
+        <div className="grid grid-cols-2 gap-1.5 bg-slate-100 dark:bg-slate-800 p-1 rounded-xl mb-3">
           <button
             type="button"
-            onClick={() => setTabSidebar("PENDENTS")}
-            className={`py-1 text-[11px] font-bold rounded-md transition-colors ${
-              tabSidebar === "PENDENTS"
+            onClick={() => setSidebarMode("FEINES")}
+            className={`py-1.5 text-xs font-bold rounded-lg flex items-center justify-center gap-1.5 transition-all ${
+              sidebarMode === "FEINES"
                 ? "bg-white dark:bg-slate-900 text-emerald-600 dark:text-emerald-400 shadow-sm"
                 : "text-slate-500 hover:text-slate-800 dark:hover:text-slate-200"
             }`}
           >
-            Pendents ({feines.filter((f) => !f.cap_de_colla_id).length})
+            <Briefcase className="w-3.5 h-3.5" />
+            <span>Feines ({feines.length})</span>
           </button>
           <button
             type="button"
-            onClick={() => setTabSidebar("ASSIGNADES")}
-            className={`py-1 text-[11px] font-bold rounded-md transition-colors ${
-              tabSidebar === "ASSIGNADES"
-                ? "bg-white dark:bg-slate-900 text-emerald-600 dark:text-emerald-400 shadow-sm"
+            onClick={() => setSidebarMode("OPERARIS")}
+            className={`py-1.5 text-xs font-bold rounded-lg flex items-center justify-center gap-1.5 transition-all ${
+              sidebarMode === "OPERARIS"
+                ? "bg-white dark:bg-slate-900 text-blue-600 dark:text-blue-400 shadow-sm"
                 : "text-slate-500 hover:text-slate-800 dark:hover:text-slate-200"
             }`}
           >
-            Assignades ({feines.filter((f) => !!f.cap_de_colla_id).length})
-          </button>
-          <button
-            type="button"
-            onClick={() => setTabSidebar("TOTES")}
-            className={`py-1 text-[11px] font-bold rounded-md transition-colors ${
-              tabSidebar === "TOTES"
-                ? "bg-white dark:bg-slate-900 text-emerald-600 dark:text-emerald-400 shadow-sm"
-                : "text-slate-500 hover:text-slate-800 dark:hover:text-slate-200"
-            }`}
-          >
-            Totes ({feines.length})
+            <Users className="w-3.5 h-3.5" />
+            <span>Operaris ({operaris.length})</span>
           </button>
         </div>
 
-        {/* Llistat Arrossegable (Drop & Go) */}
-        <div className="flex-1 overflow-y-auto space-y-2 max-h-[520px] pr-1">
-          {feinesFiltrades.map((feina) => {
-            const isSelected = selectedFeinaId === feina.id;
-            const assignedOp = operaris.find((o) => o.id === feina.cap_de_colla_id);
+        {/* CONTINGUT: MODE OPERARIS */}
+        {sidebarMode === "OPERARIS" && (
+          <div className="flex-1 flex flex-col overflow-hidden">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500">
+                Quadrilles Actives de Camp
+              </span>
+              <span className="text-xs text-blue-500 font-mono font-bold">
+                {pinsQuadrilles.length} al mapa
+              </span>
+            </div>
 
-            return (
-              <div
-                key={feina.id}
-                draggable
-                onDragStart={(e) => handleDragStart(e, feina)}
-                onDragEnd={handleDragEnd}
-                onClick={() => {
-                  setSelectedFeinaId(feina.id);
-                  if (feina.cap_de_colla_id) {
-                    setSelectedOperariId(feina.cap_de_colla_id);
-                  }
-                }}
-                className={`p-3 bg-slate-50 dark:bg-slate-800/60 border rounded-lg cursor-grab active:cursor-grabbing hover:border-emerald-500 transition-all shadow-sm ${
-                  isSelected
-                    ? "border-emerald-500 ring-2 ring-emerald-500/20 bg-emerald-50/40 dark:bg-emerald-950/20"
-                    : "border-slate-200 dark:border-slate-700/60"
-                } ${draggingId === feina.id ? "opacity-50 border-emerald-500 ring-2 ring-emerald-500/20" : ""}`}
-              >
-                <div className="flex justify-between items-start mb-1">
-                  <span className="text-xs font-bold text-slate-800 dark:text-slate-100 font-mono">
-                    {feina.codi}
-                  </span>
-                  <span
-                    className={`text-[10px] px-1.5 py-0.5 rounded font-medium border ${
-                      feina.estat === "PENDENT"
-                        ? "bg-amber-500/10 text-amber-600 border-amber-500/20"
-                        : feina.estat === "ASSIGNADA" || feina.estat === "PROGRAMADA"
-                        ? "bg-blue-500/10 text-blue-600 border-blue-500/20"
-                        : "bg-emerald-500/10 text-emerald-600 border-emerald-500/20"
+            <div className="flex-1 overflow-y-auto space-y-2 max-h-[520px] pr-1">
+              {operaris.map((op) => {
+                const assigned = feines.filter((f) => f.cap_de_colla_id === op.id);
+                const isSelected = selectedOperariId === op.id;
+
+                return (
+                  <div
+                    key={op.id}
+                    onClick={() => focusOperari(op.id)}
+                    className={`p-3 rounded-xl border transition-all cursor-pointer ${
+                      isSelected
+                        ? "border-blue-500 bg-blue-50/60 dark:bg-blue-950/30 ring-2 ring-blue-500/20"
+                        : "border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/60 hover:border-blue-400"
                     }`}
                   >
-                    {feina.estat}
-                  </span>
-                </div>
-                <p className="text-xs font-medium text-slate-600 dark:text-slate-300 line-clamp-1">
-                  {feina.titol}
-                </p>
+                    <div className="flex items-center justify-between mb-1.5">
+                      <div className="flex items-center gap-2">
+                        <div className="w-7 h-7 rounded-full bg-blue-500/20 text-blue-500 font-bold text-xs flex items-center justify-center border border-blue-500/30">
+                          {op.nom[0]}
+                          {op.cognoms ? op.cognoms[0] : ""}
+                        </div>
+                        <div>
+                          <h4 className="text-xs font-bold text-slate-900 dark:text-white leading-tight">
+                            {op.nom} {op.cognoms || ""}
+                          </h4>
+                          <span className="text-[10px] text-slate-500 font-mono">
+                            {op.rol} • {op.estat}
+                          </span>
+                        </div>
+                      </div>
+                      <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-blue-100 dark:bg-blue-900/50 text-blue-600 dark:text-blue-300">
+                        {assigned.length} OT
+                      </span>
+                    </div>
 
-                {assignedOp ? (
-                  <div className="mt-1 flex items-center gap-1.5 text-[10px] text-blue-600 dark:text-blue-400 font-medium">
-                    <Truck className="w-3 h-3 shrink-0" />
-                    <span>Colla: {assignedOp.nom} {assignedOp.cognoms || ""}</span>
-                  </div>
-                ) : (
-                  <div className="mt-1 flex items-center gap-1 text-[10px] text-amber-600 dark:text-amber-400">
-                    <Clock className="w-3 h-3 shrink-0" />
-                    <span>Pendent d'assignar</span>
-                  </div>
-                )}
+                    <div className="flex items-center justify-between pt-1 border-t border-slate-200 dark:border-slate-700/60 text-[10px]">
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          focusOperari(op.id);
+                        }}
+                        className="text-blue-600 dark:text-blue-400 font-bold hover:underline flex items-center gap-1"
+                      >
+                        <Navigation className="w-3 h-3" />
+                        <span>Centrar al mapa</span>
+                      </button>
 
-                <div className="flex items-center gap-1 mt-1 text-[10px] text-slate-400 truncate">
-                  <MapPin className="w-3 h-3 text-emerald-500 shrink-0" />
-                  <span className="truncate">{feina.adreca}</span>
+                      {op.telefon && (
+                        <a
+                          href={`tel:${op.telefon}`}
+                          onClick={(e) => e.stopPropagation()}
+                          className="text-slate-500 hover:text-emerald-500 flex items-center gap-1"
+                        >
+                          <Phone className="w-3 h-3" />
+                          <span>{op.telefon}</span>
+                        </a>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+              {operaris.length === 0 && (
+                <div className="p-6 text-center text-slate-400 text-xs">
+                  No hi ha operaris registrats en aquest tenant.
                 </div>
-              </div>
-            );
-          })}
-          {feinesFiltrades.length === 0 && (
-            <div className="p-6 text-center text-slate-400 text-xs">
-              No hi ha feines amb els filtres seleccionats.
+              )}
             </div>
-          )}
-        </div>
+          </div>
+        )}
+
+        {/* CONTINGUT: MODE FEINES */}
+        {sidebarMode === "FEINES" && (
+          <div className="flex-1 flex flex-col overflow-hidden">
+            {/* Filtre per Cap de Colla / Operari */}
+            <div className="mb-3">
+              <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block mb-1 flex items-center gap-1">
+                <Filter className="w-3 h-3 text-slate-400" />
+                Filtrar per Operari / Colla
+              </label>
+              <select
+                value={filtreOperariId || ""}
+                onChange={(e) => {
+                  const val = e.target.value || null;
+                  setFiltreOperariId(val);
+                  if (val) focusOperari(val);
+                }}
+                className="w-full text-xs bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-2.5 py-1.5 text-slate-800 dark:text-slate-200 font-medium focus:ring-2 focus:ring-emerald-500 outline-none transition-all cursor-pointer"
+              >
+                <option value="">Tots els operaris ({operaris.length})</option>
+                {operaris.map((op) => {
+                  const count = feines.filter((f) => f.cap_de_colla_id === op.id).length;
+                  return (
+                    <option key={op.id} value={op.id}>
+                      {op.nom} {op.cognoms || ""} — {count} feines
+                    </option>
+                  );
+                })}
+              </select>
+            </div>
+
+            {/* Pestanyes d'Estat */}
+            <div className="grid grid-cols-3 gap-1 bg-slate-100 dark:bg-slate-800/80 p-1 rounded-lg mb-3">
+              <button
+                type="button"
+                onClick={() => setTabSidebarFeines("PENDENTS")}
+                className={`py-1 text-[11px] font-bold rounded-md transition-colors ${
+                  tabSidebarFeines === "PENDENTS"
+                    ? "bg-white dark:bg-slate-900 text-emerald-600 dark:text-emerald-400 shadow-sm"
+                    : "text-slate-500 hover:text-slate-800 dark:hover:text-slate-200"
+                }`}
+              >
+                Pendents ({feines.filter((f) => !f.cap_de_colla_id).length})
+              </button>
+              <button
+                type="button"
+                onClick={() => setTabSidebarFeines("ASSIGNADES")}
+                className={`py-1 text-[11px] font-bold rounded-md transition-colors ${
+                  tabSidebarFeines === "ASSIGNADES"
+                    ? "bg-white dark:bg-slate-900 text-emerald-600 dark:text-emerald-400 shadow-sm"
+                    : "text-slate-500 hover:text-slate-800 dark:hover:text-slate-200"
+                }`}
+              >
+                Assignades ({feines.filter((f) => !!f.cap_de_colla_id).length})
+              </button>
+              <button
+                type="button"
+                onClick={() => setTabSidebarFeines("TOTES")}
+                className={`py-1 text-[11px] font-bold rounded-md transition-colors ${
+                  tabSidebarFeines === "TOTES"
+                    ? "bg-white dark:bg-slate-900 text-emerald-600 dark:text-emerald-400 shadow-sm"
+                    : "text-slate-500 hover:text-slate-800 dark:hover:text-slate-200"
+                }`}
+              >
+                Totes ({feines.length})
+              </button>
+            </div>
+
+            {/* Llistat Arrossegable (Drop & Go) */}
+            <div className="flex-1 overflow-y-auto space-y-2 max-h-[520px] pr-1">
+              {feinesFiltrades.map((feina) => {
+                const isSelected = selectedFeinaId === feina.id;
+                const assignedOp = operaris.find((o) => o.id === feina.cap_de_colla_id);
+
+                return (
+                  <div
+                    key={feina.id}
+                    draggable
+                    onDragStart={(e) => handleDragStart(e, feina)}
+                    onDragEnd={handleDragEnd}
+                    onClick={() => focusFeina(feina.id)}
+                    className={`p-3 bg-slate-50 dark:bg-slate-800/60 border rounded-lg cursor-grab active:cursor-grabbing hover:border-emerald-500 transition-all shadow-sm ${
+                      isSelected
+                        ? "border-emerald-500 ring-2 ring-emerald-500/20 bg-emerald-50/40 dark:bg-emerald-950/20"
+                        : "border-slate-200 dark:border-slate-700/60"
+                    } ${draggingId === feina.id ? "opacity-50 border-emerald-500 ring-2 ring-emerald-500/20" : ""}`}
+                  >
+                    <div className="flex justify-between items-start mb-1">
+                      <span className="text-xs font-bold text-slate-800 dark:text-slate-100 font-mono">
+                        {feina.codi}
+                      </span>
+                      <span
+                        className={`text-[10px] px-1.5 py-0.5 rounded font-medium border ${
+                          feina.estat === "PENDENT"
+                            ? "bg-amber-500/10 text-amber-600 border-amber-500/20"
+                            : feina.estat === "ASSIGNADA" || feina.estat === "PROGRAMADA"
+                            ? "bg-blue-500/10 text-blue-600 border-blue-500/20"
+                            : "bg-emerald-500/10 text-emerald-600 border-emerald-500/20"
+                        }`}
+                      >
+                        {feina.estat}
+                      </span>
+                    </div>
+                    <p className="text-xs font-medium text-slate-600 dark:text-slate-300 line-clamp-1">
+                      {feina.titol}
+                    </p>
+
+                    {assignedOp ? (
+                      <div
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          focusOperari(assignedOp.id);
+                        }}
+                        className="mt-1 flex items-center gap-1.5 text-[10px] text-blue-600 dark:text-blue-400 font-medium hover:underline cursor-pointer"
+                        title="Centrar en aquest operari al mapa"
+                      >
+                        <Truck className="w-3 h-3 shrink-0" />
+                        <span>Colla: {assignedOp.nom} {assignedOp.cognoms || ""}</span>
+                      </div>
+                    ) : (
+                      <div className="mt-1 flex items-center gap-1 text-[10px] text-amber-600 dark:text-amber-400">
+                        <Clock className="w-3 h-3 shrink-0" />
+                        <span>Pendent d'assignar</span>
+                      </div>
+                    )}
+
+                    <div className="flex items-center gap-1 mt-1 text-[10px] text-slate-400 truncate">
+                      <MapPin className="w-3 h-3 text-emerald-500 shrink-0" />
+                      <span className="truncate">{feina.adreca}</span>
+                    </div>
+                  </div>
+                );
+              })}
+              {feinesFiltrades.length === 0 && (
+                <div className="p-6 text-center text-slate-400 text-xs">
+                  No hi ha feines amb els filtres seleccionats.
+                </div>
+              )}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* 2. Visor Cartogràfic GIS Principal */}
@@ -538,15 +700,15 @@ export default function GestioMap({
           {/* Indicador de Coordenades Reals */}
           <div className="bg-slate-900/90 text-white px-2.5 py-1.5 rounded-lg border border-slate-700 text-[11px] font-mono shadow-md backdrop-blur flex items-center gap-1.5">
             <Crosshair className="w-3.5 h-3.5 text-emerald-400" />
-            <span>{centerLat.toFixed(4)}°N, {centerLng.toFixed(4)}°E</span>
+            <span>{currentCenterLat.toFixed(4)}°N, {currentCenterLng.toFixed(4)}°E</span>
           </div>
 
-          {/* Botó de Recentrar */}
+          {/* Botó de Recentrar a la Seu Central */}
           <button
             type="button"
             onClick={handleRecenter}
             className="p-1.5 bg-white/95 dark:bg-slate-900/95 rounded-lg border border-slate-200 dark:border-slate-800 shadow-md backdrop-blur text-slate-700 dark:text-slate-300 hover:text-emerald-500 transition-colors"
-            title="Recentrar mapa a Lleida / Segrià"
+            title="Recentrar a la Seu Central (Lleida)"
           >
             <RotateCcw className="w-4 h-4" />
           </button>
@@ -716,10 +878,7 @@ export default function GestioMap({
                     style={{ top: pin.pos.top, left: pin.pos.left }}
                     onClick={(e) => {
                       e.stopPropagation();
-                      setSelectedFeinaId(pin.id);
-                      if (pin.cap_de_colla_id) {
-                        setSelectedOperariId(pin.cap_de_colla_id);
-                      }
+                      focusFeina(pin.id);
                     }}
                     className={`absolute z-20 -translate-x-1/2 -translate-y-1/2 pointer-events-auto cursor-pointer group transition-transform ${
                       isSelected ? "scale-125 z-30" : "hover:scale-110"
@@ -761,7 +920,7 @@ export default function GestioMap({
                 );
               })}
 
-            {/* 4. Pins de Vehicles / Operaris de Camp */}
+            {/* 4. Pins de Vehicles / Operaris de Camp (Visible, Il·luminat i Interactiu) */}
             {capes.operaris &&
               pinsQuadrilles.map((v) => {
                 const isSelected = v.isSelected || filtreOperariId === v.id;
@@ -772,27 +931,30 @@ export default function GestioMap({
                     style={{ top: v.pos.top, left: v.pos.left }}
                     onClick={(e) => {
                       e.stopPropagation();
-                      setSelectedOperariId(v.id);
+                      focusOperari(v.id);
                     }}
-                    className={`absolute z-20 -translate-x-1/2 -translate-y-1/2 pointer-events-auto cursor-pointer transition-transform ${
-                      isSelected ? "scale-115 z-30" : "hover:scale-105"
+                    className={`absolute z-30 -translate-x-1/2 -translate-y-1/2 pointer-events-auto cursor-pointer transition-transform ${
+                      isSelected ? "scale-125 z-40" : "hover:scale-110"
                     }`}
                   >
                     <div className="relative flex items-center justify-center">
                       {isSelected && (
-                        <span className="animate-ping absolute inline-flex h-9 w-9 rounded-full bg-blue-400 opacity-50" />
+                        <span className="animate-ping absolute inline-flex h-12 w-12 rounded-full bg-blue-400 opacity-60" />
                       )}
                       <div
-                        className={`flex items-center gap-1.5 backdrop-blur border text-white rounded-full px-2.5 py-1 text-[10px] shadow-xl ${
+                        className={`flex items-center gap-1.5 backdrop-blur border text-white rounded-full px-2.5 py-1 text-[11px] shadow-2xl transition-all ${
                           isSelected
-                            ? "bg-blue-600 border-blue-300 ring-2 ring-blue-400/50 font-bold"
-                            : "bg-slate-900/95 border-slate-700"
+                            ? "bg-blue-600 border-white ring-4 ring-blue-500/50 font-bold shadow-blue-500/30"
+                            : "bg-slate-900/95 border-blue-500/50 hover:border-blue-400"
                         }`}
                       >
-                        <Truck className="w-3.5 h-3.5 text-blue-400 shrink-0" />
-                        <span className="truncate max-w-[120px]">{v.nom}</span>
+                        <div className="w-5 h-5 rounded-full bg-blue-400 text-slate-900 font-bold text-[10px] flex items-center justify-center">
+                          {v.nom[0]}
+                        </div>
+                        <Truck className="w-3.5 h-3.5 text-blue-300 shrink-0" />
+                        <span className="truncate max-w-[120px] font-medium">{v.nom}</span>
                         {v.assignedJobs.length > 0 && (
-                          <span className="bg-blue-500 text-white text-[9px] px-1 rounded-full font-mono font-bold">
+                          <span className="bg-emerald-500 text-white text-[9px] px-1.5 py-0.2 rounded-full font-mono font-bold">
                             {v.assignedJobs.length}
                           </span>
                         )}
@@ -852,24 +1014,39 @@ export default function GestioMap({
                     const op = operaris.find((o) => o.id === selectedFeina.cap_de_colla_id);
                     return op ? (
                       <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-2">
-                          <div className="w-6 h-6 rounded-full bg-blue-500/20 text-blue-400 flex items-center justify-center font-bold text-xs">
+                        <div
+                          onClick={() => focusOperari(op.id)}
+                          className="flex items-center gap-2 cursor-pointer group"
+                        >
+                          <div className="w-6 h-6 rounded-full bg-blue-500/20 text-blue-400 flex items-center justify-center font-bold text-xs group-hover:bg-blue-500 group-hover:text-white transition-colors">
                             {op.nom[0]}
                           </div>
                           <div>
-                            <div className="font-bold text-xs">{op.nom} {op.cognoms || ""}</div>
+                            <div className="font-bold text-xs group-hover:text-blue-400 transition-colors">
+                              {op.nom} {op.cognoms || ""}
+                            </div>
                             <div className="text-[10px] text-slate-400">{op.rol}</div>
                           </div>
                         </div>
-                        {op.telefon && (
-                          <a
-                            href={`tel:${op.telefon}`}
-                            className="p-1 text-emerald-400 hover:text-emerald-300"
-                            title="Trucar"
+                        <div className="flex items-center gap-1">
+                          <button
+                            type="button"
+                            onClick={() => focusOperari(op.id)}
+                            className="p-1 text-blue-400 hover:text-blue-300"
+                            title="Centrar en l'operari al mapa"
                           >
-                            <Phone className="w-3.5 h-3.5" />
-                          </a>
-                        )}
+                            <Navigation className="w-3.5 h-3.5" />
+                          </button>
+                          {op.telefon && (
+                            <a
+                              href={`tel:${op.telefon}`}
+                              className="p-1 text-emerald-400 hover:text-emerald-300"
+                              title="Trucar"
+                            >
+                              <Phone className="w-3.5 h-3.5" />
+                            </a>
+                          )}
+                        </div>
                       </div>
                     ) : (
                       <span className="text-slate-400 text-xs">ID: {selectedFeina.cap_de_colla_id}</span>
@@ -894,7 +1071,7 @@ export default function GestioMap({
                     const newOpId = e.target.value;
                     if (newOpId) {
                       await onDropAssignment(selectedFeina.id, selectedFeina.versio, newOpId);
-                      setSelectedOperariId(newOpId);
+                      focusOperari(newOpId);
                     }
                   }}
                   className="w-full text-xs bg-slate-800 border border-slate-700 rounded-lg px-2 py-1.5 text-white font-medium focus:ring-2 focus:ring-emerald-500 outline-none cursor-pointer"
@@ -963,8 +1140,8 @@ export default function GestioMap({
                     .map((af) => (
                       <div
                         key={af.id}
-                        onClick={() => setSelectedFeinaId(af.id)}
-                        className="p-1.5 bg-slate-800/80 hover:bg-slate-700/80 border border-slate-700 rounded text-[11px] flex items-center justify-between cursor-pointer"
+                        onClick={() => focusFeina(af.id)}
+                        className="p-1.5 bg-slate-800/80 hover:bg-slate-700/80 border border-slate-700 rounded text-[11px] flex items-center justify-between cursor-pointer transition-colors"
                       >
                         <span className="font-mono text-emerald-400 font-bold">{af.codi}</span>
                         <span className="truncate max-w-[140px] text-slate-300">{af.titol}</span>
@@ -986,7 +1163,7 @@ export default function GestioMap({
           <div className="flex items-center justify-between mb-2">
             <span className="text-xs font-bold uppercase tracking-wider text-slate-300 flex items-center gap-1.5">
               <Users className="w-4 h-4 text-emerald-400" />
-              Quadrilles Actives (Arrossega feines aquí)
+              Quadrilles Actives (Clica per centrar • Arrossega feines per assignar)
             </span>
             <span className="text-[10px] text-slate-400">
               {modeVisor === "SAT"
@@ -1005,15 +1182,16 @@ export default function GestioMap({
                   key={operari.id}
                   onDragOver={handleDragOver}
                   onDrop={(e) => handleDrop(e, operari.id)}
-                  onClick={() => setSelectedOperariId(operari.id)}
+                  onClick={() => focusOperari(operari.id)}
                   className={`bg-slate-900/90 backdrop-blur border-2 border-dashed rounded-xl p-3 transition-all flex flex-col min-h-[120px] shadow-lg cursor-pointer ${
                     isSelected
-                      ? "border-emerald-500 ring-2 ring-emerald-500/20 bg-slate-900"
-                      : "border-slate-700 hover:border-emerald-500"
+                      ? "border-blue-500 ring-2 ring-blue-500/30 bg-slate-900"
+                      : "border-slate-700 hover:border-blue-400"
                   }`}
+                  title="Clica per centrar i veure al mapa"
                 >
                   <div className="flex items-center gap-2 mb-2 pb-2 border-b border-slate-800">
-                    <div className="w-7 h-7 rounded-full bg-emerald-500/20 text-emerald-400 font-bold text-xs flex items-center justify-center border border-emerald-500/30">
+                    <div className="w-7 h-7 rounded-full bg-blue-500/20 text-blue-400 font-bold text-xs flex items-center justify-center border border-blue-500/30">
                       {operari.nom[0]}
                       {operari.cognoms ? operari.cognoms[0] : ""}
                     </div>
@@ -1021,7 +1199,7 @@ export default function GestioMap({
                       <h3 className="text-xs font-bold text-white leading-tight truncate">
                         {operari.nom} {operari.cognoms}
                       </h3>
-                      <span className="text-[10px] text-emerald-400 font-mono">
+                      <span className="text-[10px] text-blue-400 font-mono">
                         En Servei ({operari.rol})
                       </span>
                     </div>
@@ -1033,7 +1211,7 @@ export default function GestioMap({
                   <div className="flex-1 space-y-1 overflow-y-auto max-h-[80px]">
                     {assignedFeines.length === 0 ? (
                       <div className="h-full flex flex-col items-center justify-center text-center p-1 text-slate-500 text-[11px]">
-                        <span>Arrossega una feina aquí</span>
+                        <span>Clica per centrar o arrossega una feina</span>
                       </div>
                     ) : (
                       assignedFeines.map((af) => (
@@ -1041,7 +1219,7 @@ export default function GestioMap({
                           key={af.id}
                           onClick={(e) => {
                             e.stopPropagation();
-                            setSelectedFeinaId(af.id);
+                            focusFeina(af.id);
                           }}
                           className="bg-slate-800/80 hover:bg-slate-700/80 border border-slate-700 rounded px-2 py-1 text-xs flex items-center justify-between text-slate-200 transition-colors"
                         >

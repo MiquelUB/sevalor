@@ -1,8 +1,7 @@
 "use client";
-import { apiFetch } from "@/lib/api";
-
-
 import React, { useState, useEffect } from "react";
+import Link from "next/link";
+import { apiFetch } from "@/lib/api";
 import {
   HardHat,
   Users,
@@ -18,6 +17,7 @@ import {
   Mail,
   PlusCircle,
   RefreshCw,
+  MapPin,
   Search,
   Filter,
   FileText,
@@ -679,12 +679,22 @@ export default function GestioOperarisPage() {
                   </p>
                 </div>
               </div>
-              <button
-                onClick={() => setOperariSeleccionat(null)}
-                className="p-1.5 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg text-slate-400"
-              >
-                <X className="w-5 h-5" />
-              </button>
+              <div className="flex items-center gap-2">
+                <Link
+                  href={`/gestio/mapa?operari_id=${operariSeleccionat.id}`}
+                  className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs flex items-center gap-1.5 shadow-sm transition-colors"
+                  title="Localitzar i centrar al mapa"
+                >
+                  <MapPin className="w-3.5 h-3.5" />
+                  <span>Veure al Mapa</span>
+                </Link>
+                <button
+                  onClick={() => setOperariSeleccionat(null)}
+                  className="p-1.5 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg text-slate-400"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
             </div>
 
             {/* Selector de Pestanyes (8 dimensions RF-04) */}
