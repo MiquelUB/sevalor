@@ -123,13 +123,21 @@ class CopilotDispatcher:
         res = await db.execute(select(Empresa).where(Empresa.id == empresa_id))
         empresa = res.scalar_one_or_none()
 
-        if not empresa or not empresa.node_ia_actiu or not empresa.node_ia_url or not empresa.node_ia_url.strip():
+        # Adreça del node d'IA local de l'empresa o de l'entorn de desplegament/demo
+        node_url = (
+            (empresa.node_ia_url.strip() if (empresa and empresa.node_ia_url and empresa.node_ia_url.strip()) else None)
+            or getattr(settings, "LM_STUDIO_URL", None)
+            or "http://127.0.0.1:1234/v1"
+        )
+        es_actiu = (empresa.node_ia_actiu if empresa else False) or bool(getattr(settings, "LM_STUDIO_URL", None))
+
+        if not es_actiu or not node_url:
             logger.info(
                 f"Empresa {empresa_id} sense ordinador dedicat actiu. Zero egress a Hetzner (Constitució §2.V)."
             )
             return None, None, None, None
 
-        lm_url = empresa.node_ia_url.strip()
+        lm_url = node_url
         base_url = lm_url.rstrip("/")
         endpoint = (
             f"{base_url}/chat/completions"
@@ -137,8 +145,8 @@ class CopilotDispatcher:
             else f"{base_url}/v1/chat/completions"
         )
 
-        agent_prompt = empresa.agent_prompt_system or agent_prompt_system
-        vertical_efectiva = empresa.vertical or vertical
+        agent_prompt = (empresa.agent_prompt_system if empresa else None) or agent_prompt_system
+        vertical_efectiva = (empresa.vertical if empresa else None) or vertical
 
         system_content = f"{subagent.system_prompt} Vertical: {vertical_efectiva}. "
         if agent_prompt:
@@ -152,7 +160,7 @@ class CopilotDispatcher:
 
         messages.append({"role": "user", "content": pregunta})
 
-        model_name = getattr(settings, "LM_STUDIO_MODEL", "deepseek-coder-v2-lite-instruct")
+        model_name = getattr(settings, "LM_STUDIO_MODEL", "qwen2.5-vl-7b-instruct")
         api_key = getattr(settings, "LM_STUDIO_API_KEY", "lm-studio")
 
         payload = {
@@ -161,11 +169,11 @@ class CopilotDispatcher:
             "tools": subagent.tools_schema,
             "tool_choice": "auto" if subagent.tools_schema else "none",
             "temperature": 0.2,
-            "max_tokens": 700,
+            "max_tokens": 400,
         }
 
         try:
-            async with httpx.AsyncClient(timeout=8.0) as client:
+            async with httpx.AsyncClient(timeout=35.0) as client:
                 resp = await client.post(
                     endpoint,
                     json=payload,
@@ -212,7 +220,7 @@ class CopilotDispatcher:
                         "model": model_name,
                         "messages": messages,
                         "temperature": 0.2,
-                        "max_tokens": 700,
+                        "max_tokens": 400,
                     }
                     resp_synth = await client.post(
                         endpoint,

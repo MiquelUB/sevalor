@@ -29,17 +29,16 @@ export default function CopilotWidget({ isMobile = false }: { isMobile?: boolean
   const confirmarAccio = async (actionContext: any, mIdx: number) => {
     setExecutantAccio(true);
     try {
-      const res = await apiFetch("/gestio/copilot/action/confirm", {
+      const dades: any = await apiFetch("/gestio/copilot/action/confirm", {
         method: "POST",
         body: JSON.stringify({ action: actionContext.action, payload: actionContext.payload }),
       });
-      const dades = await res.json();
       
       // Update message to show success
       setConversaXat(prev => {
         const newArr = [...prev];
         newArr[mIdx].actionContext = null; // Hide the action box
-        newArr[mIdx].text = newArr[mIdx].text + "\n\n✅ " + (dades.missatge || "Acció executada amb èxit.");
+        newArr[mIdx].text = newArr[mIdx].text + "\n\n✅ " + (dades?.missatge || "Acció executada amb èxit.");
         return newArr;
       });
     } catch (err) {
@@ -60,33 +59,24 @@ export default function CopilotWidget({ isMobile = false }: { isMobile?: boolean
     setImatgeB64(null);
 
     try {
-      const res = await apiFetch("/gestio/copilot/xat", {
+      const dades: any = await apiFetch("/gestio/copilot/xat", {
         method: "POST",
         body: JSON.stringify({ pregunta: textFinal, imatge_b64: imatgeB64 }),
       });
-      if (res.ok) {
-        const dades = await res.json();
-        const requiresConf = dades.metadata?.tool_resultat?.requires_confirmation;
-        setConversaXat((prev) => [
-          ...prev,
-          { 
-            sender: "bot", 
-            text: dades.resposta || (requiresConf ? dades.metadata.tool_resultat.missatge : ""), 
-            links: dades.enllacos || [],
-            actionContext: requiresConf ? dades.metadata.tool_resultat : null
-          },
-        ]);
-      } else {
-        const errorData = await res.json();
-        setConversaXat((prev) => [
-          ...prev,
-          { sender: "bot", text: errorData.detail || "Error processant la consulta.", error: true },
-        ]);
-      }
-    } catch (err) {
+      const requiresConf = dades?.metadata?.tool_resultat?.requires_confirmation;
       setConversaXat((prev) => [
         ...prev,
-        { sender: "bot", text: "Error de connexió amb l'Assistent AI.", error: true },
+        { 
+          sender: "bot", 
+          text: dades?.resposta || (requiresConf ? dades?.metadata?.tool_resultat?.missatge : ""), 
+          links: dades?.enllacos || [],
+          actionContext: requiresConf ? dades?.metadata?.tool_resultat : null
+        },
+      ]);
+    } catch (err: any) {
+      setConversaXat((prev) => [
+        ...prev,
+        { sender: "bot", text: err?.message || "Error de connexió amb l'Assistent AI.", error: true },
       ]);
     } finally {
       setCarregant(false);

@@ -155,7 +155,7 @@ class TelegramService:
             if base_url.endswith("/v1")
             else f"{base_url}/v1/chat/completions"
         )
-        model_name = getattr(settings, "LM_STUDIO_MODEL", "deepseek-coder-v2-lite-instruct")
+        model_name = getattr(settings, "LM_STUDIO_MODEL", "qwen2.5-vl-7b-instruct")
         api_key = getattr(settings, "LM_STUDIO_API_KEY", "lm-studio")
 
         payload = {
@@ -169,7 +169,7 @@ class TelegramService:
         }
 
         try:
-            async with httpx.AsyncClient(timeout=10.0) as http_client:
+            async with httpx.AsyncClient(timeout=35.0) as http_client:
                 resp = await http_client.post(
                     endpoint,
                     json=payload,

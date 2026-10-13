@@ -702,7 +702,7 @@ async def cridar_lm_studio(
         system_prompt += f"\nContext addicional:\n{context_addicional}"
 
     model_name = getattr(settings, "LM_STUDIO_MODEL", None) or getattr(
-        settings, "LMSTUDIO_MODEL", "deepseek-coder-v2-lite-instruct"
+        settings, "LMSTUDIO_MODEL", "qwen2.5-vl-7b-instruct"
     )
     api_key = getattr(settings, "LM_STUDIO_API_KEY", "lm-studio")
 
@@ -713,11 +713,11 @@ async def cridar_lm_studio(
             {"role": "user", "content": pregunta},
         ],
         "temperature": 0.2,
-        "max_tokens": 500,
+        "max_tokens": 400,
     }
 
     try:
-        async with httpx.AsyncClient(timeout=8.0) as client:
+        async with httpx.AsyncClient(timeout=35.0) as client:
             resp = await client.post(
                 endpoint,
                 json=payload,
@@ -773,7 +773,7 @@ async def cridar_lm_studio_amb_tools(
         "Respon sempre en català de forma professional, tècnica i precisa, basant-te exclusivament en les dades obtingudes de les eines."
     )
 
-    model_name = getattr(settings, "LM_STUDIO_MODEL", "deepseek-coder-v2-lite-instruct")
+    model_name = getattr(settings, "LM_STUDIO_MODEL", "qwen2.5-vl-7b-instruct")
     api_key = getattr(settings, "LM_STUDIO_API_KEY", "lm-studio")
 
     messages = [
@@ -787,11 +787,11 @@ async def cridar_lm_studio_amb_tools(
         "tools": TOOLS_SCHEMA,
         "tool_choice": "auto",
         "temperature": 0.2,
-        "max_tokens": 700,
+        "max_tokens": 400,
     }
 
     try:
-        async with httpx.AsyncClient(timeout=12.0) as client:
+        async with httpx.AsyncClient(timeout=35.0) as client:
             resp = await client.post(
                 endpoint,
                 json=payload,
@@ -1866,7 +1866,7 @@ async def obtenir_estat_ia() -> Dict[str, Any]:
 
     try:
         start_t = datetime.now()
-        async with httpx.AsyncClient(timeout=4.0) as client:
+        async with httpx.AsyncClient(timeout=8.0) as client:
             resp = await client.get(models_url)
             elapsed_ms = int((datetime.now() - start_t).total_seconds() * 1000)
             if resp.status_code == 200:
@@ -1876,7 +1876,7 @@ async def obtenir_estat_ia() -> Dict[str, Any]:
                     "estat": "ONLINE",
                     "url": lm_url,
                     "model_actiu": getattr(
-                        settings, "LM_STUDIO_MODEL", "deepseek-coder-v2-lite-instruct"
+                        settings, "LM_STUDIO_MODEL", "qwen2.5-vl-7b-instruct"
                     ),
                     "models_disponibles": models,
                     "latencia_ms": elapsed_ms,
