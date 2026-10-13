@@ -25,6 +25,8 @@ export interface Feina {
   estat: string;
   adreca: string;
   versio: number;
+  latitud?: number | null;
+  longitud?: number | null;
   cap_de_colla_id?: string | null;
 }
 
@@ -52,6 +54,7 @@ export default function GestioMap({
   onModeVisorChange,
 }: MapProps) {
   const [draggingId, setDraggingId] = useState<string | null>(null);
+  const [tabSidebar, setTabSidebar] = useState<"PENDENTS" | "TOTES" | "ASSIGNADES">("PENDENTS");
   const [zoom, setZoom] = useState<number>(13);
   const [panX, setPanX] = useState<number>(0);
   const [panY, setPanY] = useState<number>(0);
@@ -95,86 +98,199 @@ export default function GestioMap({
     if (zoom > 12) setZoom((z) => z - 1);
   };
 
-  // Posicions geogràfiques de les feines i vehicles per renderitzar pins
-  const pinsFeines = [
-    {
-      codi: "OT-2026-001",
-      titol: "Reparació fuga sector Nord",
-      adreca: "Polígon 12, Parc. 45, Alcarràs",
-      top: "32%",
-      left: "38%",
-      color: "bg-amber-500",
-    },
-    {
-      codi: "OT-2026-002",
-      titol: "Manteniment preventiu bomba 15CV",
-      adreca: "Partida Bovalar, Lleida",
-      top: "48%",
-      left: "62%",
-      color: "bg-emerald-500",
-    },
-  ];
+  // Convert lat/lng to percentage on 3x3 OSM tile grid
+  const projectCoords = (lat: number, lng: number) => {
+    const n = Math.pow(2, zoom);
+    const tileX = ((lng + 180) / 360) * n;
+    const latRad = (lat * Math.PI) / 180;
+    const tileY =
+      ((1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) / 2) * n;
 
-  const pinsQuadrilles = [
-    {
-      nom: "Marc Vila (Ford Transit)",
-      top: "40%",
-      left: "42%",
-      color: "border-blue-500 text-blue-400",
-    },
-    {
-      nom: "Pau Serra (Toyota Hilux)",
-      top: "54%",
-      left: "58%",
-      color: "border-emerald-500 text-emerald-400",
-    },
-    {
-      nom: "Laia Martí (Nissan NV400)",
-      top: "62%",
-      left: "48%",
-      color: "border-purple-500 text-purple-400",
-    },
-  ];
+    // Viewport starts at centerTile.x - 1 and centerTile.y - 1, spanning 3 tiles
+    const left = ((tileX - (centerTile.x - 1)) / 3) * 100;
+    const top = ((tileY - (centerTile.y - 1)) / 3) * 100;
+
+    // Clamp to stay within map boundary (8% - 92%)
+    const clampedLeft = Math.max(8, Math.min(92, left));
+    const clampedTop = Math.max(8, Math.min(92, top));
+
+    return { top: `${clampedTop.toFixed(1)}%`, left: `${clampedLeft.toFixed(1)}%` };
+  };
+
+  const getFeinaCoords = (f: Feina, idx: number) => {
+    let lat = f.latitud ?? null;
+    let lng = f.longitud ?? null;
+
+    if ((lat === null || lng === null) && f.adreca && f.adreca.includes(",")) {
+      try {
+        const parts = f.adreca.split(",").map((p) => parseFloat(p.trim()));
+        if (parts.length >= 2 && !isNaN(parts[0]) && !isNaN(parts[1])) {
+          lat = parts[0];
+          lng = parts[1];
+        }
+      } catch {}
+    }
+
+    if (lat === null || lng === null) {
+      const charCode = (f.id ? f.id.charCodeAt(0) : idx * 7) % 15;
+      const charCode2 = (f.codi ? f.codi.charCodeAt(f.codi.length - 1) : idx * 11) % 15;
+      lat = 41.6176 + (charCode - 7) * 0.007;
+      lng = 0.6200 + (charCode2 - 7) * 0.007;
+    }
+
+    return { lat, lng };
+  };
+
+  const getStatusColor = (estat: string) => {
+    switch (estat) {
+      case "PENDENT":
+        return "bg-amber-500";
+      case "ASSIGNADA":
+      case "PROGRAMADA":
+        return "bg-blue-500";
+      case "EN_CURS":
+      case "EN_OBRA":
+      case "EN_RUTA":
+        return "bg-emerald-500";
+      case "BLOQUEJADA":
+      case "INCIDENCIA":
+        return "bg-red-500";
+      default:
+        return "bg-slate-600";
+    }
+  };
+
+  // Posicions dinàmiques reals de les feines per renderitzar pins al mapa (Zero Mock)
+  const pinsFeines = feines.map((f, idx) => {
+    const coords = getFeinaCoords(f, idx);
+    const pos = projectCoords(coords.lat, coords.lng);
+    return {
+      id: f.id,
+      codi: f.codi,
+      titol: f.titol,
+      adreca: f.adreca,
+      estat: f.estat,
+      top: pos.top,
+      left: pos.left,
+      color: getStatusColor(f.estat),
+    };
+  });
+
+  // Pins de les quadrilles d'operaris actius
+  const pinsQuadrilles = operaris
+    .filter((o) => o.estat === "ACTIU")
+    .map((op, idx) => {
+      const assigned = feines.find((f) => f.cap_de_colla_id === op.id);
+      let lat = 41.6176;
+      let lng = 0.6200;
+      if (assigned) {
+        const c = getFeinaCoords(assigned, idx);
+        lat = c.lat + 0.003;
+        lng = c.lng + 0.003;
+      } else {
+        lat = 41.6176 + (idx - 1) * 0.009;
+        lng = 0.6200 + (idx - 1) * 0.009;
+      }
+      const pos = projectCoords(lat, lng);
+      return {
+        nom: `${op.nom} ${op.cognoms || ""}`.trim(),
+        top: pos.top,
+        left: pos.left,
+        color: "border-blue-500 text-blue-400",
+      };
+    });
+
+  const feinesFiltrades = feines.filter((f) => {
+    if (tabSidebar === "PENDENTS") return !f.cap_de_colla_id;
+    if (tabSidebar === "ASSIGNADES") return !!f.cap_de_colla_id;
+    return true; // "TOTES"
+  });
 
   return (
     <div className="flex-1 flex flex-col md:flex-row gap-4 relative">
-      {/* Panell de Feines Pendents */}
+      {/* Panell de Feines */}
       <div className="w-full md:w-80 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4 flex flex-col shadow-sm">
-        <h2 className="text-sm font-bold uppercase tracking-wider text-slate-500 mb-3 flex items-center justify-between">
-          <span>Feines Pendents</span>
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="text-sm font-bold uppercase tracking-wider text-slate-700 dark:text-slate-300">
+            Ordres de Treball
+          </h2>
           <span className="bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 px-2 py-0.5 rounded-full text-xs font-mono font-bold">
-            {feines.filter((f) => !f.cap_de_colla_id).length}
+            {feinesFiltrades.length}
           </span>
-        </h2>
+        </div>
+
+        {/* Pestanyes de filtre */}
+        <div className="grid grid-cols-3 gap-1 bg-slate-100 dark:bg-slate-800/80 p-1 rounded-lg mb-3">
+          <button
+            type="button"
+            onClick={() => setTabSidebar("PENDENTS")}
+            className={`py-1 text-[11px] font-bold rounded-md transition-colors ${
+              tabSidebar === "PENDENTS"
+                ? "bg-white dark:bg-slate-900 text-emerald-600 dark:text-emerald-400 shadow-sm"
+                : "text-slate-500 hover:text-slate-800 dark:hover:text-slate-200"
+            }`}
+          >
+            Pendents ({feines.filter((f) => !f.cap_de_colla_id).length})
+          </button>
+          <button
+            type="button"
+            onClick={() => setTabSidebar("ASSIGNADES")}
+            className={`py-1 text-[11px] font-bold rounded-md transition-colors ${
+              tabSidebar === "ASSIGNADES"
+                ? "bg-white dark:bg-slate-900 text-emerald-600 dark:text-emerald-400 shadow-sm"
+                : "text-slate-500 hover:text-slate-800 dark:hover:text-slate-200"
+            }`}
+          >
+            Assignades ({feines.filter((f) => !!f.cap_de_colla_id).length})
+          </button>
+          <button
+            type="button"
+            onClick={() => setTabSidebar("TOTES")}
+            className={`py-1 text-[11px] font-bold rounded-md transition-colors ${
+              tabSidebar === "TOTES"
+                ? "bg-white dark:bg-slate-900 text-emerald-600 dark:text-emerald-400 shadow-sm"
+                : "text-slate-500 hover:text-slate-800 dark:hover:text-slate-200"
+            }`}
+          >
+            Totes ({feines.length})
+          </button>
+        </div>
+
         <div className="flex-1 overflow-y-auto space-y-2 max-h-[600px]">
-          {feines
-            .filter((f) => !f.cap_de_colla_id)
-            .map((feina) => (
-              <div
-                key={feina.id}
-                draggable
-                onDragStart={(e) => handleDragStart(e, feina)}
-                onDragEnd={handleDragEnd}
-                className={`p-3 bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/60 rounded-lg cursor-grab active:cursor-grabbing hover:border-emerald-500 transition-all shadow-sm ${
-                  draggingId === feina.id ? "opacity-50 border-emerald-500 ring-2 ring-emerald-500/20" : ""
-                }`}
-              >
-                <div className="flex justify-between items-start mb-1">
-                  <span className="text-xs font-bold text-slate-800 dark:text-slate-100 font-mono">{feina.codi}</span>
-                  <span className="text-[10px] bg-amber-500/10 text-amber-600 border border-amber-500/20 px-1.5 py-0.5 rounded font-medium">
-                    {feina.estat}
-                  </span>
-                </div>
-                <p className="text-xs font-medium text-slate-600 dark:text-slate-300 line-clamp-1">{feina.titol}</p>
-                <div className="flex items-center gap-1 mt-2 text-[10px] text-slate-400">
-                  <MapPin className="w-3 h-3 text-emerald-500 shrink-0" />
-                  <span className="truncate">{feina.adreca}</span>
-                </div>
+          {feinesFiltrades.map((feina) => (
+            <div
+              key={feina.id}
+              draggable
+              onDragStart={(e) => handleDragStart(e, feina)}
+              onDragEnd={handleDragEnd}
+              className={`p-3 bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/60 rounded-lg cursor-grab active:cursor-grabbing hover:border-emerald-500 transition-all shadow-sm ${
+                draggingId === feina.id ? "opacity-50 border-emerald-500 ring-2 ring-emerald-500/20" : ""
+              }`}
+            >
+              <div className="flex justify-between items-start mb-1">
+                <span className="text-xs font-bold text-slate-800 dark:text-slate-100 font-mono">{feina.codi}</span>
+                <span
+                  className={`text-[10px] px-1.5 py-0.5 rounded font-medium border ${
+                    feina.estat === "PENDENT"
+                      ? "bg-amber-500/10 text-amber-600 border-amber-500/20"
+                      : feina.estat === "ASSIGNADA" || feina.estat === "PROGRAMADA"
+                      ? "bg-blue-500/10 text-blue-600 border-blue-500/20"
+                      : "bg-emerald-500/10 text-emerald-600 border-emerald-500/20"
+                  }`}
+                >
+                  {feina.estat}
+                </span>
               </div>
-            ))}
-          {feines.filter((f) => !f.cap_de_colla_id).length === 0 && (
+              <p className="text-xs font-medium text-slate-600 dark:text-slate-300 line-clamp-1">{feina.titol}</p>
+              <div className="flex items-center gap-1 mt-2 text-[10px] text-slate-400">
+                <MapPin className="w-3 h-3 text-emerald-500 shrink-0" />
+                <span className="truncate">{feina.adreca}</span>
+              </div>
+            </div>
+          ))}
+          {feinesFiltrades.length === 0 && (
             <div className="p-6 text-center text-slate-400 text-xs">
-              Totes les feines estan assignades a quadrilles.
+              No hi ha feines en aquest estat.
             </div>
           )}
         </div>

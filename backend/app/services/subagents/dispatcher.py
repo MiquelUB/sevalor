@@ -97,8 +97,10 @@ class CopilotDispatcher:
                 scores["subagent_auditoria_marge"] = -100.0
 
         # 2. Planificació i Equip
-        if any(k in q for k in ["ordre", "ordres", "feina", "feines", "treball", "tasca", "tasques", "equip", "operari", "treballador", "plantilla", "horari", "fitxatge", "fitxatges", "hores", "jornada", "incidencia", "incidència", "avui", "part de treball", "repartiment", "assignada", "assignat"]):
+        if any(k in q for k in ["ordre", "ordres", "feina", "feines", "treball", "tasca", "tasques", "equip", "operari", "treballador", "plantilla", "horari", "fitxatge", "fitxatges", "hores", "jornada", "incidencia", "incidència", "avui", "part de treball", "repartiment", "assignada", "assignat", "cens", "quants som"]):
             scores["subagent_planificacio_equip"] += 5.0
+        if any(k in q for k in ["plantilla", "total plantilla", "quants som", "treballadors actius", "cens", "quants operaris", "quants treballadors"]):
+            scores["subagent_planificacio_equip"] += 8.0
         if re.search(r"\bOT[-\d\w]+\b", query, re.IGNORECASE):
             scores["subagent_planificacio_equip"] += 8.0
 
@@ -502,6 +504,8 @@ class CopilotDispatcher:
                 and (
                     t_res_loc.get("trobat")
                     or t_res_loc.get("total", 0) > 0
+                    or t_res_loc.get("total_plantilla", 0) > 0
+                    or t_res_loc.get("total_operaris", 0) > 0
                     or t_res_loc.get("total_hores", 0) > 0
                     or t_res_loc.get("total_alertes", 0) > 0
                     or t_res_loc.get("total_disponible", 0) > 0
@@ -539,24 +543,35 @@ class CopilotDispatcher:
         elapsed_ms = int((time.perf_counter() - t_start) * 1000)
 
         # ── 7. Persistència de l'Auditoria a PostgreSQL (Zero Mock) ───────────
-        consulta_db = ConsultaXatCopilot(
-            empresa_id=empresa_id,
-            usuari_id=usuari_id,
-            pregunta=pregunta,
-            resposta=resposta,
-            vertical=vertical,
-            node_ia_actiu=es_actiu,
-            node_ia_url=node_url,
-            temps_inferencia_ms=elapsed_ms,
-            enllacos_relacionats=enllacos,
-            es_error_timeout=es_timeout,
-            denegat_per_rol=False,
-            tool_name=tool_name,
-            tool_args=tool_args,
-            tool_result=tool_result,
-        )
-        db.add(consulta_db)
-        await db.commit()
+        try:
+            val_usuari_id = None
+            if usuari_id:
+                res_chk = await db.execute(select(Usuari.id).where(Usuari.id == usuari_id))
+                if res_chk.scalar_one_or_none():
+                    val_usuari_id = usuari_id
+
+            if val_usuari_id:
+                consulta_db = ConsultaXatCopilot(
+                    empresa_id=empresa_id,
+                    usuari_id=val_usuari_id,
+                    pregunta=pregunta,
+                    resposta=resposta,
+                    vertical=vertical,
+                    node_ia_actiu=es_actiu,
+                    node_ia_url=node_url,
+                    temps_inferencia_ms=elapsed_ms,
+                    enllacos_relacionats=enllacos,
+                    es_error_timeout=es_timeout,
+                    denegat_per_rol=False,
+                    tool_name=tool_name,
+                    tool_args=tool_args,
+                    tool_result=tool_result,
+                )
+                db.add(consulta_db)
+                await db.commit()
+        except Exception as e:
+            logger.warning(f"Error registrant auditoria de consulta copilot: {e}")
+            await db.rollback()
 
         return {
             "resposta": resposta,

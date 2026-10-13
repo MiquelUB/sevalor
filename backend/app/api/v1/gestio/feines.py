@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db_with_tenant_context
 from app.core.security import require_roles
-from app.models.models import Client, OrdreTreball
+from app.models.models import Client, EinaCustodia, Finca, OrdreTreball
 
 router = APIRouter(
     prefix="/gestio/feines",
@@ -30,11 +30,16 @@ class FeinaCreate(BaseModel):
     data_planificacio: date
     cap_de_colla_id: Optional[uuid.UUID] = None
     vehicle_id: Optional[uuid.UUID] = None
+    latitud: Optional[float] = None
+    longitud: Optional[float] = None
+    eina_ids: Optional[List[uuid.UUID]] = None
 
 
 class FeinaResponse(FeinaCreate):
     id: uuid.UUID
     versio: int = 1
+    latitud: Optional[float] = None
+    longitud: Optional[float] = None
 
 
 @router.get("", response_model=List[FeinaResponse])
@@ -80,6 +85,28 @@ async def alta_feina(
     if result_codi.scalars().first():
         raise HTTPException(status_code=400, detail="El codi de feina ja es troba registrat")
 
+    # Coordenades: agafar les directes o parsejar adreça / finca
+    lat = feina.latitud
+    lng = feina.longitud
+
+    if (lat is None or lng is None) and feina.adreca and "," in feina.adreca:
+        try:
+            parts = [float(p.strip()) for p in feina.adreca.split(",")]
+            if len(parts) >= 2:
+                lat, lng = parts[0], parts[1]
+        except (ValueError, TypeError):
+            pass
+
+    if (lat is None or lng is None) and feina.finca_id:
+        stmt_finca = select(Finca).where(
+            Finca.id == feina.finca_id,
+            Finca.empresa_id == uuid.UUID(empresa_id),
+        )
+        finca_db = (await db.execute(stmt_finca)).scalars().first()
+        if finca_db and finca_db.latitud is not None and finca_db.longitud is not None:
+            lat = float(finca_db.latitud)
+            lng = float(finca_db.longitud)
+
     nova_feina = OrdreTreball(
         empresa_id=uuid.UUID(empresa_id),
         codi=feina.codi,
@@ -92,9 +119,25 @@ async def alta_feina(
         data_planificacio=feina.data_planificacio,
         cap_de_colla_id=feina.cap_de_colla_id,
         vehicle_id=feina.vehicle_id,
+        latitud=lat,
+        longitud=lng,
     )
 
     db.add(nova_feina)
+
+    # Custòdia d'eines seleccionades per a la feina
+    if feina.eina_ids:
+        for eina_id in feina.eina_ids:
+            stmt_eina = select(EinaCustodia).where(
+                EinaCustodia.id == eina_id,
+                EinaCustodia.empresa_id == uuid.UUID(empresa_id),
+            )
+            eina_obj = (await db.execute(stmt_eina)).scalars().first()
+            if eina_obj:
+                eina_obj.estat = "CUSTODIADA"
+                if feina.cap_de_colla_id:
+                    eina_obj.custodiat_per_operari_id = feina.cap_de_colla_id
+
     await db.commit()
 
     return nova_feina
@@ -109,11 +152,12 @@ async def llistar_feines_mapa(
         raise HTTPException(status_code=401, detail="No identificat")
 
     stmt = (
-        select(OrdreTreball, Client)
+        select(OrdreTreball, Client, Finca)
         .outerjoin(Client, OrdreTreball.client_id == Client.id)
+        .outerjoin(Finca, OrdreTreball.finca_id == Finca.id)
         .where(
             OrdreTreball.empresa_id == uuid.UUID(empresa_id),
-            OrdreTreball.estat.in_(["PENDENT", "EN_CURS", "BLOQUEJADA", "EN_OBRA", "EN_RUTA"]),
+            OrdreTreball.estat.in_(["PENDENT", "EN_CURS", "BLOQUEJADA", "EN_OBRA", "EN_RUTA", "ASSIGNADA", "PROGRAMADA"]),
         )
         .order_by(OrdreTreball.created_at.desc())
     )
@@ -121,10 +165,16 @@ async def llistar_feines_mapa(
     rows = result.all()
 
     features = []
-    for ordre, client in rows:
+    for ordre, client, finca in rows:
         lat = ordre.latitud
         lng = ordre.longitud
-        if not lat or not lng:
+
+        if lat is None or lng is None:
+            if finca and finca.latitud is not None and finca.longitud is not None:
+                lat = float(finca.latitud)
+                lng = float(finca.longitud)
+
+        if lat is None or lng is None:
             # Fallback to parse adreca if it contains coordinates (for tests)
             if ordre.adreca and "," in ordre.adreca:
                 try:
@@ -147,6 +197,7 @@ async def llistar_feines_mapa(
                     "titol": ordre.titol,
                     "estat": ordre.estat,
                     "adreca": ordre.adreca,
+                    "cap_de_colla_id": str(ordre.cap_de_colla_id) if ordre.cap_de_colla_id else None,
                     "client_rao_social": client.rao_social if client else None,
                     "is_incidencia": False,
                 },

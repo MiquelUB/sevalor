@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db_with_tenant_context
 from app.core.security import require_roles
-from app.models.models import Article, Incidencia, OrdreTreball, Vehicle
+from app.models.models import Article, EstocMagatzem, Incidencia, OrdreTreball, Vehicle
 
 router = APIRouter(
     prefix="/gestio/dashboard",
@@ -57,11 +57,19 @@ async def get_dashboard_hud(
     teams_on_field = res_teams.scalar() or 0
 
     # Critical stock
-    stmt_stock = select(func.count(Article.id)).where(
-        Article.empresa_id == emp_uuid, Article.estoc_actual <= Article.estoc_minim  # type: ignore
+    stmt_stock = (
+        select(Article.id)
+        .outerjoin(EstocMagatzem, Article.id == EstocMagatzem.article_id)
+        .where(
+            Article.empresa_id == emp_uuid,
+            Article.actiu.is_(True),
+            Article.estoc_minim > 0,
+        )
+        .group_by(Article.id, Article.estoc_minim)
+        .having(func.coalesce(func.sum(EstocMagatzem.quantitat_fisica), 0) <= Article.estoc_minim)
     )
     res_stock = await db.execute(stmt_stock)
-    critical_stock = res_stock.scalar() or 0
+    critical_stock = len(res_stock.all())
 
     # Vehicles with alerts
     stmt_veh = select(func.count(Vehicle.id)).where(

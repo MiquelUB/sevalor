@@ -684,7 +684,7 @@ SCHEMA_GET_TEAM_TODAY = {
     "type": "function",
     "function": {
         "name": "get_team_today",
-        "description": "Consulta l'estat de l'equip de treball avui: qui està en jornada activa (fitxat), qui ha finalitzat i quin vehicle tenen assignat.",
+        "description": "Consulta la plantilla total de l'empresa (cens complet de treballadors i operaris actius desglossats per rols) i l'estat de jornada d'avui: qui està en jornada activa (fitxat), qui ha finalitzat i quin vehicle tenen assignat.",
         "parameters": {
             "type": "object",
             "properties": {},

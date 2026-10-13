@@ -3,7 +3,7 @@
 import re
 import uuid
 from datetime import date, datetime, timedelta
-from typing import Any, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -33,7 +33,7 @@ class SubagentPlanificacioEquip(BaseSubagent):
     system_prompt = (
         "Ets l'assistent expert en Planificació, Agenda i Equip de Treball de SEVALOR. "
         "Gestiones la consulta d'ordres de treball (OTs), planificació diària i setmanal, "
-        "estat de la jornada de l'equip i incidències de camp. "
+        "plantilla total de treballadors de l'empresa, estat de la jornada de l'equip i incidències de camp. "
         "Respon sempre en català de forma concisa, professional i fonamentant-te en les dades reals de la base de dades."
     )
 
@@ -58,6 +58,12 @@ class SubagentPlanificacioEquip(BaseSubagent):
             "jornada",
             "hores treballades",
             "equip",
+            "plantilla",
+            "total plantilla",
+            "cens",
+            "treballadors",
+            "operaris",
+            "quants som",
             "qui treballa",
             "qui hi ha avui",
             "incidència",
@@ -377,7 +383,24 @@ class SubagentPlanificacioEquip(BaseSubagent):
             else:
                 sense_fitxar.append(f"{nom_comp}{v_info}")
 
-        linies = [f"Estat de l'equip per a avui ({avui}):"]
+        rols_count: Dict[str, int] = {}
+        llista_membres = []
+        for u, _, _, _, _ in rows:
+            r = u.rol or "OPERARI"
+            rols_count[r] = rols_count.get(r, 0) + 1
+            nom_u = f"{u.nom} {u.cognoms or ''}".strip() or u.email
+            llista_membres.append(f"{nom_u} ({r})")
+
+        rols_txt = ", ".join(
+            [f"{count} {r.lower()}s" if count > 1 else f"1 {r.lower()}" for r, count in rols_count.items()]
+        )
+        total_total = len(rows)
+
+        linies = [
+            f"La plantilla total de l'empresa és de {total_total} treballadors actius ({rols_txt}):",
+            "• Equip: " + (", ".join(llista_membres) if llista_membres else "Sense treballadors actius"),
+            f"\nEstat de la jornada avui ({avui}):",
+        ]
         if actius:
             linies.append(f"• Amb registre actiu ({len(actius)}): " + ", ".join(actius))
         else:
@@ -402,7 +425,8 @@ class SubagentPlanificacioEquip(BaseSubagent):
             "trobat": True,
             "data": str(avui),
             "total_operaris": len(rows),
-            "total_plantilla": len(rows),
+            "total_plantilla": total_total,
+            "desglossament_rols": rols_count,
             "equip": equip_data,
             "actius": actius,
             "missatge": "\n".join(linies),
@@ -574,11 +598,32 @@ class SubagentPlanificacioEquip(BaseSubagent):
             tool_res = await self.tool_get_work_order_detail(db, empresa_id, codi)
             return tool_res.get("missatge", ""), tool_name, tool_args, tool_res, enllacos
 
-        # 2. Equip i fitxatge d'avui
-        if any(k in q for k in ["qui treballa", "qui hi ha", "equip avui", "jornada d'avui", "ha fitxat avui", "qui ha fitxat"]):
+        # 2. Equip, plantilla i fitxatge d'avui
+        if any(
+            k in q
+            for k in [
+                "plantilla",
+                "total plantilla",
+                "quants som",
+                "quants treballadors",
+                "quants operaris",
+                "treballadors",
+                "operaris",
+                "qui treballa",
+                "qui hi ha",
+                "equip avui",
+                "jornada d'avui",
+                "ha fitxat avui",
+                "qui ha fitxat",
+                "cens",
+                "equip",
+            ]
+        ):
             tool_name = "get_team_today"
             tool_args = {}
-            tool_res = await self.tool_get_team_today(db, empresa_id)
+            tool_res = await self.tool_get_team_today(
+                db, empresa_id, caller_role=caller_role, caller_user_id=caller_user_id
+            )
             return tool_res.get("missatge", ""), tool_name, tool_args, tool_res, enllacos
 
         # 3. Fitxatges i hores (timesheet)

@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
-import { X, Save, Building2, User, FileText, Calendar, MapPin, Map, Truck, Map as MapIcon, AlignLeft, Package, Plus, Trash2 } from "lucide-react";
+import { X, Save, Building2, User, FileText, Calendar, MapPin, Map, Truck, Map as MapIcon, AlignLeft, Package, Plus, Trash2, Wrench } from "lucide-react";
 import { apiFetch } from "@/lib/api";
 
 interface CrearOTModalProps {
@@ -17,6 +17,7 @@ export function CrearOTModal({ onClose, onSuccess }: CrearOTModalProps) {
   const [vehicles, setVehicles] = useState<any[]>([]);
   const [planols, setPlanols] = useState<any[]>([]);
   const [articles, setArticles] = useState<any[]>([]);
+  const [eines, setEines] = useState<any[]>([]);
 
   // Form state
   const [formData, setFormData] = useState({
@@ -38,30 +39,35 @@ export function CrearOTModal({ onClose, onSuccess }: CrearOTModalProps) {
   const [currentArticle, setCurrentArticle] = useState("");
   const [currentQty, setCurrentQty] = useState(1);
 
+  // Eines en custòdia state
+  const [selectedEinaIds, setSelectedEinaIds] = useState<string[]>([]);
+  const [currentEina, setCurrentEina] = useState("");
+
   useEffect(() => {
     // Load external data
     Promise.all([
-      apiFetch("/gestio/clients"),
-      apiFetch("/gestio/operaris"),
-      apiFetch("/gestio/flota"),
-      apiFetch("/gestio/planols"),
-      apiFetch("/gestio/magatzem/articles")
-    ]).then(([clientsRes, operarisRes, flotaRes, planolsRes, articlesRes]) => {
-      if (clientsRes.ok) clientsRes.json().then((data: any) => setClients(data.items || data || []));
-      if (operarisRes.ok) operarisRes.json().then((data: any) => setOperaris(data || []));
-      if (flotaRes.ok) flotaRes.json().then((data: any) => setVehicles(data || []));
-      if (planolsRes.ok) planolsRes.json().then((data: any) => setPlanols(data || []));
-      if (articlesRes.ok) articlesRes.json().then((data: any) => setArticles(data || []));
+      apiFetch<any>("/gestio/clients").catch(() => []),
+      apiFetch<any>("/gestio/operaris").catch(() => []),
+      apiFetch<any>("/gestio/flota").catch(() => []),
+      apiFetch<any>("/gestio/planols").catch(() => []),
+      apiFetch<any>("/gestio/magatzem/articles").catch(() => []),
+      apiFetch<any>("/gestio/magatzem/eines").catch(() => [])
+    ]).then(([clientsData, operarisData, flotaData, planolsData, articlesData, einesData]) => {
+      setClients(Array.isArray(clientsData) ? clientsData : (clientsData?.items || []));
+      setOperaris(Array.isArray(operarisData) ? operarisData : (operarisData?.operaris || []));
+      setVehicles(Array.isArray(flotaData) ? flotaData : (flotaData?.vehicles || []));
+      setPlanols(Array.isArray(planolsData) ? planolsData : []);
+      setArticles(Array.isArray(articlesData) ? articlesData : []);
+      setEines(Array.isArray(einesData) ? einesData : []);
     }).catch(console.error);
   }, []);
 
   // When client changes, fetch fitxa360 to get finques
   useEffect(() => {
     if (formData.client_id) {
-      apiFetch(`/gestio/clients/${formData.client_id}/fitxa360`)
-        .then(res => res.json())
+      apiFetch<any>(`/gestio/clients/${formData.client_id}/fitxa360`)
         .then(data => {
-          setFinques(data.finques || []);
+          setFinques(data?.finques || []);
           setFormData(prev => ({ ...prev, finca_id: "" }));
         })
         .catch(console.error);
@@ -91,6 +97,16 @@ export function CrearOTModal({ onClose, onSuccess }: CrearOTModalProps) {
     setLiniesPicking(newLinies);
   };
 
+  const addEina = () => {
+    if (!currentEina || selectedEinaIds.includes(currentEina)) return;
+    setSelectedEinaIds([...selectedEinaIds, currentEina]);
+    setCurrentEina("");
+  };
+
+  const removeEina = (idToRemove: string) => {
+    setSelectedEinaIds(selectedEinaIds.filter(id => id !== idToRemove));
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
@@ -99,6 +115,9 @@ export function CrearOTModal({ onClose, onSuccess }: CrearOTModalProps) {
       const payload = {
         ...formData,
         vehicle_id: formData.vehicle_id ? formData.vehicle_id : null,
+        cap_de_colla_id: formData.cap_de_colla_id ? formData.cap_de_colla_id : null,
+        finca_id: formData.finca_id ? formData.finca_id : null,
+        eina_ids: selectedEinaIds.length > 0 ? selectedEinaIds : null,
       };
       
       const { planol_id, ...backendPayload } = payload;
@@ -255,13 +274,23 @@ export function CrearOTModal({ onClose, onSuccess }: CrearOTModalProps) {
                   required
                   disabled={!formData.client_id}
                   value={formData.finca_id}
-                  onChange={e => setFormData({ ...formData, finca_id: e.target.value })}
+                  onChange={e => {
+                    const selId = e.target.value;
+                    const selFinca = finques.find(f => f.id === selId);
+                    setFormData(prev => ({
+                      ...prev,
+                      finca_id: selId,
+                      adreca: selFinca?.latitud && selFinca?.longitud
+                        ? `${selFinca.latitud}, ${selFinca.longitud}`
+                        : (selFinca?.adreca || prev.adreca)
+                    }));
+                  }}
                   className="w-full px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100 focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 outline-none transition-all disabled:opacity-50"
                 >
                   <option value="">Selecciona una finca...</option>
                   {finques.map(f => (
                     <option key={f.id} value={f.id}>
-                      {f.nom_finca || f.id}
+                      {f.nom || f.nom_finca || f.id}
                     </option>
                   ))}
                 </select>
@@ -343,14 +372,14 @@ export function CrearOTModal({ onClose, onSuccess }: CrearOTModalProps) {
             </div>
           </div>
 
-          {/* Secció 4: Assignació de Materials i Eines */}
+          {/* Secció 4: Assignació de Materials (Picking) */}
           <div>
-            <h3 className="text-sm font-bold text-emerald-600 dark:text-emerald-500 uppercase tracking-wider mb-4 border-b border-slate-100 dark:border-slate-800 pb-2">4. Assignació de Material i Eines (Picking)</h3>
+            <h3 className="text-sm font-bold text-emerald-600 dark:text-emerald-500 uppercase tracking-wider mb-4 border-b border-slate-100 dark:border-slate-800 pb-2">4. Assignació de Material (Fulla de Picking)</h3>
             <div className="bg-slate-50 dark:bg-slate-800/30 p-4 rounded-xl border border-slate-200 dark:border-slate-800 space-y-4">
               <div className="flex items-end gap-4 flex-wrap">
                 <div className="flex-1 space-y-2 min-w-[250px]">
                   <label className="text-sm font-bold text-slate-700 dark:text-slate-300 flex items-center gap-2">
-                    <Package className="w-4 h-4 text-slate-400" /> Article / Eina
+                    <Package className="w-4 h-4 text-slate-400" /> Article / Material
                   </label>
                   <select
                     value={currentArticle}
@@ -360,7 +389,7 @@ export function CrearOTModal({ onClose, onSuccess }: CrearOTModalProps) {
                     <option value="">Cercar material disponible...</option>
                     {articles.map(art => (
                       <option key={art.id} value={art.id} className={art.estoc_real <= 0 ? "text-red-500" : ""}>
-                        {art.nom} ({art.referencia_inventari}) - Estoc: {art.estoc_real} {art.unitat_mesura}
+                        {art.nom} ({art.referencia_inventari}) - Estoc: {art.estoc_real ?? 0} {art.unitat_mesura}
                       </option>
                     ))}
                   </select>
@@ -382,7 +411,7 @@ export function CrearOTModal({ onClose, onSuccess }: CrearOTModalProps) {
                   disabled={!currentArticle || currentQty <= 0}
                   className="px-4 py-2.5 rounded-xl bg-slate-800 dark:bg-slate-700 hover:bg-slate-900 dark:hover:bg-slate-600 disabled:opacity-50 text-white font-bold transition-colors flex items-center gap-2"
                 >
-                  <Plus className="w-4 h-4" /> Afegir
+                  <Plus className="w-4 h-4" /> Afegir Material
                 </button>
               </div>
 
@@ -410,6 +439,76 @@ export function CrearOTModal({ onClose, onSuccess }: CrearOTModalProps) {
                               <Trash2 className="w-4 h-4" />
                             </button>
                           </div>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Secció 5: Assignació d'Eines i Equips en Custòdia */}
+          <div>
+            <h3 className="text-sm font-bold text-emerald-600 dark:text-emerald-500 uppercase tracking-wider mb-4 border-b border-slate-100 dark:border-slate-800 pb-2">5. Eines i Equips en Custòdia</h3>
+            <div className="bg-slate-50 dark:bg-slate-800/30 p-4 rounded-xl border border-slate-200 dark:border-slate-800 space-y-4">
+              <div className="flex items-end gap-4 flex-wrap">
+                <div className="flex-1 space-y-2 min-w-[250px]">
+                  <label className="text-sm font-bold text-slate-700 dark:text-slate-300 flex items-center gap-2">
+                    <Wrench className="w-4 h-4 text-slate-400" /> Eina o Maquinària de Treball
+                  </label>
+                  <select
+                    value={currentEina}
+                    onChange={e => setCurrentEina(e.target.value)}
+                    className="w-full px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100 focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 outline-none transition-all"
+                  >
+                    <option value="">Selecciona eina disponible...</option>
+                    {eines
+                      .filter(e => !selectedEinaIds.includes(e.id))
+                      .map(e => (
+                        <option key={e.id} value={e.id}>
+                          {e.nom} {e.model ? `(${e.model})` : ""} - SN: {e.numero_serie} [{e.estat}]
+                        </option>
+                      ))}
+                  </select>
+                </div>
+                <button
+                  type="button"
+                  onClick={addEina}
+                  disabled={!currentEina}
+                  className="px-4 py-2.5 rounded-xl bg-slate-800 dark:bg-slate-700 hover:bg-slate-900 dark:hover:bg-slate-600 disabled:opacity-50 text-white font-bold transition-colors flex items-center gap-2"
+                >
+                  <Plus className="w-4 h-4" /> Vincular Eina
+                </button>
+              </div>
+
+              {/* Llista d'Eines Vinculades */}
+              {selectedEinaIds.length > 0 && (
+                <div className="mt-4 pt-4 border-t border-slate-200 dark:border-slate-700">
+                  <h4 className="text-xs font-bold text-slate-500 mb-3 uppercase tracking-wider">Eines assignades a la intervenció:</h4>
+                  <ul className="space-y-2">
+                    {selectedEinaIds.map((einaId) => {
+                      const einaDef = eines.find(e => e.id === einaId);
+                      return (
+                        <li key={einaId} className="flex items-center justify-between bg-white dark:bg-slate-900 p-3 rounded-lg border border-slate-100 dark:border-slate-800 shadow-sm">
+                          <div className="flex items-center gap-2.5">
+                            <Wrench className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                            <div>
+                              <span className="font-medium text-slate-800 dark:text-slate-200 text-sm">
+                                {einaDef?.nom || "Eina"}
+                              </span>
+                              <span className="text-xs text-slate-400 ml-2">
+                                (SN: {einaDef?.numero_serie} {einaDef?.model ? `• ${einaDef.model}` : ""})
+                              </span>
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => removeEina(einaId)}
+                            className="text-red-500 hover:text-red-700 p-1 rounded-md hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
                         </li>
                       );
                     })}
