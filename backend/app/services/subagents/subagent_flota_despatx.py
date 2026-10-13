@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.models import DocumentFlota, OrdreTreball, Vehicle
+from app.models.models import DocumentFlota, OrdreTreball, Usuari, Vehicle
 from app.services.subagents.base import BaseSubagent
 from app.services.subagents.schemas import SCHEMAS_FLOTA_DESPATX
 
@@ -63,6 +63,10 @@ class SubagentFlotaDespatx(BaseSubagent):
             "closest",
             "cercano",
             "flota",
+            "en ruta",
+            "en servei",
+            "assignat",
+            "assignats",
         ]
         return any(k in q for k in paraules_clau)
 
@@ -78,6 +82,8 @@ class SubagentFlotaDespatx(BaseSubagent):
         elif tool_name == "audit_itv_insurance_fleet":
             dies = int(args.get("dies_marge", 30))
             return await self.tool_audit_itv_insurance_fleet(db, empresa_id, dies)
+        elif tool_name == "get_fleet_status":
+            return await self.tool_get_fleet_status(db, empresa_id, args.get("filtres_estat"))
         return {"error": f"Eina no suportada pel subagent de flota: {tool_name}"}
 
     async def tool_get_closest_vehicle(
@@ -240,6 +246,83 @@ class SubagentFlotaDespatx(BaseSubagent):
             ),
         }
 
+    async def tool_get_fleet_status(
+        self, db: AsyncSession, empresa_id: uuid.UUID, filtres_estat: Optional[str] = None
+    ) -> dict:
+        stmt = (
+            select(Vehicle, Usuari.nom, Usuari.cognoms)
+            .outerjoin(Usuari, Vehicle.conductor_habitual_id == Usuari.id)
+            .where(Vehicle.empresa_id == empresa_id)
+            .order_by(Vehicle.matricula.asc())
+        )
+        res = await db.execute(stmt)
+        rows = res.all()
+        vehicles = []
+        for veh, u_nom, u_cognoms in rows:
+            c_nom = f"{u_nom or ''} {u_cognoms or ''}".strip() or "Sense conductor assignat"
+            vehicles.append(
+                {
+                    "matricula": veh.matricula,
+                    "marca": veh.marca,
+                    "model": veh.model,
+                    "estat": veh.estat,
+                    "conductor": c_nom,
+                    "odometre_km": veh.odometre_acumulat,
+                    "estat_itv": veh.estat_itv,
+                }
+            )
+
+        total = len(vehicles)
+        if total == 0:
+            return {
+                "trobat": False,
+                "total_vehicles": 0,
+                "vehicles": [],
+                "missatge": "Actualment no hi ha cap vehicle registrat a la flota de l'empresa.",
+            }
+
+        en_ruta = [
+            v
+            for v in vehicles
+            if v["estat"] in ("ASSIGNAT", "EN_RUTA")
+            or (v["estat"] == "OPERATIU" and v["conductor"] != "Sense conductor assignat")
+        ]
+        disponibles = [
+            v
+            for v in vehicles
+            if v["estat"] in ("DISPONIBLE", "OPERATIU")
+            and v["conductor"] == "Sense conductor assignat"
+        ]
+
+        txt_parts = [f"Flota de l'empresa ({total} vehicles totals):"]
+        if en_ruta:
+            llista_ruta = ", ".join(
+                [
+                    f"{v['matricula']} ({v['marca']} {v['model']} - Conductor: {v['conductor']})"
+                    for v in en_ruta
+                ]
+            )
+            txt_parts.append(f"• Vehicles en ruta o en servei ({len(en_ruta)}): {llista_ruta}.")
+        else:
+            txt_parts.append("• No hi ha cap vehicle en ruta o assignat a un conductor ara mateix.")
+
+        if disponibles:
+            llista_disp = ", ".join(
+                [f"{v['matricula']} ({v['marca']} {v['model']})" for v in disponibles]
+            )
+            txt_parts.append(f"• Vehicles lliures/disponibles ({len(disponibles)}): {llista_disp}.")
+
+        missatge = "\n".join(txt_parts)
+
+        return {
+            "trobat": True,
+            "total_vehicles": total,
+            "en_ruta": en_ruta,
+            "disponibles": disponibles,
+            "vehicles": vehicles,
+            "missatge": missatge,
+        }
+
     async def run_sovereign(
         self, pregunta: str, db: AsyncSession, empresa_id: uuid.UUID
     ) -> Tuple[str, Optional[str], Optional[dict], Optional[dict], List[dict]]:
@@ -332,12 +415,38 @@ class SubagentFlotaDespatx(BaseSubagent):
                 )
             return resposta, tool_name, tool_args, tool_res, enllacos
 
-        # Si pregunta per ITV o assegurances de la flota
-        tool_name = "audit_itv_insurance_fleet"
-        tool_args = {"dies_marge": 30}
-        tool_res = await self.tool_audit_itv_insurance_fleet(db, empresa_id, 30)
+        # 3. ITV o assegurances de la flota (NOMÉS si es pregunta expressament per aquests conceptes)
+        if any(
+            k in pregunta_lower
+            for k in [
+                "itv",
+                "asseguran",
+                "caducat",
+                "caduca",
+                "caducitat",
+                "polissa",
+                "pòlissa",
+                "inspecci",
+                "manteniment",
+            ]
+        ):
+            tool_name = "audit_itv_insurance_fleet"
+            tool_args = {"dies_marge": 30}
+            tool_res = await self.tool_audit_itv_insurance_fleet(db, empresa_id, 30)
+            return (
+                tool_res.get("missatge", "Revisió de flota completada."),
+                tool_name,
+                tool_args,
+                tool_res,
+                enllacos,
+            )
+
+        # 4. Estat general de la flota / vehicles en ruta / vehicles disponibles
+        tool_name = "get_fleet_status"
+        tool_args = {"filtres_estat": None}
+        tool_res = await self.tool_get_fleet_status(db, empresa_id)
         return (
-            tool_res.get("missatge", "Revisió de flota completada."),
+            tool_res.get("missatge", "Consulta de flota completada."),
             tool_name,
             tool_args,
             tool_res,

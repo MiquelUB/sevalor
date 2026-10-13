@@ -114,6 +114,32 @@ class SubagentGeneralRag(BaseSubagent):
         pregunta_lower = pregunta.lower()
         enllacos: List[dict] = []
 
+        # Salutacions i cortesia bàsica (Greetings)
+        salutacions = [
+            "hola",
+            "bon dia",
+            "bona tarda",
+            "bona nit",
+            "hola!",
+            "que tal",
+            "què tal",
+            "com va",
+            "com estàs",
+            "com estas",
+            "qui ets",
+            "ajuda",
+            "salutacions",
+        ]
+        text_net = pregunta_lower.strip().rstrip("!?.,")
+        if any(text_net == s or text_net.startswith(s + " ") or text_net.startswith(s + ",") for s in salutacions):
+            resposta = (
+                "Hola! Sóc el Copilot Tècnic de SEVALOR Suite. "
+                "Puc ajudar-te a consultar l'estoc real del magatzem, gestionar la flota de vehicles i rutes, "
+                "revisar l'historial de clients, verificar garanties o resoldre dubtes tècnics sobre protocols i normatives. "
+                "En què et puc ajudar avui?"
+            )
+            return resposta, None, None, None, []
+
         # Client / Historial
         if any(
             k in pregunta_lower

@@ -317,7 +317,7 @@ class CopilotDispatcher:
             resposta = resposta_ia
             if tool_name == "get_real_stock":
                 enllacos.append({"titol": "Inventari de Magatzem", "url": "/gestio/magatzem"})
-            elif tool_name in ("get_vehicle_info", "get_closest_vehicle"):
+            elif tool_name in ("get_vehicle_info", "get_closest_vehicle", "get_fleet_status", "audit_itv_insurance_fleet"):
                 enllacos.append({"titol": "Flota de Vehicles", "url": "/gestio/flota"})
             elif tool_name == "get_client_history":
                 enllacos.append({"titol": "Directori de Clients", "url": "/gestio/clients"})

@@ -205,10 +205,28 @@ SCHEMA_AUDIT_ITV_INSURANCE_FLEET = {
     },
 }
 
+SCHEMA_GET_FLEET_STATUS = {
+    "type": "function",
+    "function": {
+        "name": "get_fleet_status",
+        "description": "Consulta l'estat general de la flota de vehicles: quins vehicles estan en ruta, en servei o assignats a operaris, i quins estan disponibles al parc.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "filtres_estat": {
+                    "type": "string",
+                    "description": "Filtre opcional d'estat (ex: 'EN_RUTA', 'ASSIGNAT', 'DISPONIBLE')",
+                }
+            },
+        },
+    },
+}
+
 SCHEMAS_FLOTA_DESPATX: List[Dict[str, Any]] = [
     SCHEMA_GET_CLOSEST_VEHICLE,
     SCHEMA_GET_VEHICLE_INFO,
     SCHEMA_AUDIT_ITV_INSURANCE_FLEET,
+    SCHEMA_GET_FLEET_STATUS,
 ]
 
 # ── 4. Auditoria Financer i Rendibilitat (BOSS Only) ─────────────────────────
