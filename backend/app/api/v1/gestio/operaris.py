@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.v1.operari_pwa.jornada import JornadaInici
 from app.core.db import get_db_with_tenant_context
 from app.core.security import require_roles, veto_enginyer_finances
-from app.models.models import RegistreJornadaLaboral, Usuari
+from app.models.models import OrdreTreball, RegistreJornadaLaboral, Usuari
 from app.services.ocr_service import processar_dni_ocr
 
 router = APIRouter(
@@ -51,6 +51,8 @@ class OperariResponse(BaseModel):
     intents_pin_fallits: int = 0
     cap_de_grup_id: Optional[uuid.UUID] = None
     vehicle_assignat_id: Optional[uuid.UUID] = None
+    latitud: Optional[float] = None
+    longitud: Optional[float] = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -89,7 +91,23 @@ async def llistar_operaris(
     result = await db.execute(stmt)
     operaris = result.scalars().all()
 
-    return operaris
+    # Afegir coordenades de feines actives per relacionar visualment l'operari al mapa
+    response_list = []
+    for op in operaris:
+        op_resp = OperariResponse.model_validate(op)
+        stmt_ot = select(OrdreTreball).where(
+            OrdreTreball.empresa_id == uuid.UUID(empresa_id),
+            OrdreTreball.cap_de_colla_id == op.id,
+            OrdreTreball.estat.in_(["EN_CURS", "EN_RUTA", "EN_OBRA", "ASSIGNADA", "PROGRAMADA"]),
+        ).order_by(OrdreTreball.created_at.desc())
+        ot_res = await db.execute(stmt_ot)
+        ot_activa = ot_res.scalars().first()
+        if ot_activa and ot_activa.latitud is not None and ot_activa.longitud is not None:
+            op_resp.latitud = float(ot_activa.latitud) + 0.002
+            op_resp.longitud = float(ot_activa.longitud) + 0.002
+        response_list.append(op_resp)
+
+    return response_list
 
 
 @router.post("", response_model=OperariResponse, status_code=status.HTTP_201_CREATED)
