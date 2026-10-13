@@ -137,8 +137,8 @@ function GestioLayoutContent({ children }: { children: React.ReactNode }) {
 
   if (isEmbed) {
     return (
-      <div className="flex flex-col h-screen bg-slate-950 overflow-hidden">
-        <main className="flex-1 flex flex-col h-full w-full">{children}</main>
+      <div className="flex flex-col h-full w-full bg-slate-950 overflow-hidden">
+        <main className="flex-1 flex flex-col h-full w-full overflow-hidden">{children}</main>
       </div>
     );
   }

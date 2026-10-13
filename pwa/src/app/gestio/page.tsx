@@ -36,7 +36,7 @@ export default function GestioDashboardPage() {
   }, []);
 
   return (
-    <div className="flex flex-col h-full bg-slate-50 dark:bg-slate-950 p-4 md:p-6 space-y-6 overflow-y-auto">
+    <div className="flex flex-col h-full bg-slate-50 dark:bg-slate-950 p-4 md:p-6 space-y-6 overflow-y-auto overflow-x-hidden max-w-full">
       {/* 1. HUD DE POLSO OPERATIVO EN TIEMPO REAL (RF-07 & FR-018) */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
         {/* Cuadrillas Activas */}
@@ -129,7 +129,7 @@ export default function GestioDashboardPage() {
       </div>
 
       {/* 3. MAPA EMBEGUT (RF-08) */}
-      <div className="min-h-[480px] rounded-3xl overflow-hidden border border-slate-200 dark:border-slate-800 shadow-sm relative">
+      <div className="h-[640px] md:h-[680px] rounded-3xl overflow-hidden border border-slate-200 dark:border-slate-800 shadow-sm relative w-full">
         <div className="absolute inset-0 bg-slate-100 dark:bg-slate-900 flex items-center justify-center">
           <iframe 
             src="/gestio/mapa?embed=true" 

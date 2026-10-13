@@ -81,6 +81,7 @@ export default function GestioMapaPage() {
             modeVisor={modeVisor}
             onModeVisorChange={setModeVisor}
             initialOperariId={initialOperariId}
+            isEmbed={true}
           />
         )}
       </div>
