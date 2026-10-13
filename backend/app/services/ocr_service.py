@@ -165,12 +165,22 @@ async def processar_albara_ocr(file_bytes: bytes) -> Dict[str, Any]:
 
     # 1. Extracció directa determinista sobre text de PDF
     if text:
-        # NIF / CIF
-        nif_m = re.search(r"\b([A-HJ-NP-SU-W][0-9]{7}[0-9A-J]|[0-9]{8}[A-Z])\b", text.upper()) or re.search(
-            r"\b[A-Z]-?[0-9]{8}\b", text.upper()
-        )
-        if nif_m:
-            resultat["proveidor_nif"] = nif_m.group(0).replace(" ", "")
+        # NIF / CIF del proveïdor
+        prov_block = re.search(r"DADES DEL PROVE[ÏI]DOR[\s:\n\r]+([^\n\r]+(?:\n[^\n\r]+)?)", text, re.IGNORECASE)
+        if prov_block:
+            p_lines = [line.strip() for line in prov_block.group(1).splitlines() if line.strip() and not line.strip().upper().startswith("NIF")]
+            if p_lines:
+                resultat["proveidor_nom"] = p_lines[0]
+            nif_in_block = re.search(r"NIF:?\s*([A-Z0-9-]{8,11})", prov_block.group(0), re.IGNORECASE)
+            if nif_in_block:
+                resultat["proveidor_nif"] = nif_in_block.group(1).strip()
+
+        if not resultat["proveidor_nif"]:
+            nif_m = re.search(r"\b([A-HJ-NP-SU-W][0-9]{7}[0-9A-J]|[0-9]{8}[A-Z])\b", text.upper()) or re.search(
+                r"\b[A-Z]-?[0-9]{8}\b", text.upper()
+            )
+            if nif_m:
+                resultat["proveidor_nif"] = nif_m.group(0).replace(" ", "")
 
         # Número d'albarà
         num_m = re.search(
@@ -190,29 +200,28 @@ async def processar_albara_ocr(file_bytes: bytes) -> Dict[str, Any]:
             if data_iso:
                 resultat["data_albara"] = f"{data_iso.group(1)}-{data_iso.group(2)}-{data_iso.group(3)}"
 
-        # Nom del proveïdor
-        prov_dades = re.search(r"DADES DEL PROVE[ÏI]DOR[\s:\n\r]+([^\n\r]+)", text, re.IGNORECASE)
-        if prov_dades and len(prov_dades.group(1).strip()) > 3:
-            resultat["proveidor_nom"] = prov_dades.group(1).strip()
-        else:
+        # Nom del proveïdor (fallback si no estava a DADES DEL PROVEÏDOR)
+        if not resultat["proveidor_nom"]:
             prov_m = re.search(r"(?:Proveïdor|Proveedor|Empresa)[\s:]+([^(\n\r]+)", text, re.IGNORECASE)
             if prov_m and len(prov_m.group(1).strip()) > 3:
                 resultat["proveidor_nom"] = prov_m.group(1).strip()
             else:
-                # La primera línia no buida sovint és la capçalera/raó social
                 primeres_linies = [linia.strip() for linia in text.splitlines() if linia.strip()]
                 if primeres_linies:
                     resultat["proveidor_nom"] = primeres_linies[0]
 
-        # Articles
+        # ── Extracció de línies d'articles ─────────────────────────────────
         linies: List[Dict[str, Any]] = []
+
+        # Intent A: Format delimitat per canonades / pipes (sense caure en peus de pàgina)
         for line in text.splitlines():
             line_str = line.strip()
-            if "|" in line_str:
-                parts = [p.strip() for p in line_str.split("|")]
+            if "|" in line_str and not any(k in line_str.lower() for k in ("registre mercantil", "reg. mercantil", "pàgina", "pagina")):
+                clean = line_str.lstrip("-*• ")
+                parts = [p.strip() for p in clean.split("|")]
                 if len(parts) >= 3:
-                    ref = parts[0].replace("-", "").strip()
-                    nom = parts[1]
+                    ref = parts[0].strip()
+                    nom = parts[1].strip()
                     q_m = re.search(r"(\d+(?:[.,]\d+)?)", parts[2])
                     qty = float(q_m.group(1).replace(",", ".")) if q_m else 1.0
                     p_m = re.search(r"(\d+(?:[.,]\d+)?)", parts[3]) if len(parts) > 3 else None
@@ -222,9 +231,12 @@ async def processar_albara_ocr(file_bytes: bytes) -> Dict[str, Any]:
                     if len(parts) > 4 and "%" in parts[4]:
                         dte_m = re.search(r"(\d+(?:[.,]\d+)?)", parts[4])
                         dte = float(dte_m.group(1).replace(",", ".")) if dte_m else 0.0
+                    elif len(parts) > 3 and "%" in parts[3]:
+                        dte_m = re.search(r"(\d+(?:[.,]\d+)?)", parts[3])
+                        dte = float(dte_m.group(1).replace(",", ".")) if dte_m else 0.0
 
                     tipus = "MATERIAL"
-                    if any(k in nom.lower() for k in ("eina", "tornavís", "tornavis", "trepant", "serra")):
+                    if any(k in nom.lower() or k in ref.lower() for k in ("eina", "pinça", "pinca", "clau", "tornavís", "tornavis", "càmera", "camera", "mesurador", "pelacables", "arnès", "arnes")):
                         tipus = "EINA"
 
                     linies.append({
@@ -235,6 +247,84 @@ async def processar_albara_ocr(file_bytes: bytes) -> Dict[str, Any]:
                         "descompte_percent": dte,
                         "tipus": tipus,
                     })
+
+        # Intent B: Format columnar / tabular de documents PDF (PyMuPDF word clustering)
+        if not linies and len(file_bytes) > 0:
+            try:
+                import fitz
+                doc_pdf = fitz.open(stream=file_bytes, filetype="pdf")
+                num_re = r"\d+(?:\.\d{3})*(?:,\d+)?"
+                num_pattern = re.compile(
+                    rf"(?P<qtat>{num_re})\s*(?:un\.?|kit|par|bob\.?|m|kg|l|joc|uds\.?|u\.?|bid\.?)?\s+(?P<preu>{num_re})\s*€\s+(?P<dte>{num_re})\s*%\s+(?P<total>{num_re})\s*€",
+                    re.IGNORECASE,
+                )
+
+                for page in doc_pdf:
+                    words = page.get_text("words")
+                    header_y = next((w[1] for w in words if w[4].upper() == "CODI"), 200)
+                    footer_y = next((w[1] for w in words if w[1] > header_y + 50 and w[4].upper() in ("OBSERVACIONS", "SUBTOTAL")), 550)
+                    table_words = [w for w in words if header_y + 10 < w[1] < footer_y - 5]
+                    table_words.sort(key=lambda w: (w[1], w[0]))
+
+                    lines_grouped = []
+                    curr_line = []
+                    curr_y = None
+                    for w in table_words:
+                        if curr_y is None or abs(w[1] - curr_y) < 7:
+                            curr_line.append(w)
+                            curr_y = w[1] if curr_y is None else (curr_y + w[1]) / 2
+                        else:
+                            curr_line.sort(key=lambda x: x[0])
+                            lines_grouped.append((curr_y, " ".join([x[4] for x in curr_line])))
+                            curr_line = [w]
+                            curr_y = w[1]
+                    if curr_line:
+                        curr_line.sort(key=lambda x: x[0])
+                        lines_grouped.append((curr_y, " ".join([x[4] for x in curr_line])))
+
+                    unconsumed_desc = ""
+                    for y, lstr in lines_grouped:
+                        m = num_pattern.search(lstr)
+                        if m:
+                            qtat = float(m.group("qtat").replace(".", "").replace(",", "."))
+                            preu = float(m.group("preu").replace(".", "").replace(",", "."))
+                            dte = float(m.group("dte").replace(",", "."))
+                            pre_text = lstr[:m.start()].strip()
+                            if unconsumed_desc:
+                                pre_text = f"{unconsumed_desc} {pre_text}".strip()
+                                unconsumed_desc = ""
+
+                            # Extreure codi d'article (ex: MOD-450B, INV-HY-06, CAM-TER-IR)
+                            code_m = re.search(r"\b([A-Z0-9]{2,6}-[A-Z0-9]{2,6}(?:-[A-Z0-9]{1,4})?)\b", pre_text)
+                            if code_m:
+                                code = code_m.group(1)
+                                nom = re.sub(rf"\b{re.escape(code)}\b", "", pre_text).strip()
+                                nom = re.sub(r"\s+", " ", nom)
+                            else:
+                                tokens = pre_text.split()
+                                if len(tokens) >= 2 and tokens[0].endswith("-"):
+                                    code = tokens[0] + tokens[1]
+                                    nom = " ".join(tokens[2:])
+                                elif tokens:
+                                    code = tokens[0]
+                                    nom = " ".join(tokens[1:])
+                                else:
+                                    code = "REF-DOC"
+                                    nom = "Article de Material"
+
+                            tipus = "EINA" if any(w in nom.lower() or w in code.lower() for w in ["eina", "pinça", "pinca", "clau", "tornavís", "tornavis", "càmera", "camera", "mesurador", "pelacables", "arnès", "arnes"]) else "MATERIAL"
+                            linies.append({
+                                "referencia": code,
+                                "nom": nom,
+                                "quantitat": qtat,
+                                "preu": preu,
+                                "descompte_percent": dte,
+                                "tipus": tipus,
+                            })
+                        else:
+                            unconsumed_desc = lstr
+            except Exception as e:
+                logger.info(f"Avís en extracció columnar de PDF: {e}")
 
         if linies:
             resultat["linies"] = linies

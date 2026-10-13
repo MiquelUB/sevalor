@@ -32,7 +32,7 @@ class SubagentFlotaDespatx(BaseSubagent):
     id = "subagent_flota_despatx"
     nom = "Subagent de Flota i Desplaçaments"
     descripcio = "Especialista en geolocalització de vehicles, càlcul Haversine de proximitat i control d'ITV/assegurances."
-    allowed_roles = ["SECRETARIA", "ENGINYER", "BOSS"]
+    allowed_roles = ["SECRETARIA", "ENGINYER", "BOSS", "OPERARI", "CAP_DE_COLLA", "ADMIN"]
     tools_schema = SCHEMAS_FLOTA_DESPATX
     system_prompt = (
         "Ets l'assistent expert en Flota i Despatx de SEVALOR. "

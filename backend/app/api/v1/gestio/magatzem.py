@@ -846,7 +846,10 @@ async def confirmar_document(
                 # Les eines no sumen al moviment d'estoc de materials ni al preu PMP.
                 continue
 
-            stmt_art = select(Article).where(Article.referencia_inventari == linia.referencia)
+            stmt_art = select(Article).where(
+                Article.empresa_id == empresa_id,
+                Article.referencia_inventari == linia.referencia,
+            )
             article = (await db.execute(stmt_art)).scalars().first()
 
             if not article:
@@ -856,12 +859,17 @@ async def confirmar_document(
                     nom=linia.nom,
                     unitat_mesura="UNITAT",
                     familia="GENERAL",
+                    proveidor_id=prov.id,
+                    descompte_proveidor=float(linia.descompte_percent),
                     preu_cost=nou_preu,
                 )
                 db.add(article)
                 await db.flush()
                 articles_creats += 1
             else:
+                if not article.proveidor_id:
+                    article.proveidor_id = prov.id
+                article.descompte_proveidor = float(linia.descompte_percent)
                 # Calcular PMP (Preu Mitjà Ponderat)
                 estoc_res = await db.execute(
                     select(EstocMagatzem).where(EstocMagatzem.article_id == article.id)

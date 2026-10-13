@@ -16,7 +16,7 @@ class SubagentGeneralRag(BaseSubagent):
     id = "subagent_general_rag"
     nom = "Subagent General i RAG Corporatiu"
     descripcio = "Especialista en procediments tècnics corporatius, normatives REBT/agrícoles i historial 360° de clients."
-    allowed_roles = ["BOSS", "SECRETARIA", "ENGINYER"]
+    allowed_roles = ["BOSS", "SECRETARIA", "ENGINYER", "OPERARI", "CAP_DE_COLLA", "ADMIN"]
     tools_schema = SCHEMAS_GENERAL_RAG
     system_prompt = (
         "Ets el Copilot Tècnic de SEVALOR Suite. "

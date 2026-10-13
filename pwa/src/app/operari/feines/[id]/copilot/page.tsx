@@ -4,6 +4,7 @@ import React, { useState, useEffect, useRef } from "react";
 import { Send, Bot, User, AlertCircle, ArrowLeft } from "lucide-react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
+import { apiFetch } from "@/lib/api";
 
 interface Message {
   id: string;
@@ -52,30 +53,22 @@ export default function CopilotPage() {
     setIsLoading(true);
 
     try {
-      const res = await fetch("/api/v1/gestio/copilot/rag", {
+      const data: any = await apiFetch("/gestio/copilot/xat", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ query: userMsg.content, context_id: feinaId }),
+        body: JSON.stringify({ pregunta: userMsg.content, context_id: feinaId }),
       });
 
-      if (!res.ok) {
-        throw new Error("Error de l'assistent");
-      }
-
-      const data = await res.json();
       const botMsg: Message = {
         id: (Date.now() + 1).toString(),
         role: "bot",
         content: data.resposta || "Ho sento, no he pogut generar una resposta.",
       };
       setMessages((prev) => [...prev, botMsg]);
-    } catch (error) {
+    } catch (error: any) {
       const errorMsg: Message = {
         id: (Date.now() + 1).toString(),
         role: "bot",
-        content: "Error de connexió amb el Copilot. Torna-ho a intentar més tard.",
+        content: error?.message || "Error de connexió amb el Copilot. Torna-ho a intentar més tard.",
       };
       setMessages((prev) => [...prev, errorMsg]);
     } finally {

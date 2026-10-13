@@ -14,6 +14,8 @@ import {
   X,
   CheckCircle2,
   Layers,
+  Trash2,
+  FileText,
 } from "lucide-react";
 import { apiFetch, getAuthToken, getApiBaseUrl, extractTenantId } from "@/lib/api";
 import { useGestio } from "@/lib/gestio-context";
@@ -196,7 +198,14 @@ export default function GestioMagatzemPage() {
           tipus_document: resultatOcr.tipus_document || "ALBARA",
           data_document: resultatOcr.data_document || new Date().toISOString().split("T")[0],
           numero_albarans_vinculats: resultatOcr.numero_albarans_vinculats || [],
-          linies: resultatOcr.linies || [],
+          linies: (resultatOcr.linies || []).map((l: any) => ({
+            referencia: l.referencia,
+            nom: l.nom,
+            quantitat: Number(l.quantitat) || 1,
+            preu: Number(l.preu) || 0,
+            descompte_percent: Number(l.descompte_percent) || 0,
+            tipus: l.tipus || "MATERIAL",
+          })),
         }),
       });
       setModalOcr(false);
@@ -689,11 +698,11 @@ export default function GestioMagatzemPage() {
       {/* Modal Entrada OCR */}
       {modalOcr && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="w-full max-w-lg bg-white dark:bg-slate-900 rounded-3xl shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden">
-            <div className="p-5 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between">
+          <div className={`w-full ${resultatOcr ? "max-w-5xl max-h-[90vh]" : "max-w-lg"} bg-white dark:bg-slate-900 rounded-3xl shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden flex flex-col`}>
+            <div className="p-5 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between shrink-0">
               <h3 className="font-bold text-sm text-slate-800 dark:text-slate-100 flex items-center gap-2">
                 <Sparkles className="w-4 h-4 text-indigo-600" />
-                Entrada Assistida per IA (OCR)
+                Entrada Assistida per IA (OCR Albarà / Factura)
               </h3>
               <button
                 onClick={() => {
@@ -707,7 +716,7 @@ export default function GestioMagatzemPage() {
               </button>
             </div>
 
-            <div className="p-5 space-y-4">
+            <div className="p-5 space-y-4 overflow-y-auto flex-1">
               {!resultatOcr ? (
                 <form onSubmit={handlePujarOcr} className="space-y-4">
                   <div>
@@ -734,27 +743,189 @@ export default function GestioMagatzemPage() {
                 </form>
               ) : (
                 <div className="space-y-4">
-                  <div className="p-4 bg-slate-50 dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 text-xs">
-                    <p><strong>Proveïdor:</strong> {resultatOcr.proveidor?.nom || (typeof resultatOcr.proveidor === "string" ? resultatOcr.proveidor : "Pendent de revisió")}</p>
-                    <p><strong>Número:</strong> {resultatOcr.numero_document || "Sense número"}</p>
-                    <p><strong>Data:</strong> {resultatOcr.data_document || "Pendent"}</p>
-                    <p className="mt-2 font-bold">Línies detectades: {resultatOcr.linies?.length || 0}</p>
+                  {/* Dades de la capçalera detectada */}
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3 p-3 bg-slate-50 dark:bg-slate-800/60 rounded-2xl border border-slate-200 dark:border-slate-700">
+                    <div>
+                      <span className="text-[10px] uppercase font-bold text-slate-400 block">Proveïdor</span>
+                      <p className="text-xs font-bold text-slate-800 dark:text-slate-100 mt-0.5">
+                        {resultatOcr.proveidor?.nom || "Proveïdor no identificat"}
+                      </p>
+                      <p className="text-[11px] font-mono text-slate-500">
+                        NIF: {resultatOcr.proveidor?.nif || "—"}
+                      </p>
+                    </div>
+                    <div>
+                      <span className="text-[10px] uppercase font-bold text-slate-400 block">Document</span>
+                      <p className="text-xs font-bold text-slate-800 dark:text-slate-100 mt-0.5 font-mono">
+                        {resultatOcr.numero_document || "Sense número"}
+                      </p>
+                      <p className="text-[11px] text-slate-500">
+                        Data: {resultatOcr.data_document || "—"}
+                      </p>
+                    </div>
+                    <div>
+                      <span className="text-[10px] uppercase font-bold text-slate-400 block">Resum Línies</span>
+                      <p className="text-xs font-bold text-emerald-600 dark:text-emerald-400 mt-0.5">
+                        {resultatOcr.linies?.length || 0} articles detectats
+                      </p>
+                      <p className="text-[11px] text-slate-500">
+                        {resultatOcr.linies?.filter((l: any) => l.tipus === "EINA").length || 0} eines, {resultatOcr.linies?.filter((l: any) => l.tipus !== "EINA").length || 0} materials
+                      </p>
+                    </div>
                   </div>
-                  <div className="flex justify-end gap-2">
-                    <button
-                      onClick={() => setResultatOcr(null)}
-                      className="px-4 py-2 rounded-xl border border-slate-300 dark:border-slate-700 text-slate-600 dark:text-slate-300 text-xs font-medium hover:bg-slate-100 dark:hover:bg-slate-800"
-                      disabled={processantOcr}
-                    >
-                      Tornar
-                    </button>
-                    <button
-                      onClick={handleConfirmarOcr}
-                      disabled={processantOcr}
-                      className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow disabled:opacity-50"
-                    >
-                      {processantOcr ? "Desant..." : "Confirmar i Desar"}
-                    </button>
+
+                  {/* Taula de línies de l'albarà amb edició */}
+                  <div className="border border-slate-200 dark:border-slate-700 rounded-2xl overflow-hidden shadow-sm">
+                    <table className="w-full text-left text-xs border-collapse">
+                      <thead>
+                        <tr className="bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-bold border-b border-slate-200 dark:border-slate-700">
+                          <th className="p-2.5">Tipus</th>
+                          <th className="p-2.5">Ref. Article</th>
+                          <th className="p-2.5">Descripció</th>
+                          <th className="p-2.5 text-right">Quantitat</th>
+                          <th className="p-2.5 text-right">Preu (€)</th>
+                          <th className="p-2.5 text-right">Dte (%)</th>
+                          <th className="p-2.5 text-right">Total Net</th>
+                          <th className="p-2.5 text-center w-10"></th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100 dark:divide-slate-800 bg-white dark:bg-slate-900">
+                        {resultatOcr.linies?.map((lin: any, idx: number) => {
+                          const net = (Number(lin.quantitat || 0) * Number(lin.preu || 0)) * (1 - (Number(lin.descompte_percent || 0) / 100));
+                          return (
+                            <tr key={idx} className="hover:bg-slate-50/60 dark:hover:bg-slate-800/40">
+                              <td className="p-2">
+                                <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${lin.tipus === "EINA" ? "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300" : "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300"}`}>
+                                  {lin.tipus}
+                                </span>
+                              </td>
+                              <td className="p-2">
+                                <input
+                                  type="text"
+                                  value={lin.referencia}
+                                  onChange={(e) => {
+                                    const updated = [...resultatOcr.linies];
+                                    updated[idx].referencia = e.target.value;
+                                    setResultatOcr({ ...resultatOcr, linies: updated });
+                                  }}
+                                  className="w-28 font-mono font-bold text-emerald-700 dark:text-emerald-400 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded px-1.5 py-0.5 text-xs"
+                                />
+                              </td>
+                              <td className="p-2">
+                                <input
+                                  type="text"
+                                  value={lin.nom}
+                                  onChange={(e) => {
+                                    const updated = [...resultatOcr.linies];
+                                    updated[idx].nom = e.target.value;
+                                    setResultatOcr({ ...resultatOcr, linies: updated });
+                                  }}
+                                  className="w-full min-w-[180px] bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded px-1.5 py-0.5 text-xs text-slate-800 dark:text-slate-100"
+                                />
+                              </td>
+                              <td className="p-2 text-right">
+                                <input
+                                  type="number"
+                                  step="0.01"
+                                  value={lin.quantitat}
+                                  onChange={(e) => {
+                                    const updated = [...resultatOcr.linies];
+                                    updated[idx].quantitat = Number(e.target.value);
+                                    setResultatOcr({ ...resultatOcr, linies: updated });
+                                  }}
+                                  className="w-16 text-right font-mono font-bold bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded px-1 py-0.5 text-xs"
+                                />
+                              </td>
+                              <td className="p-2 text-right">
+                                <input
+                                  type="number"
+                                  step="0.01"
+                                  value={lin.preu}
+                                  onChange={(e) => {
+                                    const updated = [...resultatOcr.linies];
+                                    updated[idx].preu = Number(e.target.value);
+                                    setResultatOcr({ ...resultatOcr, linies: updated });
+                                  }}
+                                  className="w-16 text-right font-mono bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded px-1 py-0.5 text-xs"
+                                />
+                              </td>
+                              <td className="p-2 text-right">
+                                <input
+                                  type="number"
+                                  step="0.01"
+                                  value={lin.descompte_percent}
+                                  onChange={(e) => {
+                                    const updated = [...resultatOcr.linies];
+                                    updated[idx].descompte_percent = Number(e.target.value);
+                                    setResultatOcr({ ...resultatOcr, linies: updated });
+                                  }}
+                                  className="w-14 text-right font-mono bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded px-1 py-0.5 text-xs"
+                                />
+                              </td>
+                              <td className="p-2 text-right font-mono font-bold text-slate-800 dark:text-slate-200">
+                                {net.toFixed(2)} €
+                              </td>
+                              <td className="p-2 text-center">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    const updated = resultatOcr.linies.filter((_: any, i: number) => i !== idx);
+                                    setResultatOcr({ ...resultatOcr, linies: updated });
+                                  }}
+                                  className="p-1 text-slate-400 hover:text-rose-600 rounded"
+                                  title="Eliminar línia"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {/* Peu de la revisió */}
+                  <div className="flex items-center justify-between pt-2">
+                    <div className="text-xs text-slate-500">
+                      Total estimat de l'albarà:{" "}
+                      <strong className="text-slate-800 dark:text-slate-200 font-mono text-sm ml-1">
+                        {resultatOcr.linies
+                          ?.reduce((acc: number, l: any) => {
+                            const net = (Number(l.quantitat || 0) * Number(l.preu || 0)) * (1 - (Number(l.descompte_percent || 0) / 100));
+                            return acc + net;
+                          }, 0)
+                          .toFixed(2)}{" "}
+                        €
+                      </strong>
+                    </div>
+
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => setResultatOcr(null)}
+                        className="px-4 py-2 rounded-xl border border-slate-300 dark:border-slate-700 text-slate-600 dark:text-slate-300 text-xs font-medium hover:bg-slate-100 dark:hover:bg-slate-800"
+                        disabled={processantOcr}
+                      >
+                        Tornar
+                      </button>
+                      <button
+                        onClick={handleConfirmarOcr}
+                        disabled={processantOcr}
+                        className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow flex items-center gap-1.5 disabled:opacity-50"
+                      >
+                        {processantOcr ? (
+                          <>
+                            <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                            <span>Desant...</span>
+                          </>
+                        ) : (
+                          <>
+                            <CheckCircle2 className="w-3.5 h-3.5" />
+                            <span>Confirmar i Desar a l'Inventari</span>
+                          </>
+                        )}
+                      </button>
+                    </div>
                   </div>
                 </div>
               )}

@@ -18,7 +18,7 @@ class SubagentLogisticaEstoc(BaseSubagent):
     descripcio = (
         "Especialista en inventari físic, disponibilitat d'articles i replanificació de material."
     )
-    allowed_roles = ["CAP_DE_MAGATZEM", "ENGINYER", "SECRETARIA", "BOSS"]
+    allowed_roles = ["CAP_DE_MAGATZEM", "ENGINYER", "SECRETARIA", "BOSS", "OPERARI", "CAP_DE_COLLA", "ADMIN"]
     tools_schema = SCHEMAS_LOGISTICA_ESTOC
     system_prompt = (
         "Ets l'assistent expert en Logística i Magatzem de SEVALOR. "
@@ -34,15 +34,18 @@ class SubagentLogisticaEstoc(BaseSubagent):
             for ocr_k in ["albarà", "albara", "ocr", "tiquet", "digitalitzar", "escanejar"]
         ):
             return False
+        # No capturar consultes generals de feines o flota
+        if any(f_k in q for f_k in ["vehicle", "furgoneta", "itv", "assegurança", "quota", "feina", "feines"]):
+            return False
         paraules_clau = [
             "estoc",
             "stock",
-            "quantitat",
-            "queden",
-            "queda",
-            "disposem",
             "cable",
             "tub",
+            "tubs",
+            "panell",
+            "inversor",
+            "bateria",
             "electrovalvula",
             "material",
             "inventari",
@@ -77,25 +80,39 @@ class SubagentLogisticaEstoc(BaseSubagent):
     async def tool_get_real_stock(
         self, db: AsyncSession, empresa_id: uuid.UUID, article_ref: str
     ) -> dict:
-        terme = article_ref.strip()
-        cerca = f"%{terme}%"
+        terme = article_ref.strip().lower()
+        stopwords = {
+            "material", "familia", "família", "article", "articles", "d", "de", "del",
+            "dels", "la", "el", "els", "les", "per", "obra", "tenim", "disposem", "quants",
+            "queden", "queda", "al", "als", "en", "i", "un", "una", "uns", "unes", "hi", "ha"
+        }
+        words = [w for w in terme.split() if w not in stopwords and len(w) > 1]
+        cerca = f"%{' '.join(words) if words else terme}%"
         stmt = select(Article).where(
             Article.empresa_id == empresa_id,
-            or_(Article.referencia_inventari.ilike(cerca), Article.nom.ilike(cerca)),
+            or_(
+                Article.referencia_inventari.ilike(cerca),
+                Article.nom.ilike(cerca),
+                Article.familia.ilike(cerca),
+            ),
         )
         res = await db.execute(stmt)
         articles = res.scalars().all()
 
-        if not articles:
-            paraules = [p for p in terme.split() if len(p) > 2]
-            if paraules:
-                clauses = [
-                    or_(Article.referencia_inventari.ilike(f"%{p}%"), Article.nom.ilike(f"%{p}%"))
-                    for p in paraules
-                ]
-                stmt_p = select(Article).where(Article.empresa_id == empresa_id, or_(*clauses))
-                res_p = await db.execute(stmt_p)
-                articles = res_p.scalars().all()
+        if not articles and words:
+            clauses = []
+            for p in words:
+                clauses.append(Article.referencia_inventari.ilike(f"%{p}%"))
+                clauses.append(Article.nom.ilike(f"%{p}%"))
+                clauses.append(Article.familia.ilike(f"%{p}%"))
+                if p.endswith("s") and len(p) > 2:
+                    stem = p[:-1]
+                    clauses.append(Article.referencia_inventari.ilike(f"%{stem}%"))
+                    clauses.append(Article.nom.ilike(f"%{stem}%"))
+                    clauses.append(Article.familia.ilike(f"%{stem}%"))
+            stmt_p = select(Article).where(Article.empresa_id == empresa_id, or_(*clauses))
+            res_p = await db.execute(stmt_p)
+            articles = res_p.scalars().all()
 
         if not articles:
             return {
@@ -103,7 +120,7 @@ class SubagentLogisticaEstoc(BaseSubagent):
                 "article_cercat": article_ref,
                 "total_disponible": 0.0,
                 "articles": [],
-                "missatge": f"No s'ha trobat cap article amb la referència o nom '{article_ref}'.",
+                "missatge": f"No s'ha trobat cap article coincident amb '{article_ref}' als magatzems de l'empresa.",
             }
 
         articles_data = []

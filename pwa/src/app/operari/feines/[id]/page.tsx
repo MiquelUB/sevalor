@@ -2,7 +2,8 @@
 
 import React, { useState, useEffect } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { ArrowLeft, Settings, Cpu, HardDrive, Server, Smartphone, Wrench, FileText } from "lucide-react";
+import Link from "next/link";
+import { ArrowLeft, Settings, Cpu, HardDrive, Server, Smartphone, Wrench, FileText, Bot } from "lucide-react";
 import { apiFetch } from "@/lib/api";
 import { db } from "@/lib/offline/db";
 import { encryptWithPin, decryptWithPin } from "@/lib/crypto";
@@ -193,9 +194,18 @@ const loadFeina = async (pin?: string) => {
         </div>
       ) : (
         <>
-          <div className="bg-white dark:bg-slate-900 p-4 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm">
-            <h2 className="text-sm font-bold text-slate-800 dark:text-slate-100">{ordre.titol}</h2>
-            <p className="text-xs text-slate-500 mt-1">{ordre.client} • {ordre.estat}</p>
+          <div className="bg-white dark:bg-slate-900 p-4 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm flex items-center justify-between">
+            <div>
+              <h2 className="text-sm font-bold text-slate-800 dark:text-slate-100">{ordre.titol}</h2>
+              <p className="text-xs text-slate-500 mt-1">{ordre.client} • {ordre.estat}</p>
+            </div>
+            <Link
+              href={`/operari/feines/${ordre.id}/copilot`}
+              className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold flex items-center gap-1.5 shadow transition-colors"
+            >
+              <Bot className="w-3.5 h-3.5" />
+              <span>Copilot IA</span>
+            </Link>
           </div>
 
           <h3 className="text-sm font-bold mt-4 mb-2 text-slate-700 dark:text-slate-300 px-1">

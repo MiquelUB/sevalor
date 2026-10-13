@@ -267,13 +267,7 @@ class CopilotDispatcher:
         pregunta_net = pregunta.lower()
 
         # ── 1. Verificació d'Accés per Rol (Zero-Trust Security Barrier) ────────
-        if rol_usuari == "OPERARI":
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Copilot no disponible per a operaris",
-            )
-
-        # Veto financer per a rols no-BOSS (ENGINYER, SECRETARIA, etc.)
+        # Veto financer per a rols no-BOSS (OPERARI, ENGINYER, SECRETARIA, etc.)
         es_consulta_financera = any(clau in pregunta_net for clau in PARAULES_CLAU_FINANCERES_VETO)
         if es_consulta_financera and rol_usuari != "BOSS":
             log_denegat = ConsultaXatCopilot(
@@ -324,8 +318,19 @@ class CopilotDispatcher:
                 enllacos.append({"titol": "Auditoria de Garanties", "url": "/gestio/copilot"})
             elif tool_name == "get_unbilled_money":
                 enllacos.append({"titol": "Control Financer i Marge", "url": "/gestio/economica"})
+        elif resposta_ia:
+            # Resposta conversacional directa atesa per la IA local (LM Studio)
+            resposta = resposta_ia
+            if selected_subagent.id == "subagent_flota_despatx":
+                enllacos.append({"titol": "Flota de Vehicles", "url": "/gestio/flota"})
+            elif selected_subagent.id == "subagent_logistica_estoc":
+                enllacos.append({"titol": "Inventari de Magatzem", "url": "/gestio/magatzem"})
+            elif selected_subagent.id == "subagent_peritatge_camp":
+                enllacos.append({"titol": "Auditoria de Garanties", "url": "/gestio/copilot"})
+            elif selected_subagent.id == "subagent_auditoria_marge":
+                enllacos.append({"titol": "Control Financer i Marge", "url": "/gestio/economica"})
         else:
-            # Fallback determinista sobirà local (Zero Mock Data)
+            # Fallback determinista sobirà local (Zero Mock Data) si LM Studio no ha respost
             (
                 resp_local,
                 t_name_loc,
@@ -334,25 +339,11 @@ class CopilotDispatcher:
                 enllacos_loc,
             ) = await selected_subagent.run_sovereign(pregunta, db, empresa_id)
 
-            if t_name_loc != "get_rag_knowledge" or (t_res_loc and t_res_loc.get("trobat")):
-                resposta = resp_local
-                tool_name = t_name_loc
-                tool_args = t_args_loc
-                tool_result = t_res_loc
-                enllacos = enllacos_loc
-            elif resposta_ia:
-                # Pregunta conversacional directa atesa per LM Studio
-                resposta = resposta_ia
-                tool_name = None
-                tool_args = None
-                tool_result = None
-                enllacos = []
-            else:
-                resposta = resp_local
-                tool_name = t_name_loc
-                tool_args = t_args_loc
-                tool_result = t_res_loc
-                enllacos = enllacos_loc
+            resposta = resp_local
+            tool_name = t_name_loc
+            tool_args = t_args_loc
+            tool_result = t_res_loc
+            enllacos = enllacos_loc
 
         elapsed_ms = int((time.perf_counter() - t_start) * 1000)
 
