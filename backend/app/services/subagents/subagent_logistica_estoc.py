@@ -140,45 +140,80 @@ class SubagentLogisticaEstoc(BaseSubagent):
     ) -> dict:
         terme = article_ref.strip().lower()
         stopwords = {
-            "material", "familia", "família", "article", "articles", "d", "de", "del",
+            "material", "materials", "familia", "família", "article", "articles", "d", "de", "del",
             "dels", "la", "el", "els", "les", "per", "obra", "tenim", "disposem", "quants",
-            "queden", "queda", "al", "als", "en", "i", "un", "una", "uns", "unes", "hi", "ha"
+            "queden", "queda", "al", "als", "en", "i", "un", "una", "uns", "unes", "hi", "ha",
+            "quin", "quina", "quins", "quines", "estoc", "stock", "magatzem", "inventari"
         }
         words = [w for w in terme.split() if w not in stopwords and len(w) > 1]
-        cerca = f"%{' '.join(words) if words else terme}%"
-        stmt = select(Article).where(
-            Article.empresa_id == empresa_id,
-            or_(
-                Article.referencia_inventari.ilike(cerca),
-                Article.nom.ilike(cerca),
-                Article.familia.ilike(cerca),
-            ),
-        )
-        res = await db.execute(stmt)
-        articles = res.scalars().all()
 
-        if not articles and words:
+        # Mapatge de sinònims tècnics habituals
+        sinonims_map = {
+            "tub": ["tub", "canonada", "pe-100", "polietil"],
+            "tubs": ["tub", "canonada", "pe-100", "polietil"],
+            "canonada": ["tub", "canonada", "pe-100"],
+            "canonades": ["tub", "canonada", "pe-100"],
+            "tuberia": ["tub", "canonada"],
+            "valvula": ["valv", "bermad", "vàlvul"],
+            "vàlvula": ["valv", "bermad", "vàlvul"],
+            "valvules": ["valv", "bermad", "vàlvul"],
+            "vàlvules": ["valv", "bermad", "vàlvul"],
+            "electrovalvula": ["valv", "bermad"],
+            "electrovàlvula": ["valv", "bermad"],
+            "filtre": ["filtr", "anell"],
+            "filtres": ["filtr", "anell"],
+            "bomba": ["bomb", "submergibl"],
+            "bombes": ["bomb", "submergibl"],
+            "aspersor": ["aspers", "sectorial"],
+            "aspersors": ["aspers", "sectorial"],
+            "cable": ["cabl"],
+            "cables": ["cabl"],
+        }
+
+        search_tokens = set(words)
+        for w in words:
+            if w in sinonims_map:
+                search_tokens.update(sinonims_map[w])
+
+        articles = []
+        if search_tokens:
             clauses = []
-            for p in words:
-                clauses.append(Article.referencia_inventari.ilike(f"%{p}%"))
-                clauses.append(Article.nom.ilike(f"%{p}%"))
-                clauses.append(Article.familia.ilike(f"%{p}%"))
-                if p.endswith("s") and len(p) > 2:
-                    stem = p[:-1]
-                    clauses.append(Article.referencia_inventari.ilike(f"%{stem}%"))
-                    clauses.append(Article.nom.ilike(f"%{stem}%"))
-                    clauses.append(Article.familia.ilike(f"%{stem}%"))
-            stmt_p = select(Article).where(Article.empresa_id == empresa_id, or_(*clauses))
-            res_p = await db.execute(stmt_p)
-            articles = res_p.scalars().all()
+            for token in search_tokens:
+                clauses.append(Article.referencia_inventari.ilike(f"%{token}%"))
+                clauses.append(Article.nom.ilike(f"%{token}%"))
+                clauses.append(Article.familia.ilike(f"%{token}%"))
+            stmt = select(Article).where(Article.empresa_id == empresa_id, or_(*clauses))
+            res = await db.execute(stmt)
+            articles = res.scalars().all()
+
+        # Si la consulta és genèrica o no s'ha trobat cap article específic, obtenir catàleg actiu complet
+        es_consulta_generica = not words or any(g in terme for g in ("tots", "general", "global", "inventari", "magatzem"))
+        if not articles and es_consulta_generica:
+            stmt_all = (
+                select(Article)
+                .where(Article.empresa_id == empresa_id, Article.actiu.is_(True))
+                .order_by(Article.familia.asc(), Article.nom.asc())
+                .limit(25)
+            )
+            res_all = await db.execute(stmt_all)
+            articles = res_all.scalars().all()
 
         if not articles:
+            # Obtenir llista de famílies disponibles per suggerir a l'usuari
+            stmt_fams = select(Article.familia).where(Article.empresa_id == empresa_id).distinct()
+            res_fams = await db.execute(stmt_fams)
+            families_disponibles = [f[0] for f in res_fams.all() if f[0]]
+            fam_str = ", ".join(families_disponibles) if families_disponibles else "Cap família registrada"
+
             return {
                 "trobat": False,
                 "article_cercat": article_ref,
                 "total_disponible": 0.0,
                 "articles": [],
-                "missatge": f"No s'ha trobat cap article coincident amb '{article_ref}' als magatzems de l'empresa.",
+                "missatge": (
+                    f"No s'ha trobat cap article coincident amb '{article_ref}' als magatzems de l'empresa. "
+                    f"Famílies disponibles a l'inventari: {fam_str}."
+                ),
             }
 
         articles_data = []
@@ -214,6 +249,7 @@ class SubagentLogisticaEstoc(BaseSubagent):
             "total_disponible": total_disponible_global,
             "articles": articles_data,
         }
+
 
     async def tool_replanificar_ot(
         self, db: AsyncSession, empresa_id: uuid.UUID, codi_ot: str, nova_data: str

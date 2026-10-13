@@ -743,35 +743,138 @@ export default function GestioMagatzemPage() {
                 </form>
               ) : (
                 <div className="space-y-4">
-                  {/* Dades de la capçalera detectada */}
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3 p-3 bg-slate-50 dark:bg-slate-800/60 rounded-2xl border border-slate-200 dark:border-slate-700">
-                    <div>
-                      <span className="text-[10px] uppercase font-bold text-slate-400 block">Proveïdor</span>
-                      <p className="text-xs font-bold text-slate-800 dark:text-slate-100 mt-0.5">
-                        {resultatOcr.proveidor?.nom || "Proveïdor no identificat"}
-                      </p>
-                      <p className="text-[11px] font-mono text-slate-500">
-                        NIF: {resultatOcr.proveidor?.nif || "—"}
-                      </p>
+                  {/* Dades de la capçalera detectada amb selecció i edició */}
+                  <div className="p-4 bg-slate-50 dark:bg-slate-800/60 rounded-2xl border border-slate-200 dark:border-slate-700 space-y-3">
+                    <div className="flex flex-col md:flex-row md:items-center justify-between gap-2 pb-2 border-b border-slate-200 dark:border-slate-700/60">
+                      <span className="text-xs font-bold text-slate-700 dark:text-slate-200 flex items-center gap-1.5">
+                        <Building className="w-4 h-4 text-indigo-600" />
+                        Capçalera del Document & Proveïdor
+                      </span>
+                      <div className="flex items-center gap-2">
+                        <label className="text-[11px] font-medium text-slate-500">Vincular Proveïdor:</label>
+                        <select
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            if (!val) return;
+                            const trobat = proveidors.find((p) => p.id === val);
+                            if (trobat) {
+                              setResultatOcr({
+                                ...resultatOcr,
+                                proveidor: {
+                                  ...resultatOcr.proveidor,
+                                  nom: trobat.rao_social,
+                                  nif: trobat.nif,
+                                  telefon: trobat.telefon || "",
+                                  email: trobat.email || "",
+                                },
+                              });
+                            }
+                          }}
+                          className="px-2.5 py-1 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 text-xs font-medium"
+                        >
+                          <option value="">-- Seleccionar proveïdor registrat --</option>
+                          {proveidors.map((p) => (
+                            <option key={p.id} value={p.id}>
+                              {p.rao_social} ({p.nif})
+                            </option>
+                          ))}
+                        </select>
+                      </div>
                     </div>
-                    <div>
-                      <span className="text-[10px] uppercase font-bold text-slate-400 block">Document</span>
-                      <p className="text-xs font-bold text-slate-800 dark:text-slate-100 mt-0.5 font-mono">
-                        {resultatOcr.numero_document || "Sense número"}
-                      </p>
-                      <p className="text-[11px] text-slate-500">
-                        Data: {resultatOcr.data_document || "—"}
-                      </p>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
+                      <div>
+                        <label className="block text-[10px] uppercase font-bold text-slate-400 mb-1">
+                          Nom Proveïdor (Raó Social) *
+                        </label>
+                        <input
+                          type="text"
+                          required
+                          value={resultatOcr.proveidor?.nom || ""}
+                          onChange={(e) =>
+                            setResultatOcr({
+                              ...resultatOcr,
+                              proveidor: { ...resultatOcr.proveidor, nom: e.target.value },
+                            })
+                          }
+                          className="w-full px-2.5 py-1.5 rounded-xl border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 text-xs font-bold text-slate-800 dark:text-slate-100"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] uppercase font-bold text-slate-400 mb-1">
+                          NIF / CIF Proveïdor *
+                        </label>
+                        <input
+                          type="text"
+                          required
+                          value={resultatOcr.proveidor?.nif || ""}
+                          onChange={(e) =>
+                            setResultatOcr({
+                              ...resultatOcr,
+                              proveidor: { ...resultatOcr.proveidor, nif: e.target.value },
+                            })
+                          }
+                          className="w-full px-2.5 py-1.5 rounded-xl border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 text-xs font-mono font-bold text-slate-800 dark:text-slate-100 uppercase"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] uppercase font-bold text-slate-400 mb-1">
+                          Nº Document (Albarà) *
+                        </label>
+                        <input
+                          type="text"
+                          required
+                          value={resultatOcr.numero_document || ""}
+                          onChange={(e) =>
+                            setResultatOcr({ ...resultatOcr, numero_document: e.target.value })
+                          }
+                          className="w-full px-2.5 py-1.5 rounded-xl border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 text-xs font-mono font-bold text-indigo-700 dark:text-indigo-400"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] uppercase font-bold text-slate-400 mb-1">
+                          Data Document *
+                        </label>
+                        <input
+                          type="date"
+                          required
+                          value={resultatOcr.data_document || ""}
+                          onChange={(e) =>
+                            setResultatOcr({ ...resultatOcr, data_document: e.target.value })
+                          }
+                          className="w-full px-2.5 py-1.5 rounded-xl border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 text-xs font-medium text-slate-800 dark:text-slate-100"
+                        />
+                      </div>
                     </div>
-                    <div>
-                      <span className="text-[10px] uppercase font-bold text-slate-400 block">Resum Línies</span>
-                      <p className="text-xs font-bold text-emerald-600 dark:text-emerald-400 mt-0.5">
-                        {resultatOcr.linies?.length || 0} articles detectats
-                      </p>
-                      <p className="text-[11px] text-slate-500">
-                        {resultatOcr.linies?.filter((l: any) => l.tipus === "EINA").length || 0} eines, {resultatOcr.linies?.filter((l: any) => l.tipus !== "EINA").length || 0} materials
-                      </p>
-                    </div>
+                  </div>
+
+                  {/* Capçalera de secció de línies amb botó d'afegir */}
+                  <div className="flex items-center justify-between pt-1">
+                    <span className="text-xs font-bold text-slate-700 dark:text-slate-300 flex items-center gap-1.5">
+                      <Layers className="w-3.5 h-3.5 text-indigo-600" />
+                      Línies d'Articles Detectades ({resultatOcr.linies?.length || 0})
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const novaLinia = {
+                          tipus: "MATERIAL",
+                          referencia: `ART-${(resultatOcr.linies?.length || 0) + 1}`,
+                          nom: "",
+                          quantitat: 1,
+                          preu: 0,
+                          descompte_percent: 0,
+                        };
+                        setResultatOcr({
+                          ...resultatOcr,
+                          linies: [...(resultatOcr.linies || []), novaLinia],
+                        });
+                      }}
+                      className="px-3 py-1 rounded-xl bg-indigo-50 hover:bg-indigo-100 dark:bg-indigo-950/50 dark:hover:bg-indigo-900/60 text-indigo-700 dark:text-indigo-300 text-xs font-bold flex items-center gap-1 border border-indigo-200 dark:border-indigo-800 transition-colors"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      <span>Afegir Línia</span>
+                    </button>
                   </div>
 
                   {/* Taula de línies de l'albarà amb edició */}
@@ -780,24 +883,35 @@ export default function GestioMagatzemPage() {
                       <thead>
                         <tr className="bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-bold border-b border-slate-200 dark:border-slate-700">
                           <th className="p-2.5">Tipus</th>
-                          <th className="p-2.5">Ref. Article</th>
-                          <th className="p-2.5">Descripció</th>
+                          <th className="p-2.5">Ref. Article (Codi)</th>
+                          <th className="p-2.5">Descripció del Producte</th>
                           <th className="p-2.5 text-right">Quantitat</th>
-                          <th className="p-2.5 text-right">Preu (€)</th>
+                          <th className="p-2.5 text-right">Preu Tarifa (€)</th>
                           <th className="p-2.5 text-right">Dte (%)</th>
+                          <th className="p-2.5 text-right">Cost Net (€)</th>
                           <th className="p-2.5 text-right">Total Net</th>
                           <th className="p-2.5 text-center w-10"></th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-100 dark:divide-slate-800 bg-white dark:bg-slate-900">
                         {resultatOcr.linies?.map((lin: any, idx: number) => {
-                          const net = (Number(lin.quantitat || 0) * Number(lin.preu || 0)) * (1 - (Number(lin.descompte_percent || 0) / 100));
+                          const costNetUnitari = Number(lin.preu || 0) * (1 - (Number(lin.descompte_percent || 0) / 100));
+                          const netTotal = Number(lin.quantitat || 0) * costNetUnitari;
                           return (
                             <tr key={idx} className="hover:bg-slate-50/60 dark:hover:bg-slate-800/40">
                               <td className="p-2">
-                                <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${lin.tipus === "EINA" ? "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300" : "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300"}`}>
-                                  {lin.tipus}
-                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    const updated = [...resultatOcr.linies];
+                                    updated[idx].tipus = lin.tipus === "EINA" ? "MATERIAL" : "EINA";
+                                    setResultatOcr({ ...resultatOcr, linies: updated });
+                                  }}
+                                  className={`px-2 py-0.5 rounded-full text-[10px] font-bold cursor-pointer transition-colors ${lin.tipus === "EINA" ? "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300 hover:bg-blue-200" : "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300 hover:bg-emerald-200"}`}
+                                  title="Fes clic per commutar entre MATERIAL i EINA"
+                                >
+                                  {lin.tipus} ⟲
+                                </button>
                               </td>
                               <td className="p-2">
                                 <input
@@ -808,6 +922,7 @@ export default function GestioMagatzemPage() {
                                     updated[idx].referencia = e.target.value;
                                     setResultatOcr({ ...resultatOcr, linies: updated });
                                   }}
+                                  placeholder="Ref. Codi"
                                   className="w-28 font-mono font-bold text-emerald-700 dark:text-emerald-400 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded px-1.5 py-0.5 text-xs"
                                 />
                               </td>
@@ -820,6 +935,7 @@ export default function GestioMagatzemPage() {
                                     updated[idx].nom = e.target.value;
                                     setResultatOcr({ ...resultatOcr, linies: updated });
                                   }}
+                                  placeholder="Descripció de l'article"
                                   className="w-full min-w-[180px] bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded px-1.5 py-0.5 text-xs text-slate-800 dark:text-slate-100"
                                 />
                               </td>
@@ -862,8 +978,11 @@ export default function GestioMagatzemPage() {
                                   className="w-14 text-right font-mono bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded px-1 py-0.5 text-xs"
                                 />
                               </td>
+                              <td className="p-2 text-right font-mono text-slate-500">
+                                {costNetUnitari.toFixed(2)} €
+                              </td>
                               <td className="p-2 text-right font-mono font-bold text-slate-800 dark:text-slate-200">
-                                {net.toFixed(2)} €
+                                {netTotal.toFixed(2)} €
                               </td>
                               <td className="p-2 text-center">
                                 <button
@@ -872,7 +991,7 @@ export default function GestioMagatzemPage() {
                                     const updated = resultatOcr.linies.filter((_: any, i: number) => i !== idx);
                                     setResultatOcr({ ...resultatOcr, linies: updated });
                                   }}
-                                  className="p-1 text-slate-400 hover:text-rose-600 rounded"
+                                  className="p-1 text-slate-400 hover:text-rose-600 rounded transition-colors"
                                   title="Eliminar línia"
                                 >
                                   <Trash2 className="w-3.5 h-3.5" />
@@ -888,12 +1007,12 @@ export default function GestioMagatzemPage() {
                   {/* Peu de la revisió */}
                   <div className="flex items-center justify-between pt-2">
                     <div className="text-xs text-slate-500">
-                      Total estimat de l'albarà:{" "}
+                      Total net de l'albarà:{" "}
                       <strong className="text-slate-800 dark:text-slate-200 font-mono text-sm ml-1">
                         {resultatOcr.linies
                           ?.reduce((acc: number, l: any) => {
-                            const net = (Number(l.quantitat || 0) * Number(l.preu || 0)) * (1 - (Number(l.descompte_percent || 0) / 100));
-                            return acc + net;
+                            const costNet = Number(l.preu || 0) * (1 - (Number(l.descompte_percent || 0) / 100));
+                            return acc + (Number(l.quantitat || 0) * costNet);
                           }, 0)
                           .toFixed(2)}{" "}
                         €

@@ -36,10 +36,12 @@ class SubagentFlotaDespatx(BaseSubagent):
     tools_schema = SCHEMAS_FLOTA_DESPATX
     system_prompt = (
         "Ets l'assistent expert en Flota i Despatx de SEVALOR. "
-        "Optimitza el desplaçament de vehicles, audita venciments d'ITV i assegurances, consulta consums de combustible, "
-        "historials de reparacions i localitza el vehicle més proper a una urgència. "
+        "Per consultar quins vehicles estan en ruta, en servei actiu, assignats a operaris o disponibles al parc, crida SEMPRE l'eina 'get_fleet_status'. "
+        "Només has de cridar 'audit_itv_insurance_fleet' quan l'usuari pregunti expressament per inspeccions ITV o venciment d'assegurances. "
+        "Optimitza el desplaçament de vehicles, audita consums de combustible i localitza el vehicle més proper a una urgència amb 'get_closest_vehicle'. "
         "Respon sempre en català de forma concisa i precisa basant-te exclusivament en les dades reals de la flota."
     )
+
 
     def can_handle(self, query: str, rol: str) -> bool:
         q = query.lower()

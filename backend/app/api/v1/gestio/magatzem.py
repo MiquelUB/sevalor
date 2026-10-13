@@ -230,7 +230,16 @@ async def alta_article(
     db.add(nou_article)
     await db.commit()
 
+    if nou_article.proveidor_id:
+        stmt_prov_n = select(Proveidor.rao_social).where(Proveidor.id == nou_article.proveidor_id)
+        prov_nom_res = (await db.execute(stmt_prov_n)).scalar_one_or_none()
+        setattr(nou_article, "proveidor_nom", prov_nom_res)
+    else:
+        setattr(nou_article, "proveidor_nom", None)
+    setattr(nou_article, "estoc_real", 0.0)
+
     return nou_article
+
 
 
 from app.models.models import EinaCustodia  # noqa: E402
@@ -686,9 +695,15 @@ async def confirmar_document(
 ):
     empresa_id = uuid.UUID(request.state.empresa_id)
 
-    # 1. Buscar o crear Proveïdor
-    stmt_prov = select(Proveidor).where(Proveidor.nif == payload.proveidor.nif)
+    # 1. Buscar o crear Proveïdor (per NIF o nom)
+    stmt_prov = select(Proveidor).where(
+        or_(
+            Proveidor.nif == payload.proveidor.nif,
+            func.lower(Proveidor.rao_social) == payload.proveidor.nom.strip().lower(),
+        )
+    )
     prov = (await db.execute(stmt_prov)).scalars().first()
+
     if not prov:
         prov = Proveidor(
             empresa_id=empresa_id,
@@ -955,8 +970,7 @@ async def modificar_article(
     art_db.descompte_proveidor = article.descompte_proveidor
     art_db.marge_guanys = article.marge_guanys
     art_db.preu_venda = article.preu_venda
-    if article.proveidor_id is not None:
-        art_db.proveidor_id = article.proveidor_id
+    art_db.proveidor_id = article.proveidor_id
 
     await db.commit()
 
@@ -971,8 +985,11 @@ async def modificar_article(
     if art_db.proveidor_id:
         prov_nom = (await db.execute(select(Proveidor.rao_social).where(Proveidor.id == art_db.proveidor_id))).scalar()
         art_dict["proveidor_nom"] = prov_nom
+    else:
+        art_dict["proveidor_nom"] = None
 
     return art_dict
+
 
 
 @router.get("/eines", response_model=List[EinaResponse])

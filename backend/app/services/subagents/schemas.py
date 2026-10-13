@@ -251,7 +251,7 @@ SCHEMA_AUDIT_ITV_INSURANCE_FLEET = {
     "type": "function",
     "function": {
         "name": "audit_itv_insurance_fleet",
-        "description": "Audita tota la flota cercant vehicles amb ITV o assegurança caducada o que caduca en els propers 30 dies.",
+        "description": "Audita exclusivament les dates de caducitat d'ITV o assegurança dels vehicles (NOMÉS s'ha de cridar quan l'usuari pregunta expressament per ITV, revisions legals o assegurances caducades).",
         "parameters": {
             "type": "object",
             "properties": {
@@ -268,7 +268,7 @@ SCHEMA_GET_FLEET_STATUS = {
     "type": "function",
     "function": {
         "name": "get_fleet_status",
-        "description": "Consulta l'estat general de la flota de vehicles: quins vehicles estan en ruta, en servei o assignats a operaris, i quins estan disponibles al parc.",
+        "description": "Eina PRINCIPAL per consultar quins vehicles hi ha a la flota de l'empresa, quins vehicles estan en ruta o en servei actiu, quins estan assignats a operaris/conductors, i quins estan lliures o disponibles a la base.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -280,6 +280,7 @@ SCHEMA_GET_FLEET_STATUS = {
         },
     },
 }
+
 
 SCHEMA_GET_VEHICLE_MAINTENANCE = {
     "type": "function",
