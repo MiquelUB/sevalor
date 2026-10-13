@@ -3,7 +3,7 @@
 import React, { useState, useEffect } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
-import { ArrowLeft, Settings, Cpu, HardDrive, Server, Smartphone, Wrench, FileText, Bot } from "lucide-react";
+import { ArrowLeft, Settings, Cpu, HardDrive, Server, Smartphone, Wrench, FileText, Bot, Truck, Package, Navigation, CheckCircle2, MapPin } from "lucide-react";
 import { apiFetch } from "@/lib/api";
 import { db } from "@/lib/offline/db";
 import { encryptWithPin, decryptWithPin } from "@/lib/crypto";
@@ -17,12 +17,33 @@ interface Asset {
   estat: string;
 }
 
+interface LiniaPicking {
+  id: string;
+  article_id: string;
+  article_nom: string;
+  quantitat_prevista: number;
+  quantitat_carregada_pick_in: number;
+}
+
+interface EinaCustodia {
+  id: string;
+  nom: string;
+  model?: string;
+  numero_serie: string;
+  estat: string;
+}
+
 interface OrdreDetall {
   id: string;
   codi: string;
   titol: string;
+  descripcio?: string;
   client: string;
   estat: string;
+  adreca?: string;
+  vehicle?: { matricula: string; model: string };
+  linies_picking?: LiniaPicking[];
+  eines_assignades?: EinaCustodia[];
   assets: Asset[];
 }
 
@@ -74,8 +95,13 @@ const loadFeina = async (pin?: string) => {
             id: String(data.id),
             codi: data.codi || "OT-00",
             titol: data.titol || "Detall de l'Ordre",
+            descripcio: data.descripcio,
             client: data.client?.rao_social || "Client",
             estat: data.estat || "PENDENT",
+            adreca: data.adreca || "",
+            vehicle: data.vehicle,
+            linies_picking: data.linies_picking || [],
+            eines_assignades: data.eines_assignades || [],
             assets: data.assets || [],
           });
         } catch (decErr) {
@@ -85,12 +111,17 @@ const loadFeina = async (pin?: string) => {
       } else {
         const data = await apiFetch<any>(`/operari/feines/${id}`);
         if (data) {
-          const mapped = {
+          const mapped: OrdreDetall = {
             id: String(data.id),
             codi: data.codi || "OT-00",
             titol: data.titol || "Detall de l'Ordre",
+            descripcio: data.descripcio,
             client: data.client?.rao_social || "Client",
             estat: data.estat || "PENDENT",
+            adreca: data.adreca || "",
+            vehicle: data.vehicle,
+            linies_picking: data.linies_picking || [],
+            eines_assignades: data.eines_assignades || [],
             assets: data.assets || [],
           };
           setOrdre(mapped);
@@ -115,6 +146,21 @@ const loadFeina = async (pin?: string) => {
       }
     } finally {
       if (!showPinModal) setLoading(false);
+    }
+  };
+
+  const [iniciantTrajecte, setIniciantTrajecte] = useState(false);
+
+  const handleIniciarTrajecte = async () => {
+    setIniciantTrajecte(true);
+    try {
+      await apiFetch(`/operari/feines/${id}/iniciar-trajecte`, { method: "PUT" });
+      setOrdre(prev => prev ? { ...prev, estat: "EN_RUTA" } : null);
+      alert("Trajecte iniciat! Vehicle i feina en ruta.");
+    } catch (e: any) {
+      alert("Error iniciant trajecte: " + e.message);
+    } finally {
+      setIniciantTrajecte(false);
     }
   };
 
@@ -194,45 +240,157 @@ const loadFeina = async (pin?: string) => {
         </div>
       ) : (
         <>
-          <div className="bg-white dark:bg-slate-900 p-4 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm flex items-center justify-between">
-            <div>
-              <h2 className="text-sm font-bold text-slate-800 dark:text-slate-100">{ordre.titol}</h2>
-              <p className="text-xs text-slate-500 mt-1">{ordre.client} • {ordre.estat}</p>
+          {/* Capçalera de l'Ordre */}
+          <div className="bg-white dark:bg-slate-900 p-4 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm space-y-3">
+            <div className="flex items-start justify-between">
+              <div>
+                <span className="font-mono text-xs font-bold text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-900/30 px-2 py-0.5 rounded">
+                  {ordre.codi}
+                </span>
+                <h2 className="text-base font-bold text-slate-800 dark:text-slate-100 mt-1">{ordre.titol}</h2>
+                <p className="text-xs text-slate-500">{ordre.client}</p>
+              </div>
+              <span className={`text-xs font-bold px-2.5 py-1 rounded-full border ${
+                ordre.estat === "PENDENT"
+                  ? "bg-amber-500/10 text-amber-600 border-amber-500/20"
+                  : ordre.estat === "EN_RUTA" || ordre.estat === "EN_CURS"
+                  ? "bg-emerald-500/10 text-emerald-600 border-emerald-500/20"
+                  : "bg-blue-500/10 text-blue-600 border-blue-500/20"
+              }`}>
+                {ordre.estat}
+              </span>
             </div>
+
+            {ordre.adreca && (
+              <div className="flex items-center gap-1.5 text-xs text-slate-500 border-t border-slate-100 dark:border-slate-800 pt-2">
+                <MapPin className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
+                <span>{ordre.adreca}</span>
+              </div>
+            )}
+          </div>
+
+          {/* Botons d'Acció Ràpida de l'Operari */}
+          <div className="grid grid-cols-3 gap-2">
+            <button
+              onClick={handleIniciarTrajecte}
+              disabled={iniciantTrajecte || ordre.estat === "EN_RUTA" || ordre.estat === "EN_CURS"}
+              className="py-2.5 px-3 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold flex flex-col items-center justify-center gap-1 shadow transition-colors disabled:opacity-40 cursor-pointer"
+            >
+              <Navigation className="w-4 h-4" />
+              <span>{ordre.estat === "EN_RUTA" ? "En Ruta" : "Iniciar Trajecte"}</span>
+            </button>
+
             <Link
               href={`/operari/feines/${ordre.id}/copilot`}
-              className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold flex items-center gap-1.5 shadow transition-colors"
+              className="py-2.5 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold flex flex-col items-center justify-center gap-1 shadow transition-colors text-center"
             >
-              <Bot className="w-3.5 h-3.5" />
+              <Bot className="w-4 h-4" />
               <span>Copilot IA</span>
+            </Link>
+
+            <Link
+              href={`/operari/feines/${ordre.id}/tancar`}
+              className="py-2.5 px-3 rounded-xl bg-slate-800 dark:bg-slate-100 hover:bg-slate-700 dark:hover:bg-white text-white dark:text-slate-900 text-xs font-bold flex flex-col items-center justify-center gap-1 shadow transition-colors text-center"
+            >
+              <CheckCircle2 className="w-4 h-4" />
+              <span>Tancar Feina</span>
             </Link>
           </div>
 
-          <h3 className="text-sm font-bold mt-4 mb-2 text-slate-700 dark:text-slate-300 px-1">
-            Màquines i Actius Assignats
-          </h3>
-          
-          {ordre.assets.length === 0 ? (
-            <div className="bg-white dark:bg-slate-900 p-6 rounded-xl border border-slate-200 dark:border-slate-800 text-center shadow-sm">
-              <Settings className="w-8 h-8 mx-auto text-slate-300 dark:text-slate-700 mb-2" />
-              <p className="text-sm font-bold text-slate-600 dark:text-slate-400">Cap màquina associada</p>
-            </div>
-          ) : (
-            <div className="space-y-3">
-              {ordre.assets.map(asset => (
-                <div key={asset.id} className="bg-white dark:bg-slate-900 p-4 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm flex items-center gap-3">
-                  <div className="p-2 bg-slate-100 dark:bg-slate-800 rounded-lg text-slate-500 dark:text-slate-400">
-                    {getAssetIcon(asset.tipus)}
-                  </div>
-                  <div className="flex-1">
-                    <h4 className="text-sm font-bold text-slate-800 dark:text-slate-100">{asset.nom}</h4>
-                    <p className="text-[10px] font-mono text-slate-500">{asset.model} • SN: {asset.num_serie}</p>
-                  </div>
-                  <span className="text-[9px] font-bold px-2 py-1 rounded bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300">
-                    {asset.estat}
-                  </span>
+          {/* Vehicle Assignat */}
+          {ordre.vehicle && (
+            <div className="bg-white dark:bg-slate-900 p-4 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="p-2 bg-blue-50 dark:bg-blue-900/20 rounded-lg text-blue-600 dark:text-blue-400">
+                  <Truck className="w-5 h-5" />
                 </div>
-              ))}
+                <div>
+                  <h4 className="text-xs font-bold text-slate-800 dark:text-slate-100">Vehicle Assignat</h4>
+                  <p className="text-xs text-slate-500">{ordre.vehicle.model}</p>
+                </div>
+              </div>
+              <span className="font-mono text-xs font-bold bg-slate-100 dark:bg-slate-800 px-2 py-1 rounded text-slate-700 dark:text-slate-300">
+                {ordre.vehicle.matricula}
+              </span>
+            </div>
+          )}
+
+          {/* Materials de Picking */}
+          <div className="space-y-2">
+            <h3 className="text-sm font-bold text-slate-700 dark:text-slate-300 px-1 flex items-center gap-1.5">
+              <Package className="w-4 h-4 text-emerald-500" />
+              Materials Assignats ({ordre.linies_picking?.length || 0})
+            </h3>
+            {(!ordre.linies_picking || ordre.linies_picking.length === 0) ? (
+              <div className="bg-white dark:bg-slate-900 p-4 rounded-xl border border-dashed border-slate-200 dark:border-slate-800 text-center text-xs text-slate-400">
+                Cap material de picking vinculat a aquesta feina.
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {ordre.linies_picking.map((linia) => (
+                  <div key={linia.id} className="bg-white dark:bg-slate-900 p-3 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm flex items-center justify-between">
+                    <div>
+                      <h4 className="text-xs font-bold text-slate-800 dark:text-slate-100">{linia.article_nom}</h4>
+                      <p className="text-[10px] text-slate-400">Carregat: {linia.quantitat_carregada_pick_in} / {linia.quantitat_prevista}</p>
+                    </div>
+                    <span className="text-xs font-mono font-bold px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300">
+                      {linia.quantitat_prevista} uts
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Eines i Equips en Custòdia */}
+          <div className="space-y-2">
+            <h3 className="text-sm font-bold text-slate-700 dark:text-slate-300 px-1 flex items-center gap-1.5">
+              <Wrench className="w-4 h-4 text-amber-500" />
+              Eines en Custòdia ({ordre.eines_assignades?.length || 0})
+            </h3>
+            {(!ordre.eines_assignades || ordre.eines_assignades.length === 0) ? (
+              <div className="bg-white dark:bg-slate-900 p-4 rounded-xl border border-dashed border-slate-200 dark:border-slate-800 text-center text-xs text-slate-400">
+                Cap eina o maquinària en custòdia per a aquest operari.
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {ordre.eines_assignades.map((eina) => (
+                  <div key={eina.id} className="bg-white dark:bg-slate-900 p-3 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm flex items-center justify-between">
+                    <div>
+                      <h4 className="text-xs font-bold text-slate-800 dark:text-slate-100">{eina.nom}</h4>
+                      <p className="text-[10px] font-mono text-slate-400">{eina.model || "Standard"} • SN: {eina.numero_serie}</p>
+                    </div>
+                    <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-600 border border-emerald-500/20">
+                      {eina.estat}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Màquines i Actius de la Finca */}
+          {ordre.assets && ordre.assets.length > 0 && (
+            <div className="space-y-2">
+              <h3 className="text-sm font-bold text-slate-700 dark:text-slate-300 px-1">
+                Màquines i Actius de la Finca ({ordre.assets.length})
+              </h3>
+              <div className="space-y-2">
+                {ordre.assets.map(asset => (
+                  <div key={asset.id} className="bg-white dark:bg-slate-900 p-3 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm flex items-center gap-3">
+                    <div className="p-2 bg-slate-100 dark:bg-slate-800 rounded-lg text-slate-500 dark:text-slate-400">
+                      {getAssetIcon(asset.tipus)}
+                    </div>
+                    <div className="flex-1">
+                      <h4 className="text-xs font-bold text-slate-800 dark:text-slate-100">{asset.nom}</h4>
+                      <p className="text-[10px] font-mono text-slate-500">{asset.model} • SN: {asset.num_serie}</p>
+                    </div>
+                    <span className="text-[9px] font-bold px-2 py-1 rounded bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300">
+                      {asset.estat}
+                    </span>
+                  </div>
+                ))}
+              </div>
             </div>
           )}
         </>

@@ -3,13 +3,13 @@ from datetime import date, datetime
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db_with_tenant_context
 from app.core.security import require_roles
-from app.models.models import Client, EinaCustodia, Finca, OrdreTreball
+from app.models.models import Client, EinaCustodia, Finca, OrdreTreball, Usuari
 
 router = APIRouter(
     prefix="/gestio/feines",
@@ -33,6 +33,7 @@ class FeinaCreate(BaseModel):
     latitud: Optional[float] = None
     longitud: Optional[float] = None
     eina_ids: Optional[List[uuid.UUID]] = None
+    model_config = ConfigDict(from_attributes=True)
 
 
 class FeinaResponse(FeinaCreate):
@@ -40,6 +41,9 @@ class FeinaResponse(FeinaCreate):
     versio: int = 1
     latitud: Optional[float] = None
     longitud: Optional[float] = None
+    client_nom: Optional[str] = None
+    cap_de_colla_nom: Optional[str] = None
+    model_config = ConfigDict(from_attributes=True)
 
 
 @router.get("", response_model=List[FeinaResponse])
@@ -54,7 +58,12 @@ async def llistar_feines(
     if not empresa_id or empresa_id == "undefined":
         raise HTTPException(status_code=401, detail="No identificat")
 
-    stmt = select(OrdreTreball).where(OrdreTreball.empresa_id == uuid.UUID(empresa_id))
+    stmt = (
+        select(OrdreTreball, Client, Usuari)
+        .outerjoin(Client, OrdreTreball.client_id == Client.id)
+        .outerjoin(Usuari, OrdreTreball.cap_de_colla_id == Usuari.id)
+        .where(OrdreTreball.empresa_id == uuid.UUID(empresa_id))
+    )
 
     if q:
         search_term = f"%{q}%"
@@ -65,7 +74,16 @@ async def llistar_feines(
     stmt = stmt.limit(limit).offset(offset).order_by(OrdreTreball.created_at.desc())
 
     result = await db.execute(stmt)
-    feines = result.scalars().all()
+    rows = result.all()
+
+    feines = []
+    for ordre, client, operari in rows:
+        f_resp = FeinaResponse.model_validate(ordre)
+        if client:
+            f_resp.client_nom = client.rao_social
+        if operari:
+            f_resp.cap_de_colla_nom = f"{operari.nom} {operari.cognoms or ''}".strip()
+        feines.append(f_resp)
 
     return feines
 
@@ -362,6 +380,8 @@ async def drop_and_go(
 
     if payload.cap_de_colla_id is not None:
         ordre.cap_de_colla_id = payload.cap_de_colla_id
+        if ordre.estat == "PENDENT":
+            ordre.estat = "ASSIGNADA"
     if payload.data_programada is not None:
         ordre.data_planificacio = payload.data_programada
 
@@ -373,6 +393,7 @@ async def drop_and_go(
         "versio": ordre.versio,
         "cap_de_colla_id": ordre.cap_de_colla_id,
         "data_planificacio": ordre.data_planificacio,
+        "estat": ordre.estat,
     }
 
 

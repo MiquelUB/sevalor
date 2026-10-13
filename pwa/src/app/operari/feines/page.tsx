@@ -1,10 +1,14 @@
 "use client";
 
 import React from "react";
+import Link from "next/link";
 import { useAssignacions } from "@/lib/hooks/useAssignacions";
 import { OrdreTreballLocal } from "@/lib/types/operari";
 
 function AssignacioCard({ ordre }: { ordre: OrdreTreballLocal }) {
+  const dataFmt = ordre.data_programada ? new Date(ordre.data_programada).toLocaleDateString() : "Avui";
+  const clientNom = ordre.client_nom || (ordre as any).client?.rao_social || "Client no especificat";
+
   return (
     <div className="bg-white rounded-lg shadow p-4 mb-4 border-l-4" style={{ borderColor: 'var(--color-primary, #0f172a)' }}>
       <div className="flex justify-between items-start mb-2">
@@ -16,7 +20,7 @@ function AssignacioCard({ ordre }: { ordre: OrdreTreballLocal }) {
         </span>
       </div>
       <p className="text-sm mb-3" style={{ color: 'var(--color-muted-foreground, #64748b)' }}>
-        {ordre.client_nom || "Client no especificat"}
+        {clientNom}
       </p>
       {ordre.descripcio && (
         <p className="text-sm mb-3 line-clamp-2" style={{ color: 'var(--color-foreground, #000)' }}>
@@ -24,13 +28,14 @@ function AssignacioCard({ ordre }: { ordre: OrdreTreballLocal }) {
         </p>
       )}
       <div className="flex justify-between items-center text-xs" style={{ color: 'var(--color-muted-foreground, #64748b)' }}>
-        <span>🗓 {new Date(ordre.data_programada).toLocaleDateString()}</span>
-        <button 
-          className="px-3 py-1.5 rounded font-medium transition-opacity hover:opacity-90 active:opacity-80"
+        <span>🗓 {dataFmt}</span>
+        <Link 
+          href={`/operari/feines/${ordre.id}`}
+          className="px-3 py-1.5 rounded font-medium transition-opacity hover:opacity-90 active:opacity-80 block text-center"
           style={{ backgroundColor: 'var(--color-primary, #0f172a)', color: 'var(--color-primary-foreground, #fff)' }}
         >
           Obrir Feina
-        </button>
+        </Link>
       </div>
     </div>
   );
@@ -39,8 +44,8 @@ function AssignacioCard({ ordre }: { ordre: OrdreTreballLocal }) {
 export default function FeinesKanbanPage() {
   const { ordres, loading, error, refetch } = useAssignacions();
 
-  const pendents = ordres.filter(o => ["PENDENT", "PAUSADA"].includes(o.estat_local));
-  const enCurs = ordres.filter(o => ["EN_TRANSIT", "EN_CURS"].includes(o.estat_local));
+  const pendents = ordres.filter(o => ["PENDENT", "ASSIGNADA", "PROGRAMADA", "PAUSADA"].includes(o.estat_local || (o as any).estat));
+  const enCurs = ordres.filter(o => ["EN_TRANSIT", "EN_RUTA", "EN_OBRA", "EN_CURS"].includes(o.estat_local || (o as any).estat));
 
   return (
     <div className="min-h-screen pb-20" style={{ backgroundColor: 'var(--color-background, #f8fafc)' }}>

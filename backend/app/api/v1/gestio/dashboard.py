@@ -26,17 +26,17 @@ async def get_dashboard_hud(
 
     emp_uuid = uuid.UUID(empresa_id)
 
-    # Active jobs
+    # Active jobs (totes les feines actives o planificades pendents/en curs)
     stmt_active = select(func.count(OrdreTreball.id)).where(
         OrdreTreball.empresa_id == emp_uuid,
-        OrdreTreball.estat.in_(["EN_CURS", "EN_OBRA", "EN_RUTA"]),
+        OrdreTreball.estat.in_(["PENDENT", "ASSIGNADA", "PROGRAMADA", "EN_CURS", "EN_OBRA", "EN_RUTA"]),
     )
     res_active = await db.execute(stmt_active)
     active_jobs = res_active.scalar() or 0
 
     # Completed jobs
     stmt_comp = select(func.count(OrdreTreball.id)).where(
-        OrdreTreball.empresa_id == emp_uuid, OrdreTreball.estat == "FINALITZADA"
+        OrdreTreball.empresa_id == emp_uuid, OrdreTreball.estat.in_(["FINALITZADA", "COMPLETADA", "TANCADA"])
     )
     res_comp = await db.execute(stmt_comp)
     completed_jobs = res_comp.scalar() or 0
@@ -48,10 +48,11 @@ async def get_dashboard_hud(
     res_inc = await db.execute(stmt_inc)
     open_incidents = res_inc.scalar() or 0
 
-    # Teams on field (distinct cap_de_colla_id in active jobs)
+    # Teams on field (distinct cap_de_colla_id in active or assigned jobs)
     stmt_teams = select(func.count(func.distinct(OrdreTreball.cap_de_colla_id))).where(
         OrdreTreball.empresa_id == emp_uuid,
-        OrdreTreball.estat.in_(["EN_CURS", "EN_OBRA", "EN_RUTA"]),
+        OrdreTreball.estat.in_(["ASSIGNADA", "PROGRAMADA", "EN_CURS", "EN_OBRA", "EN_RUTA"]),
+        OrdreTreball.cap_de_colla_id.is_not(None),
     )
     res_teams = await db.execute(stmt_teams)
     teams_on_field = res_teams.scalar() or 0

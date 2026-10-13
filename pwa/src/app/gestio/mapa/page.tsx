@@ -11,9 +11,13 @@ export default function GestioMapaPage() {
   const [feines, setFeines] = useState<Feina[]>([]);
   const [operaris, setOperaris] = useState<Operari[]>([]);
   const [loading, setLoading] = useState(true);
+  const [isEmbed, setIsEmbed] = useState(false);
 
   useEffect(() => {
     fetchData();
+    if (typeof window !== "undefined") {
+      setIsEmbed(window.location.search.includes("embed=true"));
+    }
   }, []);
 
   const fetchData = async () => {
@@ -55,6 +59,26 @@ export default function GestioMapaPage() {
       alert("Error en l'assignació: " + err.message);
     }
   };
+
+  if (isEmbed) {
+    return (
+      <div className="flex-1 flex flex-col h-full w-full p-2">
+        {loading ? (
+          <div className="flex-1 min-h-[400px] flex items-center justify-center bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800">
+            <p className="text-xs text-slate-400 animate-pulse">Carregant mapa i quadrilles...</p>
+          </div>
+        ) : (
+          <GestioMap
+            feines={feines}
+            operaris={operaris}
+            onDropAssignment={handleDropAssignment}
+            modeVisor={modeVisor}
+            onModeVisorChange={setModeVisor}
+          />
+        )}
+      </div>
+    );
+  }
 
   return (
     <div className="flex-1 flex flex-col p-6 space-y-4 max-w-7xl mx-auto w-full">

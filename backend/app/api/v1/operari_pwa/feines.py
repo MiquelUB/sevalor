@@ -12,7 +12,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db_with_tenant_context
 from app.core.security import require_roles
-from app.models.models import Article, Client, FullaPicking, LiniaPicking, OrdreTreball, Vehicle
+from app.models.models import (
+    Article,
+    Client,
+    EinaCustodia,
+    FullaPicking,
+    LiniaPicking,
+    OrdreTreball,
+    Vehicle,
+)
 
 router = APIRouter(
     prefix="/operari",
@@ -31,6 +39,15 @@ class VehicleResponse(BaseModel):
     id: uuid.UUID
     matricula: str
     model: str
+    model_config = ConfigDict(from_attributes=True)
+
+
+class EinaCustodiaResponse(BaseModel):
+    id: uuid.UUID
+    nom: str
+    model: Optional[str] = None
+    numero_serie: str
+    estat: str
     model_config = ConfigDict(from_attributes=True)
 
 
@@ -55,6 +72,7 @@ class FeinaOperariDetailResponse(BaseModel):
     vehicle: Optional[VehicleResponse] = None
     picking_id: Optional[uuid.UUID] = None
     linies_picking: List[LiniaPickingDetailResponse] = []
+    eines_assignades: List[EinaCustodiaResponse] = []
     model_config = ConfigDict(from_attributes=True)
 
 
@@ -63,8 +81,11 @@ class FeinaOperariResponse(BaseModel):
     codi: str
     titol: str
     estat: str
+    estat_local: Optional[str] = None
     adreca: Optional[str] = None
     data_planificacio: Optional[date] = None
+    data_programada: Optional[str] = None
+    client_nom: Optional[str] = None
     client: Optional[ClientResponse] = None
     model_config = ConfigDict(from_attributes=True)
 
@@ -105,7 +126,7 @@ async def llistar_les_meves_feines(
         .where(
             OrdreTreball.empresa_id == uuid.UUID(empresa_id),
             OrdreTreball.cap_de_colla_id == uuid.UUID(usuari_id),
-            OrdreTreball.estat.in_(["PENDENT", "EN_CURS"]),
+            OrdreTreball.estat.in_(["PENDENT", "ASSIGNADA", "PROGRAMADA", "EN_CURS", "EN_RUTA", "EN_OBRA", "PAUSADA"]),
         )
         .order_by(OrdreTreball.data_planificacio.asc())
     )
@@ -114,8 +135,11 @@ async def llistar_les_meves_feines(
     feines = []
     for feina, client in result.all():
         feina_resp = FeinaOperariResponse.model_validate(feina)
+        feina_resp.estat_local = feina.estat
+        feina_resp.data_programada = str(feina.data_planificacio) if feina.data_planificacio else None
         if client:
             feina_resp.client = ClientResponse.model_validate(client)
+            feina_resp.client_nom = client.rao_social
         feines.append(feina_resp)
 
     return feines
@@ -178,6 +202,16 @@ async def obtenir_detall_feina(
                     )
                 )
             resp.linies_picking = linies
+
+        # Eines en custòdia assignades a l'operari
+        stmt_eines = select(EinaCustodia).where(
+            EinaCustodia.empresa_id == uuid.UUID(empresa_id),
+            EinaCustodia.custodiat_per_operari_id == uuid.UUID(usuari_id),
+        )
+        result_eines = await db.execute(stmt_eines)
+        resp.eines_assignades = [
+            EinaCustodiaResponse.model_validate(e) for e in result_eines.scalars().all()
+        ]
 
         return resp
     except HTTPException:

@@ -175,6 +175,8 @@ export default function GestioDashboardPage() {
                 <tr className="border-b border-slate-100 dark:border-slate-800 text-[11px] font-mono text-slate-400 uppercase tracking-wider">
                   <th className="py-2.5 px-3">Codi</th>
                   <th className="py-2.5 px-3">Títol / Descripció</th>
+                  <th className="py-2.5 px-3">Client</th>
+                  <th className="py-2.5 px-3">Cap de Colla</th>
                   <th className="py-2.5 px-3">Estat</th>
                   <th className="py-2.5 px-3">Data Planificada</th>
                   <th className="py-2.5 px-3">Ubicació</th>
@@ -190,6 +192,19 @@ export default function GestioDashboardPage() {
                       <div>{feina.titol}</div>
                       {feina.descripcio && (
                         <div className="text-xs text-slate-400 line-clamp-1">{feina.descripcio}</div>
+                      )}
+                    </td>
+                    <td className="py-3 px-3 text-xs font-medium text-slate-600 dark:text-slate-300">
+                      {feina.client_nom || "-"}
+                    </td>
+                    <td className="py-3 px-3 text-xs">
+                      {feina.cap_de_colla_nom ? (
+                        <span className="font-semibold text-slate-700 dark:text-slate-300 flex items-center gap-1">
+                          <Users className="w-3.5 h-3.5 text-blue-500" />
+                          {feina.cap_de_colla_nom}
+                        </span>
+                      ) : (
+                        <span className="text-amber-500 text-[11px] font-medium italic">Pendent d'assignar</span>
                       )}
                     </td>
                     <td className="py-3 px-3">
