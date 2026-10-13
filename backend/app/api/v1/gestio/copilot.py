@@ -34,13 +34,7 @@ from app.services.subagents.dispatcher import copilot_dispatcher
 router = APIRouter(
     prefix="/gestio/copilot",
     tags=["Copilot IA de Camp i Gestió"],
-    dependencies=[
-        Depends(
-            require_roles(
-                ["BOSS", "SECRETARIA", "ENGINYER", "OPERARI", "CAP_DE_COLLA", "ADMIN"]
-            )
-        )
-    ],
+    dependencies=[Depends(require_roles(["BOSS", "SECRETARIA", "ENGINYER"]))],
 )
 
 # Límits i paràmetres constitucionals (Spec 012)

@@ -3,8 +3,11 @@ from httpx import AsyncClient
 
 
 @pytest.mark.asyncio
-async def test_ia_rag_sense_node_ia_retorna_503(async_client: AsyncClient, headers: dict):
+async def test_ia_rag_sense_node_ia_retorna_503(
+    async_client: AsyncClient, headers: dict, monkeypatch: pytest.MonkeyPatch
+):
     """Sense node LM Studio, /rag NO ha d'inventar text: retorna 503 (Zero Mock Data)."""
+    monkeypatch.setattr("app.core.config.settings.LM_STUDIO_URL", "http://127.0.0.1:9999/v1")
     response = await async_client.post(
         "/gestio/copilot/rag",
         json={"prompt": "Com s'instal·la la bomba model X?"},

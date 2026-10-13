@@ -35,6 +35,7 @@ from app.api.v1.gestio.proveidors import router as proveidors_router
 from app.api.v1.gestio.ws import router as ws_router
 from app.api.v1.health import router as health_router
 from app.api.v1.operari_auth import router as operari_auth_router
+from app.api.v1.operari_pwa.copilot import router as operari_copilot_router
 from app.api.v1.operari_pwa.feines import llistar_les_meves_feines
 from app.api.v1.operari_pwa.feines import router as feines_pwa_router
 from app.api.v1.operari_pwa.incidencies import router as incidencies_router
@@ -158,6 +159,7 @@ app.include_router(sync_router, prefix=settings.API_V1_STR + "/operari_pwa")
 app.include_router(operari_planols_router, prefix=settings.API_V1_STR)
 app.include_router(materials_operari_router, prefix=settings.API_V1_STR)
 app.include_router(planols_operari_router, prefix=settings.API_V1_STR)
+app.include_router(operari_copilot_router, prefix=settings.API_V1_STR)
 
 compat_pwa_router = APIRouter(prefix="/operari_pwa", tags=["Operari PWA Compat"])
 compat_pwa_router.add_api_route("/feines", llistar_les_meves_feines, methods=["GET"])

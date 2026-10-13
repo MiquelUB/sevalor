@@ -59,7 +59,8 @@ export default function CopilotWidget({ isMobile = false }: { isMobile?: boolean
     setImatgeB64(null);
 
     try {
-      const dades: any = await apiFetch("/gestio/copilot/xat", {
+      const endpoint = isMobile ? "/operari/copilot/xat" : "/gestio/copilot/xat";
+      const dades: any = await apiFetch(endpoint, {
         method: "POST",
         body: JSON.stringify({ pregunta: textFinal, imatge_b64: imatgeB64 }),
       });

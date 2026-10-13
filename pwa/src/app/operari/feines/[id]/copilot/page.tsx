@@ -53,7 +53,7 @@ export default function CopilotPage() {
     setIsLoading(true);
 
     try {
-      const data: any = await apiFetch("/gestio/copilot/xat", {
+      const data: any = await apiFetch("/operari/copilot/xat", {
         method: "POST",
         body: JSON.stringify({ pregunta: userMsg.content, context_id: feinaId }),
       });

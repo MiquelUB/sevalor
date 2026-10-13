@@ -261,12 +261,19 @@ class CopilotDispatcher:
         vertical: str = "SEVALOR",
         historial: Optional[List[dict]] = None,
         agent_prompt_system: Optional[str] = None,
+        allow_operari: bool = False,
     ) -> Dict[str, Any]:
         """Encamina, audita la seguretat per rol i resol la consulta mitjançant el subagent idoni."""
         t_start = time.perf_counter()
         pregunta_net = pregunta.lower()
 
         # ── 1. Verificació d'Accés per Rol (Zero-Trust Security Barrier) ────────
+        if not allow_operari and rol_usuari in ("OPERARI", "CAPATAZ", "CAP_DE_COLLA"):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Copilot no disponible per a operaris",
+            )
+
         # Veto financer per a rols no-BOSS (OPERARI, ENGINYER, SECRETARIA, etc.)
         es_consulta_financera = any(clau in pregunta_net for clau in PARAULES_CLAU_FINANCERES_VETO)
         if es_consulta_financera and rol_usuari != "BOSS":
@@ -318,19 +325,8 @@ class CopilotDispatcher:
                 enllacos.append({"titol": "Auditoria de Garanties", "url": "/gestio/copilot"})
             elif tool_name == "get_unbilled_money":
                 enllacos.append({"titol": "Control Financer i Marge", "url": "/gestio/economica"})
-        elif resposta_ia:
-            # Resposta conversacional directa atesa per la IA local (LM Studio)
-            resposta = resposta_ia
-            if selected_subagent.id == "subagent_flota_despatx":
-                enllacos.append({"titol": "Flota de Vehicles", "url": "/gestio/flota"})
-            elif selected_subagent.id == "subagent_logistica_estoc":
-                enllacos.append({"titol": "Inventari de Magatzem", "url": "/gestio/magatzem"})
-            elif selected_subagent.id == "subagent_peritatge_camp":
-                enllacos.append({"titol": "Auditoria de Garanties", "url": "/gestio/copilot"})
-            elif selected_subagent.id == "subagent_auditoria_marge":
-                enllacos.append({"titol": "Control Financer i Marge", "url": "/gestio/economica"})
         else:
-            # Fallback determinista sobirà local (Zero Mock Data) si LM Studio no ha respost
+            # Execució sobirana local del subagent
             (
                 resp_local,
                 t_name_loc,
@@ -339,11 +335,42 @@ class CopilotDispatcher:
                 enllacos_loc,
             ) = await selected_subagent.run_sovereign(pregunta, db, empresa_id)
 
-            resposta = resp_local
-            tool_name = t_name_loc
-            tool_args = t_args_loc
-            tool_result = t_res_loc
-            enllacos = enllacos_loc
+            has_found_stock = bool(
+                t_name_loc == "get_real_stock"
+                and t_res_loc
+                and (len(t_res_loc.get("articles", [])) > 0 or float(t_res_loc.get("total_disponible", 0.0)) > 0)
+            )
+            is_specific_tool = bool(
+                t_name_loc and t_name_loc not in ("get_real_stock", "get_rag_knowledge")
+            )
+            has_rag = bool(t_name_loc == "get_rag_knowledge" and t_res_loc and t_res_loc.get("trobat"))
+
+            if has_found_stock or is_specific_tool or has_rag:
+                resposta = resp_local
+                tool_name = t_name_loc
+                tool_args = t_args_loc
+                tool_result = t_res_loc
+                enllacos = enllacos_loc
+            elif resposta_ia:
+                # Si la IA local ha respost conversacionalment i no hi ha dades específiques trobades per subagent
+                resposta = resposta_ia
+                tool_name = None
+                tool_args = None
+                tool_result = None
+                if selected_subagent.id == "subagent_flota_despatx":
+                    enllacos.append({"titol": "Flota de Vehicles", "url": "/gestio/flota"})
+                elif selected_subagent.id == "subagent_logistica_estoc":
+                    enllacos.append({"titol": "Inventari de Magatzem", "url": "/gestio/magatzem"})
+                elif selected_subagent.id == "subagent_peritatge_camp":
+                    enllacos.append({"titol": "Auditoria de Garanties", "url": "/gestio/copilot"})
+                elif selected_subagent.id == "subagent_auditoria_marge":
+                    enllacos.append({"titol": "Control Financer i Marge", "url": "/gestio/economica"})
+            else:
+                resposta = resp_local
+                tool_name = t_name_loc
+                tool_args = t_args_loc
+                tool_result = t_res_loc
+                enllacos = enllacos_loc
 
         elapsed_ms = int((time.perf_counter() - t_start) * 1000)
 
