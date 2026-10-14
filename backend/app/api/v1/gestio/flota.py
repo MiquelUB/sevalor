@@ -26,6 +26,7 @@ from app.core.security import require_roles
 from app.models.models import (
     DocumentFlota,
     HistorialAssignacioVehicle,
+    Magatzem,
     MantenimentVehicle,
     OrdreTreball,
     Usuari,
@@ -161,6 +162,17 @@ async def alta_vehicle(
     )
 
     db.add(nou_vehicle)
+    await db.flush()
+
+    # Creació automàtica del Magatzem Mòbil per al Vehicle (Spec 004 / Spec 01 / Spec 015)
+    magatzem_furgoneta = Magatzem(
+        empresa_id=uuid.UUID(empresa_id),
+        nom=f"Vehicle {nou_vehicle.matricula} ({nou_vehicle.marca} {nou_vehicle.model})",
+        tipus="FURGONETA",
+        vehicle_id=nou_vehicle.id,
+        actiu=True,
+    )
+    db.add(magatzem_furgoneta)
     await db.commit()
 
     return nou_vehicle

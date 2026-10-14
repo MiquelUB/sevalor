@@ -39,6 +39,15 @@ interface Article {
   estoc_real?: number;
 }
 
+interface MagatzemItem {
+  id: string;
+  nom: string;
+  tipus: "NAU_CENTRAL" | "FURGONETA";
+  vehicle_id?: string | null;
+  vehicle_matricula?: string | null;
+  actiu: boolean;
+}
+
 export default function GestioMagatzemPage() {
   const { rolActiu } = useGestio();
   const [vertical, setVertical] = useState<string>("SEVALOR");
@@ -46,6 +55,16 @@ export default function GestioMagatzemPage() {
   const [articles, setArticles] = useState<Article[]>([]);
   const [eines, setEines] = useState<any[]>([]);
   const [proveidors, setProveidors] = useState<any[]>([]);
+  const [magatzems, setMagatzems] = useState<MagatzemItem[]>([]);
+  const [selectedMagatzemId, setSelectedMagatzemId] = useState<string>("TOTS");
+  const [modalTraspas, setModalTraspas] = useState(false);
+  const [traspasArticleId, setTraspasArticleId] = useState<string>("");
+  const [traspasOrigenId, setTraspasOrigenId] = useState<string>("");
+  const [traspasDestiId, setTraspasDestiId] = useState<string>("");
+  const [traspasQuantitat, setTraspasQuantitat] = useState<number>(1);
+  const [traspasant, setTraspasant] = useState(false);
+  const [checkoutTargetTipus, setCheckoutTargetTipus] = useState<"OPERARI" | "VEHICLE">("OPERARI");
+  const [selectedVehicleMagatzemId, setSelectedVehicleMagatzemId] = useState("");
   const [activeTab, setActiveTab] = useState<"MATERIALS" | "EINES">("MATERIALS");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -96,21 +115,33 @@ export default function GestioMagatzemPage() {
     }
   }, [nouArticle.preu_cost, nouArticle.descompte_proveidor, nouArticle.marge_guanys, nouArticle.tipus_creacio]);
 
-  const carregarArticles = async () => {
+  const carregarArticles = async (magId?: string) => {
     setLoading(true);
     setError(null);
+    const targetMagId = magId !== undefined ? magId : selectedMagatzemId;
+    const articlesQuery = targetMagId && targetMagId !== "TOTS"
+      ? `/gestio/magatzem/articles?magatzem_id=${targetMagId}`
+      : "/gestio/magatzem/articles";
+    const einesQuery = targetMagId && targetMagId !== "TOTS"
+      ? `/gestio/magatzem/eines?magatzem_id=${targetMagId}`
+      : "/gestio/magatzem/eines";
+
     try {
-      const [articlesData, einesData, operarisData, configData, proveidorsData] = await Promise.all([
-        apiFetch<Article[]>("/gestio/magatzem/articles").catch(() => []),
-        apiFetch<any[]>("/gestio/magatzem/eines").catch(() => []),
+      const [articlesData, einesData, operarisData, configData, proveidorsData, magatzemsData] = await Promise.all([
+        apiFetch<Article[]>(articlesQuery).catch(() => []),
+        apiFetch<any[]>(einesQuery).catch(() => []),
         apiFetch<any[]>("/gestio/operaris").catch(() => []),
         apiFetch<any>("/gestio/configuracio/empresa").catch(() => null),
-        apiFetch<any[]>("/gestio/proveidors").catch(() => [])
+        apiFetch<any[]>("/gestio/proveidors").catch(() => []),
+        apiFetch<MagatzemItem[]>("/gestio/magatzem/magatzems").catch(() => [])
       ]);
       setArticles(articlesData || []);
       setEines(einesData || []);
       setOperaris(operarisData || []);
       setProveidors(proveidorsData || []);
+      if (Array.isArray(magatzemsData) && magatzemsData.length > 0) {
+        setMagatzems(magatzemsData);
+      }
       
       if (configData) {
         if (configData.vertical) setVertical(configData.vertical);
@@ -125,6 +156,47 @@ export default function GestioMagatzemPage() {
       setArticles([]);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleCanviMagatzem = (nouMagId: string) => {
+    setSelectedMagatzemId(nouMagId);
+    carregarArticles(nouMagId);
+  };
+
+  const handleExecutarTraspas = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!traspasArticleId || !traspasOrigenId || !traspasDestiId) {
+      setError("Cal seleccionar article, magatzem d'origen i magatzem de destí");
+      return;
+    }
+    if (traspasOrigenId === traspasDestiId) {
+      setError("L'origen i el destí del traspàs han de ser diferents");
+      return;
+    }
+    if (traspasQuantitat <= 0) {
+      setError("La quantitat a traspassar ha de ser superior a 0");
+      return;
+    }
+
+    setTraspasant(true);
+    setError(null);
+    try {
+      await apiFetch("/gestio/magatzem/traspas-furgoneta", {
+        method: "POST",
+        body: JSON.stringify({
+          article_id: traspasArticleId,
+          origen_magatzem_id: traspasOrigenId,
+          desti_magatzem_id: traspasDestiId,
+          quantitat: Number(traspasQuantitat),
+        }),
+      });
+      setModalTraspas(false);
+      await carregarArticles();
+    } catch (err: any) {
+      setError(err.message || "Error en realitzar el traspàs d'estoc");
+    } finally {
+      setTraspasant(false);
     }
   };
 
@@ -259,27 +331,42 @@ export default function GestioMagatzemPage() {
   };
 
   const handleCheckout = async () => {
-    if (!einaCheckout || !selectedOperari) return;
+    if (!einaCheckout) return;
+    if (checkoutTargetTipus === "OPERARI" && !selectedOperari) {
+      alert("Cal seleccionar un operari");
+      return;
+    }
+    if (checkoutTargetTipus === "VEHICLE" && !selectedVehicleMagatzemId) {
+      alert("Cal seleccionar una furgoneta o vehicle");
+      return;
+    }
+
     try {
+      const payload = checkoutTargetTipus === "OPERARI"
+        ? { operari_id: selectedOperari }
+        : { magatzem_id: selectedVehicleMagatzemId };
+
       await apiFetch(`/gestio/magatzem/eines/${einaCheckout.id}/checkout`, {
         method: "POST",
-        body: JSON.stringify({ operari_id: selectedOperari })
+        body: JSON.stringify(payload)
       });
       setModalCheckout(false);
       setEinaCheckout(null);
-      carregarArticles();
+      setSelectedOperari("");
+      setSelectedVehicleMagatzemId("");
+      await carregarArticles();
     } catch (err: any) {
       alert(err.message || "Error al fer checkout");
     }
   };
 
   const handleCheckin = async (einaId: string) => {
-    if (!confirm("Confirmar devolució de l'eina al magatzem central?")) return;
+    if (!confirm("Confirmar retorn de l'eina a la base (DISPONIBLE)?")) return;
     try {
       await apiFetch(`/gestio/magatzem/eines/${einaId}/checkin`, {
         method: "POST"
       });
-      carregarArticles();
+      await carregarArticles();
     } catch (err: any) {
       alert(err.message || "Error al fer check-in");
     }
@@ -418,6 +505,27 @@ export default function GestioMagatzemPage() {
         </div>
 
         <div className="flex items-center gap-2">
+          {/* Selector de Magatzem Mòbil vs Central (Spec 004 / Spec 01 / Spec 015) */}
+          <div className="flex items-center gap-1.5 bg-slate-100 dark:bg-slate-800 p-1 rounded-xl border border-slate-200 dark:border-slate-700">
+            <span className="text-[11px] font-bold text-slate-500 px-1.5 flex items-center gap-1">
+              <Building className="w-3.5 h-3.5 text-emerald-600" />
+              Magatzem:
+            </span>
+            <select
+              value={selectedMagatzemId}
+              onChange={(e) => handleCanviMagatzem(e.target.value)}
+              className="bg-white dark:bg-slate-900 text-xs font-bold py-1 px-2 rounded-lg border border-slate-300 dark:border-slate-700 text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+            >
+              <option value="TOTS">🏢 Tots els Magatzems (Consolidat)</option>
+              {magatzems.map((mag) => (
+                <option key={mag.id} value={mag.id}>
+                  {mag.tipus === "NAU_CENTRAL" ? "🏭 " : "🚐 "}
+                  {mag.nom} {mag.vehicle_matricula ? `[${mag.vehicle_matricula}]` : ""}
+                </option>
+              ))}
+            </select>
+          </div>
+
           <div className="relative">
             <Search className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
             <input
@@ -425,7 +533,7 @@ export default function GestioMagatzemPage() {
               value={filtreCerca}
               onChange={(e) => setFiltreCerca(e.target.value)}
               placeholder="Cercar referència o nom..."
-              className="pl-9 pr-3 py-1.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs font-medium focus:outline-none focus:border-emerald-600 w-56"
+              className="pl-9 pr-3 py-1.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs font-medium focus:outline-none focus:border-emerald-600 w-48"
             />
           </div>
 
@@ -441,7 +549,7 @@ export default function GestioMagatzemPage() {
           </select>
 
           <button
-            onClick={carregarArticles}
+            onClick={() => carregarArticles()}
             disabled={loading}
             className="p-2 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 text-slate-600 dark:text-slate-300 transition-colors"
             title="Refrescar llista"
@@ -449,6 +557,23 @@ export default function GestioMagatzemPage() {
             <RefreshCw className={`w-3.5 h-3.5 ${loading ? "animate-spin" : ""}`} />
           </button>
 
+          <button
+            onClick={() => {
+              if (articles.length > 0) {
+                setTraspasArticleId(articles[0].id);
+              }
+              const nau = magatzems.find(m => m.tipus === "NAU_CENTRAL");
+              const furg = magatzems.find(m => m.tipus === "FURGONETA");
+              if (nau) setTraspasOrigenId(nau.id);
+              if (furg) setTraspasDestiId(furg.id);
+              setModalTraspas(true);
+            }}
+            className="px-3 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold flex items-center gap-1.5 shadow transition-all"
+            title="Traspàs d'estoc entre magatzem central i furgonetes (T026)"
+          >
+            <Truck className="w-3.5 h-3.5" />
+            <span>Traspàs / Dotar</span>
+          </button>
           
           <button
             onClick={() => setModalOcr(true)}
@@ -661,9 +786,22 @@ export default function GestioMagatzemPage() {
                           {eina.numero_serie}
                         </td>
                         <td className="p-3">
-                          <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${eina.estat === "DISPONIBLE" ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400" : "bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400"}`}>
-                            {eina.estat}
+                          <span
+                            className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                              eina.estat === "DISPONIBLE"
+                                ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400"
+                                : eina.estat === "EN_VEHICLE"
+                                ? "bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400"
+                                : "bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400"
+                            }`}
+                          >
+                            {eina.estat === "EN_VEHICLE" ? "A VEHICLE" : eina.estat}
                           </span>
+                          {eina.custodia_nom && (
+                            <p className="text-[10px] text-slate-500 font-medium mt-0.5">
+                              {eina.custodia_nom}
+                            </p>
+                          )}
                         </td>
                         <td className="p-3 text-slate-500 font-mono">
                           {eina.data_fi_garantia ? new Date(eina.data_fi_garantia).toLocaleDateString('ca-ES') : "-"}
@@ -676,7 +814,7 @@ export default function GestioMagatzemPage() {
                             >
                               Check-Out 📤
                             </button>
-                          ) : eina.estat === "CUSTODIADA" ? (
+                          ) : (eina.estat === "CUSTODIADA" || eina.estat === "EN_VEHICLE") ? (
                             <button
                               onClick={() => handleCheckin(eina.id)}
                               className="px-3 py-1 rounded-lg bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-400 text-[10px] font-bold hover:bg-emerald-200 transition-colors"
@@ -1630,21 +1768,69 @@ export default function GestioMagatzemPage() {
                 <p className="text-xs font-bold text-slate-700 dark:text-slate-300">{einaCheckout.nom}</p>
                 <p className="text-[10px] font-mono text-slate-500 mt-1">SN: {einaCheckout.numero_serie}</p>
               </div>
-              <div>
-                <label className="block text-xs font-bold text-slate-600 dark:text-slate-400 mb-1">
-                  Assignar a l'Operari / Cap de Colla *
-                </label>
-                <select
-                  value={selectedOperari}
-                  onChange={(e) => setSelectedOperari(e.target.value)}
-                  className="w-full p-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs font-semibold"
+
+              {/* Selector Tipus de Custòdia: Treballador o Vehicle */}
+              <div className="flex bg-slate-100 dark:bg-slate-800 p-1 rounded-xl">
+                <button
+                  type="button"
+                  onClick={() => setCheckoutTargetTipus("OPERARI")}
+                  className={`flex-1 py-1.5 text-xs font-bold rounded-lg transition-colors ${
+                    checkoutTargetTipus === "OPERARI"
+                      ? "bg-white dark:bg-slate-900 text-blue-600 dark:text-blue-400 shadow-sm"
+                      : "text-slate-500 hover:text-slate-800"
+                  }`}
                 >
-                  <option value="">-- Selecciona un operari --</option>
-                  {operaris.map(op => (
-                    <option key={op.id} value={op.id}>{op.nom} {op.cognoms}</option>
-                  ))}
-                </select>
+                  👤 Treballador
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setCheckoutTargetTipus("VEHICLE")}
+                  className={`flex-1 py-1.5 text-xs font-bold rounded-lg transition-colors ${
+                    checkoutTargetTipus === "VEHICLE"
+                      ? "bg-white dark:bg-slate-900 text-purple-600 dark:text-purple-400 shadow-sm"
+                      : "text-slate-500 hover:text-slate-800"
+                  }`}
+                >
+                  🚐 Vehicle / Flota
+                </button>
               </div>
+
+              {checkoutTargetTipus === "OPERARI" ? (
+                <div>
+                  <label className="block text-xs font-bold text-slate-600 dark:text-slate-400 mb-1">
+                    Assignar a l'Operari / Cap de Colla *
+                  </label>
+                  <select
+                    value={selectedOperari}
+                    onChange={(e) => setSelectedOperari(e.target.value)}
+                    className="w-full p-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs font-semibold"
+                  >
+                    <option value="">-- Selecciona un operari --</option>
+                    {operaris.map(op => (
+                      <option key={op.id} value={op.id}>{op.nom} {op.cognoms}</option>
+                    ))}
+                  </select>
+                </div>
+              ) : (
+                <div>
+                  <label className="block text-xs font-bold text-slate-600 dark:text-slate-400 mb-1">
+                    Assignar al Vehicle / Furgoneta (Dotació) *
+                  </label>
+                  <select
+                    value={selectedVehicleMagatzemId}
+                    onChange={(e) => setSelectedVehicleMagatzemId(e.target.value)}
+                    className="w-full p-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs font-semibold"
+                  >
+                    <option value="">-- Selecciona un vehicle --</option>
+                    {magatzems.filter(m => m.tipus === "FURGONETA").map(m => (
+                      <option key={m.id} value={m.id}>
+                        {m.nom} {m.vehicle_matricula ? `[${m.vehicle_matricula}]` : ""}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
               <div className="flex justify-end gap-2 pt-2">
                 <button
                   onClick={() => { setModalCheckout(false); setEinaCheckout(null); }}
@@ -1654,13 +1840,142 @@ export default function GestioMagatzemPage() {
                 </button>
                 <button
                   onClick={handleCheckout}
-                  disabled={!selectedOperari}
+                  disabled={checkoutTargetTipus === "OPERARI" ? !selectedOperari : !selectedVehicleMagatzemId}
                   className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold shadow disabled:opacity-50"
                 >
                   Confirmar Entrega
                 </button>
               </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Traspàs d'Estoc Nau Central <-> Vehicles (T026) */}
+      {modalTraspas && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="w-full max-w-md bg-white dark:bg-slate-900 rounded-3xl shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden">
+            <div className="px-5 py-4 border-b border-slate-200 dark:border-slate-800 flex justify-between items-center bg-blue-50 dark:bg-blue-900/20">
+              <div className="flex items-center gap-2">
+                <Truck className="w-5 h-5 text-blue-600 dark:text-blue-400" />
+                <div>
+                  <h2 className="text-sm font-bold text-slate-900 dark:text-white">
+                    Traspàs d'Estoc (Nau Central ⇄ Vehicles)
+                  </h2>
+                  <p className="text-[10px] text-slate-500">Spec 004 & Spec 01 (T026)</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setModalTraspas(false)}
+                className="text-slate-400 hover:text-slate-600"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleExecutarTraspas} className="p-5 space-y-4">
+              <div>
+                <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                  Article o Material *
+                </label>
+                <select
+                  value={traspasArticleId}
+                  onChange={(e) => setTraspasArticleId(e.target.value)}
+                  className="w-full p-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs font-semibold"
+                  required
+                >
+                  <option value="">-- Selecciona un article --</option>
+                  {articles.map((art) => (
+                    <option key={art.id} value={art.id}>
+                      {art.referencia_inventari} - {art.nom} (Total: {art.estoc_real ?? 0} {art.unitat_mesura})
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                    Origen (De) *
+                  </label>
+                  <select
+                    value={traspasOrigenId}
+                    onChange={(e) => setTraspasOrigenId(e.target.value)}
+                    className="w-full p-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs font-semibold"
+                    required
+                  >
+                    <option value="">-- Origen --</option>
+                    {magatzems.map((m) => (
+                      <option key={m.id} value={m.id}>
+                        {m.tipus === "NAU_CENTRAL" ? "🏭 " : "🚐 "}
+                        {m.nom}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                    Destí (A) *
+                  </label>
+                  <select
+                    value={traspasDestiId}
+                    onChange={(e) => setTraspasDestiId(e.target.value)}
+                    className="w-full p-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs font-semibold"
+                    required
+                  >
+                    <option value="">-- Destí --</option>
+                    {magatzems.map((m) => (
+                      <option key={m.id} value={m.id}>
+                        {m.tipus === "NAU_CENTRAL" ? "🏭 " : "🚐 "}
+                        {m.nom}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                  Quantitat a Moure *
+                </label>
+                <input
+                  type="number"
+                  min="0.01"
+                  step="any"
+                  value={traspasQuantitat}
+                  onChange={(e) => setTraspasQuantitat(parseFloat(e.target.value) || 0)}
+                  className="w-full p-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs font-mono font-bold"
+                  required
+                />
+              </div>
+
+              <div className="flex justify-end gap-2 pt-2 border-t border-slate-100 dark:border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => setModalTraspas(false)}
+                  className="px-4 py-2 rounded-xl border border-slate-300 dark:border-slate-700 text-slate-600 dark:text-slate-300 text-xs font-medium hover:bg-slate-100"
+                >
+                  Cancel·lar
+                </button>
+                <button
+                  type="submit"
+                  disabled={traspasant || !traspasArticleId || !traspasOrigenId || !traspasDestiId || traspasOrigenId === traspasDestiId}
+                  className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold shadow flex items-center gap-1.5 disabled:opacity-50"
+                >
+                  {traspasant ? (
+                    <>
+                      <RefreshCw className="w-4 h-4 animate-spin" />
+                      <span>Processant Traspàs...</span>
+                    </>
+                  ) : (
+                    <>
+                      <CheckCircle2 className="w-4 h-4" />
+                      <span>Confirmar Traspàs</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

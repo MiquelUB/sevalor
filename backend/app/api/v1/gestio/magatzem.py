@@ -1,6 +1,6 @@
 import os
 import uuid
-from datetime import date
+from datetime import date, datetime
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
@@ -14,7 +14,7 @@ def valida_uuid(id_str: str) -> uuid.UUID:
         raise HTTPException(status_code=400, detail="Identificador d'empresa invàlid.")
 
 
-from sqlalchemy import func, or_, select  # noqa: E402
+from sqlalchemy import case, func, or_, select  # noqa: E402
 from sqlalchemy.ext.asyncio import AsyncSession  # noqa: E402
 
 from app.core.db import get_db_with_tenant_context  # noqa: E402
@@ -30,6 +30,8 @@ from app.models.models import (  # noqa: E402
     MovimentEstoc,
     OrdreTreball,
     Proveidor,
+    Usuari,
+    Vehicle,
 )
 
 router = APIRouter(
@@ -117,6 +119,7 @@ class EstocResponse(BaseModel):
 async def llistar_articles(
     request: Request,
     q: Optional[str] = None,
+    magatzem_id: Optional[uuid.UUID] = None,
     limit: int = 50,
     offset: int = 0,
     db: AsyncSession = Depends(get_db_with_tenant_context),
@@ -149,8 +152,10 @@ async def llistar_articles(
         stmt_estocs = (
             select(EstocMagatzem.article_id, func.sum(EstocMagatzem.quantitat_fisica))
             .where(EstocMagatzem.article_id.in_(articles_ids))
-            .group_by(EstocMagatzem.article_id)
         )
+        if magatzem_id:
+            stmt_estocs = stmt_estocs.where(EstocMagatzem.magatzem_id == magatzem_id)
+        stmt_estocs = stmt_estocs.group_by(EstocMagatzem.article_id)
         res_estocs = await db.execute(stmt_estocs)
         for article_id, qt in res_estocs.all():
             estocs_map[article_id] = float(qt or 0.0)
@@ -259,6 +264,9 @@ class EinaCreate(BaseModel):
 class EinaResponse(EinaCreate):
     id: uuid.UUID
     estat: str
+    custodiat_per_operari_id: Optional[uuid.UUID] = None
+    magatzem_id: Optional[uuid.UUID] = None
+    custodia_nom: Optional[str] = None
 
 
 @router.post("/eines", response_model=EinaResponse, status_code=status.HTTP_201_CREATED)
@@ -284,6 +292,98 @@ async def crear_eina(
     db.add(nova_eina)
     await db.commit()
     return nova_eina
+
+
+class MagatzemResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: uuid.UUID
+    nom: str
+    tipus: str
+    vehicle_id: Optional[uuid.UUID] = None
+    vehicle_matricula: Optional[str] = None
+    actiu: bool
+    created_at: Optional[datetime] = None
+
+
+@router.get("/magatzems", response_model=List[MagatzemResponse])
+async def llistar_magatzems(
+    request: Request, db: AsyncSession = Depends(get_db_with_tenant_context)
+):
+    """Llista tots els magatzems de l'empresa (Nau Central i Furgonetes / Vehicles mòbils)."""
+    empresa_id = getattr(request.state, "empresa_id", None) or request.headers.get("X-Empresa-ID")
+    if not empresa_id or empresa_id in ("undefined", "null", "None"):
+        raise HTTPException(status_code=401, detail="No identificat")
+    emp_uuid = valida_uuid(empresa_id)
+
+    # Assegurar que la Nau Central Base existeix per a aquest tenant
+    stmt_central = select(Magatzem).where(
+        Magatzem.empresa_id == emp_uuid, Magatzem.tipus == "NAU_CENTRAL"
+    )
+    central = (await db.execute(stmt_central)).scalars().first()
+    if not central:
+        central = Magatzem(
+            empresa_id=emp_uuid,
+            nom="Nau Central Base",
+            tipus="NAU_CENTRAL",
+            actiu=True,
+        )
+        db.add(central)
+        await db.flush()
+
+    # Sincronitzar vehicles de flota que encara no tinguin magatzem mòbil
+    stmt_vehs = select(Vehicle).where(Vehicle.empresa_id == emp_uuid)
+    vehs = (await db.execute(stmt_vehs)).scalars().all()
+
+    stmt_mags_furg = select(Magatzem).where(
+        Magatzem.empresa_id == emp_uuid, Magatzem.tipus == "FURGONETA"
+    )
+    mags_furg = {
+        m.vehicle_id: m
+        for m in (await db.execute(stmt_mags_furg)).scalars().all()
+        if m.vehicle_id
+    }
+
+    hi_ha_nous = False
+    for v in vehs:
+        if v.id not in mags_furg:
+            db.add(
+                Magatzem(
+                    empresa_id=emp_uuid,
+                    nom=f"Vehicle {v.matricula} ({v.marca} {v.model})",
+                    tipus="FURGONETA",
+                    vehicle_id=v.id,
+                    actiu=True,
+                )
+            )
+            hi_ha_nous = True
+
+    if hi_ha_nous:
+        await db.commit()
+
+    stmt_all = (
+        select(Magatzem, Vehicle.matricula)
+        .outerjoin(Vehicle, Magatzem.vehicle_id == Vehicle.id)
+        .where(Magatzem.empresa_id == emp_uuid, Magatzem.actiu.is_(True))
+        .order_by(
+            case((Magatzem.tipus == "NAU_CENTRAL", 0), else_=1),
+            Magatzem.nom.asc(),
+        )
+    )
+    res = await db.execute(stmt_all)
+    llista = []
+    for mag, mat in res.all():
+        llista.append(
+            MagatzemResponse(
+                id=mag.id,
+                nom=mag.nom,
+                tipus=mag.tipus,
+                vehicle_id=mag.vehicle_id,
+                vehicle_matricula=mat,
+                actiu=mag.actiu,
+                created_at=mag.created_at,
+            )
+        )
+    return llista
 
 
 @router.get("/magatzems/{magatzem_id}/estoc", response_model=List[EstocResponse])
@@ -993,19 +1093,55 @@ async def modificar_article(
 
 
 @router.get("/eines", response_model=List[EinaResponse])
-async def llistar_eines(request: Request, db: AsyncSession = Depends(get_db_with_tenant_context)):
+async def llistar_eines(
+    request: Request,
+    magatzem_id: Optional[uuid.UUID] = None,
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+):
     empresa_id = getattr(request.state, "empresa_id", None) or request.headers.get("X-Empresa-ID")
     if not empresa_id or empresa_id in ("undefined", "null", "None"):
         raise HTTPException(status_code=401, detail="No identificat")
     emp_uuid = valida_uuid(empresa_id)
 
-    stmt = select(EinaCustodia).where(EinaCustodia.empresa_id == emp_uuid)
+    stmt = (
+        select(EinaCustodia, Usuari.nom, Usuari.cognoms, Magatzem.nom)
+        .outerjoin(Usuari, EinaCustodia.custodiat_per_operari_id == Usuari.id)
+        .outerjoin(Magatzem, EinaCustodia.magatzem_id == Magatzem.id)
+        .where(EinaCustodia.empresa_id == emp_uuid)
+    )
+    if magatzem_id:
+        stmt = stmt.where(EinaCustodia.magatzem_id == magatzem_id)
+
     res = await db.execute(stmt)
-    return res.scalars().all()
+    resultats = []
+    for eina, u_nom, u_cognoms, mag_nom in res.all():
+        cust_nom = None
+        if u_nom:
+            cust_nom = f"{u_nom} {u_cognoms or ''}".strip()
+        elif mag_nom:
+            cust_nom = mag_nom
+
+        resp = EinaResponse(
+            id=eina.id,
+            referencia_fabricant=eina.referencia_fabricant,
+            nom=eina.nom,
+            model=eina.model,
+            numero_serie=eina.numero_serie,
+            data_fi_garantia=eina.data_fi_garantia,
+            observacions=eina.observacions,
+            incidencies=eina.incidencies,
+            estat=eina.estat,
+            custodiat_per_operari_id=eina.custodiat_per_operari_id,
+            magatzem_id=eina.magatzem_id,
+            custodia_nom=cust_nom,
+        )
+        resultats.append(resp)
+    return resultats
 
 
 class CheckoutPayload(BaseModel):
-    operari_id: uuid.UUID
+    operari_id: Optional[uuid.UUID] = None
+    magatzem_id: Optional[uuid.UUID] = None
 
 
 @router.post("/eines/{eina_id}/checkout", response_model=EinaResponse)
@@ -1031,8 +1167,19 @@ async def checkout_eina(
     if eina.estat != "DISPONIBLE":
         raise HTTPException(status_code=400, detail="Eina no disponible per checkout")
 
-    eina.estat = "CUSTODIADA"
-    eina.custodiat_per_operari_id = payload.operari_id
+    if payload.magatzem_id:
+        eina.estat = "EN_VEHICLE"
+        eina.magatzem_id = payload.magatzem_id
+        eina.custodiat_per_operari_id = None
+    elif payload.operari_id:
+        eina.estat = "CUSTODIADA"
+        eina.custodiat_per_operari_id = payload.operari_id
+        eina.magatzem_id = None
+    else:
+        raise HTTPException(
+            status_code=400, detail="Cal especificar un operari o un vehicle/magatzem"
+        )
+
     await db.commit()
     return eina
 
@@ -1054,11 +1201,15 @@ async def checkin_eina(
     if not eina:
         raise HTTPException(status_code=404, detail="Eina no trobada")
 
-    if eina.estat != "CUSTODIADA":
-        raise HTTPException(status_code=400, detail="L'eina no està custodiada actualment")
+    if eina.estat not in ("CUSTODIADA", "EN_VEHICLE"):
+        raise HTTPException(
+            status_code=400,
+            detail="L'eina no està en custòdia ni en vehicle actualment",
+        )
 
     eina.estat = "DISPONIBLE"
     eina.custodiat_per_operari_id = None
+    eina.magatzem_id = None
     await db.commit()
     return eina
 
@@ -1116,6 +1267,7 @@ class TraspasRequest(BaseModel):
 
 
 @router.post("/traspas")
+@router.post("/traspas-furgoneta")
 async def traspas_estoc(
     request: Request,
     payload: TraspasRequest,
