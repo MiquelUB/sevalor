@@ -64,7 +64,12 @@ interface MapProps {
   modeVisor?: "SAT" | "TOPO";
   onModeVisorChange?: (mode: "SAT" | "TOPO") => void;
   initialOperariId?: string | null;
+  selectedOperariId?: string | null;
+  onSelectOperari?: (id: string | null) => void;
+  selectedFeinaId?: string | null;
+  onSelectFeina?: (id: string | null) => void;
   isEmbed?: boolean;
+  showSidebar?: boolean;
 }
 
 // Funció matemàtica de conversió lat/lng a rajoles Web Mercator (EPSG:3857)
@@ -85,12 +90,15 @@ export default function GestioMap({
   modeVisor = "SAT",
   onModeVisorChange,
   initialOperariId = null,
+  selectedOperariId: externalSelectedOperariId,
+  onSelectOperari,
+  selectedFeinaId: externalSelectedFeinaId,
+  onSelectFeina,
   isEmbed = false,
+  showSidebar = false,
 }: MapProps) {
   const [draggingId, setDraggingId] = useState<string | null>(null);
-  
-  // Drawer flotant en mode incrustat / embed
-  const [showDrawerEmbed, setShowDrawerEmbed] = useState<boolean>(false);
+  const [sidebarOpen, setSidebarOpen] = useState<boolean>(showSidebar);
 
   // Pestanyes del panell lateral: "FEINES" o "OPERARIS"
   const [sidebarMode, setSidebarMode] = useState<"FEINES" | "OPERARIS">("FEINES");
@@ -265,6 +273,8 @@ export default function GestioMap({
   const focusOperari = (operariId: string) => {
     setSelectedOperariId(operariId);
     setSelectedFeinaId(null);
+    if (onSelectOperari) onSelectOperari(operariId);
+    if (onSelectFeina) onSelectFeina(null);
     const opPin = pinsQuadrilles.find((p) => p.id === operariId);
     if (opPin) {
       setCenterCoord({ lat: opPin.lat, lng: opPin.lng });
@@ -276,6 +286,7 @@ export default function GestioMap({
   // Centrar el mapa i enfocar una feina
   const focusFeina = (feinaId: string) => {
     setSelectedFeinaId(feinaId);
+    if (onSelectFeina) onSelectFeina(feinaId);
     const fPin = pinsFeines.find((p) => p.id === feinaId);
     if (fPin) {
       setCenterCoord({ lat: fPin.lat, lng: fPin.lng });
@@ -283,9 +294,23 @@ export default function GestioMap({
       setPanY(0);
       if (fPin.cap_de_colla_id) {
         setSelectedOperariId(fPin.cap_de_colla_id);
+        if (onSelectOperari) onSelectOperari(fPin.cap_de_colla_id);
       }
     }
   };
+
+  // Resposta a canvis en les props externes de selecció
+  useEffect(() => {
+    if (externalSelectedOperariId && externalSelectedOperariId !== selectedOperariId) {
+      focusOperari(externalSelectedOperariId);
+    }
+  }, [externalSelectedOperariId]);
+
+  useEffect(() => {
+    if (externalSelectedFeinaId && externalSelectedFeinaId !== selectedFeinaId) {
+      focusFeina(externalSelectedFeinaId);
+    }
+  }, [externalSelectedFeinaId]);
 
   // Suport per carregar operari inicial per paràmetre URL
   useEffect(() => {
@@ -400,7 +425,6 @@ export default function GestioMap({
                   key={op.id}
                   onClick={() => {
                     focusOperari(op.id);
-                    if (isEmbed) setShowDrawerEmbed(false);
                   }}
                   className={`p-2.5 rounded-xl border transition-all cursor-pointer ${
                     isSelected
@@ -434,7 +458,6 @@ export default function GestioMap({
                       onClick={(e) => {
                         e.stopPropagation();
                         focusOperari(op.id);
-                        if (isEmbed) setShowDrawerEmbed(false);
                       }}
                       className="text-blue-600 dark:text-blue-400 font-bold hover:underline flex items-center gap-1"
                     >
@@ -537,7 +560,6 @@ export default function GestioMap({
                   onDragEnd={handleDragEnd}
                   onClick={() => {
                     focusFeina(feina.id);
-                    if (isEmbed) setShowDrawerEmbed(false);
                   }}
                   className={`p-2.5 bg-slate-50 dark:bg-slate-800/60 border rounded-lg cursor-grab active:cursor-grabbing hover:border-emerald-500 transition-all shadow-sm ${
                     isSelected
@@ -570,7 +592,6 @@ export default function GestioMap({
                       onClick={(e) => {
                         e.stopPropagation();
                         focusOperari(assignedOp.id);
-                        if (isEmbed) setShowDrawerEmbed(false);
                       }}
                       className="mt-1 flex items-center gap-1.5 text-[10px] text-blue-600 dark:text-blue-400 font-medium hover:underline cursor-pointer"
                     >
@@ -605,24 +626,15 @@ export default function GestioMap({
   return (
     <div className="flex-1 flex flex-col md:flex-row gap-4 relative w-full h-full min-w-0 overflow-hidden">
       
-      {/* 1. Panell Lateral per a vista Completa (només si !isEmbed) */}
-      {!isEmbed && (
-        <div className="w-full md:w-80 shrink-0 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4 flex flex-col shadow-sm max-h-full overflow-hidden">
-          {renderSidebarContent()}
-        </div>
-      )}
-
-      {/* Drawer desplegable en mode incrustat / Embed */}
-      {isEmbed && showDrawerEmbed && (
-        <div className="absolute top-16 left-4 z-40 w-80 h-[480px] bg-slate-900/95 backdrop-blur border border-slate-700 rounded-2xl p-4 shadow-2xl flex flex-col text-white animate-in slide-in-from-left duration-200">
-          <div className="flex items-center justify-between pb-2 mb-2 border-b border-slate-800">
-            <span className="text-xs font-bold text-emerald-400 font-mono uppercase">
-              Llistat d'OTs i Colles
-            </span>
+      {/* 1. Panell Lateral Plegable d'Ordres de Treball i Colles */}
+      {sidebarOpen && (
+        <div className="w-full md:w-80 shrink-0 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 flex flex-col shadow-sm max-h-full overflow-hidden animate-in slide-in-from-left duration-200">
+          <div className="flex items-center justify-between pb-2 mb-2 border-b border-slate-100 dark:border-slate-800 md:hidden">
+            <span className="text-xs font-bold text-slate-700 dark:text-slate-300 font-mono">Panell d'Ordres</span>
             <button
               type="button"
-              onClick={() => setShowDrawerEmbed(false)}
-              className="p-1 text-slate-400 hover:text-white rounded"
+              onClick={() => setSidebarOpen(false)}
+              className="p-1 text-slate-400 hover:text-slate-600 dark:hover:text-white"
             >
               <X className="w-4 h-4" />
             </button>
@@ -631,28 +643,26 @@ export default function GestioMap({
         </div>
       )}
 
-      {/* 2. Visor Cartogràfic GIS Principal */}
-      <div className="flex-1 min-w-0 bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl relative overflow-hidden flex flex-col h-full shadow-sm select-none">
+      {/* 2. Visor Cartogràfic GIS Principal (Finestra Única Gran) */}
+      <div className="flex-1 min-w-0 bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-2xl relative overflow-hidden flex flex-col h-full shadow-sm select-none">
         
-        {/* Barra superior esquerra: Selector de Base, Capes i Botó Drawer en mode Embed */}
+        {/* Barra superior esquerra: Selector de Base, Capes i Botó desplegable d'Ordres */}
         <div className="absolute top-3 left-3 z-30 flex items-center gap-2 flex-wrap max-w-[80%]">
           
-          {/* Botó Drawer per a vista Embed */}
-          {isEmbed && (
-            <button
-              type="button"
-              onClick={() => setShowDrawerEmbed((s) => !s)}
-              className={`px-3 py-1.5 text-xs font-bold rounded-lg border shadow-md backdrop-blur flex items-center gap-1.5 transition-all ${
-                showDrawerEmbed
-                  ? "bg-emerald-600 text-white border-emerald-400 ring-2 ring-emerald-500/20"
-                  : "bg-white/95 dark:bg-slate-900/95 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-800 hover:border-slate-400"
-              }`}
-              title="Obrir llistat de feines i operaris"
-            >
-              <Briefcase className="w-3.5 h-3.5 text-emerald-500" />
-              <span>OTs & Colles ({feines.length})</span>
-            </button>
-          )}
+          {/* Botó per plegar / desplegar Panell d'Ordres */}
+          <button
+            type="button"
+            onClick={() => setSidebarOpen((s) => !s)}
+            className={`px-3 py-1.5 text-xs font-bold rounded-lg border shadow-md backdrop-blur flex items-center gap-1.5 transition-all ${
+              sidebarOpen
+                ? "bg-emerald-600 text-white border-emerald-400 ring-2 ring-emerald-500/20"
+                : "bg-white/95 dark:bg-slate-900/95 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-800 hover:border-slate-400"
+            }`}
+            title="Plegar / desplegar panell d'Ordres de Treball"
+          >
+            <Briefcase className="w-3.5 h-3.5 text-emerald-500" />
+            <span>Ordres ({feines.length})</span>
+          </button>
 
           {/* Selector de Cartografia Base */}
           <div className="flex bg-white/95 dark:bg-slate-900/95 backdrop-blur rounded-lg border border-slate-200 dark:border-slate-800 p-0.5 shadow-md">
@@ -1208,83 +1218,9 @@ export default function GestioMap({
           </div>
         )}
 
-        {/* 5. Tauler Flotant Drop & Go de Quadrilles al Peu del Mapa */}
-        <div className="mt-auto z-20 px-3 py-2.5 bg-gradient-to-t from-slate-950 via-slate-950/95 to-transparent border-t border-slate-800/60">
-          <div className="flex items-center justify-between mb-1.5">
-            <span className="text-[11px] font-bold uppercase tracking-wider text-slate-300 flex items-center gap-1.5">
-              <Users className="w-3.5 h-3.5 text-emerald-400" />
-              Quadrilles Actives (Clica per centrar • Arrossega feines per assignar)
-            </span>
-            <span className="text-[9px] text-slate-400">
-              {modeVisor === "SAT"
-                ? "© ESRI World Imagery"
-                : "© OpenStreetMap"}
-            </span>
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
-            {operaris.map((operari) => {
-              const assignedFeines = feines.filter((f) => f.cap_de_colla_id === operari.id);
-              const isSelected = selectedOperariId === operari.id;
-
-              return (
-                <div
-                  key={operari.id}
-                  onDragOver={handleDragOver}
-                  onDrop={(e) => handleDrop(e, operari.id)}
-                  onClick={() => focusOperari(operari.id)}
-                  className={`bg-slate-900/90 backdrop-blur border-2 border-dashed rounded-xl p-2 transition-all flex flex-col shadow-lg cursor-pointer ${
-                    isSelected
-                      ? "border-blue-500 ring-2 ring-blue-500/30 bg-slate-900"
-                      : "border-slate-700 hover:border-blue-400"
-                  }`}
-                  title="Clica per centrar i veure al mapa"
-                >
-                  <div className="flex items-center gap-2 pb-1 border-b border-slate-800">
-                    <div className="w-6 h-6 rounded-full bg-blue-500/20 text-blue-400 font-bold text-xs flex items-center justify-center border border-blue-500/30 shrink-0">
-                      {operari.nom[0]}
-                      {operari.cognoms ? operari.cognoms[0] : ""}
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <h3 className="text-xs font-bold text-white leading-tight truncate">
-                        {operari.nom} {operari.cognoms}
-                      </h3>
-                      <span className="text-[10px] text-blue-400 font-mono block truncate">
-                        En Servei ({operari.rol})
-                      </span>
-                    </div>
-                    <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-slate-800 text-slate-300 font-bold shrink-0">
-                      {assignedFeines.length} OT
-                    </span>
-                  </div>
-
-                  <div className="mt-1 space-y-1 overflow-y-auto max-h-[46px] scrollbar-thin">
-                    {assignedFeines.length === 0 ? (
-                      <div className="text-center py-0.5 text-slate-500 text-[10px]">
-                        <span>Clica per centrar • Arrossega feina aquí</span>
-                      </div>
-                    ) : (
-                      assignedFeines.map((af) => (
-                        <div
-                          key={af.id}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            focusFeina(af.id);
-                          }}
-                          className="bg-slate-800/80 hover:bg-slate-700/80 border border-slate-700 rounded px-1.5 py-0.5 text-[10px] flex items-center justify-between text-slate-200 transition-colors"
-                        >
-                          <span className="font-bold text-emerald-400 font-mono shrink-0 mr-1.5">
-                            {af.codi}
-                          </span>
-                          <span className="truncate text-slate-300">{af.titol}</span>
-                        </div>
-                      ))
-                    )}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
+        {/* Atribució cartogràfica discreta a la cantonada inferior */}
+        <div className="absolute bottom-2 right-3 z-20 text-[9px] text-slate-400/70 bg-slate-950/70 px-2 py-0.5 rounded backdrop-blur pointer-events-none border border-slate-800/40">
+          {modeVisor === "SAT" ? "© ESRI World Imagery" : "© OpenStreetMap contributors"}
         </div>
       </div>
     </div>
