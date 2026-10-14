@@ -14,25 +14,30 @@ export function getApiBaseUrl(): string {
     const custom = localStorage.getItem("sevalor_api_url");
     if (custom) return custom.replace(/\/+$/, "");
 
-    // 2. Variable d'entorn pública de Next.js
-    const envUrl = process.env.NEXT_PUBLIC_API_URL;
-    if (envUrl) {
-      const isLocalUrl = envUrl.includes("127.0.0.1") || envUrl.includes("localhost");
-      const isLocalBrowser = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
-      // Si és una URL remota o estem en local, usem envUrl
-      if (!isLocalUrl || isLocalBrowser) {
-        return envUrl.replace(/\/+$/, "");
-      }
-    }
-
-    // 3. Si estem al navegador en un domini remot (EasyPanel / VPS):
-    // Utilitzem ruta relativa /api/v1 del mateix domini per evitar Mixed Content i CORS
-    if (window.location.hostname !== "localhost" && window.location.hostname !== "127.0.0.1") {
+    // 2. Si estem al navegador en un domini remot o darrere de proxy Nginx (ports 80, 443, 8080, 8443):
+    // Utilitzem ruta relativa /api/v1 del mateix origen per evitar problemes de Mixed Content i CORS
+    if (
+      (window.location.hostname !== "localhost" && window.location.hostname !== "127.0.0.1") ||
+      ["80", "443", "8080", "8443"].includes(window.location.port)
+    ) {
       return `${window.location.origin}/api/v1`;
     }
 
-    // 4. Per defecte en desenvolupament local
-    return envUrl ? envUrl.replace(/\/+$/, "") : "http://127.0.0.1:8001/api/v1";
+    // 3. Variable d'entorn pública de Next.js
+    const envUrl = process.env.NEXT_PUBLIC_API_URL;
+    if (envUrl) {
+      // Ignorar adreces internes de Docker com http://backend:8000 que el navegador de l'usuari mai pot resoldre
+      if (!envUrl.includes("://backend")) {
+        const isLocalUrl = envUrl.includes("127.0.0.1") || envUrl.includes("localhost");
+        const isLocalBrowser = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
+        if (isLocalUrl || !isLocalBrowser) {
+          return envUrl.replace(/\/+$/, "");
+        }
+      }
+    }
+
+    // 4. Per defecte en desenvolupament local directament contra el backend exposat
+    return "http://127.0.0.1:8001/api/v1";
   }
 
   return process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8001/api/v1";

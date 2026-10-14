@@ -52,6 +52,8 @@ export interface Operari {
   cognoms: string;
   rol: string;
   estat: string;
+  estat_operatiu?: string | null;
+  especialitat?: string | null;
   telefon?: string | null;
   latitud?: number | null;
   longitud?: number | null;

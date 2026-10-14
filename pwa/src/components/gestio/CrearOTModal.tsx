@@ -116,6 +116,7 @@ export function CrearOTModal({ onClose, onSuccess }: CrearOTModalProps) {
       const geo = geocodificarAdreca(formData.adreca);
       const payload = {
         ...formData,
+        estat: formData.cap_de_colla_id ? "ASSIGNADA" : (formData.estat || "PENDENT"),
         latitud: geo.lat,
         longitud: geo.lng,
         vehicle_id: formData.vehicle_id ? formData.vehicle_id : null,

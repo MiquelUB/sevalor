@@ -69,6 +69,8 @@ services:
     security_opt:
       - no-new-privileges:true
     user: "1000:1000"
+    volumes:
+      - ./backend:/app
     tmpfs:
       - /tmp
     extra_hosts:

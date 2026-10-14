@@ -45,11 +45,29 @@ export default function GestioDashboardPage() {
       apiFetch<any>("/gestio/operaris").catch(() => []),
     ])
       .then(([hudData, feinesData, operarisData]) => {
-        if (hudData) setHud(hudData);
         const fList = Array.isArray(feinesData) ? feinesData : (feinesData?.feines || []);
         const oList = Array.isArray(operarisData) ? operarisData : (operarisData?.operaris || []);
         setFeines(fList);
         setOperaris(oList.filter((o: any) => o.estat === "ACTIU"));
+
+        if (hudData) {
+          setHud(hudData);
+        } else {
+          // Fallback reactiu si l'endpoint HUD ha tingut un retard
+          const otsActives = fList.filter((f: any) =>
+            ["PENDENT", "ASSIGNADA", "PROGRAMADA", "EN_CURS", "EN_OBRA", "EN_RUTA"].includes(f.estat)
+          );
+          const colles = new Set(
+            otsActives
+              .filter((f: any) => f.cap_de_colla_id && ["ASSIGNADA", "PROGRAMADA", "EN_CURS", "EN_OBRA", "EN_RUTA"].includes(f.estat))
+              .map((f: any) => f.cap_de_colla_id)
+          );
+          setHud((prev) => ({
+            ...prev,
+            active_jobs: otsActives.length,
+            teams_on_field: colles.size,
+          }));
+        }
       })
       .finally(() => setLoading(false));
   };
@@ -97,6 +115,37 @@ export default function GestioDashboardPage() {
     }
   };
 
+  // Càlcul reactiu i coherent dels KPIs operatius en temps real
+  const feinesActives = feines.filter((f) =>
+    ["PENDENT", "ASSIGNADA", "PROGRAMADA", "EN_CURS", "EN_OBRA", "EN_RUTA"].includes(f.estat)
+  );
+
+  const feinesActivesAmbColla = new Set(
+    feines
+      .filter(
+        (f) =>
+          f.cap_de_colla_id &&
+          ["ASSIGNADA", "PROGRAMADA", "EN_CURS", "EN_OBRA", "EN_RUTA"].includes(f.estat)
+      )
+      .map((f) => f.cap_de_colla_id)
+  );
+
+  const operarisEnServei = new Set(
+    operaris
+      .filter((o) => ["EN_SERVEI", "EN_RUTA", "EN_OBRA"].includes(o.estat_operatiu || ""))
+      .map((o) => o.id)
+  );
+
+  // Quadrilles actives reals: màxim entre la resposta d'agregació HUD i el conjunt actiu en memòria
+  const quadrillesActivesReals = Math.max(
+    hud.teams_on_field,
+    feinesActivesAmbColla.size,
+    operarisEnServei.size
+  );
+
+  // Feines actives reals: màxim entre el HUD i les feines carregades
+  const feinesActivesReals = Math.max(hud.active_jobs, feinesActives.length);
+
   return (
     <div className="flex flex-col h-full bg-slate-50 dark:bg-slate-950 p-4 md:p-6 space-y-6 overflow-y-auto overflow-x-hidden max-w-full">
       {/* 1. HUD DE POLSO OPERATIVO EN TIEMPO REAL (RF-07 & FR-018) */}
@@ -112,7 +161,7 @@ export default function GestioDashboardPage() {
             </p>
             <div className="flex items-baseline gap-2">
               <h3 className="text-2xl font-black text-slate-800 dark:text-slate-100">
-                {hud.teams_on_field}
+                {quadrillesActivesReals}
               </h3>
               <span className="text-xs font-bold text-emerald-600 dark:text-emerald-400">
                 En Faena
@@ -135,7 +184,7 @@ export default function GestioDashboardPage() {
             </p>
             <div className="flex items-baseline gap-2">
               <h3 className="text-2xl font-black text-slate-800 dark:text-slate-100">
-                {hud.active_jobs}
+                {feinesActivesReals}
               </h3>
               <span className="text-xs font-bold text-slate-600 dark:text-slate-400">Actives</span>
             </div>

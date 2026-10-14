@@ -2,12 +2,20 @@ import uuid
 from typing import Any, Dict
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select, union
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db_with_tenant_context
 from app.core.security import require_roles
-from app.models.models import Article, EstocMagatzem, Incidencia, OrdreTreball, Vehicle
+from app.models.models import (
+    Article,
+    EstocMagatzem,
+    Incidencia,
+    OrdreTreball,
+    RegistreJornadaLaboral,
+    Usuari,
+    Vehicle,
+)
 
 router = APIRouter(
     prefix="/gestio/dashboard",
@@ -41,19 +49,47 @@ async def get_dashboard_hud(
     res_comp = await db.execute(stmt_comp)
     completed_jobs = res_comp.scalar() or 0
 
-    # Open incidents
+    # Open incidents (incidències no resoltes / no tancades)
     stmt_inc = select(func.count(Incidencia.id)).where(
-        Incidencia.empresa_id == emp_uuid, Incidencia.estat != "TANCADA"
+        Incidencia.empresa_id == emp_uuid,
+        ~Incidencia.estat.in_(["TANCADA", "RESOLTA", "VERD"]),
     )
     res_inc = await db.execute(stmt_inc)
     open_incidents = res_inc.scalar() or 0
 
-    # Teams on field (distinct cap_de_colla_id in active or assigned jobs)
-    stmt_teams = select(func.count(func.distinct(OrdreTreball.cap_de_colla_id))).where(
-        OrdreTreball.empresa_id == emp_uuid,
-        OrdreTreball.estat.in_(["ASSIGNADA", "PROGRAMADA", "EN_CURS", "EN_OBRA", "EN_RUTA"]),
-        OrdreTreball.cap_de_colla_id.is_not(None),
+    # Teams on field:
+    # 1. Caps de colla o operaris assignats a feines actives (PENDENT, ASSIGNADA, PROGRAMADA, EN_CURS, EN_OBRA, EN_RUTA)
+    # 2. Operaris amb fitxatge / registre de jornada obert avui
+    # 3. Operaris en servei operatiu al camp (EN_SERVEI, EN_RUTA, EN_OBRA)
+    q_ots = (
+        select(OrdreTreball.cap_de_colla_id.label("usuari_id"))
+        .where(
+            OrdreTreball.empresa_id == emp_uuid,
+            OrdreTreball.estat.in_(["ASSIGNADA", "PROGRAMADA", "EN_CURS", "EN_OBRA", "EN_RUTA"]),
+            OrdreTreball.cap_de_colla_id.is_not(None),
+        )
     )
+    q_jornada = (
+        select(RegistreJornadaLaboral.usuari_id.label("usuari_id"))
+        .where(
+            RegistreJornadaLaboral.empresa_id == emp_uuid,
+            RegistreJornadaLaboral.data_jornada == func.current_date(),
+            RegistreJornadaLaboral.hora_fi.is_(None),
+            RegistreJornadaLaboral.estat == "EN_CURS",
+        )
+    )
+    q_servei = (
+        select(Usuari.id.label("usuari_id"))
+        .where(
+            Usuari.empresa_id == emp_uuid,
+            Usuari.rol.in_(["OPERARI", "CAP_DE_COLLA"]),
+            Usuari.estat == "ACTIU",
+            Usuari.estat_operatiu.in_(["EN_SERVEI", "EN_RUTA", "EN_OBRA"]),
+        )
+    )
+
+    stmt_teams_union = union(q_ots, q_jornada, q_servei).subquery()
+    stmt_teams = select(func.count(stmt_teams_union.c.usuari_id))
     res_teams = await db.execute(stmt_teams)
     teams_on_field = res_teams.scalar() or 0
 
@@ -74,7 +110,11 @@ async def get_dashboard_hud(
 
     # Vehicles with alerts
     stmt_veh = select(func.count(Vehicle.id)).where(
-        Vehicle.empresa_id == emp_uuid, Vehicle.estat == "AVERIAT"
+        Vehicle.empresa_id == emp_uuid,
+        or_(
+            Vehicle.estat.in_(["AVERIAT", "TALLER", "ACCIDENTAT", "MANTENIMENT"]),
+            Vehicle.estat_itv.in_(["DESFAVORABLE", "CADUCADA", "NEGATIVA"]),
+        ),
     )
     res_veh = await db.execute(stmt_veh)
     vehicles_with_alerts = res_veh.scalar() or 0
