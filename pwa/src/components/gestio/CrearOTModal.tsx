@@ -3,6 +3,7 @@
 import React, { useState, useEffect } from "react";
 import { X, Save, Building2, User, FileText, Calendar, MapPin, Map, Truck, Map as MapIcon, AlignLeft, Package, Plus, Trash2, Wrench } from "lucide-react";
 import { apiFetch } from "@/lib/api";
+import { geocodificarAdreca } from "@/lib/geocoding";
 
 interface CrearOTModalProps {
   onClose: () => void;
@@ -112,8 +113,11 @@ export function CrearOTModal({ onClose, onSuccess }: CrearOTModalProps) {
     setLoading(true);
 
     try {
+      const geo = geocodificarAdreca(formData.adreca);
       const payload = {
         ...formData,
+        latitud: geo.lat,
+        longitud: geo.lng,
         vehicle_id: formData.vehicle_id ? formData.vehicle_id : null,
         cap_de_colla_id: formData.cap_de_colla_id ? formData.cap_de_colla_id : null,
         finca_id: formData.finca_id ? formData.finca_id : null,
@@ -302,11 +306,20 @@ export function CrearOTModal({ onClose, onSuccess }: CrearOTModalProps) {
                 </label>
                 <input
                   type="text"
-                  placeholder="Introduïu una adreça o coordenades per al GIS..."
+                  placeholder="Introduïu una adreça o coordenades (ex: Carrer Indústria, Barcelona)..."
                   value={formData.adreca}
                   onChange={e => setFormData({ ...formData, adreca: e.target.value })}
                   className="w-full px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100 focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 outline-none transition-all"
                 />
+                {formData.adreca.trim().length > 2 && (() => {
+                  const geo = geocodificarAdreca(formData.adreca);
+                  return (
+                    <div className="flex items-center gap-1.5 text-[11px] font-mono text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/30 px-3 py-1.5 rounded-lg border border-emerald-500/20">
+                      <MapPin className="w-3.5 h-3.5 shrink-0" />
+                      <span>Localització GIS: <strong>{geo.ciutat || "Coordenades validades"}</strong> ({geo.lat.toFixed(4)}°N, {geo.lng.toFixed(4)}°E)</span>
+                    </div>
+                  );
+                })()}
               </div>
 
               <div className="space-y-2 md:col-span-2">

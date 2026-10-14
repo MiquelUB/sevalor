@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.db import get_db_with_tenant_context
 from app.core.security import require_roles
 from app.models.models import Client, EinaCustodia, Finca, OrdreTreball, Usuari
+from app.services.geocoding_service import geocodificar_adreca
 
 router = APIRouter(
     prefix="/gestio/feines",
@@ -79,6 +80,12 @@ async def llistar_feines(
     feines = []
     for ordre, client, operari in rows:
         f_resp = FeinaResponse.model_validate(ordre)
+        # Resolució automàtica de coordenades si no estaven persistides
+        if (f_resp.latitud is None or f_resp.longitud is None) and ordre.adreca:
+            c_lat, c_lng = geocodificar_adreca(ordre.adreca)
+            if c_lat is not None and c_lng is not None:
+                f_resp.latitud = c_lat
+                f_resp.longitud = c_lng
         if client:
             f_resp.client_nom = client.rao_social
         if operari:
@@ -103,17 +110,8 @@ async def alta_feina(
     if result_codi.scalars().first():
         raise HTTPException(status_code=400, detail="El codi de feina ja es troba registrat")
 
-    # Coordenades: agafar les directes o parsejar adreça / finca
-    lat = feina.latitud
-    lng = feina.longitud
-
-    if (lat is None or lng is None) and feina.adreca and "," in feina.adreca:
-        try:
-            parts = [float(p.strip()) for p in feina.adreca.split(",")]
-            if len(parts) >= 2:
-                lat, lng = parts[0], parts[1]
-        except (ValueError, TypeError):
-            pass
+    # Coordenades: geocodificar adreça de text o respectar coordenades directes
+    lat, lng = geocodificar_adreca(feina.adreca, feina.latitud, feina.longitud)
 
     if (lat is None or lng is None) and feina.finca_id:
         stmt_finca = select(Finca).where(
@@ -193,14 +191,9 @@ async def llistar_feines_mapa(
                 lng = float(finca.longitud)
 
         if lat is None or lng is None:
-            # Fallback to parse adreca if it contains coordinates (for tests)
-            if ordre.adreca and "," in ordre.adreca:
-                try:
-                    parts = [float(p.strip()) for p in ordre.adreca.split(",")]
-                    if len(parts) >= 2:
-                        lat, lng = parts[0], parts[1]
-                except (ValueError, TypeError):
-                    pass
+            c_lat, c_lng = geocodificar_adreca(ordre.adreca)
+            if c_lat is not None and c_lng is not None:
+                lat, lng = c_lat, c_lng
 
         if lat is None or lng is None:
             continue
@@ -317,15 +310,9 @@ async def llistar_intervencions_actives(
 
     items = []
     for o in ordres:
-        lat = 41.3851
-        lng = 2.1734
-        if o.adreca and "," in o.adreca:
-            try:
-                parts = [float(p.strip()) for p in o.adreca.split(",")]
-                if len(parts) >= 2:
-                    lat, lng = parts[0], parts[1]
-            except (ValueError, TypeError):
-                pass
+        c_lat, c_lng = geocodificar_adreca(o.adreca, o.latitud, o.longitud)
+        lat = c_lat if c_lat is not None else 41.3851
+        lng = c_lng if c_lng is not None else 2.1734
 
         items.append(
             {

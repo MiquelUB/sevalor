@@ -28,6 +28,7 @@ import {
   UserCheck,
   Navigation,
 } from "lucide-react";
+import { geocodificarAdreca } from "@/lib/geocoding";
 
 export interface Feina {
   id: string;
@@ -109,11 +110,12 @@ export default function GestioMap({
   const [selectedFeinaId, setSelectedFeinaId] = useState<string | null>(null);
   const [selectedOperariId, setSelectedOperariId] = useState<string | null>(null);
 
-  // Centre del visor dinàmic (per defecte Seu Central a Lleida / Segrià: 41.6176, 0.6200)
+  // Centre del visor dinàmic (s'auto-centra dinàmicament en la feina o territori actiu)
   const [centerCoord, setCenterCoord] = useState<{ lat: number; lng: number }>({
-    lat: 41.6176,
-    lng: 0.6200,
+    lat: 41.3879,
+    lng: 2.1699,
   });
+  const [hasAutoCentered, setHasAutoCentered] = useState<boolean>(false);
 
   // Zoom & Pan
   const [zoom, setZoom] = useState<number>(13);
@@ -168,25 +170,40 @@ export default function GestioMap({
     let lat = f.latitud ?? null;
     let lng = f.longitud ?? null;
 
-    if ((lat === null || lng === null) && f.adreca && f.adreca.includes(",")) {
-      try {
-        const parts = f.adreca.split(",").map((p) => parseFloat(p.trim()));
-        if (parts.length >= 2 && !isNaN(parts[0]) && !isNaN(parts[1])) {
-          lat = parts[0];
-          lng = parts[1];
-        }
-      } catch {}
+    if (lat !== null && lng !== null && !isNaN(lat) && !isNaN(lng)) {
+      return { lat, lng };
     }
 
-    if (lat === null || lng === null) {
-      const charCode = (f.id ? f.id.charCodeAt(0) : idx * 7) % 15;
-      const charCode2 = (f.codi ? f.codi.charCodeAt(f.codi.length - 1) : idx * 11) % 15;
-      lat = 41.6176 + (charCode - 7) * 0.007;
-      lng = 0.6200 + (charCode2 - 7) * 0.007;
+    // Geocodificació territorial intel·ligent (Barcelona, carrer industria, Lleida, etc.)
+    const geo = geocodificarAdreca(f.adreca, lat, lng);
+    if (geo.font !== "default") {
+      return { lat: geo.lat, lng: geo.lng };
     }
+
+    // Si és default, usem la posició base amb petit decalatge determinista
+    const charCode = (f.id ? f.id.charCodeAt(0) : idx * 7) % 15;
+    const charCode2 = (f.codi ? f.codi.charCodeAt(f.codi.length - 1) : idx * 11) % 15;
+    lat = geo.lat + (charCode - 7) * 0.004;
+    lng = geo.lng + (charCode2 - 7) * 0.004;
 
     return { lat, lng };
   };
+
+  // Auto-centrat inicial automàtic a la primera feina de la llista
+  useEffect(() => {
+    if (hasAutoCentered) return;
+    if (initialOperariId || externalSelectedOperariId || externalSelectedFeinaId) {
+      setHasAutoCentered(true);
+      return;
+    }
+    if (feines && feines.length > 0) {
+      const coords = getFeinaCoords(feines[0], 0);
+      setCenterCoord({ lat: coords.lat, lng: coords.lng });
+      setPanX(0);
+      setPanY(0);
+      setHasAutoCentered(true);
+    }
+  }, [feines, initialOperariId, externalSelectedOperariId, externalSelectedFeinaId, hasAutoCentered]);
 
   const getStatusColor = (estat: string) => {
     switch (estat) {
@@ -248,8 +265,10 @@ export default function GestioMap({
           lat = c.lat + 0.0025;
           lng = c.lng + 0.0025;
         } else {
-          lat = 41.6176 + ((idx % 7) - 3) * 0.004;
-          lng = 0.6200 + ((idx % 7) - 3) * 0.004;
+          const baseLat = centerCoord?.lat || 41.3879;
+          const baseLng = centerCoord?.lng || 2.1699;
+          lat = baseLat + ((idx % 7) - 3) * 0.003;
+          lng = baseLng + ((idx % 7) - 3) * 0.003;
         }
       }
 
@@ -351,7 +370,12 @@ export default function GestioMap({
   };
 
   const handleRecenter = () => {
-    setCenterCoord({ lat: 41.6176, lng: 0.6200 });
+    if (feines && feines.length > 0) {
+      const coords = getFeinaCoords(feines[0], 0);
+      setCenterCoord({ lat: coords.lat, lng: coords.lng });
+    } else {
+      setCenterCoord({ lat: 41.3879, lng: 2.1699 });
+    }
     setPanX(0);
     setPanY(0);
     setZoom(13);
