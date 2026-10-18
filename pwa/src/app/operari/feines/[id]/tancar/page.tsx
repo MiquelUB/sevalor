@@ -10,16 +10,19 @@ export default function TancarFeinaPage() {
   const params = useParams();
   const router = useRouter();
   const [signatureSaved, setSignatureSaved] = useState(false);
+  const [nomSignant, setNomSignant] = useState("");
+  const [dniSignant, setDniSignant] = useState("");
 
   const feinaId = params.id as string;
 
   const handleSaveSignature = async (base64Signature: string) => {
-    // Save to sync_queue
     await db.sync_queue.add({
       action: "TANCAR_ORDRE",
       payload: {
         ordre_id: feinaId,
         signatura_base64: base64Signature,
+        nom_signant: nomSignant.trim() || undefined,
+        dni_signant: dniSignant.trim() || undefined,
         data_tancament: new Date().toISOString(),
       },
       status: "pending",
@@ -35,29 +38,85 @@ export default function TancarFeinaPage() {
   };
 
   return (
-    <div className="p-4 max-w-lg mx-auto flex flex-col gap-6">
-      <h1 className="text-2xl font-bold text-[var(--color-primary)]">
-        Tancament de Jornada / Feina
-      </h1>
-      
-      <p className="text-sm text-gray-600">
-        Per favor, escaneja els tiquets de combustible necessaris abans de signar el tancament de la feina.
+    <div className="p-4 max-w-md mx-auto flex flex-col gap-5 bg-surface dark:bg-slate-950 min-h-screen">
+      {/* Header Stitch Screen 7b207f2eb5474f77b6138461df461858 */}
+      <header className="flex items-center justify-between bg-surface-container-lowest dark:bg-slate-900 p-3.5 rounded-xl border border-outline-variant/25 dark:border-slate-800 shadow-sm">
+        <div className="flex items-center gap-2.5">
+          <button
+            onClick={() => router.back()}
+            className="w-9 h-9 rounded-lg bg-surface-container-low dark:bg-slate-800 flex items-center justify-center text-primary dark:text-white"
+          >
+            <span className="material-symbols-outlined text-lg">
+              arrow_back
+            </span>
+          </button>
+          <div>
+            <span className="text-[10px] font-bold uppercase tracking-widest text-on-surface-variant block">
+              Ordre #{feinaId}
+            </span>
+            <h1 className="text-base font-extrabold text-primary dark:text-white leading-tight">
+              Tancament de Jornada / Feina
+            </h1>
+          </div>
+        </div>
+        <span className="material-symbols-outlined text-secondary-container text-2xl">
+          fact_check
+        </span>
+      </header>
+
+      <p className="text-xs text-on-surface-variant dark:text-slate-400 leading-relaxed px-1">
+        Per favor, escaneja els tiquets de combustible o despeses necessaris i recull la conformitat del client o operari abans de tancar l&apos;ordre.
       </p>
 
-      <div className="bg-gray-50 p-4 rounded-lg border">
+      {/* Escàner OCR de Tiquets */}
+      <div className="bg-surface-container-lowest dark:bg-slate-900 p-4 rounded-xl border border-outline-variant/25 dark:border-slate-800 shadow-sm">
         <TiquetScanner />
       </div>
 
-      <div className="bg-gray-50 p-4 rounded-lg border mt-4">
+      {/* Dades opcionals del receptor i Signatura Digital */}
+      <div className="bg-surface-container-lowest dark:bg-slate-900 p-4 rounded-xl border border-outline-variant/25 dark:border-slate-800 shadow-sm space-y-4">
         {!signatureSaved ? (
-          <SignaturePad onSave={handleSaveSignature} />
+          <>
+            <div className="grid grid-cols-2 gap-2.5">
+              <div>
+                <label className="block text-[10px] font-bold uppercase tracking-wider text-on-surface-variant mb-1">
+                  Nom del Receptor
+                </label>
+                <input
+                  type="text"
+                  value={nomSignant}
+                  onChange={(e) => setNomSignant(e.target.value)}
+                  placeholder="Nom i cognoms"
+                  className="w-full px-3 py-2 text-xs rounded-lg border border-outline-variant/40 dark:border-slate-700 bg-surface-container-low dark:bg-slate-800 text-on-surface dark:text-white"
+                />
+              </div>
+              <div>
+                <label className="block text-[10px] font-bold uppercase tracking-wider text-on-surface-variant mb-1">
+                  DNI / NIF Receptor
+                </label>
+                <input
+                  type="text"
+                  value={dniSignant}
+                  onChange={(e) => setDniSignant(e.target.value.toUpperCase())}
+                  placeholder="12345678A"
+                  className="w-full px-3 py-2 text-xs font-mono rounded-lg border border-outline-variant/40 dark:border-slate-700 bg-surface-container-low dark:bg-slate-800 text-on-surface dark:text-white"
+                />
+              </div>
+            </div>
+
+            <SignaturePad onSave={handleSaveSignature} />
+          </>
         ) : (
-          <div className="text-center p-6 text-green-700 bg-green-50 rounded border border-green-200">
-            <svg className="w-12 h-12 mx-auto mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7"></path>
-            </svg>
-            <h3 className="font-semibold text-lg">Signatura desada correctament</h3>
-            <p className="text-sm mt-1">La feina s'ha tancat i sincronitzat (o s'ha posat a la cua).</p>
+          <div className="text-center p-6 text-secondary bg-secondary-container/10 rounded-xl border border-secondary-container/30">
+            <span className="material-symbols-outlined text-4xl text-secondary-container mb-2 block">
+              task_alt
+            </span>
+            <h3 className="font-extrabold text-base text-primary dark:text-white">
+              Signatura desada correctament
+            </h3>
+            <p className="text-xs text-on-surface-variant mt-1">
+              La feina s&apos;ha tancat i sincronitzat (o s&apos;ha posat a la cua offline).
+            </p>
           </div>
         )}
       </div>
@@ -65,9 +124,11 @@ export default function TancarFeinaPage() {
       {signatureSaved && (
         <button
           onClick={handleFinalize}
-          className="w-full mt-4 px-4 py-3 text-white font-medium rounded shadow-sm hover:opacity-90"
-          style={{ backgroundColor: "var(--color-primary, #0284c7)" }}
+          className="w-full py-3.5 bg-primary text-white font-bold text-xs uppercase tracking-wider rounded-xl shadow-md hover:bg-primary-container transition-all flex items-center justify-center gap-2"
         >
+          <span className="material-symbols-outlined text-base">
+            assignment_return
+          </span>
           Tornar a Feines
         </button>
       )}

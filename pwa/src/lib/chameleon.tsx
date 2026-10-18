@@ -35,12 +35,19 @@ function applyChameleonCSS(brand: ChameleonBrand) {
   const root = document.documentElement;
 
   // Aplicar colors primari, secundari i accent
-  root.style.setProperty("--color-primary", brand.primari_hsl);
-  root.style.setProperty("--color-primary-foreground", "0 0% 100%");
-  root.style.setProperty("--color-secondary", brand.secundari_hsl);
-  root.style.setProperty("--color-secondary-foreground", "0 0% 100%");
-  root.style.setProperty("--color-accent", brand.accent_hsl);
-  root.style.setProperty("--color-accent-foreground", "0 0% 100%");
+  if (brand.primari_hsl) {
+    root.style.setProperty("--color-primary", brand.primari_hsl);
+    root.style.setProperty("--color-primary-foreground", "0 0% 100%");
+  }
+  if (brand.secundari_hsl) {
+    root.style.setProperty("--color-secondary", brand.secundari_hsl);
+    root.style.setProperty("--color-secondary-foreground", "0 0% 100%");
+  }
+  if (brand.accent_hsl) {
+    root.style.setProperty("--color-accent", brand.accent_hsl);
+    root.style.setProperty("--color-secondary-container", brand.accent_hsl);
+    root.style.setProperty("--color-accent-foreground", "0 0% 100%");
+  }
 }
 
 /**

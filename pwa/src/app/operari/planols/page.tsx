@@ -28,10 +28,15 @@ export default function OperariPlanolsPage() {
   // Inicialitzat segons mandat Zero Mock Data (Spec 017 RF-03 / DoD)
   const [capes, setCapes] = useState<CapaAnotacio[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
+  const [zoom, setZoom] = useState<number>(1);
 
   const [capaActivaId, setCapaActivaId] = useState<string>("");
-  const [mostrarDialegCapaTancada, setMostrarDialegCapaTancada] = useState<boolean>(false);
-  const [pendentClickCoords, setPendentClickCoords] = useState<{ x: number; y: number } | null>(null);
+  const [mostrarDialegCapaTancada, setMostrarDialegCapaTancada] =
+    useState<boolean>(false);
+  const [pendentClickCoords, setPendentClickCoords] = useState<{
+    x: number;
+    y: number;
+  } | null>(null);
 
   // Carregar capes reals des del backend
   const carregarPlanol = async () => {
@@ -39,7 +44,6 @@ export default function OperariPlanolsPage() {
     try {
       const data = await apiFetch("/operari/planols");
       const capesData = Array.isArray(data) ? data : [];
-      // Assegurar visibilitat per defecte
       const capesNormalitzades = capesData.map((c: any) => ({
         ...c,
         visible: c.visible ?? true,
@@ -82,7 +86,6 @@ export default function OperariPlanolsPage() {
       return;
     }
 
-    // Afegir pin a la capa activa de forma no destructiva
     afegirPinACapa(capaActivaId, x, y);
   };
 
@@ -92,20 +95,34 @@ export default function OperariPlanolsPage() {
         if (c.id === capaId) {
           return {
             ...c,
-            pins: [...c.pins, { x, y, etiqueta: `Anotació #${c.pins.length + 1}` }],
+            pins: [
+              ...c.pins,
+              { x, y, etiqueta: `Anotació #${c.pins.length + 1}` },
+            ],
           };
         }
         return c;
       })
     );
-    const planolId = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("planol") : null;
+    const planolId =
+      typeof window !== "undefined"
+        ? new URLSearchParams(window.location.search).get("planol")
+        : null;
 
     if (planolId) {
-
-      addToSyncQueue('POST_PLANOL_PIN', { planol_id: planolId, capa_id: capaId, pin: { x, y, etiqueta: `Anotació #${(capes.find(c => c.id === capaId)?.pins.length || 0) + 1}` } }).catch(console.error);
-
+      addToSyncQueue("POST_PLANOL_PIN", {
+        planol_id: planolId,
+        capa_id: capaId,
+        pin: {
+          x,
+          y,
+          etiqueta: `Anotació #${
+            (capes.find((c) => c.id === capaId)?.pins.length || 0) + 1
+          }`,
+        },
+      }).catch(console.error);
     }
-};
+  };
 
   // Creació de nova capa davant d'obra tancada (Spec 017 RF-13.1)
   const handleCrearNovaCapa = async () => {
@@ -124,85 +141,89 @@ export default function OperariPlanolsPage() {
     setMostrarDialegCapaTancada(false);
     setPendentClickCoords(null);
 
-    // Persistir al backend: el plànol real arriba per query string (?planol=<uuid>)
     const planolId =
       typeof window !== "undefined"
         ? new URLSearchParams(window.location.search).get("planol")
         : null;
     if (!planolId) {
-      alert("No s'ha pogut desar la capa: obre el visor des d'un plànol concret (falta ?planol=<id>).");
+      alert(
+        "No s'ha pogut desar la capa: obre el visor des d'un plànol concret (falta ?planol=<id>)."
+      );
       return;
     }
     try {
-      await addToSyncQueue('POST_PLANOL_CAPA', { planol_id: planolId, capa: novaCapa });
+      await addToSyncQueue("POST_PLANOL_CAPA", {
+        planol_id: planolId,
+        capa: novaCapa,
+      });
     } catch (e: any) {
       alert(e?.message || "Error desant la capa al servidor");
     }
   };
 
   return (
-    <div className="flex-1 flex flex-col bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 transition-colors">
-      {/* Barra de Navegació */}
-      <header className="bg-slate-900 dark:bg-slate-950 text-white p-4 flex items-center justify-between border-b border-slate-800">
+    <div className="flex-1 flex flex-col bg-surface dark:bg-slate-950 text-on-surface dark:text-slate-100 transition-colors">
+      {/* Barra de Navegació Stitch Screen 75a27334535b491fa5ffc622182171cf */}
+      <header className="bg-surface-container-lowest dark:bg-slate-900 text-primary dark:text-white p-4 flex items-center justify-between border-b border-outline-variant/25 dark:border-slate-800">
         <Link
           href="/operari/feines"
-          className="flex items-center gap-1 text-xs text-slate-300 hover:text-white"
+          className="flex items-center gap-1.5 text-xs font-bold text-primary dark:text-slate-300 hover:opacity-80"
         >
           <ArrowLeft className="w-4 h-4" />
           <span>Tornar</span>
         </Link>
-        <h1 className="text-sm font-bold uppercase tracking-wider text-white">
+        <h1 className="text-sm font-extrabold uppercase tracking-wider text-primary dark:text-white">
           Visor As-Built (Spec 017)
         </h1>
         <button
           onClick={carregarPlanol}
           disabled={loading}
-          className="text-[10px] font-mono font-semibold text-slate-400 hover:text-white disabled:opacity-50"
+          className="w-8 h-8 rounded-lg bg-surface-container-low dark:bg-slate-800 flex items-center justify-center text-primary dark:text-slate-300 hover:bg-surface-container disabled:opacity-50"
           title="Recarregar plànols des del backend"
         >
-          <RefreshCw className={`w-3.5 h-3.5 ${loading ? "animate-spin" : ""}`} />
+          <RefreshCw className={`w-4 h-4 ${loading ? "animate-spin" : ""}`} />
         </button>
       </header>
 
       {/* ESTAT BUIT REAL ZERO-MOCK (Spec 017 Context & RF-03) */}
       {!loading && capes.length === 0 ? (
-        <div className="flex-1 flex flex-col items-center justify-center p-8 text-center bg-white dark:bg-slate-900 rounded-2xl border border-dashed border-slate-300 dark:border-slate-800 m-4 shadow-sm">
-          <div className="w-16 h-16 rounded-full bg-emerald-50 dark:bg-emerald-950 text-emerald-600 dark:text-emerald-400 flex items-center justify-center mb-3">
+        <div className="flex-1 flex flex-col items-center justify-center p-8 text-center bg-surface-container-lowest dark:bg-slate-900 rounded-2xl border-2 border-dashed border-outline-variant/40 dark:border-slate-800 m-4 shadow-sm">
+          <div className="w-16 h-16 rounded-2xl bg-secondary-container/10 text-secondary flex items-center justify-center mb-3">
             <Compass className="w-8 h-8" />
           </div>
           {/* TEXT EXACTE EXIGIT PER LA SPEC 017 */}
-          <h3 className="text-base font-bold text-slate-800 dark:text-slate-100">
+          <h3 className="text-base font-extrabold text-primary dark:text-slate-100">
             No tens cap plànol o xarxa tècnica assignada avui
           </h3>
-          <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 max-w-xs">
+          <p className="text-xs text-on-surface-variant dark:text-slate-400 mt-1 max-w-xs">
             Només es descarreguen els plànols vinculats a les tasques que tens assignades per a la jornada.
           </p>
           <button
             onClick={carregarPlanol}
             disabled={loading}
-            className="mt-5 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow transition-all disabled:opacity-50 flex items-center gap-1.5"
+            className="mt-5 px-5 py-2.5 rounded-xl bg-secondary-container hover:brightness-110 text-white text-xs font-bold shadow-md transition-all disabled:opacity-50 flex items-center gap-1.5"
           >
             <RefreshCw className={`w-4 h-4 ${loading ? "animate-spin" : ""}`} />
             <span>Carregar dades reals</span>
           </button>
         </div>
       ) : loading && capes.length === 0 ? (
-        <div className="flex-1 flex items-center justify-center text-slate-400 text-xs">
+        <div className="flex-1 flex items-center justify-center text-on-surface-variant text-xs font-bold uppercase tracking-wider">
           Carregant plànols...
         </div>
       ) : (
         <div className="flex-1 flex flex-col">
           {/* Selector de Capes Dinàmic (Spec 017 RF-11) */}
-          <div className="p-3 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 flex items-center gap-2 overflow-x-auto text-xs">
-            <Layers className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+          <div className="p-3 bg-surface-container-lowest dark:bg-slate-900 border-b border-outline-variant/25 dark:border-slate-800 flex items-center gap-2 overflow-x-auto text-xs">
+            <Layers className="w-4 h-4 text-secondary shrink-0" />
             {capes.map((capa) => (
               <div
                 key={capa.id}
                 onClick={() => setCapaActivaId(capa.id)}
                 className={`px-3 py-1.5 rounded-xl flex items-center gap-2 cursor-pointer transition-colors shrink-0 ${
                   capaActivaId === capa.id
-                    ? "bg-emerald-600 text-white font-bold shadow"
-                    : "bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700"
+                    ? "bg-secondary-container text-white font-bold shadow-sm"
+                    : "bg-surface-container-low dark:bg-slate-800 text-on-surface dark:text-slate-300 hover:bg-surface-container"
                 }`}
               >
                 <button
@@ -225,16 +246,48 @@ export default function OperariPlanolsPage() {
             ))}
           </div>
 
-          {/* Àrea del Plànol Cartogràfic */}
-          <div className="flex-1 relative p-4 flex items-center justify-center overflow-hidden">
+          {/* Àrea del Plànol Cartogràfic Stitch Interactive Canvas */}
+          <div className="flex-1 relative p-4 flex items-center justify-center overflow-hidden bg-slate-900">
+            {/* Floating GPS Badge */}
+            <div className="absolute top-6 left-6 z-20 inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-slate-950/80 backdrop-blur-md border border-white/15 text-[10px] font-mono text-white">
+              <span className="w-2 h-2 rounded-full bg-secondary-container animate-ping" />
+              <span>GIS AS-BUILT ACTIU</span>
+            </div>
+
+            {/* Floating Zoom Controls */}
+            <div className="absolute right-6 top-6 z-20 flex flex-col gap-1.5">
+              <button
+                type="button"
+                onClick={() => setZoom((z) => Math.min(2, +(z + 0.2).toFixed(1)))}
+                className="w-9 h-9 rounded-lg bg-slate-950/80 backdrop-blur-md border border-white/15 text-white flex items-center justify-center font-bold hover:bg-slate-800"
+              >
+                +
+              </button>
+              <button
+                type="button"
+                onClick={() => setZoom((z) => Math.max(0.8, +(z - 0.2).toFixed(1)))}
+                className="w-9 h-9 rounded-lg bg-slate-950/80 backdrop-blur-md border border-white/15 text-white flex items-center justify-center font-bold hover:bg-slate-800"
+              >
+                -
+              </button>
+            </div>
+
             <div
               onClick={handlePlanolClick}
-              className="relative w-full max-w-sm aspect-[4/5] bg-slate-100 dark:bg-slate-800 rounded-2xl border-2 border-slate-300 dark:border-slate-700 shadow-inner overflow-hidden cursor-crosshair"
+              style={{ transform: `scale(${zoom})` }}
+              className="relative w-full max-w-sm aspect-[4/5] bg-slate-800 rounded-2xl border-2 border-white/20 shadow-2xl overflow-hidden cursor-crosshair transition-transform"
             >
-              {/* Fons del Plànol Mestre Simulat */}
-              <div className="absolute inset-0 bg-grid-pattern opacity-10 pointer-events-none"></div>
-              <div className="absolute inset-4 border border-dashed border-slate-400 dark:border-slate-600 rounded-xl pointer-events-none flex items-center justify-center">
-                <span className="text-xs font-mono text-slate-500 dark:text-slate-400">
+              {/* Grid Tècnic Vectorial */}
+              <div
+                className="absolute inset-0 opacity-20 pointer-events-none"
+                style={{
+                  backgroundImage:
+                    "linear-gradient(to right, #94a3b8 1px, transparent 1px), linear-gradient(to bottom, #94a3b8 1px, transparent 1px)",
+                  backgroundSize: "24px 24px",
+                }}
+              />
+              <div className="absolute inset-4 border border-dashed border-slate-500/60 rounded-xl pointer-events-none flex items-center justify-center">
+                <span className="text-xs font-mono text-slate-300 bg-slate-900/70 px-2.5 py-1 rounded">
                   Plànol Mestre de Finca (Inalterable)
                 </span>
               </div>
@@ -248,11 +301,13 @@ export default function OperariPlanolsPage() {
                       key={`${c.id}-${idx}`}
                       style={{ left: `${pin.x}%`, top: `${pin.y}%` }}
                       className={`absolute -translate-x-1/2 -translate-y-1/2 flex flex-col items-center pointer-events-none ${
-                        c.es_tancada ? "text-amber-500" : "text-emerald-600 dark:text-emerald-400"
+                        c.es_tancada
+                          ? "text-amber-400"
+                          : "text-secondary-container"
                       }`}
                     >
                       <MapPin className="w-6 h-6 drop-shadow-md fill-current" />
-                      <span className="text-[9px] font-mono font-bold bg-slate-900/90 px-1.5 py-0.5 rounded text-white border border-slate-700 shadow">
+                      <span className="text-[9px] font-mono font-bold bg-slate-950/90 px-1.5 py-0.5 rounded text-white border border-slate-700 shadow">
                         {pin.etiqueta}
                       </span>
                     </div>
@@ -264,22 +319,21 @@ export default function OperariPlanolsPage() {
           {/* POP-UP DIÀLEG D'ESMENA SOBRE OBRES TANCADES (Spec 017 RF-13.1) */}
           {mostrarDialegCapaTancada && (
             <div className="fixed inset-0 bg-black/70 flex items-center justify-center p-4 z-50 animate-fade-in">
-              <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-5 rounded-2xl max-w-xs w-full text-center shadow-2xl space-y-4">
+              <div className="bg-surface-container-lowest dark:bg-slate-900 border border-outline-variant/30 dark:border-slate-800 p-5 rounded-2xl max-w-xs w-full text-center shadow-2xl space-y-4">
                 <div className="w-12 h-12 rounded-full bg-amber-500/20 text-amber-500 flex items-center justify-center mx-auto border border-amber-500/30">
                   <Lock className="w-6 h-6" />
                 </div>
                 {/* TEXT EXACTE EXIGIT PER LA SPEC 017 */}
-                <h3 className="text-sm font-bold text-slate-800 dark:text-slate-100">
+                <h3 className="text-sm font-extrabold text-primary dark:text-slate-100">
                   Capa tancada, vols crear una capa nova?
                 </h3>
-                <p className="text-xs text-slate-500 dark:text-slate-400">
-                  Aquesta ordre de treball està tancada i facturada. Per a respectar
-                  la inalterabilitat del SIF, cal crear una capa d'addenda activa.
+                <p className="text-xs text-on-surface-variant dark:text-slate-400">
+                  Aquesta ordre de treball està tancada i facturada. Per a respectar la inalterabilitat del SIF, cal crear una capa d&apos;addenda activa.
                 </p>
                 <div className="flex gap-2 pt-2">
                   <button
                     onClick={handleCrearNovaCapa}
-                    className="flex-1 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-xl flex items-center justify-center gap-1 shadow"
+                    className="flex-1 py-2.5 bg-secondary-container hover:brightness-110 text-white text-xs font-bold rounded-xl flex items-center justify-center gap-1 shadow-md"
                   >
                     <Plus className="w-4 h-4" />
                     <span>Crear Capa Nova</span>
@@ -289,7 +343,7 @@ export default function OperariPlanolsPage() {
                       setMostrarDialegCapaTancada(false);
                       setPendentClickCoords(null);
                     }}
-                    className="px-3 py-2.5 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 text-xs font-semibold rounded-xl"
+                    className="px-3 py-2.5 bg-surface-container-low dark:bg-slate-800 hover:bg-surface-container text-on-surface dark:text-slate-300 text-xs font-semibold rounded-xl"
                   >
                     Cancel·lar
                   </button>

@@ -9,15 +9,12 @@ import {
   CheckCircle2,
   AlertTriangle,
   Plus,
-  RotateCcw,
   Truck,
   Scissors,
   CheckSquare,
   Square,
-  Camera,
   RefreshCw,
 } from "lucide-react";
-import { compressImageToWebP } from "@/lib/media";
 import { apiFetch } from "@/lib/api";
 import { BarcodeScanner } from "@/components/operari/BarcodeScanner";
 
@@ -36,7 +33,6 @@ interface MaterialItem {
 export default function OperariMaterialPage() {
   const [fase, setFase] = useState<"PICK_IN" | "OBRA" | "PICK_OUT">("PICK_IN");
   const [desquadramentNau, setDesquadramentNau] = useState<boolean>(false);
-  const [incidenciaObertes, setIncidenciaObertes] = useState<string | null>(null);
 
   // Inicialitzat buit per defecte per mandat de la Constitució (Zero Mock Data - Spec 014 RF-03)
   const [materials, setMaterials] = useState<MaterialItem[]>([]);
@@ -48,7 +44,6 @@ export default function OperariMaterialPage() {
     try {
       const data = await apiFetch("/operari/materials");
       const items = Array.isArray(data) ? data : [];
-      // Assegurar que cada item tingui els flags necessaris
       const itemsNormalitzats = items.map((m: any) => ({
         ...m,
         carregat_pick_in: m.carregat_pick_in ?? false,
@@ -76,7 +71,10 @@ export default function OperariMaterialPage() {
   };
 
   // Validar si el 100% està marcat per a Pick In (Spec 014 RF-04)
-  const totsMarcats = materials.length > 0 && materials.every((m) => m.carregat_pick_in);
+  const marcatsCount = materials.filter((m) => m.carregat_pick_in).length;
+  const totalCount = materials.length;
+  const percentPickIn = totalCount > 0 ? Math.round((marcatsCount / totalCount) * 100) : 0;
+  const totsMarcats = totalCount > 0 && marcatsCount === totalCount;
 
   // Confirmar càrrega matinal
   const handleConfirmarPickIn = async () => {
@@ -86,14 +84,15 @@ export default function OperariMaterialPage() {
       );
       return;
     }
-    // Confirmar al backend línia a línia
     try {
       for (const m of materials) {
         if (m.carregat_pick_in) {
           await apiFetch(`/operari/picking/linies/${m.id}`, {
             method: "PUT",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ quantitat_carregada_pick_in: m.quantitat_programada }),
+            body: JSON.stringify({
+              quantitat_carregada_pick_in: m.quantitat_programada,
+            }),
           });
         }
       }
@@ -106,17 +105,27 @@ export default function OperariMaterialPage() {
   // Actualitzar retorn de Pick Out
   const handleRetornCanvi = (id: string, valor: number) => {
     setMaterials((prev) =>
-      prev.map((m) => (m.id === id ? { ...m, retornat_pick_out: valor } : m))
+      prev.map((m) =>
+        m.id === id
+          ? {
+              ...m,
+              retornat_pick_out: Math.max(
+                0,
+                Math.min(m.quantitat_programada, valor)
+              ),
+            }
+          : m
+      )
     );
   };
 
   // Afegir material extra de furgoneta (Spec 014 RF-14, sense QR)
   const handleAfegirDeFurgoneta = async () => {
     try {
-      const { addToSyncQueue } = await import('@/lib/offline/sync');
-      await addToSyncQueue('USE_MATERIAL_FROM_VAN', {
-          ordre_camp_id: null, // Specify order ID in a real scenario
-          timestamp: Date.now()
+      const { addToSyncQueue } = await import("@/lib/offline/sync");
+      await addToSyncQueue("USE_MATERIAL_FROM_VAN", {
+        ordre_camp_id: null,
+        timestamp: Date.now(),
       });
       alert(
         "Acció registrada a la cua de sincronització offline. El material s'afegirà a l'ordre i es descomptarà de la furgoneta un cop hi hagi connexió (T020)."
@@ -127,19 +136,21 @@ export default function OperariMaterialPage() {
   };
 
   return (
-    <div className="flex-1 flex flex-col bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 transition-colors">
-      {/* Capçalera del Mòdul */}
-      <header className="bg-emerald-700 dark:bg-emerald-900 text-white p-4 shadow-md flex items-center justify-between">
+    <div className="flex-1 flex flex-col bg-surface dark:bg-slate-950 text-on-surface dark:text-slate-100 transition-colors">
+      {/* Capçalera del Mòdul Stitch Soft-Industrial */}
+      <header className="bg-surface-container-lowest dark:bg-slate-900 text-primary dark:text-white p-4 border-b border-outline-variant/25 dark:border-slate-800 flex items-center justify-between">
         <div className="flex items-center gap-3">
           <Link
             href="/operari/feines"
-            className="p-1.5 rounded-lg bg-emerald-800/80 hover:bg-emerald-800 text-white transition-colors"
+            className="w-9 h-9 rounded-lg bg-surface-container-low dark:bg-slate-800 hover:bg-surface-container flex items-center justify-center text-primary dark:text-white transition-colors"
           >
             <ArrowLeft className="w-4 h-4" />
           </Link>
           <div>
-            <h1 className="text-base font-bold leading-tight">Materials i Eines</h1>
-            <p className="text-xs text-emerald-200">
+            <h1 className="text-base font-extrabold leading-tight text-primary dark:text-white">
+              Materials i Eines
+            </h1>
+            <p className="text-[11px] font-medium text-on-surface-variant dark:text-slate-400">
               {fase === "PICK_IN"
                 ? "Fase 1: Càrrega Matinal (Nau)"
                 : fase === "OBRA"
@@ -150,13 +161,11 @@ export default function OperariMaterialPage() {
         </div>
         <div className="flex items-center gap-1.5">
           <button
-            onClick={() =>
-              setDesquadramentNau(!desquadramentNau)
-            }
-            className={`px-2 py-1 rounded text-[10px] font-mono font-bold transition-colors ${
+            onClick={() => setDesquadramentNau(!desquadramentNau)}
+            className={`px-2.5 py-1.5 rounded-lg text-[10px] font-mono font-bold transition-colors ${
               desquadramentNau
-                ? "bg-rose-600 text-white animate-pulse"
-                : "bg-emerald-800/80 text-emerald-200"
+                ? "bg-error text-white animate-pulse shadow-sm"
+                : "bg-surface-container-low dark:bg-slate-800 text-on-surface-variant dark:text-slate-300 border border-outline-variant/30"
             }`}
             title="Simular Desquadrament Físic de Nau (RF-05)"
           >
@@ -165,34 +174,34 @@ export default function OperariMaterialPage() {
         </div>
       </header>
 
-      {/* Selector de Fases Logístiques */}
-      <div className="bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 flex text-xs font-bold">
+      {/* Selector de Fases Logístiques Stitch Tabs */}
+      <div className="bg-surface-container-lowest dark:bg-slate-900 border-b border-outline-variant/25 dark:border-slate-800 flex text-xs font-extrabold uppercase tracking-wider">
         <button
           onClick={() => setFase("PICK_IN")}
-          className={`flex-1 py-3 text-center border-b-2 transition-colors ${
+          className={`flex-1 py-3.5 text-center border-b-2 transition-colors ${
             fase === "PICK_IN"
-              ? "border-emerald-600 text-emerald-700 dark:text-emerald-400"
-              : "border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400"
+              ? "border-secondary-container text-secondary dark:text-emerald-400 bg-secondary-container/5"
+              : "border-transparent text-on-surface-variant hover:text-primary dark:text-slate-400"
           }`}
         >
           1. Pick In
         </button>
         <button
           onClick={() => setFase("OBRA")}
-          className={`flex-1 py-3 text-center border-b-2 transition-colors ${
+          className={`flex-1 py-3.5 text-center border-b-2 transition-colors ${
             fase === "OBRA"
-              ? "border-emerald-600 text-emerald-700 dark:text-emerald-400"
-              : "border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400"
+              ? "border-secondary-container text-secondary dark:text-emerald-400 bg-secondary-container/5"
+              : "border-transparent text-on-surface-variant hover:text-primary dark:text-slate-400"
           }`}
         >
           2. Camp
         </button>
         <button
           onClick={() => setFase("PICK_OUT")}
-          className={`flex-1 py-3 text-center border-b-2 transition-colors ${
+          className={`flex-1 py-3.5 text-center border-b-2 transition-colors ${
             fase === "PICK_OUT"
-              ? "border-emerald-600 text-emerald-700 dark:text-emerald-400"
-              : "border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400"
+              ? "border-secondary-container text-secondary dark:text-emerald-400 bg-secondary-container/5"
+              : "border-transparent text-on-surface-variant hover:text-primary dark:text-slate-400"
           }`}
         >
           3. Pick Out
@@ -203,71 +212,113 @@ export default function OperariMaterialPage() {
       <div className="flex-1 p-4 flex flex-col space-y-4 overflow-y-auto">
         {/* ESTAT BUIT REAL (Mandat Zero Mock Data - Spec 014 RF-03) */}
         {!loading && materials.length === 0 && (
-          <div className="flex-1 flex flex-col items-center justify-center p-8 text-center bg-white dark:bg-slate-900 rounded-2xl border border-dashed border-slate-300 dark:border-slate-800 my-auto shadow-sm">
-            <div className="w-16 h-16 rounded-full bg-emerald-50 dark:bg-emerald-950 text-emerald-600 dark:text-emerald-400 flex items-center justify-center mb-3">
+          <div className="flex-1 flex flex-col items-center justify-center p-8 text-center bg-surface-container-lowest dark:bg-slate-900 rounded-2xl border-2 border-dashed border-outline-variant/40 dark:border-slate-800 my-auto shadow-sm">
+            <div className="w-16 h-16 rounded-2xl bg-secondary-container/10 text-secondary flex items-center justify-center mb-3">
               <Package className="w-8 h-8" />
             </div>
             {/* TEXT EXACTE EXIGIT PER LA SPEC 014 RF-03 */}
-            <h3 className="text-base font-bold text-slate-800 dark:text-slate-100">
+            <h3 className="text-base font-extrabold text-primary dark:text-slate-100">
               Aquesta tasca no té materials ni eines programades
             </h3>
-            <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 max-w-xs">
-              L'ordre s'executa amb mà d'obra directa o dotació base del vehicle.
+            <p className="text-xs text-on-surface-variant dark:text-slate-400 mt-1 max-w-xs">
+              L&apos;ordre s&apos;executa amb mà d&apos;obra directa o dotació base del vehicle.
             </p>
             <button
               onClick={carregarMaterials}
               disabled={loading}
-              className="mt-5 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow flex items-center gap-1.5 transition-all disabled:opacity-50"
+              className="mt-5 px-5 py-2.5 rounded-xl bg-secondary-container hover:brightness-110 text-white text-xs font-bold shadow-md flex items-center gap-1.5 transition-all disabled:opacity-50"
             >
-              <RefreshCw className={`w-4 h-4 ${loading ? "animate-spin" : ""}`} />
+              <RefreshCw
+                className={`w-4 h-4 ${loading ? "animate-spin" : ""}`}
+              />
               <span>Carregar dades reals</span>
             </button>
           </div>
         )}
 
         {loading && materials.length === 0 && (
-          <div className="flex-1 flex items-center justify-center text-slate-400 text-xs">
+          <div className="flex-1 flex items-center justify-center text-on-surface-variant text-xs font-bold uppercase tracking-wider">
             Carregant materials...
           </div>
         )}
 
-        {/* FASE 1: PICK IN (CÀRREGA MATINAL) */}
+        {/* FASE 1: PICK IN (CÀRREGA MATINAL - Stitch Screen 0ef93e734bf140a58691967293a32c83) */}
         {materials.length > 0 && fase === "PICK_IN" && (
           <div className="space-y-4">
-            <div className="flex items-center justify-between">
-              <p className="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
-                Verificació de Càrrega Matinal
-              </p>
-              <span className="text-xs font-mono font-semibold px-2 py-0.5 rounded bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-300">
-                {materials.filter((m) => m.carregat_pick_in).length}/{materials.length} marcats
-              </span>
+            {/* Stitch Progress Summary Card */}
+            <div className="bg-surface-container-low dark:bg-slate-900 rounded-xl p-4 border border-outline-variant/25 dark:border-slate-800">
+              <div className="flex items-center justify-between mb-3">
+                <div>
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-on-surface-variant block mb-0.5">
+                    Estat de preparació
+                  </span>
+                  <h2 className="text-lg font-extrabold text-primary dark:text-white">
+                    {marcatsCount} de {totalCount} ítems verificats
+                  </h2>
+                </div>
+                <div className="relative flex items-center justify-center w-14 h-14">
+                  <svg className="w-14 h-14 -rotate-90" viewBox="0 0 36 36">
+                    <path
+                      className="text-surface-container-highest dark:text-slate-800"
+                      d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="3.5"
+                    />
+                    <path
+                      className="text-secondary-container"
+                      d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeDasharray={`${percentPickIn}, 100`}
+                      strokeLinecap="round"
+                      strokeWidth="3.5"
+                    />
+                  </svg>
+                  <span className="absolute text-xs font-extrabold font-mono text-primary dark:text-white">
+                    {percentPickIn}%
+                  </span>
+                </div>
+              </div>
+              <div className="w-full h-2 bg-surface-container-highest dark:bg-slate-800 rounded-full overflow-hidden">
+                <div
+                  className="h-full bg-secondary-container rounded-full transition-all duration-300"
+                  style={{ width: `${percentPickIn}%` }}
+                />
+              </div>
             </div>
 
-            <BarcodeScanner 
-                onScan={(codi) => {
-                    const item = materials.find(m => m.referencia === codi || m.id === codi);
-                    if (item) {
-                        handleToggleCheck(item.id);
-                        alert(`Material ${item.nom} marcat!`);
-                    } else {
-                        alert("Codi de barres no trobat en aquesta llista.");
-                    }
-                }}
+            <BarcodeScanner
+              onScan={(codi) => {
+                const item = materials.find(
+                  (m) => m.referencia === codi || m.id === codi
+                );
+                if (item) {
+                  handleToggleCheck(item.id);
+                  alert(`Material ${item.nom} marcat!`);
+                } else {
+                  alert("Codi de barres no trobat en aquesta llista.");
+                }
+              }}
             />
 
             {desquadramentNau && (
-              <div className="p-3.5 rounded-xl bg-rose-50 dark:bg-rose-950/50 border border-rose-300 dark:border-rose-900 text-rose-900 dark:text-rose-200 text-xs flex items-start gap-2.5">
-                <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+              <div className="p-3.5 rounded-xl bg-error-container/60 border border-error/30 text-on-error-container text-xs flex items-start gap-2.5">
+                <AlertTriangle className="w-4 h-4 text-error shrink-0 mt-0.5" />
                 <div>
-                  <p className="font-bold">Desquadrament de Stock Físic a Nau</p>
+                  <p className="font-bold">
+                    Desquadrament de Stock Físic a Nau
+                  </p>
                   <p className="text-[11px] mt-0.5">
                     Manca de stock físic detectada. El botó de confirmació està bloquejat (Spec 014 RF-05).
                   </p>
                   <button
                     onClick={() =>
-                      alert("Incidència de magatzem derivada a l'Enginyer per reassignació (RF-06).")
+                      alert(
+                        "Incidència de magatzem derivada a l'Enginyer per reassignació (RF-06)."
+                      )
                     }
-                    className="mt-2 px-2.5 py-1 bg-rose-600 text-white font-bold rounded shadow"
+                    className="mt-2 px-3 py-1.5 bg-error text-white font-bold rounded-lg shadow-sm"
                   >
                     Llançar Incidència de Magatzem
                   </button>
@@ -280,38 +331,44 @@ export default function OperariMaterialPage() {
                 <div
                   key={m.id}
                   onClick={() => handleToggleCheck(m.id)}
-                  className={`p-3.5 rounded-2xl border transition-all cursor-pointer flex items-center justify-between ${
+                  className={`p-3.5 rounded-xl border transition-all cursor-pointer flex items-center justify-between ${
                     m.carregat_pick_in
-                      ? "bg-emerald-50 dark:bg-emerald-950/40 border-emerald-500 text-emerald-900 dark:text-emerald-200"
-                      : "bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 hover:border-slate-300"
+                      ? "bg-secondary-container/10 border-secondary-container text-primary dark:text-emerald-200"
+                      : "bg-surface-container-lowest dark:bg-slate-900 border-outline-variant/30 dark:border-slate-800 hover:border-primary/40"
                   }`}
                 >
                   <div className="flex items-center gap-3">
-                    <div className="text-emerald-600 dark:text-emerald-400">
+                    <div className="text-secondary-container">
                       {m.carregat_pick_in ? (
                         <CheckSquare className="w-6 h-6" />
                       ) : (
-                        <Square className="w-6 h-6 text-slate-300 dark:text-slate-600" />
+                        <Square className="w-6 h-6 text-outline-variant dark:text-slate-600" />
                       )}
                     </div>
                     <div>
                       <div className="flex items-center gap-2">
-                        <span className="text-[10px] font-mono font-bold px-1.5 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300">
+                        <span className="text-[10px] font-mono font-bold px-1.5 py-0.5 rounded bg-surface-container-low dark:bg-slate-800 text-primary dark:text-slate-300">
                           {m.referencia}
                         </span>
                         {m.es_eina && (
-                          <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-300 flex items-center gap-1">
+                          <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-700 dark:text-amber-300 flex items-center gap-1">
                             <Wrench className="w-3 h-3" /> Eina Custòdia
                           </span>
                         )}
                       </div>
-                      <h4 className="text-xs font-bold text-slate-800 dark:text-slate-100 mt-1">
+                      <h4
+                        className={`text-xs font-bold mt-1 ${
+                          m.carregat_pick_in
+                            ? "line-through opacity-75 text-on-surface-variant"
+                            : "text-primary dark:text-slate-100"
+                        }`}
+                      >
                         {m.nom}
                       </h4>
                     </div>
                   </div>
 
-                  <div className="text-right font-mono font-bold text-sm">
+                  <div className="text-right font-mono font-extrabold text-sm text-primary dark:text-white">
                     {m.quantitat_programada} {m.unitat}
                   </div>
                 </div>
@@ -321,10 +378,10 @@ export default function OperariMaterialPage() {
             <button
               onClick={handleConfirmarPickIn}
               disabled={!totsMarcats || desquadramentNau}
-              className={`w-full py-3 rounded-xl font-bold text-xs uppercase tracking-wider flex items-center justify-center gap-2 shadow transition-all ${
+              className={`w-full py-3.5 rounded-xl font-bold text-xs uppercase tracking-wider flex items-center justify-center gap-2 shadow-md transition-all ${
                 totsMarcats && !desquadramentNau
-                  ? "bg-emerald-600 hover:bg-emerald-700 text-white active:scale-98"
-                  : "bg-slate-200 dark:bg-slate-800 text-slate-400 dark:text-slate-500 cursor-not-allowed"
+                  ? "bg-secondary-container hover:brightness-110 text-white active:scale-[0.98]"
+                  : "bg-surface-container-high dark:bg-slate-800 text-outline dark:text-slate-500 cursor-not-allowed"
               }`}
             >
               <CheckCircle2 className="w-4 h-4" />
@@ -333,15 +390,15 @@ export default function OperariMaterialPage() {
           </div>
         )}
 
-        {/* FASE 2: EXECUCIÓ D'OBRA (A CAMP) */}
+        {/* FASE 2: EXECUCIÓ D'OBRA (A CAMP - Stitch Screen faf20a5ef44a40bb8f269a11f33b2414) */}
         {materials.length > 0 && fase === "OBRA" && (
           <div className="space-y-4">
-            <div className="p-4 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm space-y-3">
+            <div className="p-4 rounded-xl bg-surface-container-lowest dark:bg-slate-900 border border-outline-variant/25 dark:border-slate-800 shadow-sm space-y-3">
               <div className="flex items-center justify-between">
-                <h4 className="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                <h4 className="text-xs font-extrabold uppercase tracking-wider text-primary dark:text-slate-300">
                   Controls Especials de Camp
                 </h4>
-                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-blue-100 dark:bg-blue-950 text-blue-800 dark:text-blue-300">
+                <span className="text-[10px] font-extrabold uppercase tracking-wider px-2.5 py-0.5 rounded-full bg-secondary-container/15 text-secondary">
                   En Execució
                 </span>
               </div>
@@ -349,20 +406,22 @@ export default function OperariMaterialPage() {
               {/* Botó Afegir de Furgoneta (RF-14) */}
               <button
                 onClick={handleAfegirDeFurgoneta}
-                className="w-full py-2.5 px-3 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 text-xs font-bold flex items-center justify-between border border-slate-200 dark:border-slate-700"
+                className="w-full py-3 px-3.5 rounded-xl bg-surface-container-low dark:bg-slate-800 hover:bg-surface-container text-primary dark:text-slate-200 text-xs font-bold flex items-center justify-between border border-outline-variant/30 dark:border-slate-700 transition-colors"
               >
                 <div className="flex items-center gap-2">
-                  <Truck className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
-                  <span>Afegir Peça d'Estoc de Furgoneta (Sense QR)</span>
+                  <Truck className="w-4 h-4 text-secondary" />
+                  <span>Afegir Peça d&apos;Estoc de Furgoneta (Sense QR)</span>
                 </div>
-                <Plus className="w-4 h-4" />
+                <Plus className="w-4 h-4 text-secondary" />
               </button>
 
               {/* Restricció de Format Continu (RF-13) */}
-              <div className="p-3 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-900 text-xs text-amber-900 dark:text-amber-200 flex items-start gap-2">
+              <div className="p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-xs text-amber-900 dark:text-amber-200 flex items-start gap-2.5">
                 <Scissors className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
                 <div>
-                  <p className="font-bold">Restricció de Format Continu (Tub PE 32mm)</p>
+                  <p className="font-bold">
+                    Restricció de Format Continu (Tub PE 32mm)
+                  </p>
                   <p className="text-[11px] text-amber-800 dark:text-amber-300 mt-0.5">
                     Obligatori exhaurir el retall de furgoneta abans de tallar una bobina o barra sencera de 6m (Spec 014 RF-13).
                   </p>
@@ -372,21 +431,21 @@ export default function OperariMaterialPage() {
 
             <button
               onClick={() => setFase("PICK_OUT")}
-              className="w-full py-3 rounded-xl bg-slate-900 dark:bg-slate-100 dark:text-slate-900 hover:bg-slate-800 text-white text-xs font-bold uppercase tracking-wider flex items-center justify-center gap-2 shadow"
+              className="w-full py-3.5 rounded-xl bg-primary hover:bg-primary-container text-white text-xs font-bold uppercase tracking-wider flex items-center justify-center gap-2 shadow-md transition-all"
             >
               <span>Arribada a Nau: Iniciar Devolució Pick Out</span>
             </button>
           </div>
         )}
 
-        {/* FASE 3: PICK OUT (RETORN A NAU I BALANÇ) */}
+        {/* FASE 3: PICK OUT (RETORN A NAU I BALANÇ - Stitch Screen 0af9e31937f24d2a8a4fb3f8e3786f07) */}
         {materials.length > 0 && fase === "PICK_OUT" && (
           <div className="space-y-4">
-            <div className="p-4 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm space-y-3">
-              <h4 className="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+            <div className="p-4 rounded-xl bg-surface-container-lowest dark:bg-slate-900 border border-outline-variant/25 dark:border-slate-800 shadow-sm space-y-3">
+              <h4 className="text-xs font-extrabold uppercase tracking-wider text-primary dark:text-slate-300">
                 Devolució de Sobrants a Nau (Pick Out)
               </h4>
-              <p className="text-[11px] text-slate-500">
+              <p className="text-[11px] text-on-surface-variant">
                 Introdueix les unitats que tornen a les prestatgeries per a calcular el consum real net: Consum = Pick In − Pick Out.
               </p>
 
@@ -398,20 +457,22 @@ export default function OperariMaterialPage() {
                   return (
                     <div
                       key={m.id}
-                      className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/70 border border-slate-200 dark:border-slate-800 flex items-center justify-between"
+                      className="p-3.5 rounded-xl bg-surface-container-low dark:bg-slate-800/70 border border-outline-variant/30 dark:border-slate-800 flex items-center justify-between gap-2"
                     >
-                      <div className="flex-1 pr-2">
-                        <p className="text-xs font-bold text-slate-800 dark:text-slate-200">
+                      <div className="flex-1 min-w-0">
+                        <p className="text-xs font-bold text-primary dark:text-slate-200 truncate">
                           {m.nom}
                         </p>
-                        <p className="text-[10px] text-slate-500">
+                        <p className="text-[10px] font-mono text-on-surface-variant">
                           Carregat: {m.quantitat_programada} {m.unitat}
                         </p>
                       </div>
 
-                      <div className="flex items-center gap-3">
+                      <div className="flex items-center gap-3 shrink-0">
                         <div className="flex items-center gap-1.5">
-                          <span className="text-[10px] text-slate-400">Retorn:</span>
+                          <span className="text-[10px] font-bold text-on-surface-variant">
+                            Retorn:
+                          </span>
                           <input
                             type="number"
                             min="0"
@@ -419,16 +480,23 @@ export default function OperariMaterialPage() {
                             step={m.format_continu ? "0.01" : "1"}
                             value={retornat}
                             onChange={(e) =>
-                              handleRetornCanvi(m.id, parseFloat(e.target.value) || 0)
+                              handleRetornCanvi(
+                                m.id,
+                                parseFloat(e.target.value) || 0
+                              )
                             }
-                            className="w-14 p-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-center text-xs font-bold"
+                            className="w-14 p-1.5 rounded-lg border border-outline-variant dark:border-slate-700 bg-surface-container-lowest dark:bg-slate-900 text-center text-xs font-mono font-bold text-primary dark:text-white"
                           />
-                          <span className="text-[10px] text-slate-500">{m.unitat}</span>
+                          <span className="text-[10px] text-on-surface-variant">
+                            {m.unitat}
+                          </span>
                         </div>
 
-                        <div className="text-right pl-2 border-l border-slate-200 dark:border-slate-700">
-                          <span className="text-[10px] text-slate-400 block">Consum:</span>
-                          <span className="text-xs font-extrabold text-emerald-600 dark:text-emerald-400">
+                        <div className="text-right pl-2.5 border-l border-outline-variant/40 dark:border-slate-700">
+                          <span className="text-[10px] text-on-surface-variant block">
+                            Consum:
+                          </span>
+                          <span className="text-xs font-mono font-extrabold text-secondary dark:text-emerald-400">
                             {consum} {m.unitat}
                           </span>
                         </div>
@@ -441,7 +509,6 @@ export default function OperariMaterialPage() {
 
             <button
               onClick={() => {
-                // Confirmar retorn al backend
                 materials.forEach((m) => {
                   apiFetch(`/operari/picking/linies/${m.id}`, {
                     method: "PUT",
@@ -451,10 +518,12 @@ export default function OperariMaterialPage() {
                     }),
                   }).catch(() => {});
                 });
-                alert("Pick Out confirmat. Consums derivats a la Torre de Control i Magatzem (Spec 004).");
+                alert(
+                  "Pick Out confirmat. Consums derivats a la Torre de Control i Magatzem (Spec 004)."
+                );
                 setFase("PICK_IN");
               }}
-              className="w-full py-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold uppercase tracking-wider flex items-center justify-center gap-2 shadow"
+              className="w-full py-3.5 rounded-xl bg-secondary-container hover:brightness-110 text-white text-xs font-bold uppercase tracking-wider flex items-center justify-center gap-2 shadow-md transition-all"
             >
               <CheckCircle2 className="w-4 h-4" />
               <span>Confirmar Devolució i Tancar Balanç</span>

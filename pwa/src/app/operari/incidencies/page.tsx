@@ -4,22 +4,16 @@ import React, { useState, useEffect } from "react";
 import Link from "next/link";
 import {
   PhoneCall,
-  Mic,
-  Camera,
   ArrowLeft,
   Send,
   AlertCircle,
   CheckCircle2,
-  ShieldAlert,
   Clock,
   RefreshCw,
-  AlertTriangle,
 } from "lucide-react";
 import { apiFetch } from "@/lib/api";
-import { compressImageToWebP } from "@/lib/media";
 import CameraInput from "@/components/CameraInput";
 import VoiceRecorder from "@/components/operari/VoiceRecorder";
-
 import { db } from "@/lib/offline/db";
 import { addToSyncQueue } from "@/lib/offline/sync";
 
@@ -56,8 +50,7 @@ export default function OperariIncidenciesPage() {
     } finally {
       setLoadingHistorial(false);
     }
-    
-    // Offline queries
+
     if (typeof window !== "undefined") {
       try {
         const queueItems = await db.sync_queue
@@ -103,7 +96,6 @@ export default function OperariIncidenciesPage() {
 
     try {
       if (isOnline && audioBlob) {
-        // Enviar per FormData multipart directe (Spec 016)
         const formData = new FormData();
         formData.append("ambit", tipus);
         formData.append("estat", "VERMELL");
@@ -117,7 +109,6 @@ export default function OperariIncidenciesPage() {
           body: formData,
         });
       } else {
-        // Enviar per la cua offline o petició JSON
         const payload = {
           ambit: tipus,
           estat: "VERMELL",
@@ -141,43 +132,51 @@ export default function OperariIncidenciesPage() {
     }
   };
 
+  const ambitsConfig = [
+    { id: "VEHICLE", label: "VEHICLE", icon: "local_shipping" },
+    { id: "MATERIAL", label: "MATERIAL", icon: "inventory_2" },
+    { id: "CLIENT", label: "CLIENT", icon: "water_damage" },
+  ];
+
   return (
-    <div className="flex-1 flex flex-col bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 transition-colors">
-      {/* Barra de Navegació */}
-      <header className="bg-slate-900 dark:bg-slate-950 text-white p-4 flex items-center justify-between border-b border-slate-800">
+    <div className="flex-1 flex flex-col bg-surface dark:bg-slate-950 text-on-surface dark:text-slate-100 transition-colors">
+      {/* Barra de Navegació Stitch Screen 481e9bc3205541b59a1226cd2f081f7f */}
+      <header className="bg-surface-container-lowest dark:bg-slate-900 text-primary dark:text-white p-4 flex items-center justify-between border-b border-outline-variant/25 dark:border-slate-800">
         <Link
           href="/operari/feines"
-          className="flex items-center gap-1 text-xs text-slate-300 hover:text-white"
+          className="flex items-center gap-1.5 text-xs font-bold text-primary dark:text-slate-300 hover:opacity-80"
         >
           <ArrowLeft className="w-4 h-4" />
           <span>Tornar</span>
         </Link>
-        <h1 className="text-sm font-bold uppercase tracking-wider text-white">
+        <h1 className="text-sm font-extrabold uppercase tracking-wider text-primary dark:text-white">
           Incidència de Camp (Spec 016)
         </h1>
-        <div className="w-12"></div>
+        <span className="material-symbols-outlined text-error text-xl">
+          warning
+        </span>
       </header>
 
       <div className="p-4 flex-1 flex flex-col gap-4 overflow-y-auto">
         {/* BOTÓ SOS 112 DIRECTE (Spec 016 RF-07) */}
         <a
           href="tel:112"
-          className="w-full py-3 px-6 rounded-2xl bg-rose-600 hover:bg-rose-700 active:scale-98 text-white font-extrabold text-sm flex items-center justify-center gap-3 shadow-lg shadow-rose-600/30 transition-all uppercase tracking-wider shrink-0"
+          className="w-full py-3.5 px-6 rounded-xl bg-error hover:opacity-95 active:scale-[0.98] text-white font-extrabold text-sm flex items-center justify-center gap-3 shadow-lg shadow-error/25 transition-all uppercase tracking-wider shrink-0"
         >
           <PhoneCall className="w-4 h-4 animate-pulse" />
           <span>SOS EMERGÈNCIA (112)</span>
         </a>
 
         {enviatExit ? (
-          <div className="p-6 bg-white dark:bg-slate-900 rounded-2xl border border-emerald-300 dark:border-emerald-800 text-center shadow-sm space-y-3">
-            <div className="w-12 h-12 rounded-full bg-emerald-100 dark:bg-emerald-950 text-emerald-600 dark:text-emerald-400 flex items-center justify-center mx-auto">
+          <div className="p-6 bg-surface-container-lowest dark:bg-slate-900 rounded-xl border border-secondary-container/40 text-center shadow-sm space-y-3">
+            <div className="w-12 h-12 rounded-full bg-secondary-container/15 text-secondary flex items-center justify-center mx-auto">
               <CheckCircle2 className="w-6 h-6" />
             </div>
-            <h3 className="text-base font-bold text-slate-800 dark:text-slate-100">
+            <h3 className="text-base font-extrabold text-primary dark:text-slate-100">
               Incidència Notificada amb Èxit
             </h3>
-            <p className="text-xs text-slate-500 dark:text-slate-400 max-w-xs mx-auto">
-              S'ha registrat a la base de dades i notificat a la Torre de Control d'Enginyers.
+            <p className="text-xs text-on-surface-variant dark:text-slate-400 max-w-xs mx-auto">
+              S&apos;ha registrat a la base de dades i notificat a la Torre de Control d&apos;Enginyers.
             </p>
             <button
               onClick={() => {
@@ -187,7 +186,7 @@ export default function OperariIncidenciesPage() {
                 setAudioBlob(null);
                 setFotoPujada(false);
               }}
-              className="mt-2 px-4 py-2 bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900 text-xs font-bold rounded-xl"
+              className="mt-2 px-4 py-2.5 bg-primary text-white text-xs font-bold rounded-xl"
             >
               Registrar una altra incidència
             </button>
@@ -195,27 +194,40 @@ export default function OperariIncidenciesPage() {
         ) : (
           <form
             onSubmit={handleSubmit}
-            className="bg-white dark:bg-slate-900 p-5 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm space-y-4"
+            className="bg-surface-container-lowest dark:bg-slate-900 p-5 rounded-xl border border-outline-variant/25 dark:border-slate-800 shadow-sm space-y-4"
           >
+            {/* Selector d'Àmbit Stitch Tactile Cards */}
             <div>
-              <label className="block text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-1.5">
-                Àmbit de l'Avaria
+              <label className="block text-[11px] font-extrabold uppercase tracking-wider text-on-surface-variant dark:text-slate-400 mb-2">
+                Àmbit de l&apos;Avaria
               </label>
-              <div className="grid grid-cols-3 gap-2">
-                {["VEHICLE", "MATERIAL", "CLIENT"].map((ambit) => (
-                  <button
-                    key={ambit}
-                    type="button"
-                    onClick={() => setTipus(ambit)}
-                    className={`py-2 text-xs font-bold rounded-xl border transition-all ${
-                      tipus === ambit
-                        ? "bg-slate-900 text-white border-slate-900 dark:bg-slate-100 dark:text-slate-900 dark:border-slate-100"
-                        : "border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-300"
-                    }`}
-                  >
-                    {ambit}
-                  </button>
-                ))}
+              <div className="grid grid-cols-3 gap-2.5">
+                {ambitsConfig.map((ambit) => {
+                  const active = tipus === ambit.id;
+                  return (
+                    <button
+                      key={ambit.id}
+                      type="button"
+                      onClick={() => setTipus(ambit.id)}
+                      className={`py-3 px-2 rounded-xl border flex flex-col items-center justify-center gap-1.5 transition-all active:scale-95 ${
+                        active
+                          ? "bg-error-container/50 border-error text-on-error-container font-extrabold shadow-sm"
+                          : "bg-surface-container-low dark:bg-slate-800 border-outline-variant/30 dark:border-slate-700 text-on-surface-variant dark:text-slate-300 font-bold"
+                      }`}
+                    >
+                      <span
+                        className={`material-symbols-outlined text-2xl ${
+                          active ? "text-error" : "text-primary dark:text-slate-400"
+                        }`}
+                      >
+                        {ambit.icon}
+                      </span>
+                      <span className="text-[11px] tracking-wider">
+                        {ambit.label}
+                      </span>
+                    </button>
+                  );
+                })}
               </div>
             </div>
 
@@ -223,7 +235,7 @@ export default function OperariIncidenciesPage() {
               <CameraInput
                 captured={fotoPujada}
                 label="Càmera en Viu"
-                onCapture={(blob) => {
+                onCapture={() => {
                   setFotoPujada(true);
                   setErrorValidacio(null);
                 }}
@@ -239,7 +251,7 @@ export default function OperariIncidenciesPage() {
             </div>
 
             <div>
-              <label className="block text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-1">
+              <label className="block text-[11px] font-extrabold uppercase tracking-wider text-on-surface-variant dark:text-slate-400 mb-1.5">
                 Descripció de la situació
               </label>
               <textarea
@@ -250,13 +262,13 @@ export default function OperariIncidenciesPage() {
                 }}
                 rows={3}
                 placeholder="Detalla breument què ha succeït o indica el suport necessari..."
-                className="w-full p-3 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs focus:outline-none focus:border-emerald-600 resize-none"
+                className="w-full p-3 rounded-xl border border-outline-variant/40 dark:border-slate-700 bg-surface-container-low dark:bg-slate-800 text-xs focus:outline-none focus:ring-2 focus:ring-primary resize-none"
               />
             </div>
 
             {errorValidacio && (
-              <div className="p-3 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-900 text-rose-700 dark:text-rose-300 text-xs flex items-center gap-2">
-                <AlertCircle className="w-4 h-4 shrink-0" />
+              <div className="p-3 rounded-xl bg-error-container/60 border border-error/30 text-on-error-container text-xs flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 shrink-0 text-error" />
                 <span>{errorValidacio}</span>
               </div>
             )}
@@ -264,37 +276,49 @@ export default function OperariIncidenciesPage() {
             <button
               type="submit"
               disabled={enviant}
-              className="w-full py-3 rounded-xl bg-slate-900 dark:bg-slate-100 hover:bg-slate-800 dark:hover:bg-white text-white dark:text-slate-900 text-xs font-bold flex items-center justify-center gap-2 shadow disabled:opacity-50"
+              className="w-full py-3.5 rounded-xl bg-error hover:opacity-95 text-white text-xs font-extrabold uppercase tracking-wider flex items-center justify-center gap-2 shadow-md disabled:opacity-50 transition-all"
             >
               <Send className="w-4 h-4" />
-              <span>{enviant ? "Enviant incidència..." : "Notificar Incidència al Centre"}</span>
+              <span>
+                {enviant
+                  ? "Enviant incidència..."
+                  : "Notificar Incidència al Centre"}
+              </span>
             </button>
           </form>
         )}
 
         {/* Historial d'incidències prèvies de l'operari */}
-        <div className="bg-white dark:bg-slate-900 p-4 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm space-y-3">
+        <div className="bg-surface-container-lowest dark:bg-slate-900 p-4 rounded-xl border border-outline-variant/25 dark:border-slate-800 shadow-sm space-y-3">
           <div className="flex items-center justify-between">
-            <h3 className="text-xs font-bold uppercase tracking-wider text-slate-600 dark:text-slate-400">
+            <h3 className="text-xs font-extrabold uppercase tracking-wider text-primary dark:text-slate-300">
               Les Teves Incidències Recents
             </h3>
             <button
               onClick={carregarHistorial}
-              className="p-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
+              className="p-1.5 rounded-lg bg-surface-container-low dark:bg-slate-800 text-on-surface-variant hover:text-primary"
             >
-              <RefreshCw className={`w-3.5 h-3.5 ${loadingHistorial ? "animate-spin" : ""}`} />
+              <RefreshCw
+                className={`w-3.5 h-3.5 ${
+                  loadingHistorial ? "animate-spin" : ""
+                }`}
+              />
             </button>
           </div>
 
-          {loadingHistorial && historial.length === 0 && pendingOffline.length === 0 ? (
-            <p className="text-xs text-slate-400 py-4 text-center">Carregant incidències...</p>
+          {loadingHistorial &&
+          historial.length === 0 &&
+          pendingOffline.length === 0 ? (
+            <p className="text-xs text-on-surface-variant py-4 text-center">
+              Carregant incidències...
+            </p>
           ) : historial.length === 0 && pendingOffline.length === 0 ? (
-            <div className="py-6 text-center text-slate-400 space-y-1">
-              <CheckCircle2 className="w-8 h-8 mx-auto text-emerald-500/50 mb-2" />
-              <p className="text-xs font-medium text-slate-600 dark:text-slate-300">
+            <div className="py-6 text-center text-on-surface-variant space-y-1">
+              <CheckCircle2 className="w-8 h-8 mx-auto text-secondary-container/60 mb-2" />
+              <p className="text-xs font-bold text-primary dark:text-slate-300">
                 Sense incidències pendents
               </p>
-              <p className="text-[11px] text-slate-400">
+              <p className="text-[11px] text-on-surface-variant">
                 Tot el material i vehicles estan operatius.
               </p>
             </div>
@@ -309,8 +333,9 @@ export default function OperariIncidenciesPage() {
                     <span className="font-bold text-amber-600 dark:text-amber-400">
                       [Pendent de Sincronització Offline]
                     </span>
-                    <p className="text-slate-600 dark:text-slate-300 truncate max-w-[200px]">
-                      {item.payload?.text_observacions || "Incidència enregistrada"}
+                    <p className="text-on-surface dark:text-slate-300 truncate max-w-[200px]">
+                      {item.payload?.text_observacions ||
+                        "Incidència enregistrada"}
                     </p>
                   </div>
                   <Clock className="w-4 h-4 text-amber-500 shrink-0" />
@@ -320,18 +345,20 @@ export default function OperariIncidenciesPage() {
               {historial.map((inc) => (
                 <div
                   key={inc.id}
-                  className="p-3 bg-slate-50 dark:bg-slate-800/60 rounded-xl border border-slate-200 dark:border-slate-700/60 flex items-center justify-between text-xs"
+                  className="p-3 bg-surface-container-low dark:bg-slate-800/60 rounded-xl border border-outline-variant/30 dark:border-slate-700/60 flex items-center justify-between text-xs"
                 >
                   <div className="space-y-0.5">
-                    <span className="font-bold text-slate-800 dark:text-slate-200">
+                    <span className="font-bold text-primary dark:text-slate-200">
                       {inc.ambit} - {inc.estat}
                     </span>
-                    <p className="text-slate-500 dark:text-slate-400 truncate max-w-[200px]">
+                    <p className="text-on-surface-variant dark:text-slate-400 truncate max-w-[200px]">
                       {inc.text_observacions || "Sense comentari"}
                     </p>
                   </div>
-                  <span className="text-[10px] text-slate-400">
-                    {inc.created_at ? new Date(inc.created_at).toLocaleDateString() : ""}
+                  <span className="text-[10px] font-mono text-on-surface-variant">
+                    {inc.created_at
+                      ? new Date(inc.created_at).toLocaleDateString()
+                      : ""}
                   </span>
                 </div>
               ))}

@@ -3,42 +3,136 @@
 @tailwind utilities;
 
 :root {
-  /* Sevalor Chameleon UI HSL Tokens */
-  --color-primary: 142 71% 35%; /* Verd corporatiu camp / tècnic */
+  /* Sevalor / CampoPro Stitch Chameleon UI HSL Tokens */
+  --color-primary: 211 95% 15%; /* #022448 Deep Navy */
   --color-primary-foreground: 0 0% 100%;
-  --color-secondary: 215 25% 27%;
+  --color-primary-container: 214 52% 25%; /* #1e3a5f */
+  --color-on-primary-container: 217 42% 68%; /* #8aa4cf */
+  --color-primary-fixed: 220 100% 92%; /* #d5e3ff */
+  --color-primary-fixed-dim: 217 80% 82%; /* #adc8f5 */
+  --color-on-primary-fixed: 212 100% 12%; /* #001c3b */
+  --color-on-primary-fixed-variant: 215 42% 30%; /* #2d486d */
+
+  --color-secondary: 32 100% 28%; /* #904d00 Amber Brown */
   --color-secondary-foreground: 0 0% 100%;
-  --color-accent: 38 92% 50%; /* Taronja alerta / maquinària */
-  --color-accent-foreground: 0 0% 100%;
-  --color-background: 210 20% 98%;
-  --color-foreground: 222 47% 11%;
+  --color-secondary-container: 29 99% 58%; /* #fe932c Industrial Amber */
+  --color-on-secondary-container: 31 100% 20%; /* #663500 */
+  --color-secondary-fixed: 25 100% 88%; /* #ffdcc3 */
+  --color-secondary-fixed-dim: 27 100% 75%; /* #ffb77d */
+  --color-on-secondary-fixed: 27 100% 9%; /* #2f1500 */
+
+  --color-accent: 29 99% 58%; /* #fe932c */
+  --color-accent-foreground: 31 100% 20%;
+
+  --color-tertiary: 36 100% 10%; /* #341f00 */
+  --color-tertiary-container: 38 100% 16%; /* #503300 */
+  --color-on-tertiary-container: 35 47% 57%; /* #c69b5f */
+  --color-tertiary-fixed: 35 100% 85%; /* #ffddb2 */
+  --color-on-tertiary-fixed-variant: 38 78% 21%; /* #60410c */
+
+  /* Tonal Surface Hierarchy (Stitch Soft-Industrial) */
+  --color-surface: 210 67% 98%; /* #f6fafe */
+  --color-surface-bright: 210 67% 98%;
+  --color-surface-dim: 210 14% 85%; /* #d6dade */
+  --color-surface-container-lowest: 0 0% 100%; /* #ffffff */
+  --color-surface-container-low: 210 33% 96%; /* #f0f4f8 */
+  --color-surface-container: 210 22% 93%; /* #eaeef2 */
+  --color-surface-container-high: 207 19% 91%; /* #e4e9ed */
+  --color-surface-container-highest: 210 14% 89%; /* #dfe3e7 */
+  --color-on-surface: 203 15% 11%; /* #171c1f */
+  --color-on-surface-variant: 218 8% 28%; /* #43474e */
+  --color-outline: 224 5% 48%; /* #74777f */
+  --color-outline-variant: 229 11% 79%; /* #c4c6cf */
+  --color-inverse-surface: 203 8% 19%; /* #2c3134 */
+  --color-inverse-on-surface: 210 25% 95%; /* #edf1f5 */
+
+  --color-background: 210 67% 98%;
+  --color-foreground: 203 15% 11%;
   --color-card: 0 0% 100%;
-  --color-border: 214 32% 91%;
-  --color-destructive: 0 84% 60%;
+  --color-border: 229 11% 79%;
+  --color-destructive: 0 75% 42%; /* #ba1a1a */
+  --color-error-container: 6 100% 92%; /* #ffdad6 */
+  --color-on-error-container: 356 100% 29%; /* #93000a */
   --color-success: 142 76% 36%;
-  --color-warning: 38 92% 50%;
+  --color-warning: 29 99% 58%;
 }
 
 .dark {
-  --color-primary: 142 71% 45%;
+  --color-primary: 211 95% 15%;
   --color-primary-foreground: 0 0% 100%;
-  --color-secondary: 215 20% 65%;
-  --color-secondary-foreground: 222 47% 11%;
-  --color-accent: 38 92% 50%;
-  --color-accent-foreground: 0 0% 100%;
+  --color-primary-container: 214 52% 25%;
+  --color-on-primary-container: 217 42% 68%;
+  --color-primary-fixed: 214 52% 25%;
+  --color-primary-fixed-dim: 217 80% 72%;
+  --color-on-primary-fixed: 210 40% 98%;
+  --color-on-primary-fixed-variant: 217 42% 78%;
+
+  --color-secondary: 29 99% 58%;
+  --color-secondary-foreground: 27 100% 9%;
+  --color-secondary-container: 29 99% 58%;
+  --color-on-secondary-container: 27 100% 9%;
+
+  --color-accent: 29 99% 58%;
+  --color-accent-foreground: 27 100% 9%;
+
+  --color-surface: 222 47% 7%;
+  --color-surface-bright: 222 47% 11%;
+  --color-surface-dim: 222 47% 5%;
+  --color-surface-container-lowest: 222 47% 10%;
+  --color-surface-container-low: 220 43% 13%;
+  --color-surface-container: 217 33% 17%;
+  --color-surface-container-high: 215 28% 22%;
+  --color-surface-container-highest: 215 25% 27%;
+  --color-on-surface: 210 20% 98%;
+  --color-on-surface-variant: 215 20% 65%;
+  --color-outline: 215 16% 47%;
+  --color-outline-variant: 215 25% 27%;
+  --color-inverse-surface: 210 20% 98%;
+  --color-inverse-on-surface: 222 47% 11%;
+
   --color-background: 222 47% 7%;
   --color-foreground: 210 20% 98%;
   --color-card: 222 47% 10%;
-  --color-border: 215 25% 20%;
+  --color-border: 215 25% 22%;
   --color-destructive: 0 84% 60%;
+  --color-error-container: 356 80% 22%;
+  --color-on-error-container: 6 100% 92%;
   --color-success: 142 76% 36%;
-  --color-warning: 38 92% 50%;
+  --color-warning: 29 99% 58%;
 }
 
 @layer base {
   body {
-    @apply bg-background text-foreground antialiased selection:bg-primary selection:text-white;
+    @apply bg-surface text-on-surface antialiased selection:bg-primary selection:text-white;
     touch-action: manipulation;
     -webkit-tap-highlight-color: transparent;
   }
+}
+
+.material-symbols-outlined {
+  font-variation-settings: 'FILL' 0, 'wght' 500, 'GRAD' 0, 'opsz' 24;
+  user-select: none;
+}
+
+.pb-safe {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+.pt-safe {
+  padding-top: env(safe-area-inset-top, 0px);
+}
+
+.custom-scrollbar::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: rgba(2, 36, 72, 0.15);
+  border-radius: 10px;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: rgba(2, 36, 72, 0.3);
 }

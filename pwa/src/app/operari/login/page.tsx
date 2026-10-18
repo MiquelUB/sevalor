@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { Lock, Delete, ShieldAlert, Sun, Moon, User, ArrowRight, Settings, Globe } from "lucide-react";
+import { Delete, ShieldAlert, Sun, Moon, User, ArrowRight, Settings, Globe } from "lucide-react";
 import {
   createSentinelBlock,
   verifySentinelBlock,
@@ -21,6 +21,7 @@ export default function OperariLoginPage() {
   const [loading, setLoading] = useState<boolean>(false);
   const [showConfig, setShowConfig] = useState(false);
   const [apiUrl, setApiUrl] = useState("");
+  const [isOffline, setIsOffline] = useState(false);
   const router = useRouter();
 
   // Mode Clar / Fosc
@@ -42,6 +43,16 @@ export default function OperariLoginPage() {
     }
 
     setApiUrl(getApiBaseUrl());
+    setIsOffline(typeof navigator !== "undefined" && !navigator.onLine);
+
+    const handleOnline = () => setIsOffline(false);
+    const handleOffline = () => setIsOffline(true);
+    window.addEventListener("online", handleOnline);
+    window.addEventListener("offline", handleOffline);
+    return () => {
+      window.removeEventListener("online", handleOnline);
+      window.removeEventListener("offline", handleOffline);
+    };
   }, []);
 
   const toggleTheme = () => {
@@ -172,7 +183,7 @@ export default function OperariLoginPage() {
             const saltBytes = new Uint8Array(saltHex.split(",").map(Number));
             const valid = await verifySentinelBlock(codiPin, saltBytes, cipher, iv);
             if (valid) {
-        sessionStorage.setItem("sevalor_session_pin", codiPin);
+              sessionStorage.setItem("sevalor_session_pin", codiPin);
               window.location.href = "/operari/feines";
               setLoading(false);
               return;
@@ -200,47 +211,71 @@ export default function OperariLoginPage() {
   };
 
   return (
-    <div className="min-h-screen flex flex-col justify-between p-4 sm:p-6 bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 transition-colors duration-200">
-      
-      {/* Capçalera */}
-      <div className="text-center pt-2 sm:pt-4 relative max-w-sm mx-auto w-full">
-        <button
-          onClick={toggleTheme}
-          className="absolute right-0 top-0 p-2 rounded-xl bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300 shadow-sm"
-          title="Commutar Tema"
-        >
-          {isDark ? <Sun className="w-4 h-4 text-amber-400" /> : <Moon className="w-4 h-4 text-blue-500" />}
-        </button>
+    <div className="min-h-screen flex flex-col justify-between p-5 bg-gradient-to-b from-[#1E3A5F] to-[#0F172A] text-white select-none relative overflow-hidden">
+      {/* Decorative Background Elements */}
+      <div className="fixed -bottom-24 -left-24 w-64 h-64 bg-secondary-container/10 rounded-full blur-3xl pointer-events-none" />
+      <div className="fixed -top-24 -right-24 w-64 h-64 bg-primary-container/20 rounded-full blur-3xl pointer-events-none" />
 
-        <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-emerald-600/10 dark:bg-emerald-600/20 text-emerald-600 dark:text-emerald-400 mb-2 border border-emerald-500/30 shadow-inner">
-          <Lock className="w-7 h-7" />
+      {/* Top Status Bar & Branding (Stitch Screen 1cd4053a312544f2a66347703d5d6945) */}
+      <header className="w-full flex flex-col items-center pt-2 relative z-10">
+        <div className="w-full flex items-center justify-between mb-4">
+          {/* Status Indicator Badge */}
+          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-amber-500/15 border border-amber-500/30">
+            <span className="material-symbols-outlined text-amber-400 text-[16px]">
+              {isOffline ? "cloud_off" : "verified_user"}
+            </span>
+            <span className="text-[11px] font-bold uppercase tracking-wider text-amber-400">
+              {isOffline ? "Mode fora de línia actiu" : "Terminal Segur Zero-Trust"}
+            </span>
+          </div>
+
+          <button
+            onClick={toggleTheme}
+            className="p-2 rounded-xl bg-white/10 hover:bg-white/20 text-white/80 transition-colors"
+            title="Commutar Tema"
+          >
+            {isDark ? <Sun className="w-4 h-4 text-amber-400" /> : <Moon className="w-4 h-4 text-sky-300" />}
+          </button>
         </div>
-        <h1 className="text-2xl font-bold tracking-tight text-slate-900 dark:text-white">
-          SEVALOR
-        </h1>
-        <p className="text-xs text-slate-500 dark:text-slate-400">
-          Terminal de Camp d&apos;Operari
-        </p>
-      </div>
 
-      {/* Cos central: Formulari NIF + PIN */}
-      <div className="my-auto py-2 max-w-xs mx-auto w-full">
-        
+        {/* Logo & Brand Name */}
+        <div className="flex flex-col items-center gap-1.5">
+          <div className="w-14 h-14 rounded-2xl bg-white/10 backdrop-blur-md flex items-center justify-center border border-white/15 shadow-xl">
+            <span
+              className="material-symbols-outlined text-secondary-container text-[32px]"
+              style={{ fontVariationSettings: "'FILL' 1" }}
+            >
+              agriculture
+            </span>
+          </div>
+          <div className="text-center">
+            <h1 className="text-2xl font-extrabold tracking-tight text-white">
+              CampoPro <span className="text-secondary-container">SEVALOR</span>
+            </h1>
+            <p className="text-slate-400 text-xs font-medium mt-0.5">
+              Introdueix el teu DNI/NIF i PIN d&apos;operari
+            </p>
+          </div>
+        </div>
+      </header>
+
+      {/* Main Content: NIF + PIN Indicators & Tactile Keypad */}
+      <div className="w-full max-w-[320px] mx-auto flex flex-col items-center gap-4 my-auto py-3 relative z-10">
         {/* Error Alert */}
         {error && (
-          <div className="mb-4 p-3 bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 rounded-xl text-red-600 dark:text-red-400 text-xs font-medium flex items-center gap-2">
-            <ShieldAlert className="w-4 h-4 shrink-0" />
+          <div className="w-full p-3 bg-rose-500/20 border border-rose-400/40 rounded-xl text-rose-200 text-xs font-medium flex items-center gap-2">
+            <ShieldAlert className="w-4 h-4 shrink-0 text-rose-400" />
             <span>{error}</span>
           </div>
         )}
 
-        {/* Camp NIF / DNI editable clar i directe */}
-        <div className="mb-4">
-          <label className="block text-xs font-semibold uppercase tracking-wider text-slate-600 dark:text-slate-300 mb-1.5">
+        {/* Camp NIF / DNI editable */}
+        <div className="w-full">
+          <label className="block text-[10px] font-bold uppercase tracking-widest text-slate-300 mb-1.5">
             DNI / NIF de l&apos;Operari
           </label>
           <div className="relative">
-            <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
+            <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
               <User className="w-4 h-4" />
             </div>
             <input
@@ -249,41 +284,44 @@ export default function OperariLoginPage() {
               value={nif}
               onChange={handleNifChange}
               placeholder="ex: 12345678A"
-              className="block w-full pl-9 pr-3 py-2.5 text-base font-mono font-bold uppercase tracking-wider rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-500 shadow-sm"
+              className="block w-full pl-10 pr-3 py-2.5 text-sm font-mono font-bold uppercase tracking-wider rounded-xl border border-white/15 bg-white/10 backdrop-blur-md text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-secondary-container shadow-inner"
             />
           </div>
         </div>
 
-        {/* Indicador de Dígits del PIN */}
-        <div className="mb-4">
-          <p className="text-center text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-2">
+        {/* 4-Dot & Box PIN Display */}
+        <div className="flex flex-col items-center gap-2 py-1">
+          <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400">
             PIN de 4 dígits
-          </p>
-          <div className="flex justify-center gap-3">
-            {[0, 1, 2, 3].map((idx) => (
-              <div
-                key={idx}
-                className={`w-11 h-13 sm:w-12 sm:h-14 rounded-2xl border-2 flex items-center justify-center text-2xl font-bold transition-all ${
-                  pin.length > idx
-                    ? "border-emerald-500 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 shadow-sm"
-                    : "border-slate-300 dark:border-slate-800 bg-white dark:bg-slate-900 text-slate-400 dark:text-slate-600"
-                }`}
-              >
-                {pin.length > idx ? "•" : ""}
-              </div>
-            ))}
+          </span>
+          <div className="flex items-center justify-center gap-4" role="status" aria-label="PIN progress">
+            {[0, 1, 2, 3].map((idx) => {
+              const filled = pin.length > idx;
+              return (
+                <div
+                  key={idx}
+                  className={`w-11 h-12 rounded-2xl border-2 flex items-center justify-center text-xl font-bold transition-all ${
+                    filled
+                      ? "border-secondary-container bg-secondary-container/20 text-secondary-container shadow-[0_0_12px_rgba(30,132,73,0.4)]"
+                      : "border-white/20 bg-white/5 text-white/30"
+                  }`}
+                >
+                  {filled ? "•" : ""}
+                </div>
+              );
+            })}
           </div>
         </div>
 
-        {/* Numpad Tàctil de Gran Format */}
-        <div className="grid grid-cols-3 gap-2 sm:gap-3 w-full pb-2">
+        {/* Numeric Keypad (3x4 Grid Stitch Circular Tactile Buttons) */}
+        <div className="grid grid-cols-3 gap-x-5 gap-y-3 w-full justify-items-center">
           {["1", "2", "3", "4", "5", "6", "7", "8", "9"].map((num) => (
             <button
               key={num}
               type="button"
               disabled={loading}
               onClick={() => handleDigit(num)}
-              className="h-14 sm:h-16 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 hover:bg-slate-100 dark:hover:bg-slate-800 active:bg-emerald-600 active:text-white text-2xl font-bold text-slate-800 dark:text-slate-100 shadow-sm transition-all flex items-center justify-center active:scale-95 touch-manipulation"
+              className="w-[68px] h-[68px] rounded-full bg-white/10 hover:bg-white/15 active:bg-secondary-container active:scale-95 transition-all flex items-center justify-center text-2xl font-bold text-white border border-white/10 shadow-lg touch-manipulation"
             >
               {num}
             </button>
@@ -292,7 +330,8 @@ export default function OperariLoginPage() {
           <button
             type="button"
             onClick={handleClear}
-            className="h-14 sm:h-16 rounded-2xl bg-slate-100 dark:bg-slate-900/60 border border-slate-200 dark:border-slate-800 hover:bg-slate-200 dark:hover:bg-slate-800 text-slate-500 dark:text-slate-400 text-sm font-bold transition-colors flex items-center justify-center active:scale-95 touch-manipulation"
+            className="w-[68px] h-[68px] rounded-full bg-white/5 hover:bg-white/10 active:bg-white/20 active:scale-95 transition-all flex items-center justify-center text-sm font-bold text-slate-300 border border-white/5 touch-manipulation"
+            title="Netejar PIN"
           >
             C
           </button>
@@ -301,7 +340,7 @@ export default function OperariLoginPage() {
             type="button"
             disabled={loading}
             onClick={() => handleDigit("0")}
-            className="h-14 sm:h-16 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 hover:bg-slate-100 dark:hover:bg-slate-800 active:bg-emerald-600 active:text-white text-2xl font-bold text-slate-800 dark:text-slate-100 shadow-sm transition-all flex items-center justify-center active:scale-95 touch-manipulation"
+            className="w-[68px] h-[68px] rounded-full bg-white/10 hover:bg-white/15 active:bg-secondary-container active:scale-95 transition-all flex items-center justify-center text-2xl font-bold text-white border border-white/10 shadow-lg touch-manipulation"
           >
             0
           </button>
@@ -309,38 +348,39 @@ export default function OperariLoginPage() {
           <button
             type="button"
             onClick={handleDelete}
-            className="h-14 sm:h-16 rounded-2xl bg-slate-100 dark:bg-slate-900/60 border border-slate-200 dark:border-slate-800 hover:bg-slate-200 dark:hover:bg-slate-800 text-slate-500 dark:text-slate-400 transition-colors flex items-center justify-center active:scale-95 touch-manipulation"
+            aria-label="Esborrar"
+            className="w-[68px] h-[68px] rounded-full bg-transparent hover:bg-white/5 active:bg-white/15 active:scale-95 transition-all flex items-center justify-center text-slate-300 touch-manipulation"
           >
             <Delete className="w-6 h-6" />
           </button>
         </div>
 
-        {/* Botó directe d'Entrar */}
+        {/* Primary Action Button (Stitch Green CTA) */}
         <button
           type="button"
           disabled={loading || pin.length !== 4 || !nif.trim()}
           onClick={() => submitLogin(pin)}
-          className="w-full mt-2 py-3 px-4 rounded-xl text-sm font-bold text-white bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 shadow-lg shadow-emerald-600/20 transition-all"
+          className="w-full h-13 py-3.5 mt-1 rounded-xl bg-secondary-container hover:brightness-110 active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-xl shadow-black/20 flex items-center justify-center gap-2 text-white font-bold text-sm tracking-wide uppercase"
         >
-          {loading ? "Comprovant accés..." : "Entrar al Terminal"}
+          <span>{loading ? "Comprovant accés..." : "Entrar al Terminal"}</span>
           {!loading && <ArrowRight className="w-4 h-4" />}
         </button>
       </div>
 
-      {/* Peu de pàgina: Configuració API */}
-      <div className="text-center pt-2 pb-1 max-w-xs mx-auto w-full">
+      {/* Footer Metadata & Server Config */}
+      <footer className="w-full flex flex-col items-center gap-2 pb-1 relative z-10 max-w-xs mx-auto">
         <button
           type="button"
           onClick={() => setShowConfig(!showConfig)}
-          className="text-xs text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 flex items-center justify-center gap-1 mx-auto transition-colors"
+          className="text-slate-400 hover:text-white text-xs font-medium transition-colors py-1 px-3 rounded-lg flex items-center gap-1.5"
         >
-          <Settings className="w-3 h-3" />
+          <Settings className="w-3.5 h-3.5" />
           <span>Configuració del servidor API</span>
         </button>
 
         {showConfig && (
-          <form onSubmit={handleSaveApiUrl} className="mt-2 w-full space-y-2 text-xs">
-            <label className="block font-medium text-slate-600 dark:text-slate-400 text-left">
+          <form onSubmit={handleSaveApiUrl} className="w-full space-y-2 text-xs bg-slate-900/90 p-3 rounded-xl border border-white/10">
+            <label className="block font-medium text-slate-300 text-left">
               URL de l&apos;API:
             </label>
             <div className="flex gap-2">
@@ -351,19 +391,25 @@ export default function OperariLoginPage() {
                   value={apiUrl}
                   onChange={(e) => setApiUrl(e.target.value)}
                   placeholder="https://api.domini.com/api/v1"
-                  className="w-full pl-8 pr-2 py-1.5 border border-slate-300 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-200"
+                  className="w-full pl-8 pr-2 py-1.5 border border-white/15 rounded-lg bg-slate-800 text-white"
                 />
               </div>
               <button
                 type="submit"
-                className="px-3 py-1.5 bg-emerald-600 text-white rounded-lg font-medium hover:bg-emerald-700"
+                className="px-3 py-1.5 bg-secondary-container text-white rounded-lg font-bold hover:brightness-110"
               >
                 Desar
               </button>
             </div>
           </form>
         )}
-      </div>
+
+        <div className="flex items-center gap-2 opacity-40">
+          <span className="text-[10px] font-bold tracking-widest uppercase text-slate-400">
+            v4.0 • AES-GCM 256 Offline Ready
+          </span>
+        </div>
+      </footer>
     </div>
   );
 }
