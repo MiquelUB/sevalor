@@ -99,7 +99,7 @@ export default function OperariLayout({
               </div>
               <div className="flex flex-col">
                 <span className="text-xs font-extrabold tracking-tight leading-none text-white">
-                  CampoPro
+                  Sevalor
                 </span>
                 <span className="text-[9px] font-mono tracking-widest uppercase text-on-primary-container leading-none mt-0.5">
                   SEVALOR PWA v4.0

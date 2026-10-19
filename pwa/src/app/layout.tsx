@@ -3,7 +3,7 @@ import { ChameleonProvider } from "@/lib/chameleon";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "CampoPro · SEVALOR Suite — Gestió i Terminal de Camp",
+  title: "Sevalor · SEVALOR Suite — Gestió i Terminal de Camp",
   description: "Plataforma B2B i PWA de mobilitat per a operaris i quadrilles de camp de Sevalor Suite.",
   manifest: "/manifest.json",
   icons: {

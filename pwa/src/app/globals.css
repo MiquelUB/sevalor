@@ -3,7 +3,7 @@
 @tailwind utilities;
 
 :root {
-  /* Sevalor / CampoPro Stitch Chameleon UI HSL Tokens */
+  /* Sevalor Stitch Chameleon UI HSL Tokens */
   --color-primary: 211 95% 15%; /* #022448 Deep Navy */
   --color-primary-foreground: 0 0% 100%;
   --color-primary-container: 214 52% 25%; /* #1e3a5f */

@@ -149,7 +149,7 @@ function GestioLayoutContent({ children }: { children: React.ReactNode }) {
             </div>
             <div className="flex flex-col min-w-0">
               <span className="font-display-lg text-lg text-white tracking-tight truncate">
-                {empresa?.nom || "CampoPro"}
+                {empresa?.nom || "Sevalor"}
               </span>
               <span className="text-[10px] font-mono text-on-primary-container uppercase tracking-wider truncate">
                 {empresa?.nif || "SEVALOR SUITE"}
@@ -365,7 +365,7 @@ function GestioLayoutContent({ children }: { children: React.ReactNode }) {
               <span className="material-symbols-outlined text-[14px]">home</span>
               <span>/</span>
               <Link href="/gestio" className="hover:text-primary">
-                CampoPro
+                Sevalor
               </Link>
               <span>/</span>
               <span className="font-body-strong text-primary">{currentSectionLabel}</span>

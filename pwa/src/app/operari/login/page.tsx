@@ -250,7 +250,7 @@ export default function OperariLoginPage() {
           </div>
           <div className="text-center">
             <h1 className="text-2xl font-extrabold tracking-tight text-white">
-              CampoPro <span className="text-secondary-container">SEVALOR</span>
+              Sevalor <span className="text-secondary-container">SEVALOR</span>
             </h1>
             <p className="text-slate-400 text-xs font-medium mt-0.5">
               Introdueix el teu DNI/NIF i PIN d&apos;operari

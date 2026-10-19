@@ -24,6 +24,7 @@ ENV/
 !.env.example
 infra/letsencrypt/
 backend/secrets/
+.agents/start_stitch.sh
 
 # Logs
 *.log

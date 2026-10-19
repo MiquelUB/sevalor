@@ -551,7 +551,7 @@ export default function EmpresaDetailPage({ params }: { params: { id: string } }
               }}
               className="px-2.5 py-1 rounded-lg text-[10px] font-mono bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300 hover:opacity-80"
             >
-              CampoPro (Verd Agro)
+              Sevalor (Verd Agro)
             </button>
             <button
               type="button"
