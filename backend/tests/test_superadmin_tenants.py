@@ -54,6 +54,33 @@ async def test_onboarding_tenant_success(headers):
         assert data["tenant"]["pla_subscripcio"] == "STARTER"
         assert data["tenant"]["estat_inicial"] == "TRIAL"
 
+
+@pytest.mark.asyncio
+async def test_onboarding_tenant_amb_logotip_base64(headers):
+    import base64
+    valid_png_bytes = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
+    b64_str = "data:image/png;base64," + base64.b64encode(valid_png_bytes).decode("ascii")
+    payload = {
+        "rao_social": "Empresa Logo Test S.L.",
+        "nif": "B" + str(uuid.uuid4())[:8].upper(),
+        "subdomini": "testlogo-" + str(uuid.uuid4())[:8],
+        "vertical": "CAMPOPRO",
+        "pla_subscripcio": "PRO",
+        "quota_disc_gb": 30,
+        "boss_nif": "99988877L",
+        "boss_nom": "Laura",
+        "boss_cognoms": "Sole",
+        "boss_email": f"laura_{uuid.uuid4().hex[:6]}@logotest.cat",
+        "boss_telefon": "+34600111222",
+        "logotip_base64": b64_str,
+    }
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        response = await ac.post("/api/v1/superadmin/tenants/onboarding", json=payload, headers=headers)
+        assert response.status_code == 201
+        data = response.json()
+        assert data["status"] == "CREATED"
+        assert "logo_oficial.png" in (data["tenant"].get("logotip_path") or "")
+
 @pytest.mark.asyncio
 async def test_onboarding_requires_superadmin():
     payload_jwt = {

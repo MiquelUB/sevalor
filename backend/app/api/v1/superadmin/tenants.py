@@ -108,6 +108,7 @@ class OnboardingTenantRequest(BaseModel):
     boss_email: str = Field(..., pattern=r"^[\w\.-]+@[\w\.-]+\.\w+$")
     boss_telefon: Optional[str] = None
     feature_flags: Optional[Dict[str, bool]] = None
+    logotip_base64: Optional[str] = None
 
 
 class UpdateDominiTenantRequest(BaseModel):
@@ -504,6 +505,21 @@ async def crear_nou_tenant(
         else []
     )
 
+    logotip_path = None
+    if payload.logotip_base64:
+        import base64
+        try:
+            raw_b64 = payload.logotip_base64
+            if "," in raw_b64:
+                raw_b64 = raw_b64.split(",", 1)[1]
+            content_bytes = base64.b64decode(raw_b64)
+            if len(content_bytes) <= 10 * 1024 * 1024:
+                from app.api.v1.superadmin.empreses import desar_fitxer_logotip, validar_magic_bytes_imatge
+                ext, _mime = validar_magic_bytes_imatge(content_bytes)
+                logotip_path = desar_fitxer_logotip(str(nou_id), content_bytes, ext)
+        except Exception as e:
+            logger.warning(f"No s'ha pogut processar el logotip base64 durant onboarding: {e}")
+
     nova_empresa = Empresa(
         id=nou_id,
         nom=payload.rao_social.strip(),
@@ -539,6 +555,8 @@ async def crear_nou_tenant(
         primari_hsl=payload.primari_hsl or "210 100% 15%",
         secundari_hsl=payload.secundari_hsl or "38 92% 50%",
         accent_hsl=payload.accent_hsl or "190 90% 50%",
+        logotip_path=logotip_path,
+        favicon_path=logotip_path,
     )
     db.add(nova_empresa)
 
@@ -624,6 +642,7 @@ async def crear_nou_tenant(
             "boss_usuari_id": str(boss_user_id),
             "enllac_activacio_2fa": enllac_activacio,
             "estat_inicial": "TRIAL",
+            "logotip_path": nova_empresa.logotip_path,
         },
     }
 
