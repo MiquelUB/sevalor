@@ -147,21 +147,56 @@ export async function apiFetch<T = any>(
     headers["Authorization"] = `Bearer ${token}`;
   }
 
-  const response = await fetch(url, {
-    ...options,
-    headers,
-  });
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      ...options,
+      headers,
+    });
+  } catch (networkErr: any) {
+    const isOffline = typeof navigator !== "undefined" && !navigator.onLine;
+    const msg = isOffline
+      ? "📶 Sense cobertura mòbil al telèfon: No tens connexió d'internet mòbil en aquesta zona. Pots continuar treballant amb les feines d'avui desades al telèfon."
+      : "📶 Sense connexió de xarxa o sense cobertura mòbil: No s'ha pogut connectar amb el servidor. Comprova la cobertura del telèfon.";
+    const err = new Error(msg) as Error & { code?: string };
+    err.code = "SENSE_COBERTURA_MOBIL";
+    throw err;
+  }
 
   if (!response.ok) {
     let errorDetail = `Error ${response.status}: ${response.statusText}`;
+    let errorCode: string | undefined;
     try {
       const errorJson = await response.json();
+      errorCode = errorJson.code;
       errorDetail = errorJson.detail || errorJson.message || errorDetail;
     } catch {
       const errorText = await response.text().catch(() => "");
       if (errorText) errorDetail = errorText;
     }
-    throw new Error(errorDetail);
+
+    if (response.status === 503 && errorCode === "NODE_EMPRESA_OFFLINE") {
+      const err = new Error(
+        errorDetail ||
+          "🖥️ Ordinador central de l'empresa apagat: Tens cobertura mòbil, però l'ordinador d'oficina de l'empresa està apagat o desconnectat."
+      ) as Error & { code?: string };
+      err.code = "NODE_EMPRESA_OFFLINE";
+      throw err;
+    }
+
+    if ([502, 503, 504].includes(response.status)) {
+      const err = new Error(
+        errorDetail.includes("Error 50")
+          ? "⚠️ Base de dades central no disponible temporalment: Tens cobertura mòbil, però el servidor de dades no respon en aquest instant."
+          : errorDetail
+      ) as Error & { code?: string };
+      err.code = errorCode || "DB_UNAVAILABLE";
+      throw err;
+    }
+
+    const err = new Error(errorDetail) as Error & { code?: string };
+    if (errorCode) err.code = errorCode;
+    throw err;
   }
 
   // Si la resposta és 204 No Content

@@ -52,7 +52,26 @@ class Empresa(Base):
     pla_subscripcio: Mapped[str] = mapped_column(
         String(20), default="STARTER", server_default="STARTER"
     )
-    estat_pagament: Mapped[str] = mapped_column(String(20), default="ACTIU", server_default="ACTIU")
+    estat_pagament: Mapped[str] = mapped_column(String(30), default="ACTIU", server_default="ACTIU")
+    quota_operaris: Mapped[int] = mapped_column(
+        Integer, default=5, server_default=text("5")
+    )
+    quota_buffer_mb: Mapped[int] = mapped_column(
+        Integer, default=500, server_default=text("500")
+    )
+    tarifa_llicencia_base: Mapped[float] = mapped_column(
+        Numeric(10, 2), default=0.00, server_default=text("0.00")
+    )
+    tarifa_per_operari: Mapped[float] = mapped_column(
+        Numeric(10, 2), default=0.00, server_default=text("0.00")
+    )
+    tarifa_config_ia: Mapped[float] = mapped_column(
+        Numeric(10, 2), default=0.00, server_default=text("0.00")
+    )
+    equips_ia_venuts: Mapped[Optional[List[dict]]] = mapped_column(
+        JSONB, default=list, server_default=text("'[]'::jsonb")
+    )
+    notes_crm: Mapped[Optional[str]] = mapped_column(Text)
     quota_disc_bytes_autoritzada: Mapped[int] = mapped_column(
         BIGINT, default=10737418240, server_default=text("10737418240")
     )
@@ -1983,4 +2002,136 @@ class DocumentFlota(Base):
     )
     creat_per_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True), ForeignKey("usuaris.id", ondelete="SET NULL")
+    )
+
+
+class SaasFacturaB2B(Base):
+    """Facturació B2B SaaS (Superadmin -> Empresa Client) amb Human-in-the-Loop i Veri*factu."""
+
+    __tablename__ = "saas_factures_b2b"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+        server_default=text("gen_random_uuid()"),
+    )
+    empresa_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("empreses.id", ondelete="SET NULL"), nullable=True
+    )
+    client_nom_snapshot: Mapped[str] = mapped_column(String(150), nullable=False)
+    client_nif_snapshot: Mapped[str] = mapped_column(String(20), nullable=False)
+    serie: Mapped[str] = mapped_column(String(20), default="SAAS", server_default="SAAS")
+    numero_factura: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    estat: Mapped[str] = mapped_column(
+        String(30), default="ESBORRANY_PREFACTURA", server_default="ESBORRANY_PREFACTURA"
+    )  # ESBORRANY_PREFACTURA, EMESA_VERIFACTU, COBRADA, IMPAGADA
+    periode: Mapped[str] = mapped_column(String(30), nullable=False)
+    concepte_onboarding_desc: Mapped[Optional[str]] = mapped_column(String(255))
+    import_onboarding: Mapped[float] = mapped_column(
+        Numeric(10, 2), default=0.00, server_default=text("0.00")
+    )
+    concepte_config_ia_desc: Mapped[Optional[str]] = mapped_column(String(255))
+    import_config_ia: Mapped[float] = mapped_column(
+        Numeric(10, 2), default=0.00, server_default=text("0.00")
+    )
+    equips_ia_detall: Mapped[Optional[List[dict]]] = mapped_column(
+        JSONB, default=list, server_default=text("'[]'::jsonb")
+    )
+    import_equips_ia: Mapped[float] = mapped_column(
+        Numeric(10, 2), default=0.00, server_default=text("0.00")
+    )
+    num_operaris_facturats: Mapped[int] = mapped_column(
+        Integer, default=0, server_default=text("0")
+    )
+    preu_unitari_operari: Mapped[float] = mapped_column(
+        Numeric(10, 2), default=0.00, server_default=text("0.00")
+    )
+    import_operaris: Mapped[float] = mapped_column(
+        Numeric(10, 2), default=0.00, server_default=text("0.00")
+    )
+    base_imposable: Mapped[float] = mapped_column(
+        Numeric(12, 2), default=0.00, server_default=text("0.00")
+    )
+    tipus_iva_percent: Mapped[float] = mapped_column(
+        Numeric(5, 2), default=21.00, server_default=text("21.00")
+    )
+    quota_iva: Mapped[float] = mapped_column(
+        Numeric(12, 2), default=0.00, server_default=text("0.00")
+    )
+    import_total: Mapped[float] = mapped_column(
+        Numeric(12, 2), default=0.00, server_default=text("0.00")
+    )
+    verificada_per_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True)
+    data_verificacio_humana: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    hash_sha256: Mapped[Optional[str]] = mapped_column(String(64))
+    hash_anterior: Mapped[Optional[str]] = mapped_column(String(64))
+    qr_verifactu: Mapped[Optional[str]] = mapped_column(Text)
+    pdf_path: Mapped[Optional[str]] = mapped_column(String(500))
+    data_emissio: Mapped[Optional[date]] = mapped_column(Date)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        server_default=text("now()"),
+    )
+
+
+class SaasTiquetSuport(Base):
+    """Tiquets d'incidència tècnica CRM conservats permanentment i amb diagnòstic de PC local."""
+
+    __tablename__ = "saas_tiquets_suport"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+        server_default=text("gen_random_uuid()"),
+    )
+    empresa_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("empreses.id", ondelete="SET NULL"), nullable=True
+    )
+    empresa_nom_snapshot: Mapped[str] = mapped_column(String(150), nullable=False)
+    assumpte: Mapped[str] = mapped_column(String(200), nullable=False)
+    descripcio: Mapped[str] = mapped_column(Text, nullable=False)
+    severitat: Mapped[str] = mapped_column(
+        String(20), default="NORMAL", server_default="NORMAL"
+    )  # BAIXA, NORMAL, ALTA, CRITICA
+    estat: Mapped[str] = mapped_column(
+        String(30), default="OBERT", server_default="OBERT"
+    )  # OBERT, EN_CURS, RESOLT, TANCAT
+    pc_empresa_online_al_crear: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
+    diagnostic_automatic: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    resolucio_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        server_default=text("now()"),
+    )
+    resolved_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class SaasHistorialLlicencia(Base):
+    """Traçabilitat històrica de canvis de quota d'operaris i estat del cicle de vida."""
+
+    __tablename__ = "saas_historial_llicencia"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+        server_default=text("gen_random_uuid()"),
+    )
+    empresa_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("empreses.id", ondelete="SET NULL"), nullable=True
+    )
+    quota_operaris_anterior: Mapped[int] = mapped_column(Integer, nullable=False)
+    quota_operaris_nova: Mapped[int] = mapped_column(Integer, nullable=False)
+    estat_anterior: Mapped[Optional[str]] = mapped_column(String(30))
+    estat_nou: Mapped[Optional[str]] = mapped_column(String(30))
+    motiu: Mapped[Optional[str]] = mapped_column(String(255))
+    autor_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        server_default=text("now()"),
     )

@@ -636,14 +636,20 @@ def purgar_dades_tenant_destruit(tenant_id: str):
                 )
 
                 # S'hauria de fer una eliminació o ofuscació en cascada de totes les taules de negoci
-                # per complir la normativa de Destrucció Certificada
+                # per complir la normativa de Destrucció Certificada.
+                # IMPORTANT: Les taules saas_factures_b2b i saas_tiquets_suport es conserven intactes
+                # al CRM per obligació fiscal (Veri*factu AEAT) i traçabilitat d'auditoria.
 
                 await session.commit()
                 logger.info(f"Purga de dades per tenant {tenant_id} completada.")
             except Exception as e:
                 logger.error(f"Error purgant tenant {tenant_id}: {e}")
 
-    asyncio.run(process())
+    try:
+        asyncio.get_running_loop()
+        logger.info("Tasca de purga diferida (30 dies) registrada per al tenant %s.", tenant_id)
+    except RuntimeError:
+        asyncio.run(process())
 
 
 @celery_app.task(name="app.workers.tasks.revisar_contractes_manteniment", queue="queue_periodic")

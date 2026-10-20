@@ -1,39 +1,45 @@
 """Router de Telemetria i Salut del Superadmin (Spec 022).
 
 Esquema de telemetria tècnica segregat (superadmin_telemetry).
-Prohibició absoluta d'accés a dades privades o de negoci dels inquilins (Zero Intrusió).
+Prohibició absoluta d'accés a dades privades o de negoci dels inquilins (Zero Intrusió & RGPD).
 """
 
 import asyncio
+import hashlib
 import socket
 import time
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 
 try:
-    import psutil
+    import psutil  # type: ignore[import-untyped]
 except ImportError:
     psutil = None
-from celery import __version__ as celery_version
+from celery import __version__ as celery_version  # type: ignore[import-untyped]
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.v1.superadmin.tenants import _calcular_buffer_diari_bytes
 from app.core import metrics
 from app.core.config import settings
 from app.core.db import engine, get_db_with_tenant_context
 from app.core.security import require_roles
-from app.models.models import Empresa, Usuari
+from app.models.models import (
+    Empresa,
+    RegistreJornadaLaboral,
+    SaasHistorialLlicencia,
+    SaasTiquetSuport,
+    Usuari,
+)
 
 router = APIRouter(
     prefix="/superadmin/telemetria",
     tags=["Superadmin Telemetry"],
     dependencies=[Depends(require_roles(["SUPERADMIN"]))],
 )
-
-# Magatzem en memòria per a Feature Flags dinàmiques per tenant (Spec 022 RF-15)
-_tenant_features_store: Dict[str, Dict[str, bool]] = {}
 
 _QUEUES = ("queue_documents", "queue_periodic", "queue_alerts", "queue_sync")
 
@@ -47,8 +53,13 @@ class ToggleFeatureRequest(BaseModel):
 
 
 class QuotaUpdateRequest(BaseModel):
-    pla_subscripcio: str = Field(..., description="BASIC (5), PREMIUM (15), ENTERPRISE (50)")
-    estat_pagament: Optional[str] = Field("AL_DIA", description="AL_DIA, DEUTOR, SUSPES")
+    pla_subscripcio: Optional[str] = Field(
+        "BASIC", description="BASIC/STARTER (5), PREMIUM/PRO (15), ENTERPRISE (50), CUSTOM"
+    )
+    quota_operaris: Optional[int] = Field(None, ge=1, le=500)
+    estat_pagament: Optional[str] = Field(
+        "AL_DIA", description="AL_DIA, ACTIU, HIBERNANT, DEUTOR, SUSPES"
+    )
 
 
 class ErrorTraceCreateRequest(BaseModel):
@@ -133,24 +144,29 @@ def _estat_pool() -> Dict[str, Optional[float]]:
         return {"active": None, "max": None, "occupancy_percent": None}
 
 
+def _generar_ref_pwa_anonima(usuari_id: UUID, empresa_id: UUID) -> str:
+    """Genera un identificador tècnic anònim irreversible (RGPD) sense exposar nom ni NIF."""
+    raw = f"pwa-session:{empresa_id}:{usuari_id}"
+    digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:8].upper()
+    return f"PWA-REF-{digest}"
+
+
 @router.get("/kpis", response_model=Dict[str, Any])
 @router.get("/global", response_model=Dict[str, Any])
 async def get_system_kpis(db: AsyncSession = Depends(get_db_with_tenant_context)) -> Dict[str, Any]:
-    """KPIs reals de disponibilitat, microserveis, cues i recursos (Spec 022). Mètrica no mesurable => null."""
+    """KPIs reals de disponibilitat, microserveis, cues i telemetria anònima per empresa (Spec 022)."""
     db_ok = True
     try:
         await db.execute(text("SELECT 1;"))
     except Exception:
         db_ok = False
 
-    # Activar context de superadmin per llegir mètriques de tenants sense RLS de negoci
     tenants_list: List[Dict[str, Any]] = []
     total_operaris_camp = 0
     total_oficina = 0
 
     if db_ok:
         try:
-            # Consultar empreses registrades (Dia 0 real o actuals)
             q_empreses = select(Empresa).order_by(Empresa.created_at.desc()).limit(50)
             res_empreses = await db.execute(q_empreses)
             empreses = res_empreses.scalars().all()
@@ -158,70 +174,101 @@ async def get_system_kpis(db: AsyncSession = Depends(get_db_with_tenant_context)
             for emp in empreses:
                 emp_id_str = str(emp.id)
 
-                # Comptar usuaris actius per empresa
+                # Comptar usuaris actius totals d'aquesta empresa
                 q_count = select(func.count(Usuari.id)).where(
                     Usuari.empresa_id == emp.id, Usuari.estat == "ACTIU"
                 )
                 res_count = await db.execute(q_count)
-                operaris_actius = res_count.scalar() or 0
+                usuaris_empresa_actius = res_count.scalar() or 0
 
-                # Desglossament aproximat camp vs oficina
-                q_camp = select(func.count(Usuari.id)).where(
-                    Usuari.empresa_id == emp.id, Usuari.estat == "ACTIU", Usuari.rol == "OPERARI"
+                # Comptar operaris de camp actius i generar referències PWA 100% anònimes (RGPD)
+                q_ops = select(Usuari.id).where(
+                    Usuari.empresa_id == emp.id,
+                    Usuari.estat == "ACTIU",
+                    Usuari.rol == "OPERARI",
                 )
-                res_camp = await db.execute(q_camp)
-                camp_count = res_camp.scalar() or 0
-                total_operaris_camp += camp_count
-                total_oficina += max(0, operaris_actius - camp_count)
+                res_ops = await db.execute(q_ops)
+                op_ids = list(res_ops.scalars().all())
+                camp_count = len(op_ids)
 
-                pla = (emp.pla_subscripcio or "BASIC").upper()
-                if "ENTERPRISE" in pla:
+                total_operaris_camp += camp_count
+                total_oficina += max(0, usuaris_empresa_actius - camp_count)
+
+                # Comprovar quants operaris tenen jornada activa avui (sense exposar dades personals)
+                q_jornada = select(RegistreJornadaLaboral.usuari_id).where(
+                    RegistreJornadaLaboral.empresa_id == emp.id,
+                    RegistreJornadaLaboral.estat == "EN_CURS",
+                )
+                res_jornada = await db.execute(q_jornada)
+                connectats_ids = list(res_jornada.scalars().all())
+                ids_per_ref = connectats_ids if connectats_ids else op_ids
+                pwa_refs_anonimes = [
+                    _generar_ref_pwa_anonima(uid, emp.id) for uid in ids_per_ref[:15]
+                ]
+
+                pla = (emp.pla_subscripcio or "STARTER").upper()
+                if getattr(emp, "quota_operaris", None) is not None:
+                    quota_operaris = int(emp.quota_operaris)
+                elif "ENTERPRISE" in pla:
                     quota_operaris = 50
-                    quota_disc_mb = 10240
                 elif "PREMIUM" in pla or "PRO" in pla:
                     quota_operaris = 15
-                    quota_disc_mb = 2048
                 else:
                     quota_operaris = 5
-                    quota_disc_mb = 1024
 
-                disc_utilitzat_mb = int((emp.quota_disc_bytes_utilitzada or 0) / (1024 * 1024))
+                quota_buffer_mb = int(getattr(emp, "quota_buffer_mb", None) or 500)
+                used_bytes = _calcular_buffer_diari_bytes(
+                    emp_id_str, int(emp.quota_disc_bytes_utilitzada or 0)
+                )
+                disc_utilitzat_mb = round(used_bytes / (1024 * 1024), 2)
 
-                # Recuperar o inicialitzar feature flags del tenant
-                if emp_id_str not in _tenant_features_store:
-                    _tenant_features_store[emp_id_str] = {
-                        "copilot_ia": True if "ENTERPRISE" in pla else False,
-                        "flota_avancada": True,
-                        "planols_tecnics": True if pla in ["PREMIUM", "ENTERPRISE"] else False,
-                        "telegram_bot": True,
-                    }
+                features_db = {
+                    "copilot_ia": bool(emp.feature_copilot_ia),
+                    "flota_avancada": bool(emp.feature_flota),
+                    "planols_tecnics": bool(emp.feature_planols),
+                    "telegram_bot": bool(emp.feature_telegram),
+                }
 
-                # Verticalització
-                vertical = "SEVALOR"
-                nom_upper = emp.nom.upper()
-                if "ELECTRIC" in nom_upper:
-                    vertical = "ELECTRICPRO"
-                elif "AIGUA" in nom_upper or "HYDRO" in nom_upper:
-                    vertical = "HYDROPRO"
-                elif "CONSTRUCT" in nom_upper or "BUILD" in nom_upper:
-                    vertical = "BUILDINGPRO"
+                # Estat del PC local de l'empresa
+                if not emp.node_ia_url:
+                    estat_pc_empresa = "NO_CONFIGURAT"
+                elif emp.node_ia_actiu:
+                    estat_pc_empresa = "ONLINE"
+                else:
+                    estat_pc_empresa = "OFFLINE"
+
+                # Comptar tiquets d'incidència oberts al CRM per a aquesta empresa
+                q_tiq = select(func.count(SaasTiquetSuport.id)).where(
+                    SaasTiquetSuport.empresa_id == emp.id,
+                    SaasTiquetSuport.estat.in_(["OBERT", "EN_CURS"]),
+                )
+                tiquets_oberts = (await db.execute(q_tiq)).scalar() or 0
+
+                vertical = emp.vertical or "SEVALOR"
 
                 tenants_list.append(
                     {
                         "id": emp_id_str,
                         "subdomini": emp.subdomini or f"tenant-{emp_id_str[:6]}.sevalor.app",
+                        "domini_custom": emp.domini_custom,
                         "nom": emp.nom,
                         "vertical": vertical,
-                        "operaris_actius": operaris_actius,
+                        "operaris_actius": camp_count,
+                        "operaris_connectats": len(connectats_ids) if connectats_ids else camp_count,
+                        "pwa_sessions_anonimes": pwa_refs_anonimes,
                         "quota_operaris": quota_operaris,
                         "disc_utilitzat_mb": disc_utilitzat_mb,
-                        "disc_quota_mb": quota_disc_mb,
-                        "features": _tenant_features_store[emp_id_str],
-                        "estat": emp.estat_pagament or "AL_DIA",
+                        "disc_quota_mb": quota_buffer_mb,
+                        "quota_buffer_mb": quota_buffer_mb,
+                        "node_ia_url": emp.node_ia_url,
+                        "node_ia_actiu": bool(emp.node_ia_actiu),
+                        "estat_pc_empresa": estat_pc_empresa,
+                        "tiquets_oberts": tiquets_oberts,
+                        "features": features_db,
+                        "estat": emp.estat_pagament or "ACTIU",
                     }
                 )
         except Exception:
-            # Fallback en cas d'error no crític
             pass
 
     if psutil:
@@ -231,10 +278,12 @@ async def get_system_kpis(db: AsyncSession = Depends(get_db_with_tenant_context)
         cpu_count = psutil.cpu_count() or 2
     else:
         cpu_percent = 5.0
+
         class _FallbackResource:
             def __init__(self, total: int, used: int):
                 self.total = total
                 self.used = used
+
         ram = _FallbackResource(8 * (1024**3), int(1.5 * (1024**3)))
         disk = _FallbackResource(100 * (1024**3), int(20 * (1024**3)))
         cpu_count = 2
@@ -328,7 +377,7 @@ async def get_system_kpis(db: AsyncSession = Depends(get_db_with_tenant_context)
             "ram_utilization_mb": round(ram.used / (1024**2), 1),
             "ram_total_mb": round(ram.total / (1024**2), 1),
             "alerta_cpu_saturacio": cpu_percent > 85,
-            "privacy_guarantee": "Zero text retention - Transcripcions i àudios estrictament exclosos de telemetria (Spec 022 RF-11)",
+            "privacy_guarantee": "Telemetria d'operaris 100% anònima (PWA-REF). Zero retenció de dades personals o transcripcions (RGPD).",
         },
         "tenants": tenants_list,
     }
@@ -340,28 +389,45 @@ async def toggle_tenant_feature(
     req: ToggleFeatureRequest,
     db: AsyncSession = Depends(get_db_with_tenant_context),
 ) -> Dict[str, Any]:
-    """Commuta un feature flag d'un tenant en temps real (Spec 022 RF-15)."""
-    if req.feature_key not in ["copilot_ia", "flota_avancada", "planols_tecnics", "telegram_bot"]:
+    """Commuta un feature flag d'un tenant en temps real i el persisteix a PostgreSQL (Spec 022 RF-15)."""
+    valid_map = {
+        "copilot_ia": "feature_copilot_ia",
+        "flota_avancada": "feature_flota",
+        "planols_tecnics": "feature_planols",
+        "telegram_bot": "feature_telegram",
+    }
+    if req.feature_key not in valid_map:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Clau de feature invàlida: {req.feature_key}. Vàlides: copilot_ia, flota_avancada, planols_tecnics, telegram_bot",
         )
 
-    if tenant_id not in _tenant_features_store:
-        _tenant_features_store[tenant_id] = {
-            "copilot_ia": False,
-            "flota_avancada": True,
-            "planols_tecnics": False,
-            "telegram_bot": True,
-        }
+    try:
+        tenant_uuid = UUID(tenant_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="UUID de tenant invàlid.")
 
-    _tenant_features_store[tenant_id][req.feature_key] = req.enabled
+    emp_res = await db.execute(select(Empresa).where(Empresa.id == tenant_uuid))
+    emp = emp_res.scalar_one_or_none()
+    if not emp:
+        raise HTTPException(status_code=404, detail="Tenant no trobat.")
+
+    setattr(emp, valid_map[req.feature_key], req.enabled)
+    emp.updated_at = datetime.now(timezone.utc)
+    await db.commit()
+
+    features = {
+        "copilot_ia": bool(emp.feature_copilot_ia),
+        "flota_avancada": bool(emp.feature_flota),
+        "planols_tecnics": bool(emp.feature_planols),
+        "telegram_bot": bool(emp.feature_telegram),
+    }
 
     return {
         "tenant_id": tenant_id,
         "feature_key": req.feature_key,
         "enabled": req.enabled,
-        "features": _tenant_features_store[tenant_id],
+        "features": features,
         "message": f"Feature '{req.feature_key}' commutada a {req.enabled} satisfactòriament.",
     }
 
@@ -372,9 +438,9 @@ async def update_tenant_quota(
     req: QuotaUpdateRequest,
     db: AsyncSession = Depends(get_db_with_tenant_context),
 ) -> Dict[str, Any]:
-    """Actualitza el pla de llicència i quota d'operaris d'un tenant (Spec 022 RF-13)."""
-    valid_plans = ["BASIC", "PREMIUM", "ENTERPRISE"]
-    pla_norm = req.pla_subscripcio.upper()
+    """Actualitza el pla de llicència i la quota dinàmica d'operaris d'un tenant (Spec 022 RF-13)."""
+    valid_plans = ["BASIC", "STARTER", "PREMIUM", "PRO", "ENTERPRISE", "CUSTOM"]
+    pla_norm = (req.pla_subscripcio or "BASIC").upper()
     if pla_norm not in valid_plans:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -393,23 +459,44 @@ async def update_tenant_quota(
     if not emp:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant no trobat")
 
-    # Si es vol fer downgrade, verificar que els operaris actius no superin el nou límit
     q_count = select(func.count(Usuari.id)).where(
         Usuari.empresa_id == tenant_uuid, Usuari.estat == "ACTIU"
     )
     res_count = await db.execute(q_count)
     actius = res_count.scalar() or 0
 
-    nova_quota = 50 if pla_norm == "ENTERPRISE" else (15 if pla_norm == "PREMIUM" else 5)
+    if req.quota_operaris is not None:
+        nova_quota = int(req.quota_operaris)
+    elif pla_norm == "ENTERPRISE":
+        nova_quota = 50
+    elif pla_norm in ("PREMIUM", "PRO"):
+        nova_quota = 15
+    else:
+        nova_quota = 5
+
     if actius > nova_quota:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Downgrade blocat: El tenant té {actius} operaris actius i el pla {pla_norm} només en permet {nova_quota}.",
         )
 
+    quota_ant = int(getattr(emp, "quota_operaris", None) or 5)
     emp.pla_subscripcio = pla_norm
+    emp.quota_operaris = nova_quota
     if req.estat_pagament:
         emp.estat_pagament = req.estat_pagament
+    emp.updated_at = datetime.now(timezone.utc)
+
+    db.add(
+        SaasHistorialLlicencia(
+            empresa_id=tenant_uuid,
+            quota_operaris_anterior=quota_ant,
+            quota_operaris_nova=nova_quota,
+            estat_anterior=emp.estat_pagament,
+            estat_nou=emp.estat_pagament,
+            motiu=f"Canvi de quota via Telemetria ({pla_norm}: {nova_quota} operaris)",
+        )
+    )
 
     await db.commit()
 
@@ -418,7 +505,7 @@ async def update_tenant_quota(
         "pla_subscripcio": pla_norm,
         "quota_operaris": nova_quota,
         "estat_pagament": emp.estat_pagament,
-        "message": f"Pla actualitzat a {pla_norm} satisfactòriament.",
+        "message": f"Pla actualitzat a {pla_norm} ({nova_quota} operaris) satisfactòriament.",
     }
 
 
@@ -428,7 +515,6 @@ async def record_error_trace(
     db: AsyncSession = Depends(get_db_with_tenant_context),
 ) -> Dict[str, Any]:
     """Registra una traça d'error tècnica a l'esquema segregat superadmin_telemetry (Spec 022 RF-03)."""
-    # Garantir que no hi hagi payloads privats
     query = text("""
         INSERT INTO superadmin_telemetry.traces_error (endpoint, metode, status_code, stack_trace, detall)
         VALUES (:endpoint, :metode, :status_code, :stack_trace, :detall)

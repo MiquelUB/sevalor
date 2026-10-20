@@ -37,10 +37,17 @@ export default function OperariPlanolsPage() {
     x: number;
     y: number;
   } | null>(null);
+  const [errorConnexio, setErrorConnexio] = useState<{
+    code?: string;
+    message: string;
+  } | null>(null);
+  const [refArxiuExtern, setRefArxiuExtern] = useState<string>("");
+  const [consultantArxiu, setConsultantArxiu] = useState<boolean>(false);
 
-  // Carregar capes reals des del backend
+  // Carregar capes reals des del backend (buffer diari de feines d'avui)
   const carregarPlanol = async () => {
     setLoading(true);
+    setErrorConnexio(null);
     try {
       const data = await apiFetch("/operari/planols");
       const capesData = Array.isArray(data) ? data : [];
@@ -53,10 +60,43 @@ export default function OperariPlanolsPage() {
       if (capesNormalitzades.length > 0 && !capaActivaId) {
         setCapaActivaId(capesNormalitzades[0].id);
       }
-    } catch {
+    } catch (err: any) {
       setCapes([]);
+      if (
+        err?.code === "SENSE_COBERTURA_MOBIL" ||
+        err?.code === "NODE_EMPRESA_OFFLINE" ||
+        err?.code === "DB_UNAVAILABLE"
+      ) {
+        setErrorConnexio({
+          code: err.code,
+          message: err.message,
+        });
+      }
     } finally {
       setLoading(false);
+    }
+  };
+
+  // Consultar documentació extra (ex. plànol de caldera no inclòs a l'OT d'avui) al disc de l'empresa
+  const handleConsultarArxiuExtern = async () => {
+    if (!refArxiuExtern.trim()) return;
+    setConsultantArxiu(true);
+    setErrorConnexio(null);
+    try {
+      await apiFetch(
+        `/operari/planols/arxiu-extern?referencia=${encodeURIComponent(
+          refArxiuExtern.trim()
+        )}`
+      );
+    } catch (err: any) {
+      setErrorConnexio({
+        code: err?.code || "NODE_EMPRESA_OFFLINE",
+        message:
+          err?.message ||
+          "🖥️ Ordinador central de l'empresa apagat: Aquest plànol extra viu al disc dur de l'oficina i ara mateix està apagat o sense internet.",
+      });
+    } finally {
+      setConsultantArxiu(false);
     }
   };
 
@@ -184,6 +224,47 @@ export default function OperariPlanolsPage() {
           <RefreshCw className={`w-4 h-4 ${loading ? "animate-spin" : ""}`} />
         </button>
       </header>
+
+      {/* AVÍS CLAR DIFERENCIAT: COBERTURA MÒBIL vs. ORDINADOR D'EMPRESA APAGAT vs. BD */}
+      {errorConnexio && (
+        <div
+          className={`mx-4 mt-3 p-3.5 rounded-xl border text-xs font-medium space-y-1 shadow-sm ${
+            errorConnexio.code === "SENSE_COBERTURA_MOBIL"
+              ? "bg-amber-50 dark:bg-amber-950/70 border-amber-300 dark:border-amber-800 text-amber-900 dark:text-amber-200"
+              : errorConnexio.code === "NODE_EMPRESA_OFFLINE"
+              ? "bg-rose-50 dark:bg-rose-950/70 border-rose-300 dark:border-rose-800 text-rose-900 dark:text-rose-200"
+              : "bg-blue-50 dark:bg-blue-950/70 border-blue-300 dark:border-blue-800 text-blue-900 dark:text-blue-200"
+          }`}
+        >
+          <div className="font-extrabold uppercase tracking-wider text-[11px]">
+            {errorConnexio.code === "SENSE_COBERTURA_MOBIL"
+              ? "📶 Sense Cobertura Mòbil al Telèfon"
+              : errorConnexio.code === "NODE_EMPRESA_OFFLINE"
+              ? "🖥️ Ordinador Central de l'Empresa Apagat"
+              : "⚠️ Base de Dades Temporalment No Disponible"}
+          </div>
+          <p className="leading-relaxed">{errorConnexio.message}</p>
+        </div>
+      )}
+
+      {/* CERCA DE DOCUMENTACIÓ EXTRA AL DISC DE L'EMPRESA (ARXIU MESTRE) */}
+      <div className="mx-4 mt-3 p-3 rounded-xl bg-surface-container-low dark:bg-slate-900 border border-outline-variant/30 dark:border-slate-800 flex flex-col sm:flex-row items-stretch sm:items-center gap-2 text-xs">
+        <input
+          type="text"
+          value={refArxiuExtern}
+          onChange={(e) => setRefArxiuExtern(e.target.value)}
+          placeholder="Plànol extra fora de l'OT d'avui (ex: caldera-model-x)..."
+          className="flex-1 px-3 py-2 rounded-lg bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-xs"
+        />
+        <button
+          type="button"
+          onClick={handleConsultarArxiuExtern}
+          disabled={consultantArxiu || !refArxiuExtern.trim()}
+          className="px-3.5 py-2 rounded-lg bg-primary text-white font-bold text-xs disabled:opacity-50 shrink-0"
+        >
+          {consultantArxiu ? "Connectant a l'oficina..." : "Consultar Disc Empresa"}
+        </button>
+      </div>
 
       {/* ESTAT BUIT REAL ZERO-MOCK (Spec 017 Context & RF-03) */}
       {!loading && capes.length === 0 ? (

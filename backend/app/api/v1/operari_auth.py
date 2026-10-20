@@ -116,11 +116,28 @@ async def login_operari(
             detail="El compte ha estat bloquejat per massa intents fallits. Contacteu amb el supervisor.",
         )
 
-    # 3. Comprovar estat actiu
+    # 3. Comprovar estat actiu de l'usuari i estat d'hibernació/suspensió de l'empresa
     if usuari.estat != "ACTIU":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Usuari inactiu. Contacta amb l'administrador.",
+        )
+
+    emp_check_res = await db.execute(select(Empresa).where(Empresa.id == empresa_uuid))
+    emp_check = emp_check_res.scalars().first()
+    if emp_check and emp_check.estat_pagament in {
+        "HIBERNANT",
+        "SUSPES_PAGAMENT",
+        "SUSPES",
+        "BAIXA_OFFBOARDING",
+        "ELIMINAT",
+    }:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                f"Servei temporalment pausat ({emp_check.estat_pagament}). "
+                "Contacta amb l'oficina de la teva empresa."
+            ),
         )
 
     # 4. Verificar PIN (amb bcrypt)

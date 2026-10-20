@@ -49,6 +49,7 @@ from app.api.v1.operari_pwa.tiquets import router as tiquets_router
 from app.api.v1.operari_pwa.vehicles import llistar_estoc_furgonetes
 from app.api.v1.operari_pwa.vehicles import router as vehicles_pwa_router
 from app.api.v1.public_docs import router as public_docs_router
+from app.api.v1.superadmin.crm_facturacio import router as crm_facturacio_router
 from app.api.v1.superadmin.empreses import router as empreses_router
 from app.api.v1.superadmin.tenants import router as tenants_router
 from app.api.v1.telemetria import router as telemetria_router
@@ -118,6 +119,7 @@ app.include_router(health_router, prefix=settings.API_V1_STR)
 
 app.include_router(tenants_router, prefix=settings.API_V1_STR)
 app.include_router(empreses_router, prefix=settings.API_V1_STR)
+app.include_router(crm_facturacio_router, prefix=settings.API_V1_STR)
 app.include_router(operaris_router, prefix=settings.API_V1_STR)
 app.include_router(clients_router, prefix=settings.API_V1_STR)
 app.include_router(proveidors_router, prefix=settings.API_V1_STR)

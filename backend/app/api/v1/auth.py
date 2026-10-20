@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.core.db import get_db
 from app.core.security import get_current_user_claims
-from app.models.models import Usuari
+from app.models.models import Empresa, Usuari
 
 logger = logging.getLogger(__name__)
 
@@ -88,6 +88,32 @@ async def login_oficina(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Els operaris han d'accedir per la PWA amb PIN",
             )
+
+        if usuari.rol.upper() != "SUPERADMIN" and usuari.empresa_id:
+            await db.execute(text("RESET ROLE;"))
+            try:
+                emp_res = await db.execute(
+                    select(Empresa).where(Empresa.id == usuari.empresa_id)
+                )
+                emp = emp_res.scalars().first()
+            finally:
+                if current_role:
+                    await db.execute(text(f'SET ROLE "{current_role}";'))
+
+            if emp and emp.estat_pagament in {
+                "HIBERNANT",
+                "SUSPES_PAGAMENT",
+                "SUSPES",
+                "BAIXA_OFFBOARDING",
+                "ELIMINAT",
+            }:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail=(
+                        f"El compte de l'empresa es troba en estat '{emp.estat_pagament}'. "
+                        "Contacteu amb l'administració de Sevalor per regularitzar el servei."
+                    ),
+                )
 
         # Generar JWT
         expire = datetime.now(timezone.utc) + timedelta(

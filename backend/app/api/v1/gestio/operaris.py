@@ -7,13 +7,13 @@ from typing import List, Optional
 import bcrypt
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.operari_pwa.jornada import JornadaInici
 from app.core.db import get_db_with_tenant_context
 from app.core.security import require_roles, veto_enginyer_finances
-from app.models.models import OrdreTreball, RegistreJornadaLaboral, Usuari
+from app.models.models import Empresa, OrdreTreball, RegistreJornadaLaboral, Usuari
 from app.services.ocr_service import processar_dni_ocr
 
 router = APIRouter(
@@ -133,9 +133,30 @@ async def alta_operari(
     claims: dict = Depends(require_roles(["BOSS", "SECRETARIA"])),
 ):
     empresa_id = await verificar_permisos_boss(request)
+    emp_uuid = uuid.UUID(empresa_id)
+
+    emp_res = await db.execute(select(Empresa).where(Empresa.id == emp_uuid))
+    emp = emp_res.scalars().first()
+    if emp and getattr(emp, "quota_operaris", None) is not None:
+        count_res = await db.execute(
+            select(func.count(Usuari.id)).where(
+                Usuari.empresa_id == emp_uuid,
+                Usuari.rol == "OPERARI",
+                Usuari.estat == "ACTIU",
+            )
+        )
+        operaris_actius = count_res.scalar() or 0
+        if operaris_actius >= int(emp.quota_operaris):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=(
+                    f"S'ha assolit el límit d'operaris de la vostra llicència ({operaris_actius}/{emp.quota_operaris}). "
+                    "Contacteu amb l'administració SaaS per ampliar la quota."
+                ),
+            )
 
     stmt = select(Usuari).where(
-        Usuari.empresa_id == uuid.UUID(empresa_id), Usuari.nif == operari.nif
+        Usuari.empresa_id == emp_uuid, Usuari.nif == operari.nif
     )
     result = await db.execute(stmt)
     if result.scalars().first():

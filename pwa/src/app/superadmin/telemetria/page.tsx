@@ -3,13 +3,10 @@
 import React, { useState, useEffect } from "react";
 import Link from "next/link";
 import {
-  Server,
   Activity,
   Cpu,
   Database,
-  HardDrive,
   Radio,
-  Clock,
   ShieldAlert,
   ShieldCheck,
   CheckCircle2,
@@ -17,20 +14,21 @@ import {
   RefreshCw,
   Terminal,
   Zap,
-  Globe,
   Users,
-  Settings,
-  Flame,
-  Check,
-  X,
-  Layers,
-  Sparkles,
   ArrowRight,
   PlusCircle,
-  FileCode,
   AlertCircle,
+  Wifi,
+  WifiOff,
+  Smartphone,
+  LifeBuoy,
 } from "lucide-react";
 import { apiFetch } from "@/lib/api";
+
+interface PwaSessioAnonima {
+  pwa_ref: string;
+  estat: string;
+}
 
 interface TenantLlicencia {
   id: string;
@@ -38,16 +36,23 @@ interface TenantLlicencia {
   nom: string;
   vertical: "SEVALOR" | "ELECTRICPRO" | "HYDROPRO" | "BUILDINGPRO";
   operaris_actius: number;
+  operaris_connectats: number;
+  pwa_sessions_anonimes: PwaSessioAnonima[];
   quota_operaris: number;
+  buffer_utilitzat_mb: number;
+  quota_buffer_mb: number;
   disc_utilitzat_mb: number;
   disc_quota_mb: number;
+  estat_pc_empresa: "ONLINE" | "OFFLINE" | "NO_CONFIGURAT";
+  tiquets_oberts: number;
   features: {
     copilot_ia: boolean;
     flota_avancada: boolean;
     planols_tecnics: boolean;
     telegram_bot: boolean;
   };
-  estat: "AL_DIA" | "DEUTOR" | "SUSPES";
+  estat: string;
+  estat_pagament: string;
 }
 
 interface ErrorTrace {
@@ -64,7 +69,6 @@ export default function SuperadminTelemetriaPage() {
   const [carregant, setCarregant] = useState<boolean>(false);
   const [darreraActualitzacio, setDarreraActualitzacio] = useState<string>("Ara mateix");
 
-  // Telemetria del sistema (Spec 022 RF-01)
   const [errorCarrega, setErrorCarrega] = useState<string | null>(null);
   const [uptimePercent, setUptimePercent] = useState<number | null>(null);
   const [uptimeSegons, setUptimeSegons] = useState<number | null>(null);
@@ -72,37 +76,28 @@ export default function SuperadminTelemetriaPage() {
   const [p95Latency, setP95Latency] = useState<number | null>(null);
   const [p99Latency, setP99Latency] = useState<number | null>(null);
 
-  // Microserveis (carregats del backend — Spec 022 RF-04)
   const [microserveis, setMicroserveis] = useState<any[]>([]);
 
-  // Concurrència i Pool asyncpg (Spec 022 RF-06 & RF-07)
-  const [sessionsActives, setSessionsActives] = useState<number>(0);
-  const [operarisCamp, setOperarisCamp] = useState<number>(0);
-  const [oficinaTecnica, setOficinaTecnica] = useState<number>(0);
   const [poolOcupacioPercent, setPoolOcupacioPercent] = useState<number | null>(null);
   const [poolConnexionsActives, setPoolConnexionsActives] = useState<number | null>(null);
   const [poolConnexionsMax, setPoolConnexionsMax] = useState<number | null>(null);
 
-  // Cues Celery / Redis (Spec 022 RF-08 & RF-09)
   const [tasquesPerMinut, setTasquesPerMinut] = useState<number | null>(null);
   const [queueWaitMs, setQueueWaitMs] = useState<number | null>(null);
   const [tasquesPendents, setTasquesPendents] = useState<number | null>(null);
 
-  // Recursos del node i IA local (Spec 022 RF-10 & RF-11)
   const [whisperAvgInferenceSec, setWhisperAvgInferenceSec] = useState<number | null>(null);
   const [cpuUsagePercent, setCpuUsagePercent] = useState<number | null>(null);
   const [ramUsageMb, setRamUsageMb] = useState<number | null>(null);
   const [ramTotalMb, setRamTotalMb] = useState<number | null>(null);
   const [nodeDescripcio, setNodeDescripcio] = useState<string | null>(null);
 
-  // Llicències de Tenants (Spec 022 RF-12 & RF-15)
   const [tenants, setTenants] = useState<TenantLlicencia[]>([]);
+  const [filtreEmpresaId, setFiltreEmpresaId] = useState<string>("TOTES");
 
-  // Traces d'Error Tècniques Segregades (Spec 022 RF-03)
   const [tracesError, setTracesError] = useState<ErrorTrace[]>([]);
   const [mostrantTraces, setMostrantTraces] = useState<boolean>(false);
 
-  // Carregar dades del backend
   const fetchTelemetria = async () => {
     setCarregant(true);
     setErrorCarrega(null);
@@ -115,9 +110,6 @@ export default function SuperadminTelemetriaPage() {
       setP99Latency(data.latencies_ms?.p99 ?? null);
       setNodeDescripcio(data.node ?? null);
       if (data.concurrency) {
-        setSessionsActives(data.concurrency.usuaris_actius ?? 0);
-        setOperarisCamp(data.concurrency.operaris_camp ?? 0);
-        setOficinaTecnica(data.concurrency.oficina_tecnica ?? 0);
         setPoolOcupacioPercent(data.concurrency.db_pool_occupancy_percent ?? null);
         setPoolConnexionsActives(data.concurrency.db_pool_active ?? null);
         setPoolConnexionsMax(data.concurrency.db_pool_max ?? null);
@@ -177,9 +169,7 @@ export default function SuperadminTelemetriaPage() {
     fetchTelemetria();
   }, []);
 
-  // Commutar Feature Flag d'un tenant en viu (Spec 022 RF-15)
   const handleToggleFeature = async (tenantId: string, featureKey: keyof TenantLlicencia["features"]) => {
-    // Actualització optimista
     const currentVal = tenants.find((t) => t.id === tenantId)?.features[featureKey] ?? false;
     const newVal = !currentVal;
 
@@ -198,16 +188,18 @@ export default function SuperadminTelemetriaPage() {
       })
     );
 
-    // Persistir al backend
     try {
       await apiFetch(`/superadmin/telemetria/tenants/${tenantId}/features`, {
         method: "PATCH",
         body: JSON.stringify({ feature_key: featureKey, enabled: newVal }),
       });
     } catch {
-      // Fallback
+      // Revertir si cal
     }
   };
+
+  const tenantsMostrats =
+    filtreEmpresaId === "TOTES" ? tenants : tenants.filter((t) => t.id === filtreEmpresaId);
 
   return (
     <div className="flex-1 p-6 space-y-6 overflow-y-auto bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 font-sans transition-colors">
@@ -217,18 +209,31 @@ export default function SuperadminTelemetriaPage() {
           <div className="flex items-center gap-2">
             <h1 className="text-xl font-bold tracking-tight text-slate-900 dark:text-white flex items-center gap-2">
               <Activity className="w-5 h-5 text-emerald-500" />
-              Tauler de Salut & Telemetria SRE (Spec 022)
+              Telemetria per Empresa (Anònima RGPD) & Salut del Servidor
             </h1>
             <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800 font-bold">
-              SUPERADMIN_TELEMETRY SCHEME
+              TELEMETRIA ANÒNIMA D'OPERARIS (PWA-REF)
             </span>
           </div>
           <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-            Uptime, latències p95, microserveis, quotes de llicències i recursos del node (mesures reals)
+            Control d'operaris connectats per empresa mitjançant referències anònimes de PWA (sense dades personals), estat de l'ordinador local de cada client i salut del node Hetzner.
           </p>
         </div>
 
         <div className="flex items-center gap-3">
+          <select
+            value={filtreEmpresaId}
+            onChange={(e) => setFiltreEmpresaId(e.target.value)}
+            className="px-3 py-1.5 rounded-lg bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-xs font-mono font-bold"
+          >
+            <option value="TOTES">Totes les Empreses ({tenants.length})</option>
+            {tenants.map((t) => (
+              <option key={t.id} value={t.id}>
+                {t.nom} ({t.subdomini})
+              </option>
+            ))}
+          </select>
+
           <span className="text-xs font-mono text-slate-500">
             Actualitzat: {darreraActualitzacio}
           </span>
@@ -252,240 +257,40 @@ export default function SuperadminTelemetriaPage() {
         </div>
       )}
 
-      {/* BANNERS D'ALERTES DEGRADACIÓ / SATURACIÓ (Spec 022 RF-02, RF-07, RF-09, RF-10) */}
-      {p95Latency !== null && p95Latency > 500 && (
-        <div className="p-3.5 rounded-xl bg-amber-50 dark:bg-amber-950/70 border border-amber-300 dark:border-amber-800 flex items-center gap-3 text-amber-900 dark:text-amber-200 text-xs font-mono shadow-sm">
-          <AlertTriangle className="w-5 h-5 text-amber-500 shrink-0 animate-pulse" />
-          <div>
-            <strong>Alerta SRE (RF-02): Rendiment degradat de l'API.</strong> La latència p95 ({p95Latency}ms) supera el llindar crític de 500ms. S'estan monitoritzant els endpoints amb càrrega.
-          </div>
-        </div>
-      )}
-
-      {poolOcupacioPercent !== null && poolOcupacioPercent > 85 && (
-        <div className="p-3.5 rounded-xl bg-rose-50 dark:bg-rose-950/70 border border-rose-300 dark:border-rose-800 flex items-center gap-3 text-rose-900 dark:text-rose-200 text-xs font-mono shadow-sm">
-          <ShieldAlert className="w-5 h-5 text-rose-500 shrink-0 animate-pulse" />
-          <div>
-            <strong>Alerta de Saturació Imminent (RF-07):</strong> El pool de connexions PostgreSQL asyncpg ha assolit el {poolOcupacioPercent}%. Risc d'esgotament de connexions d'alta densitat.
-          </div>
-        </div>
-      )}
-
-      {tasquesPendents !== null && tasquesPendents > 50 && (
-        <div className="p-3.5 rounded-xl bg-orange-50 dark:bg-orange-950/70 border border-orange-300 dark:border-orange-800 flex items-center gap-3 text-orange-900 dark:text-orange-200 text-xs font-mono shadow-sm">
-          <AlertCircle className="w-5 h-5 text-orange-500 shrink-0" />
-          <div>
-            <strong>Alerta d'Escalat de Cues Celery (RF-09):</strong> Hi ha {tasquesPendents} tasques pendents acumulades. Cal considerar l'escalat de workers concurrents.
-          </div>
-        </div>
-      )}
-
-      {/* BLOC 1: DISPONIBILITAT, LATÈNCIES I POOL (Spec 022 RF-01 & RF-06) */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        {/* Disponibilitat del procés */}
-        <div className="p-4 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 space-y-1 shadow-sm transition-colors">
-          <div className="flex items-center justify-between text-slate-500 dark:text-slate-400 text-xs font-mono">
-            <span>Uptime del Backend</span>
-            <CheckCircle2 className="w-4 h-4 text-emerald-500" />
-          </div>
-          <h3 className="text-2xl font-black font-mono text-emerald-600 dark:text-emerald-400">
-            {uptimeSegons === null
-              ? "—"
-              : uptimeSegons >= 86400
-              ? `${Math.floor(uptimeSegons / 86400)}d ${Math.floor((uptimeSegons % 86400) / 3600)}h`
-              : `${Math.floor(uptimeSegons / 3600)}h ${Math.floor((uptimeSegons % 3600) / 60)}m`}
-          </h3>
-          <p className="text-[10px] text-slate-500 font-mono">
-            Disponibilitat % històrica: {uptimePercent === null ? "no mesurada (cal monitor extern)" : `${uptimePercent}%`}
-          </p>
-        </div>
-
-        {/* Latència p95 */}
-        <div className="p-4 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 space-y-1 shadow-sm transition-colors">
-          <div className="flex items-center justify-between text-slate-500 dark:text-slate-400 text-xs font-mono">
-            <span>Latència API (p95)</span>
-            {p95Latency !== null && p95Latency > 500 ? (
-              <AlertTriangle className="w-4 h-4 text-amber-500 animate-pulse" />
-            ) : (
-              <Zap className="w-4 h-4 text-emerald-500" />
-            )}
-          </div>
-          <h3 className={`text-2xl font-black font-mono ${p95Latency !== null && p95Latency > 500 ? "text-amber-500" : "text-slate-900 dark:text-white"}`}>
-            {fmt(p95Latency, " ms")}
-          </h3>
-          <p className="text-[10px] text-slate-500 font-mono">
-            p50: {fmt(p50Latency, "ms")} • p99: {fmt(p99Latency, "ms")}
-            {p95Latency === null ? " • sense peticions mesurades encara" : ""}
-          </p>
-        </div>
-
-        {/* Estat Pool PostgreSQL asyncpg */}
-        <div className="p-4 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 space-y-1 shadow-sm transition-colors">
-          <div className="flex items-center justify-between text-slate-500 dark:text-slate-400 text-xs font-mono">
-            <span>Pool PostgreSQL asyncpg</span>
-            <Database className="w-4 h-4 text-blue-500" />
-          </div>
-          <h3 className="text-2xl font-black font-mono text-blue-600 dark:text-blue-400">
-            {fmt(poolConnexionsActives)} / {fmt(poolConnexionsMax)}
-          </h3>
-          <p className="text-[10px] text-slate-500 font-mono">
-            Ocupació: {fmt(poolOcupacioPercent, "%")} (Límit alerta: 85%)
-          </p>
-        </div>
-
-        {/* Cues Celery */}
-        <div className="p-4 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 space-y-1 shadow-sm transition-colors">
-          <div className="flex items-center justify-between text-slate-500 dark:text-slate-400 text-xs font-mono">
-            <span>Cues Celery / Redis</span>
-            <Activity className="w-4 h-4 text-purple-500" />
-          </div>
-          <h3 className="text-2xl font-black font-mono text-purple-600 dark:text-purple-400">
-            {fmt(tasquesPendents)} <span className="text-xs font-normal text-slate-500">tasques pendents</span>
-          </h3>
-          <p className="text-[10px] text-slate-500 font-mono">
-            Throughput: {fmt(tasquesPerMinut, "/min")} • Queue Wait: {fmt(queueWaitMs, "ms")}
-          </p>
-        </div>
-      </div>
-
-      {/* BLOC 2: HEALTH CHECK DELS 7 MICROSERVEIS (Spec 022 RF-04 & RF-05) */}
-      <div className="p-5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 space-y-4 shadow-sm transition-colors">
-        <div className="flex items-center justify-between">
-          <h3 className="text-sm font-bold font-mono uppercase tracking-wider text-slate-700 dark:text-slate-300 flex items-center gap-2">
-            <Radio className="w-4 h-4 text-emerald-500 animate-pulse" />
-            <span>Matriu d'Estat de Microserveis (7 Components)</span>
-          </h3>
-          <span className="text-[11px] font-mono text-emerald-700 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/60 px-2 py-0.5 rounded border border-emerald-200 dark:border-emerald-800 font-bold">
-                        {microserveis.filter((s: any) => s.estat === "HEALTHY").length}/{microserveis.length} HEALTHY
-                      </span>
-        </div>
-
-        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3">
-          {microserveis.map((servei) => (
-            <div
-              key={servei.id}
-              className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700/80 space-y-2 flex flex-col justify-between transition-colors"
-            >
-              <div>
-                <div className="flex items-center justify-between">
-                  <span
-                    className={`w-2 h-2 rounded-full shadow-sm ${
-                      servei.estat === "HEALTHY"
-                        ? "bg-emerald-500 shadow-emerald-500/50"
-                        : servei.estat === "DOWN"
-                        ? "bg-rose-500 shadow-rose-500/50"
-                        : "bg-slate-400"
-                    }`}
-                  ></span>
-                  <span className="text-[10px] font-mono text-slate-400">{servei.ping}</span>
-                </div>
-                <h4 className="text-xs font-bold font-mono text-slate-900 dark:text-white mt-1">{servei.nom}</h4>
-                <p className="text-[10px] text-slate-500 dark:text-slate-400 leading-tight mt-0.5">{servei.tipus}</p>
-              </div>
-              <div className="pt-2 border-t border-slate-200 dark:border-slate-700/60 flex items-center justify-between text-[10px] font-mono text-slate-500">
-                <span>{servei.versio}</span>
-                <span
-                  className={`font-bold ${
-                    servei.estat === "HEALTHY"
-                      ? "text-emerald-600 dark:text-emerald-400"
-                      : servei.estat === "DOWN"
-                      ? "text-rose-600 dark:text-rose-400"
-                      : "text-slate-500"
-                  }`}
-                >
-                  {servei.estat === "HEALTHY" ? "UP" : servei.estat === "DOWN" ? "DOWN" : "SENSE SONDA"}
-                </span>
-              </div>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {/* BLOC 3: TELEMETRIA IA LOCAL CPU-ONLY CPX21 (Spec 022 RF-10 & RF-11) */}
-      <div className="p-5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 space-y-4 shadow-sm transition-colors">
-        <div className="flex items-center justify-between">
-          <h3 className="text-sm font-bold font-mono uppercase tracking-wider text-slate-700 dark:text-slate-300 flex items-center gap-2">
-            <Cpu className="w-4 h-4 text-amber-500" />
-            <span>Recursos del Node i IA Local (CPU-Only)</span>
-          </h3>
-          <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-300">
-            {nodeDescripcio ?? "Node no identificat"}
-          </span>
-        </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 space-y-1">
-            <span className="text-[11px] font-mono text-slate-500 dark:text-slate-400">Temps d'Inferència Whisper:</span>
-            <h4 className="text-xl font-bold font-mono text-emerald-600 dark:text-emerald-400">
-              {fmt(whisperAvgInferenceSec, " segons")}
-            </h4>
-            <p className="text-[10px] text-slate-500">
-              {whisperAvgInferenceSec === null ? "Sense mesures d'inferència registrades" : "Mitjana real d'inferència"}
-            </p>
-          </div>
-
-          <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 space-y-1">
-            <span className="text-[11px] font-mono text-slate-500 dark:text-slate-400">Càrrega CPU del Node:</span>
-            <h4 className="text-xl font-bold font-mono text-slate-900 dark:text-white">
-              {fmt(cpuUsagePercent, "%")} <span className="text-xs font-normal text-slate-500">utilitzada</span>
-            </h4>
-            <p className="text-[10px] text-slate-500">Alerta de saturació sostinguda si &gt; 90%</p>
-          </div>
-
-          <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 space-y-1">
-            <span className="text-[11px] font-mono text-slate-500 dark:text-slate-400">Memòria RAM del Node:</span>
-            <h4 className="text-xl font-bold font-mono text-slate-900 dark:text-white">
-              {ramUsageMb === null ? "—" : (ramUsageMb / 1024).toFixed(2)} GB / {ramTotalMb === null ? "—" : (ramTotalMb / 1024).toFixed(2)} GB
-            </h4>
-            <p className="text-[10px] text-slate-500">Lectura directa del sistema operatiu del servidor</p>
-          </div>
-        </div>
-
-        {/* Garantia de Privacitat Absoluta (Spec 022 RF-11) */}
-        <div className="p-3.5 rounded-xl bg-slate-100 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-700/60 flex items-center gap-2.5 text-xs font-mono text-slate-600 dark:text-slate-400">
-          <ShieldCheck className="w-4 h-4 text-emerald-500 shrink-0" />
-          <span>
-            <strong>Garantia de Privacitat Absoluta (RF-11):</strong> El panell de Superadmin té expressament vetat l'emmagatzematge o lectura de cap transcripció d'àudio de camp o petició de negoci.
-          </span>
-        </div>
-      </div>
-
-      {/* BLOC 4: GESTIÓ DE LLICÈNCIES, QUOTES I FEATURE FLAGS (Spec 022 RF-12 a RF-15) */}
-      <div className="p-5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 space-y-4 shadow-sm transition-colors">
+      {/* BLOC PRINCIPAL: TELEMETRIA INDIVIDUAL PER EMPRESA DONADA D'ALTA (ANÒNIMA RGPD) */}
+      <div className="p-5 rounded-2xl bg-white dark:bg-slate-900 border-2 border-emerald-500/30 dark:border-emerald-800/50 space-y-4 shadow-sm transition-colors">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div>
-            <h3 className="text-sm font-bold font-mono uppercase tracking-wider text-slate-700 dark:text-slate-300 flex items-center gap-2">
-              <Users className="w-4 h-4 text-emerald-500" />
-              <span>Taula de Llicències de Tenants & Feature Flags (Estil Twenty CRM)</span>
+            <h3 className="text-sm font-bold font-mono uppercase tracking-wider text-slate-800 dark:text-slate-200 flex items-center gap-2">
+              <Smartphone className="w-4 h-4 text-emerald-500" />
+              <span>1. Telemetria Individual per Empresa: Operaris Connectats (Anònims) & Estat PC Client</span>
             </h3>
             <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-              Control de quotes d'operaris i commutació de mòduls per tenant sense alterar dades de negoci
+              Per complir estrictament amb la Llei de Protecció de Dades (RGPD), només es mostra el recompte d'operaris i el número de referència tècnica de la PWA (<code>PWA-REF-xxxx</code>), mai noms ni NIFs d'operaris.
             </p>
           </div>
           <div className="flex items-center gap-2">
-            <span className="text-xs font-mono text-slate-500">{tenants.length} tenants registrats</span>
             <Link
               href="/superadmin/tenants/onboarding"
               className="px-2.5 py-1 rounded bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-mono font-bold flex items-center gap-1 transition-colors"
             >
               <PlusCircle className="w-3.5 h-3.5" />
-              <span>Nou Tenant</span>
+              <span>Alta Empresa</span>
             </Link>
           </div>
         </div>
 
-        {/* GESTIÓ ZERO MOCK DATA: TAULA O ESTAT BUIT CANÒNIC */}
-        {tenants.length === 0 ? (
+        {tenantsMostrats.length === 0 ? (
           <div className="p-10 rounded-xl border border-dashed border-slate-300 dark:border-slate-800 text-center space-y-3 bg-slate-50 dark:bg-slate-950/40">
             <div className="w-12 h-12 rounded-full bg-emerald-100 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 flex items-center justify-center mx-auto border border-emerald-300 dark:border-emerald-800">
               <Users className="w-6 h-6" />
             </div>
             <div className="space-y-1">
               <h4 className="text-sm font-bold text-slate-800 dark:text-slate-200 font-mono">
-                No hi ha cap tenant registrat a la plataforma
+                No hi ha cap empresa registrada
               </h4>
               <p className="text-xs text-slate-500 font-mono max-w-md mx-auto">
-                Estat canònic de Dia 0. Inicia l'aprovisionament del primer inquilí amb l'Assistent de 4 passos.
+                Dóna d'alta la primera empresa per visualitzar la seva telemetria anònima de PWA i l'estat del seu ordinador local.
               </p>
             </div>
             <Link
@@ -502,39 +307,79 @@ export default function SuperadminTelemetriaPage() {
               <table className="w-full text-left text-xs border-collapse">
                 <thead>
                   <tr className="bg-slate-100 dark:bg-slate-800/80 border-b border-slate-200 dark:border-slate-800 font-mono text-[10px] uppercase text-slate-500 dark:text-slate-400">
-                    <th className="p-3.5">Subdomini & Inquilí</th>
-                    <th className="p-3.5">Vertical Tècnica</th>
-                    <th className="p-3.5 text-center">Quota Operaris (RLS)</th>
-                    <th className="p-3.5 text-center">Disc Hetzner</th>
-                    <th className="p-3.5 text-center">Feature Flags (Interruptors en Viu)</th>
-                    <th className="p-3.5 text-right">Estat Llicència</th>
+                    <th className="p-3.5">Empresa & Subdomini</th>
+                    <th className="p-3.5">Operaris Connectats & Referències PWA Anònimes (RGPD)</th>
+                    <th className="p-3.5 text-center">Ordinador Local Client (Arxiu / IA)</th>
+                    <th className="p-3.5 text-center">Buffer Diari Hetzner</th>
+                    <th className="p-3.5 text-center">Feature Flags</th>
+                    <th className="p-3.5 text-right">Estat CRM</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-200 dark:divide-slate-800 font-mono text-[11px]">
-                  {tenants.map((t) => (
+                  {tenantsMostrats.map((t) => (
                     <tr key={t.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/40 transition-colors">
                       <td className="p-3.5">
-                        <p className="font-bold text-slate-900 dark:text-white">{t.subdomini}</p>
-                        <p className="text-[10px] text-slate-500">{t.nom}</p>
+                        <Link href={`/superadmin/empreses/${t.id}`} className="font-bold text-slate-900 dark:text-white hover:text-emerald-600">
+                          {t.nom}
+                        </Link>
+                        <p className="text-[10px] text-slate-500">{t.subdomini} • {t.vertical}</p>
+                        {t.tiquets_oberts > 0 && (
+                          <span className="inline-flex items-center gap-1 mt-1 px-1.5 py-0.5 rounded bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-300 text-[9px] font-bold">
+                            <LifeBuoy className="w-2.5 h-2.5" /> {t.tiquets_oberts} tiquet(s) obert(s)
+                          </span>
+                        )}
                       </td>
+
                       <td className="p-3.5">
-                        <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-slate-100 text-slate-700 border border-slate-300 dark:bg-slate-800 dark:text-slate-300 dark:border-slate-700">
-                          {t.vertical}
-                        </span>
+                        <div className="font-bold text-slate-900 dark:text-white">
+                          <span className="text-emerald-600 dark:text-emerald-400">
+                            {t.operaris_connectats ?? t.operaris_actius} operaris s'han connectat
+                          </span>{" "}
+                          <span className="text-slate-400 font-normal">
+                            (Llicència màx: {t.quota_operaris})
+                          </span>
+                        </div>
+                        <div className="flex flex-wrap gap-1 mt-1.5">
+                          {Array.isArray(t.pwa_sessions_anonimes) && t.pwa_sessions_anonimes.length > 0 ? (
+                            t.pwa_sessions_anonimes.map((s) => (
+                              <span
+                                key={s.pwa_ref}
+                                className="px-1.5 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-300 dark:border-slate-700 text-[9px] font-bold"
+                                title="Identificador tècnic anònim de PWA (Sense dades personals)"
+                              >
+                                {s.pwa_ref}
+                              </span>
+                            ))
+                          ) : (
+                            <span className="text-[10px] text-slate-400">Cap sessió PWA activa</span>
+                          )}
+                        </div>
                       </td>
+
                       <td className="p-3.5 text-center">
-                        <span className="font-bold text-emerald-600 dark:text-emerald-400">
-                          {t.operaris_actius}
+                        {t.estat_pc_empresa === "ONLINE" ? (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300 border border-emerald-300 text-[10px] font-bold">
+                            <Wifi className="w-3 h-3" /> PC ONLINE
+                          </span>
+                        ) : t.estat_pc_empresa === "OFFLINE" ? (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-300 border border-rose-300 text-[10px] font-bold">
+                            <WifiOff className="w-3 h-3" /> PC APAGAT (OFFLINE)
+                          </span>
+                        ) : (
+                          <span className="text-[10px] text-slate-400">No configurat</span>
+                        )}
+                      </td>
+
+                      <td className="p-3.5 text-center">
+                        <span className="font-bold text-slate-800 dark:text-slate-200">
+                          {t.buffer_utilitzat_mb ?? t.disc_utilitzat_mb} MB
                         </span>{" "}
-                        / <span className="text-slate-500">{t.quota_operaris}</span>
+                        <span className="text-slate-400">/ {t.quota_buffer_mb ?? 500} MB</span>
+                        <span className="block text-[9px] text-slate-400">Només feines d'avui</span>
                       </td>
-                      <td className="p-3.5 text-center">
-                        <span className="text-slate-700 dark:text-slate-300">{t.disc_utilitzat_mb} MB</span>{" "}
-                        <span className="text-slate-400">/ {t.disc_quota_mb} MB</span>
-                      </td>
+
                       <td className="p-3.5">
-                        <div className="flex items-center justify-center gap-1.5 text-[10px]">
-                          {/* Copilot IA */}
+                        <div className="flex items-center justify-center gap-1 text-[10px]">
                           <button
                             onClick={() => handleToggleFeature(t.id, "copilot_ia")}
                             className={`px-2 py-0.5 rounded border transition-colors ${
@@ -542,12 +387,9 @@ export default function SuperadminTelemetriaPage() {
                                 ? "border-emerald-600 bg-emerald-50 text-emerald-800 dark:border-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300 font-bold"
                                 : "border-slate-300 bg-slate-100 text-slate-400 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-500 line-through"
                             }`}
-                            title="Commutar Copilot IA"
                           >
                             Copilot
                           </button>
-
-                          {/* Flota Avançada */}
                           <button
                             onClick={() => handleToggleFeature(t.id, "flota_avancada")}
                             className={`px-2 py-0.5 rounded border transition-colors ${
@@ -555,12 +397,9 @@ export default function SuperadminTelemetriaPage() {
                                 ? "border-emerald-600 bg-emerald-50 text-emerald-800 dark:border-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300 font-bold"
                                 : "border-slate-300 bg-slate-100 text-slate-400 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-500 line-through"
                             }`}
-                            title="Commutar Flota Avançada"
                           >
                             Flota
                           </button>
-
-                          {/* Plànols Tècnics */}
                           <button
                             onClick={() => handleToggleFeature(t.id, "planols_tecnics")}
                             className={`px-2 py-0.5 rounded border transition-colors ${
@@ -568,12 +407,9 @@ export default function SuperadminTelemetriaPage() {
                                 ? "border-emerald-600 bg-emerald-50 text-emerald-800 dark:border-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300 font-bold"
                                 : "border-slate-300 bg-slate-100 text-slate-400 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-500 line-through"
                             }`}
-                            title="Commutar Plànols Tècnics"
                           >
                             Plànols
                           </button>
-
-                          {/* Bot Telegram */}
                           <button
                             onClick={() => handleToggleFeature(t.id, "telegram_bot")}
                             className={`px-2 py-0.5 rounded border transition-colors ${
@@ -581,15 +417,23 @@ export default function SuperadminTelemetriaPage() {
                                 ? "border-emerald-600 bg-emerald-50 text-emerald-800 dark:border-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300 font-bold"
                                 : "border-slate-300 bg-slate-100 text-slate-400 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-500 line-through"
                             }`}
-                            title="Commutar Telegram Bot"
                           >
                             Telegram
                           </button>
                         </div>
                       </td>
+
                       <td className="p-3.5 text-right">
-                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-300 dark:bg-emerald-950 dark:text-emerald-400 dark:border-emerald-800">
-                          {t.estat}
+                        <span
+                          className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${
+                            t.estat_pagament === "HIBERNANT"
+                              ? "bg-amber-100 text-amber-800 border-amber-300 dark:bg-amber-950 dark:text-amber-300"
+                              : t.estat === "AL_DIA"
+                              ? "bg-emerald-100 text-emerald-800 border-emerald-300 dark:bg-emerald-950 dark:text-emerald-400"
+                              : "bg-rose-100 text-rose-800 border-rose-300 dark:bg-rose-950 dark:text-rose-400"
+                          }`}
+                        >
+                          {t.estat_pagament || t.estat}
                         </span>
                       </td>
                     </tr>
@@ -601,16 +445,120 @@ export default function SuperadminTelemetriaPage() {
         )}
       </div>
 
-      {/* BLOC 5: AUDITORIA DE TRACES D'ERROR SRE (Spec 022 RF-03) */}
-      <div className="p-5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 space-y-4 shadow-sm transition-colors">
+      {/* BLOC 2: SALUT GLOBAL DEL CLÚSTER HETZNER (INFRAESTRUCTURA COMPARTIDA) */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="p-4 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 space-y-1 shadow-sm">
+          <div className="flex items-center justify-between text-slate-500 dark:text-slate-400 text-xs font-mono">
+            <span>Uptime del Servidor Hetzner</span>
+            <CheckCircle2 className="w-4 h-4 text-emerald-500" />
+          </div>
+          <h3 className="text-2xl font-black font-mono text-emerald-600 dark:text-emerald-400">
+            {uptimeSegons === null
+              ? "—"
+              : uptimeSegons >= 86400
+              ? `${Math.floor(uptimeSegons / 86400)}d ${Math.floor((uptimeSegons % 86400) / 3600)}h`
+              : `${Math.floor(uptimeSegons / 3600)}h ${Math.floor((uptimeSegons % 3600) / 60)}m`}
+          </h3>
+          <p className="text-[10px] text-slate-500 font-mono">
+            Node: {nodeDescripcio ?? "Hetzner Cloud"}
+          </p>
+        </div>
+
+        <div className="p-4 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 space-y-1 shadow-sm">
+          <div className="flex items-center justify-between text-slate-500 dark:text-slate-400 text-xs font-mono">
+            <span>Latència API (p95)</span>
+            <Zap className="w-4 h-4 text-emerald-500" />
+          </div>
+          <h3 className="text-2xl font-black font-mono text-slate-900 dark:text-white">
+            {fmt(p95Latency, " ms")}
+          </h3>
+          <p className="text-[10px] text-slate-500 font-mono">
+            p50: {fmt(p50Latency, "ms")} • p99: {fmt(p99Latency, "ms")}
+          </p>
+        </div>
+
+        <div className="p-4 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 space-y-1 shadow-sm">
+          <div className="flex items-center justify-between text-slate-500 dark:text-slate-400 text-xs font-mono">
+            <span>Pool PostgreSQL asyncpg</span>
+            <Database className="w-4 h-4 text-blue-500" />
+          </div>
+          <h3 className="text-2xl font-black font-mono text-blue-600 dark:text-blue-400">
+            {fmt(poolConnexionsActives)} / {fmt(poolConnexionsMax)}
+          </h3>
+          <p className="text-[10px] text-slate-500 font-mono">
+            Ocupació: {fmt(poolOcupacioPercent, "%")}
+          </p>
+        </div>
+
+        <div className="p-4 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 space-y-1 shadow-sm">
+          <div className="flex items-center justify-between text-slate-500 dark:text-slate-400 text-xs font-mono">
+            <span>CPU & RAM Node Hetzner</span>
+            <Cpu className="w-4 h-4 text-amber-500" />
+          </div>
+          <h3 className="text-2xl font-black font-mono text-slate-900 dark:text-white">
+            {fmt(cpuUsagePercent, "%")} CPU
+          </h3>
+          <p className="text-[10px] text-slate-500 font-mono">
+            RAM: {ramUsageMb === null ? "—" : (ramUsageMb / 1024).toFixed(1)} / {ramTotalMb === null ? "—" : (ramTotalMb / 1024).toFixed(1)} GB
+          </p>
+        </div>
+      </div>
+
+      {/* BLOC 3: HEALTH CHECK DELS 7 MICROSERVEIS */}
+      <div className="p-5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 space-y-4 shadow-sm">
+        <div className="flex items-center justify-between">
+          <h3 className="text-sm font-bold font-mono uppercase tracking-wider text-slate-700 dark:text-slate-300 flex items-center gap-2">
+            <Radio className="w-4 h-4 text-emerald-500 animate-pulse" />
+            <span>2. Matriu d'Estat dels 7 Microserveis del Servidor</span>
+          </h3>
+          <span className="text-[11px] font-mono text-emerald-700 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/60 px-2 py-0.5 rounded border border-emerald-200 dark:border-emerald-800 font-bold">
+            {microserveis.filter((s: any) => s.estat === "HEALTHY").length}/{microserveis.length} HEALTHY
+          </span>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3">
+          {microserveis.map((servei) => (
+            <div
+              key={servei.id}
+              className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700/80 space-y-2 flex flex-col justify-between"
+            >
+              <div>
+                <div className="flex items-center justify-between">
+                  <span
+                    className={`w-2 h-2 rounded-full ${
+                      servei.estat === "HEALTHY"
+                        ? "bg-emerald-500"
+                        : servei.estat === "DOWN"
+                        ? "bg-rose-500"
+                        : "bg-slate-400"
+                    }`}
+                  />
+                  <span className="text-[10px] font-mono text-slate-400">{servei.ping}</span>
+                </div>
+                <h4 className="text-xs font-bold font-mono text-slate-900 dark:text-white mt-1">{servei.nom}</h4>
+                <p className="text-[10px] text-slate-500 dark:text-slate-400 leading-tight mt-0.5">{servei.tipus}</p>
+              </div>
+              <div className="pt-2 border-t border-slate-200 dark:border-slate-700/60 flex items-center justify-between text-[10px] font-mono text-slate-500">
+                <span>{servei.versio}</span>
+                <span className="font-bold">
+                  {servei.estat === "HEALTHY" ? "UP" : servei.estat === "DOWN" ? "DOWN" : "SENSE SONDA"}
+                </span>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* BLOC 4: AUDITORIA DE TRACES D'ERROR SRE */}
+      <div className="p-5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 space-y-4 shadow-sm">
         <div className="flex items-center justify-between">
           <div>
             <h3 className="text-sm font-bold font-mono uppercase tracking-wider text-slate-700 dark:text-slate-300 flex items-center gap-2">
               <Terminal className="w-4 h-4 text-blue-500" />
-              <span>Auditoria SRE: Traces Tècniques Segregades (superadmin_telemetry)</span>
+              <span>3. Auditoria SRE: Traces d'Error Segregades (superadmin_telemetry)</span>
             </h3>
             <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-              Esquema PostgreSQL aïllat sense payloads de negoci ni creuament amb taules d'usuaris
+              Esquema PostgreSQL aïllat sense payloads de negoci ni dades personals
             </p>
           </div>
           <button
@@ -620,7 +568,7 @@ export default function SuperadminTelemetriaPage() {
             }}
             className="px-3 py-1 rounded-lg bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 text-xs font-mono font-bold border border-slate-300 dark:border-slate-700 transition-colors"
           >
-            {mostrantTraces ? "Amagar Traces" : "Consultar Traces (RF-03)"}
+            {mostrantTraces ? "Amagar Traces" : "Consultar Traces"}
           </button>
         </div>
 
