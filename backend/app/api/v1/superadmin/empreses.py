@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.db import get_db_with_tenant_context
+from app.core.db import get_db_with_tenant_context, set_tenant_context
 from app.core.security import require_roles
 from app.models.models import Empresa
 
@@ -253,6 +253,8 @@ async def obtenir_logotip_empresa(
     except ValueError:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="UUID invàlid.")
 
+    await set_tenant_context(db, str(emp_uuid), is_superadmin=True)
+
     emp_res = await db.execute(select(Empresa).where(Empresa.id == emp_uuid))
     empresa = emp_res.scalars().first()
     if not empresa:
@@ -309,6 +311,8 @@ async def esborrar_logotip_empresa(
         emp_uuid = uuid.UUID(empresa_id)
     except ValueError:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="UUID invàlid.")
+
+    await set_tenant_context(db, str(emp_uuid), is_superadmin=True)
 
     emp_res = await db.execute(select(Empresa).where(Empresa.id == emp_uuid))
     empresa = emp_res.scalars().first()
