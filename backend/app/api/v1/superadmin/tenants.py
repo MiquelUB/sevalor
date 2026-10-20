@@ -755,6 +755,7 @@ async def obtenir_tenant(
         "nom": emp.nom,
         "rao_social": emp.nom,
         "nif": emp.nif,
+        "adreca": emp.adreca,
         "subdomini": emp.subdomini,
         "domini_custom": emp.domini_custom,
         "vertical": emp.vertical or "SEVALOR",

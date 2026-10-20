@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import Link from "next/link";
 import {
   ArrowLeft,
@@ -34,6 +34,10 @@ import {
   Check,
   Wifi,
   WifiOff,
+  Upload,
+  Image as ImageIcon,
+  Palette,
+  RefreshCw,
 } from "lucide-react";
 import { apiFetch, getAuthToken, setAuthToken } from "@/lib/api";
 
@@ -42,6 +46,126 @@ interface EquipIaItem {
   unitats: number;
   preu_unitari: number;
 }
+
+// Helpers per a la conversió bidireccional HSL <-> HEX (Chameleon UI Engine)
+function hslToHex(hslStr: string): string {
+  try {
+    const parts = hslStr
+      .replace(/[%deg,]/g, " ")
+      .trim()
+      .split(/\s+/)
+      .map(Number);
+    if (parts.length < 3 || parts.some(isNaN)) return "#10b981";
+    const h = ((parts[0] % 360) + 360) % 360;
+    const s = Math.min(100, Math.max(0, parts[1])) / 100;
+    const l = Math.min(100, Math.max(0, parts[2])) / 100;
+
+    const c = (1 - Math.abs(2 * l - 1)) * s;
+    const x = c * (1 - Math.abs(((h / 60) % 2) - 1));
+    const m = l - c / 2;
+    let r = 0,
+      g = 0,
+      b = 0;
+
+    if (h < 60) {
+      r = c; g = x; b = 0;
+    } else if (h < 120) {
+      r = x; g = c; b = 0;
+    } else if (h < 180) {
+      r = 0; g = c; b = x;
+    } else if (h < 240) {
+      r = 0; g = x; b = c;
+    } else if (h < 300) {
+      r = x; g = 0; b = c;
+    } else {
+      r = c; g = 0; b = x;
+    }
+
+    const toHex = (val: number) => {
+      const hex = Math.round((val + m) * 255).toString(16);
+      return hex.length === 1 ? "0" + hex : hex;
+    };
+    return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
+  } catch {
+    return "#10b981";
+  }
+}
+
+function hexToHsl(hex: string): string {
+  try {
+    let cleanHex = hex.replace("#", "").trim();
+    if (cleanHex.length === 3) {
+      cleanHex = cleanHex
+        .split("")
+        .map((c) => c + c)
+        .join("");
+    }
+    if (cleanHex.length !== 6) return "142 71% 25%";
+
+    const r = parseInt(cleanHex.substring(0, 2), 16) / 255;
+    const g = parseInt(cleanHex.substring(2, 4), 16) / 255;
+    const b = parseInt(cleanHex.substring(4, 6), 16) / 255;
+
+    const max = Math.max(r, g, b);
+    const min = Math.min(r, g, b);
+    const delta = max - min;
+    let l = (max + min) / 2;
+    let s = 0;
+    let h = 0;
+
+    if (delta !== 0) {
+      s = delta / (1 - Math.abs(2 * l - 1));
+      if (max === r) {
+        h = ((g - b) / delta) % 6;
+      } else if (max === g) {
+        h = (b - r) / delta + 2;
+      } else {
+        h = (r - g) / delta + 4;
+      }
+      h = Math.round(h * 60);
+      if (h < 0) h += 360;
+    }
+
+    return `${h} ${Math.round(s * 100)}% ${Math.round(l * 100)}%`;
+  } catch {
+    return "142 71% 25%";
+  }
+}
+
+const PALETES_PREDEFINIDES = [
+  {
+    id: "CAMPOPRO",
+    nom: "CampoPro (Reg & Agronomia)",
+    desc: "Verd orgànic i ocre daurat",
+    primari: "142 71% 25%",
+    secundari: "38 92% 50%",
+    accent: "160 84% 39%",
+  },
+  {
+    id: "ELECTRICPRO",
+    nom: "ElectricPro (Baixa Tensió REBT)",
+    desc: "Blau cobalt i ambre elèctric",
+    primari: "210 100% 15%",
+    secundari: "38 92% 50%",
+    accent: "190 90% 50%",
+  },
+  {
+    id: "HYDROPRO",
+    nom: "HydroPro (Fontaneria & Hidràulica)",
+    desc: "Blau marí profund i cian pur",
+    primari: "199 89% 28%",
+    secundari: "170 80% 40%",
+    accent: "45 93% 47%",
+  },
+  {
+    id: "BUILDINGPRO",
+    nom: "BuildingPro (Climatització & Obres)",
+    desc: "Terracota càlid i pissarra",
+    primari: "25 85% 35%",
+    secundari: "38 92% 50%",
+    accent: "15 80% 45%",
+  },
+];
 
 export default function EmpresaDetailPage({ params }: { params: { id: string } }) {
   const [tenant, setTenant] = useState<any>(null);
@@ -61,6 +185,19 @@ export default function EmpresaDetailPage({ params }: { params: { id: string } }
   const [subdomini, setSubdomini] = useState("");
   const [dnsCheckResult, setDnsCheckResult] = useState<any>(null);
   const [checkingDns, setCheckingDns] = useState(false);
+
+  // Dades Generals de l'Empresa
+  const [nomEmpresa, setNomEmpresa] = useState<string>("");
+  const [nifEmpresa, setNifEmpresa] = useState<string>("");
+  const [adrecaEmpresa, setAdrecaEmpresa] = useState<string>("");
+  const [verticalEmpresa, setVerticalEmpresa] = useState<string>("SEVALOR");
+
+  // Logotip Corporatiu
+  const [logotipPath, setLogotipPath] = useState<string | null>(null);
+  const [logoTimestamp, setLogoTimestamp] = useState<number>(() => Date.now());
+  const [uploadingLogo, setUploadingLogo] = useState<boolean>(false);
+  const [logoUploadSuccess, setLogoUploadSuccess] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Chameleon HSL
   const [primariHsl, setPrimariHsl] = useState("142 71% 25%");
@@ -127,6 +264,11 @@ export default function EmpresaDetailPage({ params }: { params: { id: string } }
 
       if (data) {
         setTenant(data);
+        setNomEmpresa(data.nom || data.rao_social || "");
+        setNifEmpresa(data.nif || "");
+        setAdrecaEmpresa(data.adreca || "");
+        setVerticalEmpresa(data.vertical || "SEVALOR");
+        setLogotipPath(data.logotip_path || null);
         setEstat(data.estat_pagament || data.estat || "ACTIU");
         setPla(data.pla_subscripcio || data.pla || "STARTER");
         setQuotaOperaris(Number(data.quota_operaris ?? 5));
@@ -244,22 +386,86 @@ export default function EmpresaDetailPage({ params }: { params: { id: string } }
         });
       }
 
-      // 6. Guardar Marca Camaleó (Constitució §2.VIII)
+      // 6. Guardar Marca Camaleó & Dades de l'Empresa (Constitució §2.VIII)
       await apiFetch(`/superadmin/empreses/${params.id}/camaleo`, {
         method: "PUT",
         body: JSON.stringify({
+          nom: nomEmpresa.trim(),
+          adreca: adrecaEmpresa.trim(),
+          vertical: verticalEmpresa.trim(),
           primari_hsl: primariHsl.trim(),
           secundari_hsl: secundariHsl.trim(),
           accent_hsl: accentHsl.trim(),
+          domini_custom: dominiCustom.trim() || null,
         }),
       });
 
-      setSuccessMessage("Configuració del tenant, llicència d'operaris i condicions CRM desades a PostgreSQL.");
+      setSuccessMessage("Dades de l'empresa, marca camaleó, llicència i CRM desats a PostgreSQL.");
       fetchTenantAll();
     } catch (err: any) {
       setErrorMessage(err.message || "Error en desar els canvis del tenant.");
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleLogoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (file.size > 10 * 1024 * 1024) {
+      setErrorMessage("El fitxer del logotip supera el límit màxim de 10 MB permès.");
+      return;
+    }
+
+    setUploadingLogo(true);
+    setErrorMessage(null);
+    setLogoUploadSuccess(null);
+
+    const formData = new FormData();
+    formData.append("fitxer", file);
+
+    try {
+      const res = await apiFetch<any>(`/superadmin/empreses/${params.id}/logotip`, {
+        method: "POST",
+        body: formData,
+      });
+      setLogotipPath(res.logotip_path);
+      setLogoTimestamp(Date.now());
+      setLogoUploadSuccess("Logotip oficial desat correctament al disc sobirà Hetzner.");
+      setTimeout(() => setLogoUploadSuccess(null), 4000);
+    } catch (err: any) {
+      setErrorMessage(err.message || "Error en pujar el logotip corporatiu.");
+    } finally {
+      setUploadingLogo(false);
+      if (fileInputRef.current) {
+        fileInputRef.current.value = "";
+      }
+    }
+  };
+
+  const handleResetLogo = async () => {
+    if (
+      !confirm(
+        "Vols restablir el logotip al monograma vectorial per defecte generat amb el color primari?"
+      )
+    ) {
+      return;
+    }
+    setUploadingLogo(true);
+    setErrorMessage(null);
+    try {
+      await apiFetch(`/superadmin/empreses/${params.id}/logotip`, {
+        method: "DELETE",
+      });
+      setLogotipPath(null);
+      setLogoTimestamp(Date.now());
+      setLogoUploadSuccess("Logotip restablert a la identitat vectorial per defecte.");
+      setTimeout(() => setLogoUploadSuccess(null), 3000);
+    } catch (err: any) {
+      setErrorMessage(err.message || "Error en restablir el logotip.");
+    } finally {
+      setUploadingLogo(false);
     }
   };
 
@@ -575,23 +781,32 @@ export default function EmpresaDetailPage({ params }: { params: { id: string } }
 
       {/* CAPÇALERA DE GOVERNANÇA CRM */}
       <div className="flex flex-wrap items-center justify-between gap-4 pb-4 border-b border-slate-200 dark:border-slate-800">
-        <div>
-          <div className="flex items-center gap-2.5 flex-wrap">
-            <h1 className="text-2xl font-black text-slate-900 dark:text-white">
-              {tenant?.nom || tenant?.rao_social}
-            </h1>
-            <span className="text-xs px-2.5 py-1 rounded-lg font-mono bg-emerald-50 dark:bg-emerald-950/70 text-emerald-700 dark:text-emerald-400 font-bold border border-emerald-300 dark:border-emerald-800 flex items-center gap-1.5">
-              <span>{tenant?.domini_custom || `${tenant?.subdomini}.sevalor.app`}</span>
-              {tenant?.domini_custom && (
-                <span className="px-1.5 py-0.2 rounded bg-emerald-200 dark:bg-emerald-900 text-emerald-900 dark:text-emerald-200 text-[9px] uppercase font-bold">
-                  Domini Propi
-                </span>
-              )}
-            </span>
+        <div className="flex items-center gap-3.5">
+          <div className="w-12 h-12 rounded-xl bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 flex items-center justify-center p-1.5 overflow-hidden shrink-0 shadow-sm">
+            <img
+              src={`/api/v1/superadmin/empreses/${params.id}/logotip?v=${logoTimestamp}`}
+              alt="Logo"
+              className="max-h-full max-w-full object-contain"
+            />
           </div>
-          <p className="text-xs font-mono text-slate-500 dark:text-slate-400 mt-1">
-            NIF: {tenant?.nif || "N/A"} • ID: {tenant?.id} • Vertical: {tenant?.vertical || "SEVALOR"}
-          </p>
+          <div>
+            <div className="flex items-center gap-2.5 flex-wrap">
+              <h1 className="text-2xl font-black text-slate-900 dark:text-white">
+                {nomEmpresa || tenant?.nom || tenant?.rao_social}
+              </h1>
+              <span className="text-xs px-2.5 py-1 rounded-lg font-mono bg-emerald-50 dark:bg-emerald-950/70 text-emerald-700 dark:text-emerald-400 font-bold border border-emerald-300 dark:border-emerald-800 flex items-center gap-1.5">
+                <span>{tenant?.domini_custom || `${tenant?.subdomini}.sevalor.app`}</span>
+                {tenant?.domini_custom && (
+                  <span className="px-1.5 py-0.2 rounded bg-emerald-200 dark:bg-emerald-900 text-emerald-900 dark:text-emerald-200 text-[9px] uppercase font-bold">
+                    Domini Propi
+                  </span>
+                )}
+              </span>
+            </div>
+            <p className="text-xs font-mono text-slate-500 dark:text-slate-400 mt-1">
+              NIF: {tenant?.nif || "N/A"} • ID: {tenant?.id} • Vertical: {verticalEmpresa || tenant?.vertical || "SEVALOR"}
+            </p>
+          </div>
         </div>
 
         <div className="flex items-center gap-2.5 flex-wrap">
@@ -1470,53 +1685,391 @@ export default function EmpresaDetailPage({ params }: { params: { id: string } }
           </div>
         </div>
 
-        {/* BLOC: IDENTITAT CORPORATIVA CAMALEÒNICA (CONSTITUCIÓ §2.VIII) */}
-        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-5 rounded-2xl shadow-sm md:col-span-2 space-y-4">
-          <div className="flex items-center justify-between">
-            <h2 className="text-xs font-mono font-bold uppercase tracking-wider text-slate-500 flex items-center gap-2">
-              <Sparkles className="w-4 h-4 text-emerald-500" />
-              <span>Identitat de Marca &amp; Tokens Camaleó (Constitució §2.VIII)</span>
-            </h2>
+        {/* BLOC: CONFIGURACIÓ DE L'EMPRESA & IDENTITAT CORPORATIVA (CONSTITUCIÓ §2.VIII) */}
+        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-6 rounded-2xl shadow-sm md:col-span-2 space-y-6">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 dark:border-slate-800 pb-4">
+            <div>
+              <h2 className="text-sm font-mono font-bold uppercase tracking-wider text-slate-800 dark:text-white flex items-center gap-2">
+                <Palette className="w-4 h-4 text-emerald-500" />
+                <span>Configuració Corporativa &amp; Identitat de Marca Camaleó</span>
+              </h2>
+              <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                Metadades oficials, logotip sobirà al servidor Hetzner i paleta visual dinàmica HSL per a cada client
+              </p>
+            </div>
+            {logoUploadSuccess && (
+              <span className="text-xs font-mono font-bold px-3 py-1.5 rounded-xl bg-emerald-50 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800 flex items-center gap-1.5">
+                <Check className="w-3.5 h-3.5" /> {logoUploadSuccess}
+              </span>
+            )}
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-            <div className="p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/40 space-y-2">
-              <div className="flex items-center justify-between">
-                <label className="text-xs font-bold text-slate-700 dark:text-slate-300">Primari HSL</label>
-                <div className="w-4 h-4 rounded-full border border-white shadow-sm" style={{ backgroundColor: `hsl(${primariHsl})` }} />
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+            {/* SUB-BLOC 1: DADES OFICIALS DE L'EMPRESA */}
+            <div className="lg:col-span-6 space-y-4">
+              <h3 className="text-xs font-mono font-bold uppercase tracking-wider text-slate-500 flex items-center gap-1.5">
+                <Building2 className="w-3.5 h-3.5 text-slate-400" />
+                <span>Dades Fiscals i Corporatives</span>
+              </h3>
+
+              <div className="space-y-3 text-xs">
+                <div>
+                  <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                    Nom Oficial / Raó Social de l'Empresa
+                  </label>
+                  <input
+                    type="text"
+                    value={nomEmpresa}
+                    onChange={(e) => setNomEmpresa(e.target.value)}
+                    placeholder="ex. Instal·lacions i Regs del Segrià SL"
+                    className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl p-2.5 font-bold text-slate-900 dark:text-white"
+                  />
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                      NIF / CIF Identificador Fiscal
+                    </label>
+                    <input
+                      type="text"
+                      value={nifEmpresa}
+                      readOnly
+                      title="El NIF és l'identificador tributari invariable del tenant"
+                      className="w-full bg-slate-100 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 rounded-xl p-2.5 font-mono font-bold text-slate-500 cursor-not-allowed"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                      Vertical de Negoci Especialitzada
+                    </label>
+                    <select
+                      value={verticalEmpresa}
+                      onChange={(e) => setVerticalEmpresa(e.target.value)}
+                      className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl p-2.5 font-bold text-slate-900 dark:text-white"
+                    >
+                      <option value="CAMPOPRO">CampoPro (Agronomia, Reg &amp; Parcel·les)</option>
+                      <option value="ELECTRICPRO">ElectricPro (Baixa Tensió REBT)</option>
+                      <option value="HYDROPRO">HydroPro (Fontaneria &amp; Hidràulica)</option>
+                      <option value="BUILDINGPRO">BuildingPro (Climatització &amp; Edificació)</option>
+                      <option value="SEVALOR">Sevalor (General Multivertical)</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                    Adreça Física / Seu de l'Empresa
+                  </label>
+                  <input
+                    type="text"
+                    value={adrecaEmpresa}
+                    onChange={(e) => setAdrecaEmpresa(e.target.value)}
+                    placeholder="ex. Polígon Industrial Camí dels Frares, Nau 14, 25191 Lleida"
+                    className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl p-2.5 text-slate-900 dark:text-white"
+                  />
+                </div>
               </div>
-              <input
-                type="text"
-                value={primariHsl}
-                onChange={(e) => setPrimariHsl(e.target.value)}
-                className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 text-xs rounded-xl p-2 font-mono font-bold"
-              />
             </div>
 
-            <div className="p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/40 space-y-2">
-              <div className="flex items-center justify-between">
-                <label className="text-xs font-bold text-slate-700 dark:text-slate-300">Secundari HSL</label>
-                <div className="w-4 h-4 rounded-full border border-white shadow-sm" style={{ backgroundColor: `hsl(${secundariHsl})` }} />
+            {/* SUB-BLOC 2: LOGOTIP CORPORATIU SOBIRÀ */}
+            <div className="lg:col-span-6 space-y-4">
+              <h3 className="text-xs font-mono font-bold uppercase tracking-wider text-slate-500 flex items-center gap-1.5">
+                <ImageIcon className="w-3.5 h-3.5 text-slate-400" />
+                <span>Logotip Oficial (Emmagatzematge Hetzner /docs)</span>
+              </h3>
+
+              <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-800/40 space-y-4">
+                <div className="flex items-center gap-4 flex-wrap sm:flex-nowrap">
+                  <div className="relative w-20 h-20 rounded-2xl bg-white dark:bg-slate-900 border-2 border-slate-200 dark:border-slate-700 flex items-center justify-center p-2 overflow-hidden shadow-inner shrink-0">
+                    <img
+                      src={`/api/v1/superadmin/empreses/${params.id}/logotip?v=${logoTimestamp}`}
+                      alt="Logotip de l'empresa"
+                      className="max-h-full max-w-full object-contain"
+                      onError={(e) => {
+                        (e.target as HTMLElement).style.display = "none";
+                      }}
+                    />
+                  </div>
+
+                  <div className="space-y-1.5 text-xs flex-1 min-w-[200px]">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="font-bold text-slate-900 dark:text-white">
+                        {logotipPath ? "Logotip Corporatiu Personalitzat" : "Monograma Dinàmic (Per Defecte)"}
+                      </span>
+                      {logotipPath && (
+                        <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300 font-bold">
+                          Hetzner Actiu
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-[11px] text-slate-500 font-mono">
+                      {logotipPath || `/docs/${params.id}/configuracio/logo_oficial.[png|svg]`}
+                    </p>
+                    <p className="text-[10px] text-slate-400">
+                      Formats admesos: <strong>PNG, JPG, WebP, SVG</strong> (màx 10 MB). Validació per Magic Bytes al backend.
+                    </p>
+                  </div>
+                </div>
+
+                {/* Accions de Pujada / Restabliment */}
+                <div className="flex items-center gap-2 pt-1 flex-wrap">
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept="image/png,image/jpeg,image/webp,image/svg+xml"
+                    onChange={handleLogoUpload}
+                    className="hidden"
+                  />
+                  <button
+                    type="button"
+                    disabled={uploadingLogo}
+                    onClick={() => fileInputRef.current?.click()}
+                    className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-mono font-bold flex items-center gap-1.5 transition-colors shadow-sm disabled:opacity-50"
+                  >
+                    <Upload className="w-3.5 h-3.5" />
+                    <span>{uploadingLogo ? "Pujant..." : "Pujar Nou Logotip"}</span>
+                  </button>
+
+                  {logotipPath && (
+                    <button
+                      type="button"
+                      disabled={uploadingLogo}
+                      onClick={handleResetLogo}
+                      className="px-3 py-2 rounded-xl bg-slate-200 hover:bg-rose-100 text-slate-700 hover:text-rose-700 dark:bg-slate-700 dark:hover:bg-rose-950/60 dark:text-slate-300 dark:hover:text-rose-300 text-xs font-mono font-bold flex items-center gap-1.5 transition-colors"
+                      title="Elimina el fitxer i torna al monograma dinàmic generat"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      <span>Restablir Monograma</span>
+                    </button>
+                  )}
+                </div>
               </div>
-              <input
-                type="text"
-                value={secundariHsl}
-                onChange={(e) => setSecundariHsl(e.target.value)}
-                className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 text-xs rounded-xl p-2 font-mono font-bold"
-              />
+            </div>
+          </div>
+
+          {/* SUB-BLOC 3: TOKENS DE COLOR HSL & SELECTORS VISUALS */}
+          <div className="space-y-4 pt-2 border-t border-slate-100 dark:border-slate-800">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <h3 className="text-xs font-mono font-bold uppercase tracking-wider text-slate-500 flex items-center gap-1.5">
+                <Sparkles className="w-3.5 h-3.5 text-emerald-500" />
+                <span>Paletes Predefinides per Vertical &amp; Selectors Interactius de Color</span>
+              </h3>
+
+              {/* Botons de Paletes Ràpides */}
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <span className="text-[11px] font-mono text-slate-400 mr-1">Paletes:</span>
+                {PALETES_PREDEFINIDES.map((pal) => (
+                  <button
+                    key={pal.id}
+                    type="button"
+                    onClick={() => {
+                      setPrimariHsl(pal.primari);
+                      setSecundariHsl(pal.secundari);
+                      setAccentHsl(pal.accent);
+                    }}
+                    className="px-2.5 py-1 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 hover:border-emerald-500 text-[10px] font-mono font-bold text-slate-700 dark:text-slate-200 flex items-center gap-1.5 transition-all shadow-sm"
+                  >
+                    <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: `hsl(${pal.primari})` }} />
+                    <span>{pal.id}</span>
+                  </button>
+                ))}
+              </div>
             </div>
 
-            <div className="p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/40 space-y-2">
-              <div className="flex items-center justify-between">
-                <label className="text-xs font-bold text-slate-700 dark:text-slate-300">Accent HSL</label>
-                <div className="w-4 h-4 rounded-full border border-white shadow-sm" style={{ backgroundColor: `hsl(${accentHsl})` }} />
+            {/* 3 Selectors de Color Interactius */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              {/* Color Primari */}
+              <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/40 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <label className="text-xs font-bold text-slate-900 dark:text-white block">
+                      Color Primari Corporatiu
+                    </label>
+                    <span className="text-[10px] text-slate-500">Capçaleres, botons primaris, sidebar</span>
+                  </div>
+                  <div className="relative flex items-center">
+                    <input
+                      type="color"
+                      value={hslToHex(primariHsl)}
+                      onChange={(e) => setPrimariHsl(hexToHsl(e.target.value))}
+                      className="w-8 h-8 rounded-lg cursor-pointer border border-white shadow-sm p-0 bg-transparent"
+                      title="Clica per obrir el selector de color visual"
+                    />
+                  </div>
+                </div>
+
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between text-[11px] font-mono">
+                    <span className="text-slate-500">HEX: {hslToHex(primariHsl).toUpperCase()}</span>
+                    <span className="text-slate-400">Token HSL</span>
+                  </div>
+                  <input
+                    type="text"
+                    value={primariHsl}
+                    onChange={(e) => setPrimariHsl(e.target.value)}
+                    placeholder="ex. 142 71% 25%"
+                    className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 text-xs rounded-xl p-2.5 font-mono font-bold text-slate-900 dark:text-white"
+                  />
+                </div>
               </div>
-              <input
-                type="text"
-                value={accentHsl}
-                onChange={(e) => setAccentHsl(e.target.value)}
-                className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 text-xs rounded-xl p-2 font-mono font-bold"
-              />
+
+              {/* Color Secundari */}
+              <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/40 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <label className="text-xs font-bold text-slate-900 dark:text-white block">
+                      Color Secundari
+                    </label>
+                    <span className="text-[10px] text-slate-500">Submenús, targetes i elements secundaris</span>
+                  </div>
+                  <div className="relative flex items-center">
+                    <input
+                      type="color"
+                      value={hslToHex(secundariHsl)}
+                      onChange={(e) => setSecundariHsl(hexToHsl(e.target.value))}
+                      className="w-8 h-8 rounded-lg cursor-pointer border border-white shadow-sm p-0 bg-transparent"
+                      title="Clica per obrir el selector de color visual"
+                    />
+                  </div>
+                </div>
+
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between text-[11px] font-mono">
+                    <span className="text-slate-500">HEX: {hslToHex(secundariHsl).toUpperCase()}</span>
+                    <span className="text-slate-400">Token HSL</span>
+                  </div>
+                  <input
+                    type="text"
+                    value={secundariHsl}
+                    onChange={(e) => setSecundariHsl(e.target.value)}
+                    placeholder="ex. 38 92% 50%"
+                    className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 text-xs rounded-xl p-2.5 font-mono font-bold text-slate-900 dark:text-white"
+                  />
+                </div>
+              </div>
+
+              {/* Color Accent */}
+              <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/40 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <label className="text-xs font-bold text-slate-900 dark:text-white block">
+                      Color d'Accent
+                    </label>
+                    <span className="text-[10px] text-slate-500">Alertes, notificacions, badges actius</span>
+                  </div>
+                  <div className="relative flex items-center">
+                    <input
+                      type="color"
+                      value={hslToHex(accentHsl)}
+                      onChange={(e) => setAccentHsl(hexToHsl(e.target.value))}
+                      className="w-8 h-8 rounded-lg cursor-pointer border border-white shadow-sm p-0 bg-transparent"
+                      title="Clica per obrir el selector de color visual"
+                    />
+                  </div>
+                </div>
+
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between text-[11px] font-mono">
+                    <span className="text-slate-500">HEX: {hslToHex(accentHsl).toUpperCase()}</span>
+                    <span className="text-slate-400">Token HSL</span>
+                  </div>
+                  <input
+                    type="text"
+                    value={accentHsl}
+                    onChange={(e) => setAccentHsl(e.target.value)}
+                    placeholder="ex. 160 84% 39%"
+                    className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 text-xs rounded-xl p-2.5 font-mono font-bold text-slate-900 dark:text-white"
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* SUB-BLOC 4: SIMULADOR VISUAL EN TEMPS REAL DEL CLIENT */}
+            <div className="p-4 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-100/60 dark:bg-slate-950/60 space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-mono font-bold uppercase tracking-wider text-slate-500 flex items-center gap-1.5">
+                  <Eye className="w-3.5 h-3.5 text-blue-500" />
+                  <span>Previsualitzador en Viu: Chameleon UI Engine (Constitució §2.VIII)</span>
+                </span>
+                <span className="text-[10px] font-mono text-slate-400">
+                  Contrast WCAG 2.1 AA Dinàmic
+                </span>
+              </div>
+
+              {/* Maqueta de la interfície del client amb els seus colors */}
+              <div className="rounded-xl overflow-hidden border border-slate-300 dark:border-slate-700 shadow-md bg-white dark:bg-slate-900">
+                {/* Header simulat */}
+                <div
+                  className="px-4 py-3 flex items-center justify-between text-white transition-colors"
+                  style={{ backgroundColor: `hsl(${primariHsl})` }}
+                >
+                  <div className="flex items-center gap-3">
+                    <div className="w-8 h-8 rounded-lg bg-white/20 p-1 flex items-center justify-center overflow-hidden">
+                      <img
+                        src={`/api/v1/superadmin/empreses/${params.id}/logotip?v=${logoTimestamp}`}
+                        alt="Logo"
+                        className="max-h-full max-w-full object-contain"
+                      />
+                    </div>
+                    <div>
+                      <div className="text-xs font-black tracking-wide leading-tight">
+                        {nomEmpresa || tenant?.nom || "Nom de l'Empresa"}
+                      </div>
+                      <div className="text-[10px] opacity-80 font-mono">
+                        {verticalEmpresa || "SEVALOR"} • {dominiCustom || `${subdomini}.sevalor.app`}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <span
+                      className="px-2 py-0.5 rounded-full text-[10px] font-bold text-slate-900 transition-colors"
+                      style={{ backgroundColor: `hsl(${secundariHsl})` }}
+                    >
+                      {pla}
+                    </span>
+                    <span
+                      className="w-2.5 h-2.5 rounded-full shadow-sm"
+                      style={{ backgroundColor: `hsl(${accentHsl})` }}
+                      title="Indicador d'accent"
+                    />
+                  </div>
+                </div>
+
+                {/* Cos simulat */}
+                <div className="p-4 grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
+                  <div className="p-3 rounded-xl border border-slate-100 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/50 space-y-1">
+                    <span className="text-[10px] text-slate-400 uppercase font-mono block">Operaris de Camp</span>
+                    <span className="text-base font-bold text-slate-900 dark:text-white">
+                      {tenant?.operaris_actius ?? 0} / {quotaOperaris} Llicències
+                    </span>
+                  </div>
+                  <div className="p-3 rounded-xl border border-slate-100 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/50 space-y-1">
+                    <span className="text-[10px] text-slate-400 uppercase font-mono block">Estat Pagament</span>
+                    <span
+                      className="inline-block text-[11px] font-bold px-2 py-0.5 rounded text-white"
+                      style={{ backgroundColor: `hsl(${primariHsl})` }}
+                    >
+                      {estat}
+                    </span>
+                  </div>
+                  <div className="p-3 rounded-xl border border-slate-100 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/50 space-y-1 flex items-center justify-between">
+                    <div>
+                      <span className="text-[10px] text-slate-400 uppercase font-mono block">Botó d'Acció</span>
+                      <span className="text-[11px] font-semibold text-slate-700 dark:text-slate-300">Nova Ordre</span>
+                    </div>
+                    <button
+                      type="button"
+                      className="px-3 py-1.5 rounded-lg text-white font-bold text-xs shadow-sm transition-opacity hover:opacity-90"
+                      style={{ backgroundColor: `hsl(${accentHsl})` }}
+                    >
+                      Acció
+                    </button>
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
         </div>
