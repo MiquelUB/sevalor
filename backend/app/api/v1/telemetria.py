@@ -206,6 +206,34 @@ async def get_system_kpis(db: AsyncSession = Depends(get_db_with_tenant_context)
                     _generar_ref_pwa_anonima(uid, emp.id) for uid in ids_per_ref[:15]
                 ]
 
+                # Darrera activitat registrada (última jornada o created_at)
+                q_last_act = select(func.max(RegistreJornadaLaboral.hora_inici)).where(
+                    RegistreJornadaLaboral.empresa_id == emp.id
+                )
+                res_last_act = await db.execute(q_last_act)
+                max_hora = res_last_act.scalar()
+                darrera_activitat_dt = max_hora or emp.updated_at or emp.created_at
+                darrera_activitat_iso = (
+                    darrera_activitat_dt.isoformat() if darrera_activitat_dt else None
+                )
+
+                # Total de jornades registrades en aquesta empresa (mesura d'activitat acumulada)
+                q_tot_jornades = select(func.count(RegistreJornadaLaboral.id)).where(
+                    RegistreJornadaLaboral.empresa_id == emp.id
+                )
+                res_tot_jornades = await db.execute(q_tot_jornades)
+                total_jornades = res_tot_jornades.scalar() or 0
+
+                # Càlcul del període de prova TRIAL (14 dies)
+                data_onboarding = emp.data_onboarding or emp.created_at or datetime.now(timezone.utc)
+                ara_utc = datetime.now(timezone.utc)
+                dies_onboarding = max(0, (ara_utc - data_onboarding).days) if data_onboarding else 0
+                dies_trial_restants = (
+                    max(0, 14 - dies_onboarding)
+                    if (emp.estat_pagament or "").upper() == "TRIAL"
+                    else None
+                )
+
                 pla = (emp.pla_subscripcio or "STARTER").upper()
                 if getattr(emp, "quota_operaris", None) is not None:
                     quota_operaris = int(emp.quota_operaris)
@@ -262,10 +290,17 @@ async def get_system_kpis(db: AsyncSession = Depends(get_db_with_tenant_context)
                         "quota_buffer_mb": quota_buffer_mb,
                         "node_ia_url": emp.node_ia_url,
                         "node_ia_actiu": bool(emp.node_ia_actiu),
+                        "agent_actiu": bool(emp.node_ia_actiu),
+                        "agent_url": emp.node_ia_url,
                         "estat_pc_empresa": estat_pc_empresa,
                         "tiquets_oberts": tiquets_oberts,
                         "features": features_db,
                         "estat": emp.estat_pagament or "ACTIU",
+                        "darrera_activitat": darrera_activitat_iso,
+                        "total_jornades_registrades": total_jornades,
+                        "data_onboarding": emp.data_onboarding.isoformat() if emp.data_onboarding else None,
+                        "dies_trial_restants": dies_trial_restants,
+                        "dies_trial_consumits": dies_onboarding if (emp.estat_pagament or "").upper() == "TRIAL" else None,
                     }
                 )
         except Exception:
