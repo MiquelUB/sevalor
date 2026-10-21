@@ -38,7 +38,9 @@ def make_tenant_headers(empresa_id: str, user_id: str, rol: str = "BOSS") -> dic
 
 
 @pytest.mark.asyncio
-async def test_crm_quota_operaris_i_bloqueig_alta_operaris(superadmin_headers: dict[str, str]) -> None:
+async def test_crm_quota_operaris_i_bloqueig_alta_operaris(
+    superadmin_headers: dict[str, str],
+) -> None:
     """Verifica l'assignació dinàmica de quota_operaris, l'historial i el bloqueig quan se supera la llicència."""
     suffix = str(uuid.uuid4())[:8]
     payload = {
@@ -57,7 +59,9 @@ async def test_crm_quota_operaris_i_bloqueig_alta_operaris(superadmin_headers: d
         "boss_telefon": "+34600112233",
     }
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-        res = await ac.post("/api/v1/superadmin/tenants/onboarding", json=payload, headers=superadmin_headers)
+        res = await ac.post(
+            "/api/v1/superadmin/tenants/onboarding", json=payload, headers=superadmin_headers
+        )
         assert res.status_code == 201, res.text
         tenant = res.json()["tenant"]
         empresa_id = tenant["id"]
@@ -108,7 +112,9 @@ async def test_crm_quota_operaris_i_bloqueig_alta_operaris(superadmin_headers: d
         assert upd_quota.status_code == 200
         assert upd_quota.json()["quota_operaris"] == 6
 
-        detail_res = await ac.get(f"/api/v1/superadmin/tenants/{empresa_id}", headers=superadmin_headers)
+        detail_res = await ac.get(
+            f"/api/v1/superadmin/tenants/{empresa_id}", headers=superadmin_headers
+        )
         assert detail_res.status_code == 200
         hist = detail_res.json()["historial_llicencia"]
         assert len(hist) >= 1
@@ -116,7 +122,9 @@ async def test_crm_quota_operaris_i_bloqueig_alta_operaris(superadmin_headers: d
 
 
 @pytest.mark.asyncio
-async def test_verifactu_hitl_prefactura_equips_venda_i_hibernacio(superadmin_headers: dict[str, str]) -> None:
+async def test_verifactu_hitl_prefactura_equips_venda_i_hibernacio(
+    superadmin_headers: dict[str, str],
+) -> None:
     """
     Verifica:
     - Prohibició de rènting en equips IA (només VENDA, 100% editable).
@@ -139,7 +147,9 @@ async def test_verifactu_hitl_prefactura_equips_venda_i_hibernacio(superadmin_he
         "boss_email": f"anna@hydro-{suffix}.cat",
     }
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-        res = await ac.post("/api/v1/superadmin/tenants/onboarding", json=payload, headers=superadmin_headers)
+        res = await ac.post(
+            "/api/v1/superadmin/tenants/onboarding", json=payload, headers=superadmin_headers
+        )
         assert res.status_code == 201
         empresa_id = res.json()["tenant"]["id"]
 
@@ -149,7 +159,9 @@ async def test_verifactu_hitl_prefactura_equips_venda_i_hibernacio(superadmin_he
             json={
                 "empresa_id": empresa_id,
                 "periode_facturacio": "2026-10",
-                "equips_ia_detall": [{"nom": "PC IA", "unitats": 1, "preu_unitari": 500, "modalitat": "RENTING"}],
+                "equips_ia_detall": [
+                    {"nom": "PC IA", "unitats": 1, "preu_unitari": 500, "modalitat": "RENTING"}
+                ],
             },
             headers=superadmin_headers,
         )
@@ -166,8 +178,18 @@ async def test_verifactu_hitl_prefactura_equips_venda_i_hibernacio(superadmin_he
                 "concepte_config_ia": "Configuració IA Local",
                 "import_config_ia": 150.0,
                 "equips_ia_detall": [
-                    {"nom": "PC IA Dedicat", "unitats": 1, "preu_unitari": 800.0, "modalitat": "VENDA"},
-                    {"nom": "Side Gateway", "unitats": 2, "preu_unitari": 120.0, "modalitat": "VENDA"},
+                    {
+                        "nom": "PC IA Dedicat",
+                        "unitats": 1,
+                        "preu_unitari": 800.0,
+                        "modalitat": "VENDA",
+                    },
+                    {
+                        "nom": "Side Gateway",
+                        "unitats": 2,
+                        "preu_unitari": 120.0,
+                        "modalitat": "VENDA",
+                    },
                 ],
                 "num_operaris": 8,
                 "preu_per_operari": 25.0,
@@ -195,7 +217,12 @@ async def test_verifactu_hitl_prefactura_equips_venda_i_hibernacio(superadmin_he
                 "concepte_config_ia": None,
                 "import_config_ia": 0.0,
                 "equips_ia_detall": [
-                    {"nom": "PC IA Dedicat", "unitats": 1, "preu_unitari": 800.0, "modalitat": "VENDA"}
+                    {
+                        "nom": "PC IA Dedicat",
+                        "unitats": 1,
+                        "preu_unitari": 800.0,
+                        "modalitat": "VENDA",
+                    }
                 ],
                 "num_operaris": 10,
                 "preu_per_operari": 20.0,
@@ -235,7 +262,9 @@ async def test_verifactu_hitl_prefactura_equips_venda_i_hibernacio(superadmin_he
             headers=superadmin_headers,
         )
         assert hib_res.status_code == 200
-        tenant_after = await ac.get(f"/api/v1/superadmin/tenants/{empresa_id}", headers=superadmin_headers)
+        tenant_after = await ac.get(
+            f"/api/v1/superadmin/tenants/{empresa_id}", headers=superadmin_headers
+        )
         assert tenant_after.json()["estat_pagament"] == "HIBERNANT"
 
 
@@ -264,7 +293,9 @@ async def test_tiquets_autodiagnostic_pc_apagat_recuperacio_zip_i_telemetria_ano
         "boss_email": f"joan@clima-{suffix}.cat",
     }
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-        res = await ac.post("/api/v1/superadmin/tenants/onboarding", json=payload, headers=superadmin_headers)
+        res = await ac.post(
+            "/api/v1/superadmin/tenants/onboarding", json=payload, headers=superadmin_headers
+        )
         assert res.status_code == 201
         empresa_id = res.json()["tenant"]["id"]
         boss_id = res.json()["tenant"]["boss_usuari_id"]

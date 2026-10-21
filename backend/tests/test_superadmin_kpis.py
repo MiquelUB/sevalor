@@ -12,6 +12,7 @@ from app.models.models import Empresa, Usuari
 
 pytestmark = pytest.mark.asyncio
 
+
 @pytest.fixture
 def superadmin_token_headers():
     empresa_id = str(uuid.uuid4())
@@ -29,9 +30,12 @@ def superadmin_token_headers():
         "X-Empresa-ID": empresa_id,
     }
 
+
 async def test_telemetry_global_endpoint(superadmin_token_headers):
     transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test", headers=superadmin_token_headers) as client:
+    async with AsyncClient(
+        transport=transport, base_url="http://test", headers=superadmin_token_headers
+    ) as client:
         response = await client.get("/api/v1/superadmin/telemetria/global")
         assert response.status_code == 200
         data = response.json()
@@ -39,6 +43,7 @@ async def test_telemetry_global_endpoint(superadmin_token_headers):
         assert "microservices" in data
         assert "concurrency" in data
         assert "db" in data["microservices"]
+
 
 async def test_quota_guard_downgrade(superadmin_token_headers, db_session: AsyncSession):
     # Prepare data: 1 Empresa, 6 Usuaris actius
@@ -54,17 +59,19 @@ async def test_quota_guard_downgrade(superadmin_token_headers, db_session: Async
             nif=f"1234567{i}X",
             password_hash="hashed",
             rol="OPERARI",
-            estat="ACTIU"
+            estat="ACTIU",
         )
         db_session.add(u)
     await db_session.commit()
 
     transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test", headers=superadmin_token_headers) as client:
+    async with AsyncClient(
+        transport=transport, base_url="http://test", headers=superadmin_token_headers
+    ) as client:
         # Intento de downgrade a BASIC (limit 5) per una empresa amb 6 operaris actius
         response = await client.patch(
             f"/api/v1/superadmin/telemetria/tenants/{empresa.id}/quota",
-            json={"pla_subscripcio": "BASIC"}
+            json={"pla_subscripcio": "BASIC"},
         )
         assert response.status_code == 400
         assert "Downgrade blocat" in response.json()["detail"]
@@ -72,7 +79,7 @@ async def test_quota_guard_downgrade(superadmin_token_headers, db_session: Async
         # Intento d'upgrade a PREMIUM (limit 15) hauria de funcionar
         response = await client.patch(
             f"/api/v1/superadmin/telemetria/tenants/{empresa.id}/quota",
-            json={"pla_subscripcio": "PREMIUM"}
+            json={"pla_subscripcio": "PREMIUM"},
         )
         assert response.status_code == 200
         assert response.json()["quota_operaris"] == 15
@@ -81,7 +88,9 @@ async def test_quota_guard_downgrade(superadmin_token_headers, db_session: Async
 async def test_telemetry_kpis_route_real_i_sense_valors_inventats(superadmin_token_headers):
     """La UI crida /kpis (abans 404 silenciós). Les mètriques no mesurables han de ser null, mai inventades."""
     transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test", headers=superadmin_token_headers) as client:
+    async with AsyncClient(
+        transport=transport, base_url="http://test", headers=superadmin_token_headers
+    ) as client:
         response = await client.get("/api/v1/superadmin/telemetria/kpis")
         assert response.status_code == 200
         data = response.json()

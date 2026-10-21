@@ -92,9 +92,7 @@ async def login_oficina(
         if usuari.rol.upper() != "SUPERADMIN" and usuari.empresa_id:
             await db.execute(text("RESET ROLE;"))
             try:
-                emp_res = await db.execute(
-                    select(Empresa).where(Empresa.id == usuari.empresa_id)
-                )
+                emp_res = await db.execute(select(Empresa).where(Empresa.id == usuari.empresa_id))
                 emp = emp_res.scalars().first()
             finally:
                 if current_role:
@@ -181,9 +179,175 @@ async def get_me(
 
     return UserMeResponse(
         id=str(usuari.id),
-        empresa_id=claims.get("empresa_id") or (str(usuari.empresa_id) if usuari.empresa_id else None),
+        empresa_id=claims.get("empresa_id")
+        or (str(usuari.empresa_id) if usuari.empresa_id else None),
         rol=usuari.rol.upper(),
         nom=usuari.nom,
         email=usuari.email,
         is_impersonation=is_impersonation,
     )
+
+
+class VerificarActivacioResponse(BaseModel):
+    valid: bool
+    usuari_id: str
+    nom: str
+    cognoms: str
+    email: str
+    empresa_id: str
+    empresa_nom: str
+    subdomini: str
+    primari_hsl: str | None = None
+    logotip_path: str | None = None
+
+
+class CompletarActivacioRequest(BaseModel):
+    token: str
+    password: str
+    password_confirm: str
+
+
+@router.get("/activacio/verificar", response_model=VerificarActivacioResponse)
+async def verificar_token_activacio(
+    token: str,
+    db: AsyncSession = Depends(get_db),
+) -> VerificarActivacioResponse:
+    """Verifica si el token d'activació de 24h per al gerent és vàlid."""
+    try:
+        payload = jwt.decode(
+            token,
+            settings.SECRET_KEY,
+            algorithms=[settings.ALGORITHM],
+            options={"verify_exp": True},
+        )
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(
+            status_code=status.HTTP_410_GONE,
+            detail="L'enllaç d'activació ha caducat (validesa màxima de 24 hores). Sol·liciteu un nou enllaç a l'administració de la plataforma.",
+        )
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Token d'activació invàlid o malmès.",
+        )
+
+    if payload.get("action") != "activate":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Aquest token no correspon a una acció d'activació de compte.",
+        )
+
+    user_id_str = payload.get("sub")
+    if not user_id_str:
+        raise HTTPException(status_code=400, detail="Token sense identificador d'usuari.")
+
+    try:
+        user_uuid = uuid.UUID(str(user_id_str))
+    except ValueError:
+        raise HTTPException(status_code=400, detail="UUID d'usuari invàlid.")
+
+    res_role = await db.execute(text("SELECT current_user;"))
+    current_role = res_role.scalar()
+
+    await db.execute(text("RESET ROLE;"))
+    try:
+        usuari_res = await db.execute(select(Usuari).where(Usuari.id == user_uuid))
+        usuari = usuari_res.scalars().first()
+        if not usuari:
+            raise HTTPException(status_code=404, detail="Usuari no trobat.")
+
+        emp_res = await db.execute(select(Empresa).where(Empresa.id == usuari.empresa_id))
+        empresa = emp_res.scalars().first()
+        if not empresa:
+            raise HTTPException(status_code=404, detail="Empresa no trobada.")
+    finally:
+        if current_role:
+            await db.execute(text(f'SET ROLE "{current_role}";'))
+
+    return VerificarActivacioResponse(
+        valid=True,
+        usuari_id=str(usuari.id),
+        nom=usuari.nom,
+        cognoms=usuari.cognoms,
+        email=usuari.email or "",
+        empresa_id=str(empresa.id),
+        empresa_nom=empresa.nom,
+        subdomini=empresa.subdomini or "",
+        primari_hsl=empresa.primari_hsl,
+        logotip_path=empresa.logotip_path,
+    )
+
+
+@router.post("/activacio", response_model=dict[str, str])
+async def completar_activacio(
+    payload_in: CompletarActivacioRequest,
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, str]:
+    """Estableix la contrasenya del gerent i activa el seu compte des de l'enllaç d'onboarding (Spec 04 FR-004/005)."""
+    if len(payload_in.password) < 8:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="La contrasenya ha de tenir com a mínim 8 caràcters.",
+        )
+
+    if payload_in.password != payload_in.password_confirm:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Les contrasenyes introduïdes no coincideixen.",
+        )
+
+    try:
+        token_data = jwt.decode(
+            payload_in.token,
+            settings.SECRET_KEY,
+            algorithms=[settings.ALGORITHM],
+            options={"verify_exp": True},
+        )
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(
+            status_code=status.HTTP_410_GONE,
+            detail="L'enllaç d'activació ha caducat (validesa màxima de 24 hores).",
+        )
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Token d'activació invàlid.",
+        )
+
+    if token_data.get("action") != "activate":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Acció no autoritzada amb aquest token.",
+        )
+
+    try:
+        user_uuid = uuid.UUID(str(token_data.get("sub")))
+    except Exception:
+        raise HTTPException(status_code=400, detail="UUID d'usuari invàlid.")
+
+    res_role = await db.execute(text("SELECT current_user;"))
+    current_role = res_role.scalar()
+
+    await db.execute(text("RESET ROLE;"))
+    try:
+        usuari_res = await db.execute(select(Usuari).where(Usuari.id == user_uuid))
+        usuari = usuari_res.scalars().first()
+        if not usuari:
+            raise HTTPException(status_code=404, detail="Usuari no trobat.")
+
+        salt = bcrypt.gensalt(rounds=12)
+        hashed = bcrypt.hashpw(payload_in.password.encode("utf-8"), salt).decode("utf-8")
+
+        usuari.password_hash = hashed
+        usuari.estat = "ACTIU"
+        usuari.updated_at = datetime.now(timezone.utc)
+        await db.commit()
+    finally:
+        if current_role:
+            await db.execute(text(f'SET ROLE "{current_role}";'))
+
+    return {
+        "status": "ACTIVATED",
+        "message": "El vostre compte de gerència ha estat activat satisfactòriament. Ja podeu iniciar sessió.",
+        "redirect": "/gestio/login",
+    }

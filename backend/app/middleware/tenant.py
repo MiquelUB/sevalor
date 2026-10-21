@@ -95,6 +95,23 @@ class TenantMiddleware(BaseHTTPMiddleware):
                         "detail": "Zero-Trust Segregation: SUPERADMIN no pot accedir a rutes operatives de negoci."
                     },
                 )
+        elif empresa_id:
+            path = request.url.path
+            if path.startswith("/api/v1/") and not (
+                path.startswith("/api/v1/auth") or path.startswith("/api/v1/health")
+            ):
+                from app.core.redis import is_tenant_blacklisted
+
+                blocked_state = await is_tenant_blacklisted(empresa_id)
+                if blocked_state:
+                    from fastapi.responses import JSONResponse
+
+                    return JSONResponse(
+                        status_code=403,
+                        content={
+                            "detail": f"El compte de l'empresa està en estat '{blocked_state}'. Contacteu amb l'administració de Sevalor per regularitzar el servei."
+                        },
+                    )
 
         from app.core.context import role_context, superadmin_context, tenant_context
 

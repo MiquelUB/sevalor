@@ -16,16 +16,17 @@ async def get_worker_session(
         yield session
 
 
-
 logger = logging.getLogger("workers.tasks")
 
 
 def crear_directoris_sobirans(
-    empresa_id: str, base_data_dir: str = None, base_docs_dir: str = None  # type: ignore
+    empresa_id: str,
+    base_data_dir: str | None = None,
+    base_docs_dir: str | None = None,
 ) -> List[str]:
     """Crea l'arbre de directoris sobirans per a una empresa (Spec 021 RF-08)."""
-    data_prefix = base_data_dir or os.getenv("SOVEREIGN_DATA_PATH", "/data")
-    base_docs_dir or os.getenv("SOVEREIGN_DOCS_PATH", "/docs")
+    data_prefix = str(base_data_dir or os.getenv("SOVEREIGN_DATA_PATH", "/data"))
+    str(base_docs_dir or os.getenv("SOVEREIGN_DOCS_PATH", "/docs"))
 
     try:
         os.makedirs(data_prefix, exist_ok=True)
@@ -73,7 +74,10 @@ def generar_informe_planol_pdf(planol_id: str, empresa_id: str):
 
 @celery_app.task(name="generar_informe_post_obra", queue="queue_documents")
 def generar_informe_post_obra(
-    ordre_treball_id: str, empresa_id: str, client_nom: str = "Client", dades_informe: dict = None  # type: ignore
+    ordre_treball_id: str,
+    empresa_id: str,
+    client_nom: str = "Client",
+    dades_informe: dict = None,  # type: ignore
 ):
     """
     (Phase 4 / F4-T04) Genera l'informe oficial en PDF post-intervenció
@@ -635,13 +639,49 @@ def purgar_dades_tenant_destruit(tenant_id: str):
                     {"tenant_id": tenant_id},
                 )
 
-                # S'hauria de fer una eliminació o ofuscació en cascada de totes les taules de negoci
-                # per complir la normativa de Destrucció Certificada.
-                # IMPORTANT: Les taules saas_factures_b2b i saas_tiquets_suport es conserven intactes
-                # al CRM per obligació fiscal (Veri*factu AEAT) i traçabilitat d'auditoria.
+                # Eliminació en cascada de taules operatives de negoci segons protocol RGPD
+                # NOTA: saas_factures_b2b i saas_tiquets_suport es conserven per obligació fiscal (AEAT)
+                taules_operatives = [
+                    "registres_jornada_laboral",
+                    "incidencies",
+                    "materials_linia",
+                    "albarans",
+                    "ordres_treball",
+                    "contractes_manteniment",
+                    "clients",
+                    "proveidors",
+                    "vehicles",
+                ]
+                for taula in taules_operatives:
+                    try:
+                        await session.execute(
+                            text(f"DELETE FROM {taula} WHERE empresa_id = :tenant_id"),
+                            {"tenant_id": tenant_id},
+                        )
+                    except Exception as exc_taula:
+                        logger.warning(
+                            f"Taula {taula} no s'ha pogut purgar directament per al tenant {tenant_id}: {exc_taula}"
+                        )
+
+                # Purga física de fitxers al disc sobirà Hetzner
+                import os
+                import shutil
+
+                for base_dir in ("/data", "/docs", "/tmp/data", "/tmp/docs"):
+                    carpeta_tenant = os.path.join(base_dir, tenant_id)
+                    if os.path.exists(carpeta_tenant):
+                        try:
+                            shutil.rmtree(carpeta_tenant, ignore_errors=True)
+                            logger.info(f"Directori sobirà purgat: {carpeta_tenant}")
+                        except OSError as exc_dir:
+                            logger.warning(
+                                f"No s'ha pogut eliminar directori {carpeta_tenant}: {exc_dir}"
+                            )
 
                 await session.commit()
-                logger.info(f"Purga de dades per tenant {tenant_id} completada.")
+                logger.info(
+                    f"Purga integral de dades i fitxers per al tenant {tenant_id} completada."
+                )
             except Exception as e:
                 logger.error(f"Error purgant tenant {tenant_id}: {e}")
 

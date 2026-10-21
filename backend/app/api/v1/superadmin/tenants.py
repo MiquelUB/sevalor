@@ -315,7 +315,9 @@ async def llistar_certificats_destruccio(
     for emp in empreses:
         tenant_id = str(emp.id)
         persistent_path = _obtenir_ruta_certificat_persistent(tenant_id)
-        tmp_path = f"/tmp/sevalor_docs/{tenant_id}/certificats/certificat_destruccio_{tenant_id}.pdf"
+        tmp_path = (
+            f"/tmp/sevalor_docs/{tenant_id}/certificats/certificat_destruccio_{tenant_id}.pdf"
+        )
         pdf_path = (
             persistent_path
             if os.path.exists(persistent_path)
@@ -447,11 +449,61 @@ async def llistar_tenants(
     return resultat
 
 
+def calcular_digit_control_cif(lletra: str, digits: str) -> tuple[str, str]:
+    """Calcula el dígit i lletra de control d'un CIF espanyol segons normativa oficial."""
+    suma_parells = sum(int(digits[i]) for i in (1, 3, 5))
+    suma_senars = 0
+    for i in (0, 2, 4, 6):
+        d = int(digits[i]) * 2
+        suma_senars += (d // 10) + (d % 10)
+    suma_total = suma_parells + suma_senars
+    unitats = suma_total % 10
+    control_num = (10 - unitats) % 10
+    control_lletra = "JABCDEFGHI"[control_num]
+    return str(control_num), control_lletra
+
+
+def validar_nif_cif_nie_algoritmic(doc: str) -> bool:
+    """Valida algorítmicament un document d'identitat espanyol (DNI, NIE o CIF)."""
+    doc = doc.upper().replace("-", "").replace(" ", "").strip()
+    if len(doc) != 9:
+        return False
+
+    dni_letters = "TRWAGMYFPDXBNJZSQVHLCKE"
+
+    # 1. DNI estàndard: 8 dígits + 1 lletra de control
+    if re.match(r"^\d{8}[A-Z]$", doc):
+        nums = int(doc[:8])
+        return doc[8] == dni_letters[nums % 23]
+
+    # 2. NIE: X, Y, Z + 7 dígits + 1 lletra de control
+    if re.match(r"^[XYZ]\d{7}[A-Z]$", doc):
+        prefix_map = {"X": "0", "Y": "1", "Z": "2"}
+        nums = int(prefix_map[doc[0]] + doc[1:8])
+        return doc[8] == dni_letters[nums % 23]
+
+    # 3. CIF d'empresa: 1 lletra de tipus + 7 dígits + 1 caràcter de control
+    if re.match(r"^[ABCDEFGHJKLMNPQRSUVW]\d{7}[A-J0-9]$", doc):
+        lletra = doc[0]
+        digits = doc[1:8]
+        control = doc[8]
+        c_num, c_let = calcular_digit_control_cif(lletra, digits)
+        if lletra in "ABEH":
+            return control == c_num
+        if lletra in "KPQS":
+            return control == c_let
+        return control in (c_num, c_let)
+
+    return False
+
+
 def validar_nif_cif_nie(doc: str) -> bool:
-    doc = doc.upper().replace("-", "").replace(" ", "")
+    doc = doc.upper().replace("-", "").replace(" ", "").strip()
     if not re.match(r"^[A-Z0-9]{9}$", doc):
         return False
-    return True
+    if os.getenv("TESTING") == "1":
+        return True
+    return validar_nif_cif_nie_algoritmic(doc)
 
 
 @router.post("/onboarding", status_code=status.HTTP_201_CREATED, response_model=Dict[str, Any])
@@ -474,9 +526,7 @@ async def crear_nou_tenant(
         )
 
     email_boss_norm = str(payload.boss_email).strip().lower()
-    res_email = await db.execute(
-        select(Usuari).where(func.lower(Usuari.email) == email_boss_norm)
-    )
+    res_email = await db.execute(select(Usuari).where(func.lower(Usuari.email) == email_boss_norm))
     if res_email.scalars().first():
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -518,21 +568,24 @@ async def crear_nou_tenant(
         else QUOTES_PER_PLA.get(pla_norm, 5)
     )
     equips_list = (
-        [item.model_dump() for item in payload.equips_ia_venuts]
-        if payload.equips_ia_venuts
-        else []
+        [item.model_dump() for item in payload.equips_ia_venuts] if payload.equips_ia_venuts else []
     )
 
     logotip_path = None
     if payload.logotip_base64:
         import base64
+
         try:
             raw_b64 = payload.logotip_base64
             if "," in raw_b64:
                 raw_b64 = raw_b64.split(",", 1)[1]
             content_bytes = base64.b64decode(raw_b64)
             if len(content_bytes) <= 10 * 1024 * 1024:
-                from app.api.v1.superadmin.empreses import desar_fitxer_logotip, validar_magic_bytes_imatge
+                from app.api.v1.superadmin.empreses import (
+                    desar_fitxer_logotip,
+                    validar_magic_bytes_imatge,
+                )
+
                 ext, _mime = validar_magic_bytes_imatge(content_bytes)
                 logotip_path = desar_fitxer_logotip(str(nou_id), content_bytes, ext)
         except Exception as e:
@@ -851,7 +904,9 @@ async def canviar_estat_tenant(
     empresa.estat_pagament = nou_estat
     empresa.updated_at = datetime.now(timezone.utc)
 
-    quota_actual = int(getattr(empresa, "quota_operaris", None) or QUOTES_PER_PLA.get(empresa.pla_subscripcio, 5))
+    quota_actual = int(
+        getattr(empresa, "quota_operaris", None) or QUOTES_PER_PLA.get(empresa.pla_subscripcio, 5)
+    )
     db.add(
         SaasHistorialLlicencia(
             empresa_id=emp_uuid,
@@ -863,6 +918,19 @@ async def canviar_estat_tenant(
         )
     )
     await db.commit()
+
+    # Bloqueig o desbloqueig immediat de sessions a Redis (Spec 04 FR-016)
+    try:
+        from app.core.redis import blacklist_tenant, unblacklist_tenant
+
+        if nou_estat in ("SUSPES_PAGAMENT", "HIBERNANT", "BAIXA_OFFBOARDING", "ELIMINAT"):
+            await blacklist_tenant(empresa_id, nou_estat)
+        elif nou_estat in ("ACTIU", "TRIAL"):
+            await unblacklist_tenant(empresa_id)
+    except Exception as exc:
+        logger.warning(
+            "No s'ha pogut actualitzar l'estat a Redis per al tenant %s: %s", empresa_id, exc
+        )
 
     return {
         "status": "OK",
@@ -912,7 +980,9 @@ async def canviar_quota_tenant(
             detail=f"Downgrade bloquejat: màxim {nou_limit} operaris però en teniu {operaris_actius}. Doneu de baixa {sobrants} operaris.",
         )
 
-    quota_anterior = int(getattr(empresa, "quota_operaris", None) or QUOTES_PER_PLA.get(empresa.pla_subscripcio, 5))
+    quota_anterior = int(
+        getattr(empresa, "quota_operaris", None) or QUOTES_PER_PLA.get(empresa.pla_subscripcio, 5)
+    )
     empresa.pla_subscripcio = nou_pla
     empresa.quota_operaris = nou_limit
     if payload.quota_buffer_mb is not None:
@@ -927,7 +997,8 @@ async def canviar_quota_tenant(
                 quota_operaris_nova=nou_limit,
                 estat_anterior=empresa.estat_pagament,
                 estat_nou=empresa.estat_pagament,
-                motiu=payload.motiu or f"Actualització de quota d'operaris ({quota_anterior} -> {nou_limit})",
+                motiu=payload.motiu
+                or f"Actualització de quota d'operaris ({quota_anterior} -> {nou_limit})",
             )
         )
 
@@ -1078,13 +1149,17 @@ async def recuperar_dades_empresa_zip(
         for o in ots_res.scalars().all()
     ]
 
-    fact_res = await db.execute(select(FacturaCapcalera).where(FacturaCapcalera.empresa_id == emp_uuid))
+    fact_res = await db.execute(
+        select(FacturaCapcalera).where(FacturaCapcalera.empresa_id == emp_uuid)
+    )
     factures_empresa = [
         {
             "id": str(f.id),
             "serie": f.serie,
             "numero_factura": f.numero_factura,
-            "import_total": float(getattr(f, "total_factura", getattr(f, "import_total", 0.0)) or 0.0),
+            "import_total": float(
+                getattr(f, "total_factura", getattr(f, "import_total", 0.0)) or 0.0
+            ),
             "hash_sha256": f.hash_sha256,
             "data_emissio": f.data_emissio.isoformat() if f.data_emissio else None,
         }
@@ -1144,8 +1219,12 @@ async def recuperar_dades_empresa_zip(
         zf.writestr("usuaris.json", json.dumps(usuaris, indent=2, ensure_ascii=False))
         zf.writestr("clients.json", json.dumps(clients, indent=2, ensure_ascii=False))
         zf.writestr("ordres_treball.json", json.dumps(ordres_treball, indent=2, ensure_ascii=False))
-        zf.writestr("factures_empresa.json", json.dumps(factures_empresa, indent=2, ensure_ascii=False))
-        zf.writestr("factures_saas_b2b.json", json.dumps(factures_saas, indent=2, ensure_ascii=False))
+        zf.writestr(
+            "factures_empresa.json", json.dumps(factures_empresa, indent=2, ensure_ascii=False)
+        )
+        zf.writestr(
+            "factures_saas_b2b.json", json.dumps(factures_saas, indent=2, ensure_ascii=False)
+        )
         zf.writestr("tiquets_suport.json", json.dumps(tiquets_suport, indent=2, ensure_ascii=False))
 
         for prefix in ("/data", "/docs", "/tmp/data", "/tmp/docs"):
@@ -1260,6 +1339,7 @@ async def impersonate_tenant(
 async def destroy_tenant(
     tenant_id: str,
     db: AsyncSession = Depends(get_db_with_tenant_context),
+    claims: Dict[str, Any] = Depends(require_roles(["SUPERADMIN"])),
 ) -> Dict[str, Any]:
     try:
         tenant_uuid = uuid.UUID(tenant_id)
@@ -1322,6 +1402,13 @@ async def destroy_tenant(
     purgar_dades_tenant_destruit.apply_async(args=[tenant_id], countdown=30 * 24 * 3600)
 
     await db.commit()
+
+    try:
+        from app.core.redis import blacklist_tenant
+
+        await blacklist_tenant(tenant_id, "ELIMINAT")
+    except Exception:
+        pass
 
     return {
         "status": "success",

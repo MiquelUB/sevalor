@@ -17,13 +17,15 @@ def superadmin_token():
         "empresa_id": None,
         "exp": datetime.now(timezone.utc) + timedelta(minutes=15),
         "totp_activat": True,
-        "ip_allowlist": ["testclient", "127.0.0.1", "localhost", "*"]
+        "ip_allowlist": ["testclient", "127.0.0.1", "localhost", "*"],
     }
     return jwt.encode(payload, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
+
 
 @pytest.fixture
 def headers(superadmin_token):
     return {"Authorization": f"Bearer {superadmin_token}"}
+
 
 @pytest.mark.asyncio
 async def test_onboarding_tenant_success(headers):
@@ -43,12 +45,16 @@ async def test_onboarding_tenant_success(headers):
             "copilot_ia": False,
             "flota_avancada": True,
             "planols_tecnics": False,
-            "telegram_bot": True
-        }
+            "telegram_bot": True,
+        },
     }
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-        response = await ac.post("/api/v1/superadmin/tenants/onboarding", json=payload, headers=headers)
-        assert response.status_code == 201, f"Expected 201 but got {response.status_code}: {response.text}"
+        response = await ac.post(
+            "/api/v1/superadmin/tenants/onboarding", json=payload, headers=headers
+        )
+        assert response.status_code == 201, (
+            f"Expected 201 but got {response.status_code}: {response.text}"
+        )
         data = response.json()
         assert data["status"] == "CREATED"
         assert data["tenant"]["pla_subscripcio"] == "STARTER"
@@ -58,6 +64,7 @@ async def test_onboarding_tenant_success(headers):
 @pytest.mark.asyncio
 async def test_onboarding_tenant_amb_logotip_base64(headers):
     import base64
+
     valid_png_bytes = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
     b64_str = "data:image/png;base64," + base64.b64encode(valid_png_bytes).decode("ascii")
     payload = {
@@ -75,11 +82,14 @@ async def test_onboarding_tenant_amb_logotip_base64(headers):
         "logotip_base64": b64_str,
     }
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-        response = await ac.post("/api/v1/superadmin/tenants/onboarding", json=payload, headers=headers)
+        response = await ac.post(
+            "/api/v1/superadmin/tenants/onboarding", json=payload, headers=headers
+        )
         assert response.status_code == 201
         data = response.json()
         assert data["status"] == "CREATED"
         assert "logo_oficial.png" in (data["tenant"].get("logotip_path") or "")
+
 
 @pytest.mark.asyncio
 async def test_onboarding_requires_superadmin():
@@ -87,7 +97,7 @@ async def test_onboarding_requires_superadmin():
         "sub": "11111111-1111-1111-1111-111111111111",
         "rol": "OPERARI",
         "empresa_id": "22222222-2222-2222-2222-222222222222",
-        "exp": datetime.now(timezone.utc) + timedelta(minutes=15)
+        "exp": datetime.now(timezone.utc) + timedelta(minutes=15),
     }
     token = jwt.encode(payload_jwt, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
     headers = {"Authorization": f"Bearer {token}"}
@@ -102,11 +112,16 @@ async def test_onboarding_requires_superadmin():
         "boss_nif": "12345678Z",
         "boss_nom": "Hacker",
         "boss_cognoms": "Dolent",
-        "boss_email": "hacker@test.com"
+        "boss_email": "hacker@test.com",
     }
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-        response = await ac.post("/api/v1/superadmin/tenants/onboarding", json=payload, headers=headers)
-        assert response.status_code == 403, "L'API no ha bloquejat a l'operari! Greu fallada de seguretat."
+        response = await ac.post(
+            "/api/v1/superadmin/tenants/onboarding", json=payload, headers=headers
+        )
+        assert response.status_code == 403, (
+            "L'API no ha bloquejat a l'operari! Greu fallada de seguretat."
+        )
+
 
 @pytest.mark.asyncio
 async def test_estat_transicions_correctes(headers):
@@ -118,8 +133,12 @@ async def test_estat_transicions_correctes(headers):
         empresa_id = llista[0]["id"]
 
         payload = {"estat": "SUSPES_PAGAMENT"}
-        res_update = await ac.put(f"/api/v1/superadmin/tenants/{empresa_id}/estat", json=payload, headers=headers)
-        assert res_update.status_code == 200, f"Expected 200 but got {res_update.status_code}: {res_update.text}"
+        res_update = await ac.put(
+            f"/api/v1/superadmin/tenants/{empresa_id}/estat", json=payload, headers=headers
+        )
+        assert res_update.status_code == 200, (
+            f"Expected 200 but got {res_update.status_code}: {res_update.text}"
+        )
         data = res_update.json()
         assert data["nou_estat"] == "SUSPES_PAGAMENT"
 
@@ -188,18 +207,24 @@ async def test_onboarding_tenant_amb_domini_propi(headers):
             "copilot_ia": True,
             "flota_avancada": True,
             "planols_tecnics": True,
-            "telegram_bot": True
-        }
+            "telegram_bot": True,
+        },
     }
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-        response = await ac.post("/api/v1/superadmin/tenants/onboarding", json=payload, headers=headers)
-        assert response.status_code == 201, f"Expected 201 but got {response.status_code}: {response.text}"
+        response = await ac.post(
+            "/api/v1/superadmin/tenants/onboarding", json=payload, headers=headers
+        )
+        assert response.status_code == 201, (
+            f"Expected 201 but got {response.status_code}: {response.text}"
+        )
         data = response.json()
         assert data["status"] == "CREATED"
         tenant = data["tenant"]
         assert tenant["domini_custom"] == domini_custom
         assert tenant["domini_complet"] == domini_custom
-        assert tenant["enllac_activacio_2fa"].startswith(f"https://{domini_custom}/activacio?token=")
+        assert tenant["enllac_activacio_2fa"].startswith(
+            f"https://{domini_custom}/activacio?token="
+        )
 
         empresa_id = tenant["id"]
 
@@ -226,7 +251,31 @@ async def test_onboarding_tenant_amb_domini_propi(headers):
             "domini_custom": nou_domini,
             "boss_email": f"altre@{subdomini}.cat",
         }
-        res_dup = await ac.post("/api/v1/superadmin/tenants/onboarding", json=payload_dup, headers=headers)
+        res_dup = await ac.post(
+            "/api/v1/superadmin/tenants/onboarding", json=payload_dup, headers=headers
+        )
         assert res_dup.status_code == 409
         assert "ja està en ús" in res_dup.json()["detail"]
 
+
+def test_validacio_algoritmica_nif_cif_nie():
+    from app.api.v1.superadmin.tenants import validar_nif_cif_nie_algoritmic
+
+    # 1. DNI vàlid (12345678Z) vs invàlid
+    assert validar_nif_cif_nie_algoritmic("12345678Z") is True
+    assert validar_nif_cif_nie_algoritmic("12345678A") is False
+
+    # 2. NIE vàlid (X1234567L) vs invàlid
+    assert validar_nif_cif_nie_algoritmic("X1234567L") is True
+    assert validar_nif_cif_nie_algoritmic("X1234567A") is False
+
+    # 3. CIFs reals vàlids (B64010721, A58818501) vs invàlids
+    assert validar_nif_cif_nie_algoritmic("B64010721") is True
+    assert validar_nif_cif_nie_algoritmic("B64010729") is False
+    assert validar_nif_cif_nie_algoritmic("A58818501") is True
+    assert validar_nif_cif_nie_algoritmic("A58818509") is False
+
+    # 4. Formats erronis
+    assert validar_nif_cif_nie_algoritmic("123") is False
+    assert validar_nif_cif_nie_algoritmic("AAAAAAAAA") is False
+    assert validar_nif_cif_nie_algoritmic("") is False

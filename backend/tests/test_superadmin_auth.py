@@ -8,6 +8,7 @@ from httpx import ASGITransport, AsyncClient
 from app.core.config import settings
 from app.main import app
 
+
 def make_token(totp=True, ip_list=None):
     if ip_list is None:
         ip_list = ["testclient", "*"]
@@ -17,9 +18,10 @@ def make_token(totp=True, ip_list=None):
         "empresa_id": None,
         "exp": datetime.now(timezone.utc) + timedelta(minutes=15),
         "totp_activat": totp,
-        "ip_allowlist": ip_list
+        "ip_allowlist": ip_list,
     }
     return jwt.encode(payload, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
+
 
 @pytest.mark.asyncio
 async def test_superadmin_missing_totp():
@@ -30,6 +32,7 @@ async def test_superadmin_missing_totp():
         assert response.status_code == 403
         assert "TOTP" in response.text
 
+
 @pytest.mark.asyncio
 async def test_superadmin_ip_blocking():
     # Only allow 1.1.1.1
@@ -39,6 +42,7 @@ async def test_superadmin_ip_blocking():
         response = await ac.get("/api/v1/superadmin/tenants", headers=headers)
         assert response.status_code == 403
         assert "IP" in response.text
+
 
 @pytest.mark.asyncio
 async def test_impersonation_jwt_generation(db_session):
@@ -59,22 +63,31 @@ async def test_impersonation_jwt_generation(db_session):
             "boss_cognoms": "Puig",
             "boss_email": "imptest@test.cat",
             "boss_telefon": "+34600100200",
-            "feature_flags": {}
+            "feature_flags": {},
         }
-        res_create = await ac.post("/api/v1/superadmin/tenants/onboarding", json=payload, headers=headers)
+        res_create = await ac.post(
+            "/api/v1/superadmin/tenants/onboarding", json=payload, headers=headers
+        )
         assert res_create.status_code == 201
         empresa_id = res_create.json()["tenant"]["id"]
 
-        res_imp = await ac.post(f"/api/v1/superadmin/tenants/{empresa_id}/impersonate", headers=headers)
+        res_imp = await ac.post(
+            f"/api/v1/superadmin/tenants/{empresa_id}/impersonate", headers=headers
+        )
         assert res_imp.status_code == 200
         data = res_imp.json()
         assert data["is_impersonation"] is True
-        
+
         # Verify the new token has is_impersonation=True
         imp_token = data["access_token"]
-        decoded = jwt.decode(imp_token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM], options={"verify_aud": False})
+        decoded = jwt.decode(
+            imp_token,
+            settings.SECRET_KEY,
+            algorithms=[settings.ALGORITHM],
+            options={"verify_aud": False},
+        )
         assert decoded["is_impersonation"] is True
         assert decoded["empresa_id"] == empresa_id
         assert decoded["rol"] == "SUPERADMIN"
-        
+
         # Test financial endpoint block (example: we can't test unless we know a financial endpoint, but we can just test if the token is decoded correctly)
