@@ -168,7 +168,6 @@ export default function SuperadminTenantOnboardingPage() {
   // Pas 2: Domini Propi & Verificació Real DNS
   const [tipusDomini, setTipusDomini] = useState<"PROPI" | "SEVALOR">("PROPI");
   const [dominiEmpresa, setDominiEmpresa] = useState<string>("");
-  const [subdominiPrefix, setSubdominiPrefix] = useState<string>("sevalor");
   const [subdomini, setSubdomini] = useState<string>("");
   const [dnsResult, setDnsResult] = useState<any>(null);
   const [checkingDns, setCheckingDns] = useState<boolean>(false);
@@ -203,36 +202,56 @@ export default function SuperadminTenantOnboardingPage() {
     .trim()
     .toLowerCase()
     .replace(/^https?:\/\//, "")
-    .replace(/\/.*$/, "");
-  const prefixNet = (subdominiPrefix.trim() || "sevalor").toLowerCase();
+    .replace(/\/.*$/, "")
+    .replace(/[^a-z0-9.-]/g, "");
 
-  // Si l'usuari ja ha inclòs el subdomini (ex. ha escrit 'sevalor.projecte.cat' amb prefix 'sevalor'), no duplicar
+  // El subdomini o domini introduït mana de forma absoluta, sense prefixos forçats ni fallbacks a 'sevalor'
   const fqdnResultant =
     tipusDomini === "PROPI"
       ? dominiNet
-        ? dominiNet.startsWith(`${prefixNet}.`)
-          ? dominiNet
-          : `${prefixNet}.${dominiNet}`
-        : ""
       : `${(subdomini.trim() || "tenant").toLowerCase().replace(/[^a-z0-9-]/g, "")}.sevalor.app`;
 
-  // Càlcul intel·ligent del slug intern únic a PostgreSQL RLS
+  // Extracció de peces del domini per a la instrucció DNS CNAME
+  const dominiParts = dominiNet ? dominiNet.split(".").filter(Boolean) : [];
+  const cnameHost =
+    dominiParts.length > 2
+      ? dominiParts.slice(0, dominiParts.length - 2).join(".")
+      : dominiParts.length === 2
+      ? dominiParts[0]
+      : dominiParts[0] || "subdomini";
+
+  const cnameRootDomain =
+    dominiParts.length >= 2
+      ? dominiParts.slice(-2).join(".")
+      : dominiNet || "empresa.cat";
+
+  // Càlcul intel·ligent del slug intern únic a PostgreSQL RLS (mai pot ser 'sevalor')
   const slugFromRao = raoSocial
     .trim()
     .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "");
-  const dominiParts = dominiNet.split(".");
-  const domainSlug =
-    dominiParts.length > 2 && dominiParts[0] === prefixNet
-      ? dominiParts[1]
-      : dominiParts[0];
 
-  const slugCalculat =
-    subdomini.trim().toLowerCase().replace(/[^a-z0-9-]/g, "") ||
+  let domainSlug = "";
+  if (dominiParts.length >= 2) {
+    const genericPrefixes = new Set(["sevalor", "app", "gestio", "erp", "crm", "portal", "admin", "cloud", "core"]);
+    const candidate = dominiParts.find((p) => !genericPrefixes.has(p) && !["com", "cat", "es", "net", "org", "eu"].includes(p));
+    domainSlug = candidate || dominiParts[0];
+  }
+
+  let slugCalculat =
+    (tipusDomini === "SEVALOR" && subdomini.trim() ? subdomini.trim().toLowerCase().replace(/[^a-z0-9-]/g, "") : "") ||
     (slugFromRao && slugFromRao !== "sevalor" ? slugFromRao : "") ||
     (domainSlug && domainSlug !== "sevalor" ? domainSlug : "") ||
     `tenant-${Date.now().toString().slice(-4)}`;
+
+  if (["sevalor", "admin", "api", "superadmin", "billing", "app"].includes(slugCalculat)) {
+    slugCalculat = slugFromRao && !["sevalor", "admin", "api", "superadmin", "billing", "app"].includes(slugFromRao)
+      ? slugFromRao
+      : `tenant-${Date.now().toString().slice(-4)}`;
+  }
 
   const handleCheckDnsLive = async () => {
     if (!fqdnResultant) {
@@ -275,7 +294,7 @@ export default function SuperadminTenantOnboardingPage() {
       if (!dominiEmpresa.trim() || !dominiEmpresa.includes(".")) {
         setDryRunRunning(false);
         setDryRunSuccess(false);
-        setErrorMessage("Cal indicar un domini propi d'empresa vàlid (exemple: soler.cat).");
+        setErrorMessage("Cal indicar un domini o subdomini d'empresa vàlid (exemple: sevalor.projectexinoxano.cat o app.soler.cat).");
         return;
       }
     } else {
@@ -799,40 +818,28 @@ export default function SuperadminTenantOnboardingPage() {
 
             {tipusDomini === "PROPI" ? (
               <div className="space-y-4">
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-xs">
-                  <div className="sm:col-span-2">
-                    <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                      Domini Corporatiu de l'Empresa
-                    </label>
-                    <input
-                      type="text"
-                      placeholder="ex. soler.cat"
-                      value={dominiEmpresa}
-                      onChange={(e) =>
-                        setDominiEmpresa(
-                          e.target.value
-                            .toLowerCase()
-                            .replace(/^https?:\/\//, "")
-                            .replace(/\/.*$/, "")
-                            .replace(/[^a-z0-9.-]/g, "")
-                        )
-                      }
-                      className="w-full p-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 font-mono font-bold"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                      Prefix del Subdomini
-                    </label>
-                    <input
-                      type="text"
-                      placeholder="sevalor"
-                      value={subdominiPrefix}
-                      onChange={(e) => setSubdominiPrefix(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ""))}
-                      className="w-full p-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 font-mono font-bold"
-                    />
-                  </div>
+                <div>
+                  <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                    Subdomini o Domini d'Accés Personalitzat (FQDN Complet)
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="ex. sevalor.projectexinoxano.cat o app.soler.cat"
+                    value={dominiEmpresa}
+                    onChange={(e) =>
+                      setDominiEmpresa(
+                        e.target.value
+                          .toLowerCase()
+                          .replace(/^https?:\/\//, "")
+                          .replace(/\/.*$/, "")
+                          .replace(/[^a-z0-9.-]/g, "")
+                      )
+                    }
+                    className="w-full p-2.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 font-mono font-bold text-sm"
+                  />
+                  <p className="text-[11px] text-slate-500 mt-1">
+                    Introdueix directament el subdomini o domini complet. El valor introduït manarà de forma exacta com a domini de l'empresa (sense prefixos per defecte).
+                  </p>
                 </div>
 
                 {/* Instruccions de Redirecció DNS CNAME */}
@@ -840,25 +847,28 @@ export default function SuperadminTenantOnboardingPage() {
                   <div className="flex items-center justify-between">
                     <span className="font-bold text-slate-800 dark:text-slate-200 uppercase text-[11px] flex items-center gap-1.5">
                       <ExternalLink className="w-3.5 h-3.5 text-emerald-600" />
-                      <span>Pas Obligatori al Proveïdor DNS de l'Empresa ({dominiEmpresa || "empresa.cat"})</span>
+                      <span>Pas Obligatori al Proveïdor DNS de l'Empresa ({cnameRootDomain})</span>
                     </span>
                   </div>
                   <p className="text-[11px] text-slate-600 dark:text-slate-400 font-sans">
-                    Per donar d'alta l'empresa amb el seu subdomini, cal afegir aquest registre al seu panell DNS perquè apunti al nostre servidor:
+                    Perquè <strong>{fqdnResultant || "el subdomini"}</strong> apunti a la infraestructura de Sevalor Suite a Hetzner Cloud, cal afegir aquest registre al panell DNS del client:
                   </p>
-                  <div className="grid grid-cols-3 gap-2 pt-1">
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-1">
                     <div className="p-2 rounded bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800">
                       <span className="text-slate-400 text-[10px] block">Tipus</span>
                       <span className="font-bold text-emerald-600">CNAME</span>
                     </div>
                     <div className="p-2 rounded bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800">
                       <span className="text-slate-400 text-[10px] block">Host / Subdomini</span>
-                      <span className="font-bold text-slate-800 dark:text-slate-200">{subdominiPrefix || "sevalor"}</span>
+                      <span className="font-bold text-slate-800 dark:text-slate-200">{cnameHost}</span>
                     </div>
                     <div className="p-2 rounded bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800">
                       <span className="text-slate-400 text-[10px] block">Destí (Nostre Servidor)</span>
                       <span className="font-bold text-slate-800 dark:text-slate-200">edge.sevalor.app</span>
                     </div>
+                  </div>
+                  <div className="text-[11px] text-slate-500 font-sans pt-1">
+                    <em>Nota:</em> Si el gestor DNS no admet CNAME al registre arrel, pots fer servir un registre <strong>A</strong> apuntant a la IP <code>178.104.83.189</code>.
                   </div>
                 </div>
               </div>
@@ -889,11 +899,17 @@ export default function SuperadminTenantOnboardingPage() {
                 }`}
               >
                 <div className="font-bold">
-                  Sonda DNS Real per a {dnsResult.fqdn}: {dnsResult.resolt ? "RESOLT CORRECTAMENT" : "ENCARA NO RESOLT"}
+                  Sonda DNS Real per a {dnsResult.domini || dnsResult.fqdn}: {dnsResult.resolt ? "RESOLT CORRECTAMENT" : "ENCARA NO RESOLT"}
                 </div>
-                <div>{dnsResult.detall}</div>
+                <div>{dnsResult.missatge || dnsResult.detall}</div>
+                {Array.isArray(dnsResult.ips) && dnsResult.ips.length > 0 && (
+                  <div className="text-[10px]">IPs detectades: {dnsResult.ips.join(", ")}</div>
+                )}
                 {Array.isArray(dnsResult.ips_detectades) && dnsResult.ips_detectades.length > 0 && (
                   <div className="text-[10px]">IPs detectades: {dnsResult.ips_detectades.join(", ")}</div>
+                )}
+                {dnsResult.cname_detectat && (
+                  <div className="text-[10px]">CNAME detectat: {dnsResult.cname_detectat}</div>
                 )}
               </div>
             )}
@@ -930,6 +946,11 @@ export default function SuperadminTenantOnboardingPage() {
                   Els plànols fora de l'OT del dia es consulten a l'ordinador del client
                 </span>
               </div>
+            </div>
+
+            <div className="p-2.5 rounded-lg bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 text-xs font-mono flex items-center justify-between">
+              <span className="text-slate-600 dark:text-slate-400">Identificador intern PostgreSQL (RLS Tenant Slug):</span>
+              <span className="font-bold text-emerald-700 dark:text-emerald-300">{slugCalculat}</span>
             </div>
           </div>
 

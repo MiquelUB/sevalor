@@ -484,7 +484,7 @@ async def crear_nou_tenant(
         )
 
     subdomini_norm = payload.subdomini.strip().lower()
-    if subdomini_norm in {"api", "admin", "www", "app", "superadmin", "billing"}:
+    if subdomini_norm in {"api", "admin", "www", "app", "superadmin", "billing", "sevalor"}:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=f"El subdomini '{subdomini_norm}' està reservat per al sistema.",
