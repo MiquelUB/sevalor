@@ -465,6 +465,24 @@ async def crear_nou_tenant(
     if not validar_nif_cif_nie(payload.boss_nif):
         raise HTTPException(status_code=422, detail="NIF del BOSS invàlid.")
 
+    nif_norm = payload.nif.strip().upper()
+    res_nif = await db.execute(select(Empresa).where(func.upper(Empresa.nif) == nif_norm))
+    if res_nif.scalars().first():
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"El NIF/CIF '{nif_norm}' ja està registrat en una altra empresa de la plataforma. Cal introduir un NIF/CIF únic.",
+        )
+
+    email_boss_norm = str(payload.boss_email).strip().lower()
+    res_email = await db.execute(
+        select(Usuari).where(func.lower(Usuari.email) == email_boss_norm)
+    )
+    if res_email.scalars().first():
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"El correu electrònic '{email_boss_norm}' ja està registrat a la plataforma. Cal utilitzar un email únic.",
+        )
+
     subdomini_norm = payload.subdomini.strip().lower()
     if subdomini_norm in {"api", "admin", "www", "app", "superadmin", "billing"}:
         raise HTTPException(
@@ -561,16 +579,6 @@ async def crear_nou_tenant(
     db.add(nova_empresa)
 
     boss_user_id = uuid.uuid4()
-    stmt_check = select(Usuari).where(
-        func.lower(Usuari.email) == str(payload.boss_email).strip().lower()
-    )
-    res_check = await db.execute(stmt_check)
-    if res_check.scalars().first():
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Aquest email ja està registrat a una altra empresa. S'ha de fer servir un email únic.",
-        )
-
     nou_boss = Usuari(
         id=boss_user_id,
         empresa_id=nou_id,

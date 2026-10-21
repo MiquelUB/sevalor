@@ -199,19 +199,40 @@ export default function SuperadminTenantOnboardingPage() {
       .catch(() => setLiveKpis(null));
   }, []);
 
+  const dominiNet = dominiEmpresa
+    .trim()
+    .toLowerCase()
+    .replace(/^https?:\/\//, "")
+    .replace(/\/.*$/, "");
+  const prefixNet = (subdominiPrefix.trim() || "sevalor").toLowerCase();
+
+  // Si l'usuari ja ha inclòs el subdomini (ex. ha escrit 'sevalor.projecte.cat' amb prefix 'sevalor'), no duplicar
   const fqdnResultant =
     tipusDomini === "PROPI"
-      ? dominiEmpresa.trim()
-        ? `${(subdominiPrefix.trim() || "sevalor").toLowerCase()}.${dominiEmpresa.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/\/.*$/, "")}`
+      ? dominiNet
+        ? dominiNet.startsWith(`${prefixNet}.`)
+          ? dominiNet
+          : `${prefixNet}.${dominiNet}`
         : ""
       : `${(subdomini.trim() || "tenant").toLowerCase().replace(/[^a-z0-9-]/g, "")}.sevalor.app`;
 
+  // Càlcul intel·ligent del slug intern únic a PostgreSQL RLS
+  const slugFromRao = raoSocial
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  const dominiParts = dominiNet.split(".");
+  const domainSlug =
+    dominiParts.length > 2 && dominiParts[0] === prefixNet
+      ? dominiParts[1]
+      : dominiParts[0];
+
   const slugCalculat =
     subdomini.trim().toLowerCase().replace(/[^a-z0-9-]/g, "") ||
-    (dominiEmpresa.trim()
-      ? dominiEmpresa.trim().split(".")[0].toLowerCase().replace(/[^a-z0-9-]/g, "")
-      : raoSocial.trim().split(" ")[0].toLowerCase().replace(/[^a-z0-9-]/g, "")) ||
-    "empresa";
+    (slugFromRao && slugFromRao !== "sevalor" ? slugFromRao : "") ||
+    (domainSlug && domainSlug !== "sevalor" ? domainSlug : "") ||
+    `tenant-${Date.now().toString().slice(-4)}`;
 
   const handleCheckDnsLive = async () => {
     if (!fqdnResultant) {
@@ -431,12 +452,14 @@ export default function SuperadminTenantOnboardingPage() {
                 />
               </div>
               <div>
-                <label className="block font-semibold text-slate-600 dark:text-slate-400 mb-1">NIF / CIF Corporatiu</label>
+                <label className="block font-semibold text-slate-600 dark:text-slate-400 mb-1">
+                  NIF / CIF Corporatiu (Únic a la plataforma)
+                </label>
                 <input
                   type="text"
                   value={nif}
                   onChange={(e) => setNif(e.target.value)}
-                  placeholder="ex. B12345678"
+                  placeholder="ex. B67890123"
                   className="w-full p-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-200 font-mono font-bold"
                 />
               </div>
