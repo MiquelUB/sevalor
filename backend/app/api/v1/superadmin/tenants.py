@@ -273,25 +273,70 @@ async def verificar_dns_domini(
     def _resolve(host: str) -> Dict[str, Any]:
         ips: List[str] = []
         cname: Optional[str] = None
+        dns_error: Optional[str] = None
+
+        # 1. Intent directe amb dnspython (permet llegir CNAME independentment de la IP del target)
         try:
-            cname_info = socket.getfqdn(host)
-            if cname_info and cname_info != host:
-                cname = cname_info
+            import dns.resolver
+
+            r = dns.resolver.Resolver()
+            r.nameservers = ["8.8.8.8", "1.1.1.1"]
+            try:
+                ans_cname = r.resolve(host, "CNAME")
+                for val in ans_cname:
+                    cname = val.target.to_text().rstrip(".")
+            except Exception:
+                pass
+
+            try:
+                ans_a = r.resolve(host, "A")
+                for val in ans_a:
+                    ip_str = val.to_text()
+                    if ip_str not in ips:
+                        ips.append(ip_str)
+            except Exception:
+                pass
         except Exception:
             pass
-        try:
-            infos = socket.getaddrinfo(host, None)
-            for info in infos:
-                addr = str(info[4][0])
-                if addr not in ips:
-                    ips.append(addr)
-            return {"resolt": len(ips) > 0, "ips": ips, "cname": cname, "error": None}
-        except socket.gaierror as exc:
-            return {"resolt": False, "ips": [], "cname": cname, "error": str(exc)}
-        except Exception as exc:
-            return {"resolt": False, "ips": [], "cname": cname, "error": str(exc)}
+
+        # 2. Resolució estàndard amb socket com a suport / complement
+        if not ips:
+            try:
+                infos = socket.getaddrinfo(host, None)
+                for info in infos:
+                    addr = str(info[4][0])
+                    if addr not in ips:
+                        ips.append(addr)
+            except Exception as exc:
+                if not cname:
+                    dns_error = str(exc)
+
+        # 3. Si hem trobat CNAME però no IPs, intentem resoldre la IP del target
+        if cname and not ips:
+            try:
+                infos_c = socket.getaddrinfo(cname, None)
+                for info in infos_c:
+                    addr = str(info[4][0])
+                    if addr not in ips:
+                        ips.append(addr)
+            except Exception:
+                pass
+
+        resolt = bool(cname or ips)
+        return {"resolt": resolt, "ips": ips, "cname": cname, "error": dns_error}
 
     res = await asyncio.to_thread(_resolve, domini_clean)
+
+    if res["resolt"]:
+        if res["cname"] and res["ips"]:
+            missatge = f"DNS resolt correctament: CNAME {res['cname']} -> {', '.join(res['ips'])}"
+        elif res["cname"]:
+            missatge = f"CNAME detectat correctament ({res['cname']})."
+        else:
+            missatge = f"DNS resolt correctament amb IP(s): {', '.join(res['ips'])}"
+    else:
+        missatge = f"No s'ha trobat cap registre A/CNAME actiu per a aquest domini encara (Host: {domini_clean})."
+
     return {
         "domini": domini_clean,
         "fqdn": domini_clean,
@@ -301,11 +346,7 @@ async def verificar_dns_domini(
         "ips_detectades": res["ips"],
         "cname_detectat": res["cname"],
         "error": res["error"],
-        "missatge": (
-            f"DNS resolt correctament ({', '.join(res['ips'])})"
-            if res["resolt"]
-            else f"No s'ha trobat cap registre A/CNAME actiu per a aquest domini encara (Host: {domini_clean})."
-        ),
+        "missatge": missatge,
     }
 
 
