@@ -477,7 +477,7 @@ export default function EmpresaDetailPage({ params }: { params: { id: string } }
     try {
       const res = await apiFetch<any>("/superadmin/tenants/verificar-dns", {
         method: "POST",
-        body: JSON.stringify({ fqdn: fqdnToTest }),
+        body: JSON.stringify({ domini: fqdnToTest, fqdn: fqdnToTest }),
       });
       setDnsCheckResult(res);
     } catch (e: any) {

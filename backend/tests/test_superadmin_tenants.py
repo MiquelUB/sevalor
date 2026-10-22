@@ -279,3 +279,46 @@ def test_validacio_algoritmica_nif_cif_nie():
     assert validar_nif_cif_nie_algoritmic("123") is False
     assert validar_nif_cif_nie_algoritmic("AAAAAAAAA") is False
     assert validar_nif_cif_nie_algoritmic("") is False
+
+
+@pytest.mark.asyncio
+async def test_verificar_dns_endpoint(headers):
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        # 1. Accepta camp 'fqdn'
+        res_fqdn = await ac.post(
+            "/api/v1/superadmin/tenants/verificar-dns",
+            json={"fqdn": "projectexinoxano.cat"},
+            headers=headers,
+        )
+        assert res_fqdn.status_code == 200
+        data_fqdn = res_fqdn.json()
+        assert data_fqdn["domini"] == "projectexinoxano.cat"
+        assert data_fqdn["fqdn"] == "projectexinoxano.cat"
+        assert "resolt" in data_fqdn
+        assert "ips" in data_fqdn
+
+        # 2. Accepta camp 'domini'
+        res_domini = await ac.post(
+            "/api/v1/superadmin/tenants/verificar-dns",
+            json={"domini": "projectexinoxano.cat"},
+            headers=headers,
+        )
+        assert res_domini.status_code == 200
+        data_domini = res_domini.json()
+        assert data_domini["domini"] == "projectexinoxano.cat"
+
+        # 3. Accepta ambdós camps
+        res_both = await ac.post(
+            "/api/v1/superadmin/tenants/verificar-dns",
+            json={"domini": "projectexinoxano.cat", "fqdn": "projectexinoxano.cat"},
+            headers=headers,
+        )
+        assert res_both.status_code == 200
+
+        # 4. Buit (sense domini ni fqdn) -> 422
+        res_empty = await ac.post(
+            "/api/v1/superadmin/tenants/verificar-dns",
+            json={},
+            headers=headers,
+        )
+        assert res_empty.status_code == 422

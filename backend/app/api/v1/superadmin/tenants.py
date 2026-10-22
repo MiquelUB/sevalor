@@ -13,7 +13,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import FileResponse, StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -155,7 +155,14 @@ class UpdateFeatureFlagsRequest(BaseModel):
 
 
 class VerificarDnsRequest(BaseModel):
-    domini: str = Field(..., min_length=3, max_length=150)
+    domini: Optional[str] = Field(None, min_length=3, max_length=150)
+    fqdn: Optional[str] = Field(None, min_length=3, max_length=150)
+
+    @model_validator(mode="after")
+    def check_at_least_one(self) -> "VerificarDnsRequest":
+        if not self.domini and not self.fqdn:
+            raise ValueError("Cal proporcionar 'domini' o 'fqdn'.")
+        return self
 
 
 class UpdateIpAllowlistRequest(BaseModel):
@@ -251,8 +258,9 @@ async def verificar_dns_domini(
     claims: Dict[str, Any] = Depends(require_roles(["SUPERADMIN"])),
 ) -> Dict[str, Any]:
     """Verifica en viu la resolució DNS (CNAME / A) d'un domini o subdomini d'empresa."""
+    domini_raw = payload.domini or payload.fqdn or ""
     domini_clean = (
-        payload.domini.strip()
+        domini_raw.strip()
         .lower()
         .replace("https://", "")
         .replace("http://", "")
@@ -286,15 +294,17 @@ async def verificar_dns_domini(
     res = await asyncio.to_thread(_resolve, domini_clean)
     return {
         "domini": domini_clean,
+        "fqdn": domini_clean,
         "target_esperat": "edge.sevalor.app",
         "resolt": res["resolt"],
         "ips": res["ips"],
+        "ips_detectades": res["ips"],
         "cname_detectat": res["cname"],
         "error": res["error"],
         "missatge": (
             f"DNS resolt correctament ({', '.join(res['ips'])})"
             if res["resolt"]
-            else "No s'ha trobat cap registre A/CNAME actiu per a aquest domini encara."
+            else f"No s'ha trobat cap registre A/CNAME actiu per a aquest domini encara (Host: {domini_clean})."
         ),
     }
 

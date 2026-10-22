@@ -264,7 +264,7 @@ export default function SuperadminTenantOnboardingPage() {
     try {
       const res = await apiFetch<any>("/superadmin/tenants/verificar-dns", {
         method: "POST",
-        body: JSON.stringify({ fqdn: fqdnResultant }),
+        body: JSON.stringify({ domini: fqdnResultant, fqdn: fqdnResultant }),
       });
       setDnsResult(res);
     } catch (err: any) {
