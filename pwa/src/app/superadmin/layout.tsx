@@ -34,8 +34,13 @@ export default function SuperadminLayout({
 }) {
   const pathname = usePathname();
   const router = useRouter();
+  const [mounted, setMounted] = useState<boolean>(false);
   const [isDark, setIsDark] = useState<boolean>(true);
   const [mobileOpen, setMobileOpen] = useState<boolean>(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   useEffect(() => {
     setMobileOpen(false);
@@ -322,8 +327,13 @@ export default function SuperadminLayout({
             onClick={toggleTheme}
             className="p-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 dark:bg-slate-800 dark:hover:bg-slate-700 dark:text-slate-300 transition-colors"
             title="Commutar Tema Clar / Fosc"
+            suppressHydrationWarning
           >
-            {isDark ? <Sun className="w-4 h-4 text-amber-500" /> : <Moon className="w-4 h-4 text-blue-500" />}
+            {mounted ? (
+              isDark ? <Sun className="w-4 h-4 text-amber-500" /> : <Moon className="w-4 h-4 text-blue-500" />
+            ) : (
+              <Sun className="w-4 h-4 text-amber-500 opacity-60" />
+            )}
           </button>
 
           {/* Tancar sessió */}

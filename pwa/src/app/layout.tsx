@@ -26,7 +26,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="ca">
+    <html lang="ca" suppressHydrationWarning>
       <head>
         <link
           rel="stylesheet"
@@ -37,7 +37,7 @@ export default function RootLayout({
           href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200&display=swap"
         />
       </head>
-      <body className="min-h-screen bg-surface text-on-surface antialiased font-sans">
+      <body className="min-h-screen bg-surface text-on-surface antialiased font-sans" suppressHydrationWarning>
         <ChameleonProvider>
           {children}
         </ChameleonProvider>
