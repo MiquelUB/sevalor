@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.core.db import get_db_with_tenant_context
 from app.core.security import require_roles
 from app.models.models import (
@@ -29,6 +30,7 @@ from app.models.models import (
     SaasTiquetSuport,
     Usuari,
 )
+from app.services.easypanel_service import EasypanelService
 
 logger = logging.getLogger("superadmin.tenants")
 
@@ -326,36 +328,49 @@ async def verificar_dns_domini(
         return {"resolt": resolt, "ips": ips, "cname": cname, "error": dns_error}
 
     res = await asyncio.to_thread(_resolve, domini_clean)
+    apunta_a_nosaltres = bool(settings.PLATFORM_EDGE_IP and settings.PLATFORM_EDGE_IP in res["ips"])
 
     if res["resolt"]:
-        if res["ips"]:
+        if apunta_a_nosaltres:
             cname_part = f" (CNAME: {res['cname']})" if res["cname"] else ""
             missatge = (
-                f"DNS resolt correctament amb IP(s): {', '.join(res['ips'])}{cname_part}. "
-                "Recorda afegir el domini a EasyPanel (servei PWA) per activar el certificat SSL."
+                f"✅ DNS resolt correctament apuntant a la nostra IP de Sevalor ({settings.PLATFORM_EDGE_IP}){cname_part}. "
+                "El domini està llest per activar el certificat SSL a EasyPanel."
+            )
+        elif res["ips"]:
+            cname_part = f" (CNAME: {res['cname']})" if res["cname"] else ""
+            missatge = (
+                f"⚠️ El domini resol a la IP {', '.join(res['ips'])}{cname_part}, però NO apunta a la nostra IP de Sevalor "
+                f"({settings.PLATFORM_EDGE_IP}). Cal que l'empresa configuri el registre A o CNAME cap a la nostra màquina."
             )
         elif res["cname"]:
             missatge = (
                 f"CNAME detectat apuntant a '{res['cname']}', però aquest destí no té IP pública activa. "
-                "Perquè el navegador pugui carregar l'aplicació, canvia el CNAME a "
-                "'sevalor-sevalor-pwa.80opze.easypanel.host' o posa un registre A cap a la IP 178.104.83.189."
+                f"Perquè el navegador pugui carregar l'aplicació, el registre A ha d'apuntar directament a la IP {settings.PLATFORM_EDGE_IP}."
             )
         else:
             missatge = "DNS resolt correctament."
     else:
         missatge = f"No s'ha trobat cap registre A/CNAME actiu per a aquest domini encara (Host: {domini_clean})."
 
+    # Si apunta a la nostra màquina i EasyPanel està configurat, podem registrar-lo automàticament
+    easypanel_res = None
+    if apunta_a_nosaltres and settings.EASYPANEL_API_TOKEN:
+        easypanel_res = await EasypanelService.afegir_domini_pwa(domini_clean)
+
     return {
         "domini": domini_clean,
         "fqdn": domini_clean,
-        "target_esperat": "sevalor-sevalor-pwa.80opze.easypanel.host",
-        "ip_servidor": "178.104.83.189",
+        "target_esperat": settings.PLATFORM_ADMIN_HOST,
+        "ip_servidor": settings.PLATFORM_EDGE_IP,
         "resolt": res["resolt"],
+        "apunta_a_nosaltres": apunta_a_nosaltres,
         "ips": res["ips"],
         "ips_detectades": res["ips"],
         "cname_detectat": res["cname"],
         "error": res["error"],
         "missatge": missatge,
+        "easypanel": easypanel_res,
     }
 
 
@@ -819,12 +834,18 @@ async def actualitzar_domini_tenant(
     emp.updated_at = datetime.now(timezone.utc)
     await db.commit()
 
+    # Si s'ha actualitzat el domini custom i tenim EasyPanel configurat, intentem registrar-lo
+    easypanel_res = None
+    if emp.domini_custom and settings.EASYPANEL_API_TOKEN:
+        easypanel_res = await EasypanelService.afegir_domini_pwa(emp.domini_custom)
+
     return {
         "status": "OK",
         "empresa_id": empresa_id,
         "domini_custom": emp.domini_custom,
         "subdomini": emp.subdomini,
-        "domini_complet": emp.domini_custom or f"{emp.subdomini}.sevalor.app",
+        "domini_complet": emp.domini_custom or emp.subdomini,
+        "easypanel": easypanel_res,
     }
 
 
@@ -1460,6 +1481,13 @@ async def destroy_tenant(
     from app.workers.tasks import purgar_dades_tenant_destruit
 
     purgar_dades_tenant_destruit.apply_async(args=[tenant_id], countdown=30 * 24 * 3600)
+
+    # Eliminar el domini d'EasyPanel per prevenir dangling DNS
+    if emp.domini_custom and settings.EASYPANEL_API_TOKEN:
+        try:
+            await EasypanelService.eliminar_domini_pwa(emp.domini_custom)
+        except Exception:
+            pass
 
     await db.commit()
 

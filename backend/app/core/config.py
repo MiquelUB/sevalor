@@ -73,6 +73,16 @@ class Settings(BaseSettings):
     # Domini de desplegament (nginx + PWA)
     DOMAIN: str = "sevalor.app"
 
+    # Domini Oficial d'Administració Superadmin (Host permesa per a /superadmin)
+    PLATFORM_ADMIN_HOST: str = "sevalor-sevalor-pwa.80opze.easypanel.host"
+    PLATFORM_EDGE_IP: str = "178.104.83.189"
+
+    # Integració EasyPanel (automatització de dominis i SSL)
+    EASYPANEL_URL: str | None = None
+    EASYPANEL_API_TOKEN: str | None = None
+    EASYPANEL_PROJECT: str = "sevalor"
+    EASYPANEL_SERVICE_PWA: str = "pwa"
+
     # Entorn
     ENVIRONMENT: str = "development"
 

@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, EmailStr
 from slowapi import Limiter
 from slowapi.util import get_remote_address
-from sqlalchemy import func, select, text
+from sqlalchemy import func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -88,6 +88,41 @@ async def login_oficina(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Els operaris han d'accedir per la PWA amb PIN",
             )
+
+        # Blindatge de domini per rol (Zero-Trust Domain Gate)
+        raw_host = request.headers.get("x-forwarded-host") or request.headers.get("host") or ""
+        clean_host = (
+            raw_host.strip()
+            .lower()
+            .replace("https://", "")
+            .replace("http://", "")
+            .split("/")[0]
+            .split(":")[0]
+        )
+        is_local = clean_host in ("localhost", "127.0.0.1", "testserver", "test", "")
+
+        if usuari.rol.upper() == "SUPERADMIN":
+            admin_host = (settings.PLATFORM_ADMIN_HOST or "").strip().lower()
+            if not is_local and admin_host and clean_host != admin_host:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="L'accés com a SUPERADMIN només està permès des del domini oficial d'administració.",
+                )
+        elif usuari.empresa_id and not is_local:
+            # Validar que l'usuari d'oficina inicia sessió al domini de la seva pròpia empresa
+            parts = clean_host.split(".")
+            subdomini_cand = parts[0] if len(parts) >= 3 else None
+            conds = [func.lower(Empresa.domini_custom) == clean_host]
+            if subdomini_cand and subdomini_cand not in ("www", "api", "app", "localhost", "sevalor", "superadmin"):
+                conds.append(func.lower(Empresa.subdomini) == subdomini_cand)
+
+            res_h = await db.execute(select(Empresa.id).where(or_(*conds)))
+            emp_id_found = res_h.scalar()
+            if emp_id_found and str(emp_id_found) != str(usuari.empresa_id):
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Aquest usuari no pertany a l'empresa associada a aquest subdomini.",
+                )
 
         if usuari.rol.upper() != "SUPERADMIN" and usuari.empresa_id:
             await db.execute(text("RESET ROLE;"))

@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
 from slowapi import Limiter
 from slowapi.util import get_remote_address
-from sqlalchemy import func, select, text
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -67,27 +67,41 @@ async def login_operari(
                 empresa_uuid = emp.id
 
     if not empresa_uuid:
-        # Guardem el rol actual per no trencar les transaccions de test
-        res_role = await db.execute(text("SELECT current_user;"))
-        current_role = res_role.scalar()
+        # 1. Intentar resoldre pel host del subdomini de l'empresa
+        raw_host = request.headers.get("x-forwarded-host") or request.headers.get("host") or ""
+        clean_host = (
+            raw_host.strip()
+            .lower()
+            .replace("https://", "")
+            .replace("http://", "")
+            .split("/")[0]
+            .split(":")[0]
+        )
+        if clean_host and clean_host not in ("localhost", "127.0.0.1", "testserver", "test"):
+            parts = clean_host.split(".")
+            subdomini_cand = parts[0] if len(parts) >= 3 else None
+            conds = [func.lower(Empresa.domini_custom) == clean_host]
+            if subdomini_cand and subdomini_cand not in ("www", "api", "app", "localhost", "sevalor", "superadmin"):
+                conds.append(func.lower(Empresa.subdomini) == subdomini_cand)
+            res_h = await db.execute(select(Empresa.id).where(or_(*conds)))
+            emp_id_found = res_h.scalar()
+            if emp_id_found:
+                empresa_uuid = emp_id_found
 
-        # Fallback de conveniència per a la PWA quan s'accedeix sense subdomini/header
-        await db.execute(text("RESET ROLE;"))
-        try:
-            stmt_nif = select(Usuari).where(
-                func.upper(Usuari.nif) == login_data.nif.upper(),
-                Usuari.rol.in_(["OPERARI", "CAP_DE_COLLA", "ADMIN", "SUPERADMIN"]),
-            )
-            res_nif = await db.execute(stmt_nif)
-            usuari_pre = res_nif.scalars().first()
-            if usuari_pre:
-                empresa_uuid = usuari_pre.empresa_id
-        finally:
-            if current_role:
-                await db.execute(text(f'SET ROLE "{current_role}";'))
+    if not empresa_uuid and os.getenv("TESTING") == "1":
+        # Fallback exclusiu per a l'entorn de testing quan no s'envia X-Empresa-ID
+        stmt_nif = select(Usuari.empresa_id).where(
+            func.upper(Usuari.nif) == login_data.nif.upper(),
+            Usuari.rol.in_(["OPERARI", "CAP_DE_COLLA", "ADMIN", "SUPERADMIN"]),
+        )
+        res_nif = await db.execute(stmt_nif)
+        empresa_uuid = res_nif.scalar()
 
     if not empresa_uuid:
-        raise HTTPException(status_code=400, detail="Tenant context missing")
+        raise HTTPException(
+            status_code=400,
+            detail="Tenant context missing. Cal accedir des del subdomini registrat de l'empresa.",
+        )
 
     await set_tenant_context(db, str(empresa_uuid))
 

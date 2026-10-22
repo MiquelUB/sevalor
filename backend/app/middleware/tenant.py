@@ -1,10 +1,78 @@
 """Middleware de seguretat per a l'extracció de context multi-tenant (Spec 012)."""
 
+import uuid
+from typing import Optional
+
 import jwt
 from fastapi import Request, Response
+from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 
 from app.core.config import settings
+from app.core.redis import get_redis_client, is_tenant_blacklisted
+
+
+async def resoldre_empresa_id_per_host(clean_host: str) -> Optional[str]:
+    """Cerca l'empresa_id associat a un domini o subdomini, amb suport de memòria cau."""
+    if not clean_host or clean_host in ("localhost", "127.0.0.1", "testserver", "test"):
+        return None
+
+    parts = clean_host.split(".")
+    subdomini = parts[0] if len(parts) >= 3 else None
+
+    # 1. Comprovar Redis si està disponible
+    redis_client = await get_redis_client()
+    cache_key = f"host_to_tenant:{clean_host}"
+    if redis_client:
+        try:
+            cached = await redis_client.get(cache_key)
+            if cached == "NONE":
+                return None
+            if cached:
+                return cached
+        except Exception:
+            pass
+
+    # 2. Consulta a la base de dades
+    empresa_id = None
+    try:
+        from sqlalchemy import func, or_, select
+
+        from app.core.db import AsyncSessionLocal, get_db
+        from app.main import app
+        from app.models.models import Empresa
+
+        conds = [func.lower(Empresa.domini_custom) == clean_host]
+        if subdomini and subdomini not in ("www", "api", "app", "localhost", "sevalor", "superadmin"):
+            conds.append(func.lower(Empresa.subdomini) == subdomini)
+
+        if get_db in app.dependency_overrides:
+            gen = app.dependency_overrides[get_db]()
+            test_session = await anext(gen)
+            stmt = select(Empresa.id).where(or_(*conds))
+            res = await test_session.execute(stmt)
+            row = res.scalar()
+            if row:
+                empresa_id = str(row)
+        else:
+            async with AsyncSessionLocal() as session:
+                stmt = select(Empresa.id).where(or_(*conds))
+                res = await session.execute(stmt)
+                row = res.scalar()
+                if row:
+                    empresa_id = str(row)
+    except Exception:
+        pass
+
+    # 3. Desar a Redis amb TTL de 120 segons
+    if redis_client:
+        try:
+            val = empresa_id or "NONE"
+            await redis_client.set(cache_key, val, ex=120)
+        except Exception:
+            pass
+
+    return empresa_id
 
 
 class TenantMiddleware(BaseHTTPMiddleware):
@@ -13,6 +81,30 @@ class TenantMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         if request.method == "OPTIONS":
             return await call_next(request)
+
+        raw_host = request.headers.get("x-forwarded-host") or request.headers.get("host") or ""
+        clean_host = (
+            raw_host.strip()
+            .lower()
+            .replace("https://", "")
+            .replace("http://", "")
+            .split("/")[0]
+            .split(":")[0]
+        )
+        request.state.tenant_host = clean_host
+        is_local = clean_host in ("localhost", "127.0.0.1", "testserver", "test", "")
+
+        path = request.url.path
+
+        # 1. Blindatge Host de Superadmin:
+        # Només el domini oficial de la plataforma pot accedir a /api/v1/superadmin
+        if path.startswith("/api/v1/superadmin"):
+            admin_host = (settings.PLATFORM_ADMIN_HOST or "").strip().lower()
+            if not is_local and admin_host and clean_host != admin_host:
+                return JSONResponse(
+                    status_code=404,
+                    content={"detail": "Not Found"},
+                )
 
         empresa_id: str | None = None
         is_superadmin: bool = False
@@ -61,15 +153,27 @@ class TenantMiddleware(BaseHTTPMiddleware):
             header_tenant = request.headers.get("X-Empresa-ID")
             if header_tenant:
                 empresa_id = header_tenant.strip()
-            else:
-                host = request.headers.get("host", "").split(":")[0]
-                parts = host.split(".")
-                if len(parts) >= 3 and parts[0] not in ("www", "api", "app", "localhost"):
-                    request.state.subdomain = parts[0]
+
+        # 2. Resolució automàtica per Host si no ve informat
+        host_empresa_id = None
+        if not is_local:
+            host_empresa_id = await resoldre_empresa_id_per_host(clean_host)
+
+        if not empresa_id and host_empresa_id:
+            empresa_id = host_empresa_id
+
+        # 3. Protecció Cross-Tenant (Zero-Trust):
+        # Si un usuari autenticat d'un tenant intenta consumir l'API des del subdomini d'un altre tenant:
+        if jwt_empresa_id and not is_superadmin and host_empresa_id:
+            if str(jwt_empresa_id) != str(host_empresa_id):
+                return JSONResponse(
+                    status_code=403,
+                    content={
+                        "detail": "Cross-tenant domain mismatch: el token no pertany al domini d'aquesta empresa."
+                    },
+                )
 
         if empresa_id:
-            import uuid
-
             try:
                 empresa_id = str(uuid.UUID(str(empresa_id)))
             except Exception:
@@ -81,14 +185,11 @@ class TenantMiddleware(BaseHTTPMiddleware):
         request.state.user_role = user_role
 
         if is_superadmin:
-            path = request.url.path
             if path.startswith("/api/v1/") and not (
                 path.startswith("/api/v1/superadmin")
                 or path.startswith("/api/v1/auth")
                 or path.startswith("/api/v1/health")
             ):
-                from fastapi.responses import JSONResponse
-
                 return JSONResponse(
                     status_code=403,
                     content={
@@ -96,16 +197,13 @@ class TenantMiddleware(BaseHTTPMiddleware):
                     },
                 )
         elif empresa_id:
-            path = request.url.path
             if path.startswith("/api/v1/") and not (
-                path.startswith("/api/v1/auth") or path.startswith("/api/v1/health")
+                path.startswith("/api/v1/auth")
+                or path.startswith("/api/v1/health")
+                or path.startswith("/api/v1/public/")
             ):
-                from app.core.redis import is_tenant_blacklisted
-
                 blocked_state = await is_tenant_blacklisted(empresa_id)
                 if blocked_state:
-                    from fastapi.responses import JSONResponse
-
                     return JSONResponse(
                         status_code=403,
                         content={

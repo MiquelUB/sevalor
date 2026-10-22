@@ -86,19 +86,43 @@ export function ChameleonProvider({ children }: { children: React.ReactNode }) {
       }
     }
 
-    apiFetch<ChameleonBrand>("/gestio/configuracio/marca")
-      .then((data) => {
+    const loadBrand = async () => {
+      try {
+        // 1. Intentar endpoint públic per host (funciona abans i després de login)
+        const publicTenant = await apiFetch<any>("/public/tenant/resolve");
+        if (publicTenant && publicTenant.id) {
+          const brandData: ChameleonBrand = {
+            primari_hsl: publicTenant.color_primari_hsl || "152 60% 25%",
+            secundari_hsl: publicTenant.color_secundari_hsl || "152 45% 15%",
+            accent_hsl: publicTenant.color_accent_hsl || "38 92% 50%",
+            logotip_path: publicTenant.logotip_url,
+            empresa_nom: publicTenant.nom_comercial || publicTenant.rao_social,
+          };
+          setBrand(brandData);
+          applyChameleonCSS(brandData);
+          setLoading(false);
+          return;
+        }
+      } catch {
+        // Fallback per a entorns locals o sense resolució per host
+      }
+
+      // 2. Si no ha resolt pel host, provar endpoint de gestió de marca
+      try {
+        const data = await apiFetch<ChameleonBrand>("/gestio/configuracio/marca");
         setBrand(data);
         applyChameleonCSS(data);
-      })
-      .catch((err) => {
-        // En cas de 401 o 403 no emetre soroll innecessari a la consola
-        if (!err?.message?.includes("401") && !err?.message?.includes("403")) {
-          console.warn("[Chameleon] No s'ha pogut carregar la marca de l'empresa:", err.message);
+      } catch (err: any) {
+        if (!err?.message?.includes("401") && !err?.message?.includes("403") && !err?.message?.includes("404")) {
+          console.warn("[Chameleon] No s'ha pogut carregar la marca:", err.message);
         }
         setError("Marca no disponible");
-      })
-      .finally(() => setLoading(false));
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    loadBrand();
   }, []);
 
   return (

@@ -778,46 +778,17 @@ export default function SuperadminTenantOnboardingPage() {
               </button>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
-              <button
-                type="button"
-                onClick={() => setTipusDomini("PROPI")}
-                className={`p-3 rounded-xl border text-left transition-all ${
-                  tipusDomini === "PROPI"
-                    ? "border-emerald-600 bg-emerald-50 dark:bg-emerald-950/60 text-emerald-900 dark:text-emerald-200 font-bold"
-                    : "border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/40 text-slate-600 dark:text-slate-400"
-                }`}
-              >
-                <span className="font-bold flex items-center gap-1.5 mb-1">
-                  <Globe className="w-4 h-4 text-emerald-600" />
-                  <span>Subdomini sobre el Domini de l'Empresa (Recomanat)</span>
-                </span>
-                <p className="text-[11px] text-slate-500 font-normal">
-                  L'empresa redirecciona el seu subdomini (ex: <em>sevalor.soler.cat</em>) cap a <code>edge.sevalor.app</code>.
-                </p>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setTipusDomini("SEVALOR")}
-                className={`p-3 rounded-xl border text-left transition-all ${
-                  tipusDomini === "SEVALOR"
-                    ? "border-emerald-600 bg-emerald-50 dark:bg-emerald-950/60 text-emerald-900 dark:text-emerald-200 font-bold"
-                    : "border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/40 text-slate-600 dark:text-slate-400"
-                }`}
-              >
-                <span className="font-bold flex items-center gap-1.5 mb-1">
-                  <Server className="w-4 h-4 text-slate-400" />
-                  <span>Subdomini Directe sota Sevalor.app</span>
-                </span>
-                <p className="text-[11px] text-slate-500 font-normal">
-                  Si l'empresa no té domini propi, s'utilitza <em>empresa.sevalor.app</em>.
-                </p>
-              </button>
+            <div className="p-3.5 rounded-xl border border-emerald-200 dark:border-emerald-800/60 bg-emerald-50/50 dark:bg-emerald-950/30 text-xs">
+              <span className="font-bold flex items-center gap-1.5 mb-1 text-emerald-800 dark:text-emerald-300">
+                <Globe className="w-4 h-4 text-emerald-600" />
+                <span>Subdomini / Domini Corporatiu de l'Empresa (Multi-Tenant)</span>
+              </span>
+              <p className="text-[11px] text-slate-600 dark:text-slate-400 font-normal">
+                Cada empresa opera sobre el seu propi subdomini DNS (ex: <code>sevalormante.projectexinoxano.cat</code> o <code>sevalor.soler.cat</code>) apuntant a la nostra IP Hetzner.
+              </p>
             </div>
 
-            {tipusDomini === "PROPI" ? (
-              <div className="space-y-4">
+            <div className="space-y-4">
                 <div>
                   <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
                     Subdomini o Domini d'Accés Personalitzat (FQDN Complet)
@@ -873,22 +844,6 @@ export default function SuperadminTenantOnboardingPage() {
                   </div>
                 </div>
               </div>
-            ) : (
-              <div className="text-xs">
-                <label className="block font-semibold text-slate-600 dark:text-slate-400 mb-1">Subdomini Sol·licitat</label>
-                <div className="flex items-center rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 overflow-hidden">
-                  <input
-                    type="text"
-                    value={subdomini}
-                    onChange={(e) => setSubdomini(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ""))}
-                    className="flex-1 p-2 bg-transparent font-mono font-bold focus:outline-none"
-                  />
-                  <span className="px-3 text-slate-400 font-mono bg-slate-100 dark:bg-slate-800/80 border-l py-2">
-                    .sevalor.app
-                  </span>
-                </div>
-              </div>
-            )}
 
             {/* Resultat Real de la Sonda DNS (Zero Mock) */}
             {dnsResult && (

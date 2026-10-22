@@ -90,12 +90,42 @@ export async function middleware(request: NextRequest) {
   const payload = token ? await verifyJwt(token, JWT_SECRET) : null;
   const role = payload?.rol?.toUpperCase();
 
+  const rawHost = request.headers.get('x-forwarded-host') || request.headers.get('host') || '';
+  const host = rawHost.split(':')[0].toLowerCase().trim();
+  const adminHost = (
+    process.env.NEXT_PUBLIC_PLATFORM_ADMIN_HOST ||
+    process.env.PLATFORM_ADMIN_HOST ||
+    'sevalor-sevalor-pwa.80opze.easypanel.host'
+  ).toLowerCase().trim();
+  const isLocal = host === 'localhost' || host === '127.0.0.1' || host === '';
+
   const createRedirectWithClearedCookie = (targetUrl: string) => {
     // We don't clear the cookie here to avoid false negative logouts
     return NextResponse.redirect(new URL(targetUrl, request.url));
   };
 
-  // 1. ZONA GESTIÓ (/gestio)
+  // 1. ZONA SUPERADMIN (/superadmin) - Host Gate Estricte (Zero-Trust)
+  if (pathname.startsWith('/superadmin')) {
+    // Si la petició prové del subdomini o domini propi d'un client, amagar completament superadmin
+    if (!isLocal && adminHost && host !== adminHost) {
+      return NextResponse.rewrite(new URL('/_not-found', request.url));
+    }
+
+    const isLoginPage = pathname === '/superadmin/login' || pathname.startsWith('/superadmin/login/');
+
+    if (isLoginPage) {
+      if (payload && role === 'SUPERADMIN') {
+        return NextResponse.redirect(new URL('/superadmin/telemetria', request.url));
+      }
+      return NextResponse.next();
+    }
+
+    if (!payload || role !== 'SUPERADMIN') {
+      return createRedirectWithClearedCookie('/superadmin/login');
+    }
+  }
+
+  // 2. ZONA GESTIÓ (/gestio)
   if (pathname.startsWith('/gestio')) {
     const isLoginPage = pathname === '/gestio/login' || pathname.startsWith('/gestio/login/');
 
@@ -113,22 +143,6 @@ export async function middleware(request: NextRequest) {
     const allowedRoles = ['BOSS', 'SECRETARIA', 'ENGINYER', 'COMPTABILITAT', 'SUPERADMIN'];
     if (!allowedRoles.includes(role)) {
       return createRedirectWithClearedCookie('/gestio/login?error=unauthorized');
-    }
-  }
-
-  // 2. ZONA SUPERADMIN (/superadmin)
-  if (pathname.startsWith('/superadmin')) {
-    const isLoginPage = pathname === '/superadmin/login' || pathname.startsWith('/superadmin/login/');
-
-    if (isLoginPage) {
-      if (payload && role === 'SUPERADMIN') {
-        return NextResponse.redirect(new URL('/superadmin/telemetria', request.url));
-      }
-      return NextResponse.next();
-    }
-
-    if (!payload || role !== 'SUPERADMIN') {
-      return createRedirectWithClearedCookie('/superadmin/login');
     }
   }
 
