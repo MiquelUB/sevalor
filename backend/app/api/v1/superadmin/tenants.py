@@ -328,19 +328,28 @@ async def verificar_dns_domini(
     res = await asyncio.to_thread(_resolve, domini_clean)
 
     if res["resolt"]:
-        if res["cname"] and res["ips"]:
-            missatge = f"DNS resolt correctament: CNAME {res['cname']} -> {', '.join(res['ips'])}"
+        if res["ips"]:
+            cname_part = f" (CNAME: {res['cname']})" if res["cname"] else ""
+            missatge = (
+                f"DNS resolt correctament amb IP(s): {', '.join(res['ips'])}{cname_part}. "
+                "Recorda afegir el domini a EasyPanel (servei PWA) per activar el certificat SSL."
+            )
         elif res["cname"]:
-            missatge = f"CNAME detectat correctament ({res['cname']})."
+            missatge = (
+                f"CNAME detectat apuntant a '{res['cname']}', però aquest destí no té IP pública activa. "
+                "Perquè el navegador pugui carregar l'aplicació, canvia el CNAME a "
+                "'sevalor-sevalor-pwa.80opze.easypanel.host' o posa un registre A cap a la IP 178.104.83.189."
+            )
         else:
-            missatge = f"DNS resolt correctament amb IP(s): {', '.join(res['ips'])}"
+            missatge = "DNS resolt correctament."
     else:
         missatge = f"No s'ha trobat cap registre A/CNAME actiu per a aquest domini encara (Host: {domini_clean})."
 
     return {
         "domini": domini_clean,
         "fqdn": domini_clean,
-        "target_esperat": "edge.sevalor.app",
+        "target_esperat": "sevalor-sevalor-pwa.80opze.easypanel.host",
+        "ip_servidor": "178.104.83.189",
         "resolt": res["resolt"],
         "ips": res["ips"],
         "ips_detectades": res["ips"],

@@ -1644,9 +1644,12 @@ export default function EmpresaDetailPage({ params }: { params: { id: string } }
                   : "bg-amber-50 dark:bg-amber-950/60 border-amber-300 text-amber-800 dark:text-amber-200"
               }`}
             >
-              <strong>Resultat Sonda DNS ({dnsCheckResult.fqdn}):</strong> {dnsCheckResult.detall}
+              <strong>Resultat Sonda DNS ({dnsCheckResult.fqdn || dnsCheckResult.domini}):</strong> {dnsCheckResult.missatge || dnsCheckResult.detall}
+              {dnsCheckResult.cname_detectat && (
+                <div>• CNAME detectat: {dnsCheckResult.cname_detectat}</div>
+              )}
               {Array.isArray(dnsCheckResult.ips_detectades) && dnsCheckResult.ips_detectades.length > 0 && (
-                <span> • IPs: {dnsCheckResult.ips_detectades.join(", ")}</span>
+                <div>• IPs: {dnsCheckResult.ips_detectades.join(", ")}</div>
               )}
             </div>
           )}

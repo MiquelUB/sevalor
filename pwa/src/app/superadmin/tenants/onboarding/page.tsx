@@ -855,20 +855,21 @@ export default function SuperadminTenantOnboardingPage() {
                   </p>
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-1">
                     <div className="p-2 rounded bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800">
-                      <span className="text-slate-400 text-[10px] block">Tipus</span>
-                      <span className="font-bold text-emerald-600">CNAME</span>
+                      <span className="text-slate-400 text-[10px] block">Opció 1: Tipus A (Recomanat)</span>
+                      <span className="font-bold text-emerald-600 block">IP 178.104.83.189</span>
+                      <span className="text-[10px] text-slate-500">Host: {cnameHost}</span>
                     </div>
                     <div className="p-2 rounded bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800">
-                      <span className="text-slate-400 text-[10px] block">Host / Subdomini</span>
-                      <span className="font-bold text-slate-800 dark:text-slate-200">{cnameHost}</span>
+                      <span className="text-slate-400 text-[10px] block">Opció 2: Tipus CNAME</span>
+                      <span className="font-bold text-slate-800 dark:text-slate-200 block break-all text-[11px]">sevalor-sevalor-pwa.80opze.easypanel.host</span>
+                      <span className="text-[10px] text-slate-500">Host: {cnameHost}</span>
                     </div>
-                    <div className="p-2 rounded bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800">
-                      <span className="text-slate-400 text-[10px] block">Destí (Nostre Servidor)</span>
-                      <span className="font-bold text-slate-800 dark:text-slate-200">edge.sevalor.app</span>
+                    <div className="p-2 rounded bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800/60">
+                      <span className="text-amber-700 dark:text-amber-400 text-[10px] block font-bold">Pas 2: EasyPanel</span>
+                      <span className="text-[11px] text-amber-900 dark:text-amber-200 block font-sans">
+                        Afegir <strong>{fqdnResultant || "el domini"}</strong> a EasyPanel (servei PWA &gt; Domains) per al certificat SSL Let's Encrypt.
+                      </span>
                     </div>
-                  </div>
-                  <div className="text-[11px] text-slate-500 font-sans pt-1">
-                    <em>Nota:</em> Si el gestor DNS no admet CNAME al registre arrel, pots fer servir un registre <strong>A</strong> apuntant a la IP <code>178.104.83.189</code>.
                   </div>
                 </div>
               </div>
