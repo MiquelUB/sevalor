@@ -10,9 +10,11 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.core.db import get_db_with_tenant_context, set_tenant_context
 from app.core.security import require_roles
 from app.models.models import Empresa
+from app.services.easypanel_service import EasypanelService
 
 logger = logging.getLogger("superadmin.empreses")
 
@@ -329,3 +331,101 @@ async def esborrar_logotip_empresa(
         "empresa_id": str(empresa.id),
         "missatge": "Logotip restablert a la identitat vectorial per defecte.",
     }
+
+
+class ActivarCustomDomainRequest(BaseModel):
+    domini_custom: Optional[str] = Field(
+        None,
+        max_length=100,
+        pattern=r"^$|^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$",
+    )
+
+
+@router.post("/{empresa_id}/custom-domain", response_model=Dict[str, Any])
+async def activar_custom_domain(
+    empresa_id: str,
+    payload: Optional[ActivarCustomDomainRequest] = None,
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+    claims: Dict[str, Any] = Depends(require_roles(["SUPERADMIN"])),
+) -> Dict[str, Any]:
+    """Verifica el registre DNS i activa el certificat SSL a EasyPanel per al domini de l'empresa."""
+    try:
+        emp_uuid = uuid.UUID(empresa_id)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="UUID invàlid.")
+
+    await set_tenant_context(db, str(emp_uuid), is_superadmin=True)
+
+    emp_res = await db.execute(select(Empresa).where(Empresa.id == emp_uuid))
+    empresa = emp_res.scalars().first()
+    if not empresa:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Empresa no trobada.")
+
+    target_domain = (
+        payload.domini_custom.strip().lower()
+        if payload and payload.domini_custom and payload.domini_custom.strip()
+        else (empresa.domini_custom.strip().lower() if empresa.domini_custom else None)
+    )
+    if not target_domain:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="No s'ha especificat cap domini personalitzat per verificar.",
+        )
+
+    # Comprovar si una altra empresa ja té aquest domini
+    res_check = await db.execute(
+        select(Empresa).where(Empresa.domini_custom == target_domain, Empresa.id != emp_uuid)
+    )
+    if res_check.scalars().first():
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"El domini '{target_domain}' ja està assignat a una altra empresa.",
+        )
+
+    empresa.domini_custom = target_domain
+
+    dns_res = await EasypanelService.verificar_dns_resolucio(target_domain)
+    dns_status = dns_res.get("status")
+    dns_ips = dns_res.get("ips", [])
+    easypanel_res = None
+
+    if dns_status == "DNS_CORRECTE":
+        empresa.estat_domini = "DNS_ACTIU"
+        if settings.EASYPANEL_API_TOKEN:
+            try:
+                easypanel_res = await EasypanelService.afegir_domini_pwa(target_domain)
+            except Exception as e:
+                logger.error("Error registrant domini a Easypanel: %s", e)
+                easypanel_res = {"error": str(e)}
+
+        empresa.updated_at = datetime.now(timezone.utc)
+        await db.commit()
+
+        return {
+            "status": "OK",
+            "estat_domini": "DNS_ACTIU",
+            "domini": target_domain,
+            "ips_detectades": dns_ips,
+            "missatge": (
+                f"✅ DNS resolt correctament apuntant a la IP del servidor ({settings.PLATFORM_EDGE_IP}). "
+                "Domini activat a EasyPanel amb certificat SSL automàtic."
+            ),
+            "easypanel": easypanel_res,
+        }
+    else:
+        empresa.estat_domini = "PENDENT_DNS"
+        empresa.updated_at = datetime.now(timezone.utc)
+        await db.commit()
+
+        return {
+            "status": "PENDENT_DNS",
+            "estat_domini": "PENDENT_DNS",
+            "domini": target_domain,
+            "ips_detectades": dns_ips,
+            "missatge": (
+                f"⚠️ El domini '{target_domain}' encara no apunta a la nostra IP de Sevalor ({settings.PLATFORM_EDGE_IP}). "
+                f"IPs actualment detectades: {', '.join(dns_ips) if dns_ips else 'Cap'}. "
+                "Configura el registre A o CNAME cap a la nostra màquina i torna a provar."
+            ),
+            "easypanel": None,
+        }

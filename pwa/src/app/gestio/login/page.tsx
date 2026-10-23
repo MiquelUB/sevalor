@@ -4,9 +4,11 @@ import React, { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { Shield, Settings, Globe } from "lucide-react";
 import { getApiBaseUrl, setAuthToken } from "@/lib/api";
+import { useChameleon } from "@/lib/chameleon";
 
 export default function GestioLogin() {
   const router = useRouter();
+  const { brand } = useChameleon();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
@@ -54,10 +56,15 @@ export default function GestioLogin() {
     try {
       const baseUrl = apiUrl || getApiBaseUrl();
       const totpCode = otpDigits.join("");
+      const tenantId =
+        (typeof sessionStorage !== "undefined" ? sessionStorage.getItem("sevalor_tenant_id") : null) ||
+        (typeof localStorage !== "undefined" ? localStorage.getItem("sevalor_tenant_id") : null);
+
       const resp = await fetch(`${baseUrl}/auth/login`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
+          ...(tenantId ? { "X-Tenant-ID": tenantId, "X-Empresa-ID": tenantId } : {}),
         },
         body: JSON.stringify({
           email: email.trim(),
@@ -104,15 +111,25 @@ export default function GestioLogin() {
         {/* Branding Header */}
         <div className="flex flex-col items-center text-center mb-xl">
           <div className="mb-md p-sm bg-primary/5 rounded-xl">
-            <div className="h-12 w-12 rounded-xl bg-primary text-white flex items-center justify-center shadow-md">
-              <span className="material-symbols-outlined text-3xl">agriculture</span>
-            </div>
+            {brand?.logotip_path ? (
+              <img
+                src={brand.logotip_path}
+                alt={brand.empresa_nom || "Logo Empresa"}
+                className="h-14 w-auto max-w-[140px] object-contain rounded-xl shadow-sm"
+              />
+            ) : (
+              <div className="h-12 w-12 rounded-xl bg-primary text-white flex items-center justify-center shadow-md">
+                <span className="material-symbols-outlined text-3xl">agriculture</span>
+              </div>
+            )}
           </div>
           <h1 className="font-display-lg text-display-lg text-primary tracking-tight">
-            Accés Gestió
+            {brand?.empresa_nom ? `Accés ${brand.empresa_nom}` : "Accés Gestió"}
           </h1>
           <p className="text-on-surface-variant text-sm mt-xs">
-            Panell d&apos;Administració i Control Tècnic · SEVALOR
+            {brand?.empresa_nom
+              ? "Panell de Gestió Tècnica i Control"
+              : "Panell d'Administració i Control Tècnic · SEVALOR"}
           </p>
         </div>
 

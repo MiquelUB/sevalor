@@ -38,6 +38,7 @@ import {
   Image as ImageIcon,
   Palette,
   RefreshCw,
+  Lock,
 } from "lucide-react";
 import { apiFetch, getAuthToken, setAuthToken } from "@/lib/api";
 
@@ -183,8 +184,11 @@ export default function EmpresaDetailPage({ params }: { params: { id: string } }
   const [motiuQuota, setMotiuQuota] = useState<string>("");
   const [dominiCustom, setDominiCustom] = useState("");
   const [subdomini, setSubdomini] = useState("");
+  const [estatDomini, setEstatDomini] = useState<string>("NO_CONFIGURAT");
   const [dnsCheckResult, setDnsCheckResult] = useState<any>(null);
   const [checkingDns, setCheckingDns] = useState(false);
+  const [activantSsl, setActivantSsl] = useState(false);
+  const [activarSslResult, setActivarSslResult] = useState<any>(null);
 
   // Dades Generals de l'Empresa
   const [nomEmpresa, setNomEmpresa] = useState<string>("");
@@ -275,6 +279,7 @@ export default function EmpresaDetailPage({ params }: { params: { id: string } }
         setQuotaBufferMb(Number(data.quota_buffer_mb ?? 500));
         setDominiCustom(data.domini_custom || "");
         setSubdomini(data.subdomini || "");
+        setEstatDomini(data.estat_domini || (data.domini_custom ? "PENDENT_DNS" : "NO_CONFIGURAT"));
         if (data.primari_hsl) setPrimariHsl(data.primari_hsl);
         if (data.secundari_hsl) setSecundariHsl(data.secundari_hsl);
         if (data.accent_hsl) setAccentHsl(data.accent_hsl);
@@ -484,6 +489,39 @@ export default function EmpresaDetailPage({ params }: { params: { id: string } }
       setDnsCheckResult({ resolt: false, detall: e.message || "Error de resolució DNS" });
     } finally {
       setCheckingDns(false);
+    }
+  };
+
+  const handleActivarCustomDomainSsl = async () => {
+    const fqdnToActivate = dominiCustom.trim();
+    if (!fqdnToActivate) {
+      setErrorMessage("Introdueix un domini personalitzat abans d'activar el certificat SSL.");
+      return;
+    }
+    setActivantSsl(true);
+    setActivarSslResult(null);
+    setErrorMessage(null);
+    try {
+      const res = await apiFetch<any>(`/superadmin/empreses/${params.id}/custom-domain`, {
+        method: "POST",
+        body: JSON.stringify({ domini_custom: fqdnToActivate }),
+      });
+      setActivarSslResult(res);
+      if (res.estat_domini) {
+        setEstatDomini(res.estat_domini);
+      }
+      if (res.status === "OK") {
+        setSuccessMessage("Certificat SSL activat i registrat a EasyPanel correctament!");
+        fetchTenantAll();
+      }
+    } catch (e: any) {
+      setActivarSslResult({
+        status: "ERROR",
+        estat_domini: "ERROR_SSL",
+        missatge: e.message || "Error activant el domini a EasyPanel.",
+      });
+    } finally {
+      setActivantSsl(false);
     }
   };
 
@@ -795,10 +833,16 @@ export default function EmpresaDetailPage({ params }: { params: { id: string } }
                 {nomEmpresa || tenant?.nom || tenant?.rao_social}
               </h1>
               <span className="text-xs px-2.5 py-1 rounded-lg font-mono bg-emerald-50 dark:bg-emerald-950/70 text-emerald-700 dark:text-emerald-400 font-bold border border-emerald-300 dark:border-emerald-800 flex items-center gap-1.5">
-                <span>{tenant?.domini_custom || `${tenant?.subdomini}.sevalor.app`}</span>
+                <span>{tenant?.domini_custom || `${tenant?.subdomini}.sevalor.cat`}</span>
                 {tenant?.domini_custom && (
-                  <span className="px-1.5 py-0.2 rounded bg-emerald-200 dark:bg-emerald-900 text-emerald-900 dark:text-emerald-200 text-[9px] uppercase font-bold">
-                    Domini Propi
+                  <span
+                    className={`px-1.5 py-0.2 rounded text-[9px] uppercase font-bold ${
+                      estatDomini === "DNS_ACTIU"
+                        ? "bg-emerald-200 dark:bg-emerald-900 text-emerald-900 dark:text-emerald-200"
+                        : "bg-amber-200 dark:bg-amber-900 text-amber-900 dark:text-amber-200"
+                    }`}
+                  >
+                    {estatDomini === "DNS_ACTIU" ? "SSL Actiu" : "Pendent DNS"}
                   </span>
                 )}
               </span>
@@ -1621,20 +1665,71 @@ export default function EmpresaDetailPage({ params }: { params: { id: string } }
       {/* SECCIÓ 5: DOMINI D'EMPRESA & VERIFICACIÓ DNS EN VIU */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-5 rounded-2xl shadow-sm md:col-span-2 space-y-4">
-          <div className="flex items-center justify-between">
-            <h2 className="text-xs font-mono font-bold uppercase tracking-wider text-slate-500 flex items-center gap-2">
-              <Globe className="w-4 h-4 text-emerald-500" />
-              <span>Domini Propi de l'Empresa &amp; Verificació Real de Redirecció DNS</span>
-            </h2>
-            <button
-              type="button"
-              onClick={handleCheckDns}
-              disabled={checkingDns}
-              className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-mono font-bold transition-colors"
-            >
-              {checkingDns ? "Comprovant DNS..." : "Verificar Redirecció DNS en Viu"}
-            </button>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-2">
+              <h2 className="text-xs font-mono font-bold uppercase tracking-wider text-slate-500 flex items-center gap-2">
+                <Globe className="w-4 h-4 text-emerald-500" />
+                <span>Domini Propi de l'Empresa &amp; Certificat SSL (EasyPanel)</span>
+              </h2>
+              {estatDomini === "DNS_ACTIU" ? (
+                <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800 flex items-center gap-1">
+                  <Check className="w-3 h-3" /> SSL Actiu
+                </span>
+              ) : estatDomini === "PENDENT_DNS" ? (
+                <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-300 border border-amber-300 dark:border-amber-800 flex items-center gap-1">
+                  <AlertTriangle className="w-3 h-3" /> Pendent DNS
+                </span>
+              ) : (
+                <span className="text-[10px] font-mono text-slate-500 bg-slate-100 dark:bg-slate-800 px-2 py-0.5 rounded">
+                  Sense Domini Custom
+                </span>
+              )}
+            </div>
+
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={handleCheckDns}
+                disabled={checkingDns}
+                className="px-3 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 text-xs font-mono font-semibold transition-colors"
+              >
+                {checkingDns ? "Comprovant DNS..." : "Verificar Redirecció DNS"}
+              </button>
+              <button
+                type="button"
+                onClick={handleActivarCustomDomainSsl}
+                disabled={activantSsl || !dominiCustom.trim()}
+                className="px-3.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white text-xs font-mono font-bold flex items-center gap-1.5 shadow-sm transition-colors"
+              >
+                <Lock className="w-3.5 h-3.5" />
+                <span>{activantSsl ? "Activant SSL..." : "Verificar DNS i Activar SSL"}</span>
+              </button>
+            </div>
           </div>
+
+          {activarSslResult && (
+            <div
+              className={`p-3.5 rounded-xl border text-xs font-mono ${
+                activarSslResult.status === "OK"
+                  ? "bg-emerald-50 dark:bg-emerald-950/60 border-emerald-300 text-emerald-800 dark:text-emerald-200"
+                  : "bg-amber-50 dark:bg-amber-950/60 border-amber-300 text-amber-800 dark:text-amber-200"
+              }`}
+            >
+              <div className="font-bold flex items-center gap-1.5">
+                {activarSslResult.status === "OK" ? (
+                  <Check className="w-4 h-4 text-emerald-600 shrink-0" />
+                ) : (
+                  <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+                )}
+                <span>{activarSslResult.missatge}</span>
+              </div>
+              {Array.isArray(activarSslResult.ips_detectades) && activarSslResult.ips_detectades.length > 0 && (
+                <div className="text-[11px] mt-1 text-slate-600 dark:text-slate-400">
+                  IPs detectades pel servidor: {activarSslResult.ips_detectades.join(", ")}
+                </div>
+              )}
+            </div>
+          )}
 
           {dnsCheckResult && (
             <div

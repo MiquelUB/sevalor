@@ -38,6 +38,9 @@ class Empresa(Base):
     adreca: Mapped[Optional[str]] = mapped_column(Text)
     subdomini: Mapped[Optional[str]] = mapped_column(String(63), unique=True)
     domini_custom: Mapped[Optional[str]] = mapped_column(String(100), unique=True)
+    estat_domini: Mapped[str] = mapped_column(
+        String(30), default="NO_CONFIGURAT", server_default="NO_CONFIGURAT"
+    )
     primari_hsl: Mapped[str] = mapped_column(
         String(30), default="210 100% 15%", server_default="210 100% 15%"
     )

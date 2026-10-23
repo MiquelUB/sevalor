@@ -83,11 +83,12 @@ class EquipIAVenutItem(BaseModel):
 class OnboardingTenantRequest(BaseModel):
     rao_social: str = Field(..., min_length=2, max_length=100)
     nif: str = Field(..., min_length=9, max_length=20)
-    subdomini: str = Field(..., min_length=2, max_length=63, pattern="^[a-z0-9-]+$")
+    slug: Optional[str] = Field(None, min_length=2, max_length=63, pattern=r"^[a-z0-9-]+$")
+    subdomini: Optional[str] = Field(None, min_length=2, max_length=63, pattern=r"^[a-z0-9-]+$")
     domini_custom: Optional[str] = Field(
         None,
         max_length=100,
-        pattern=r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$",
+        pattern=r"^$|^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$",
     )
     vertical: str = Field("SEVALOR", max_length=100)
     magatzem_families_default: Optional[str] = None
@@ -487,8 +488,10 @@ async def llistar_tenants(
                 "nom": emp.nom,
                 "rao_social": emp.nom,
                 "nif": emp.nif,
+                "slug": emp.subdomini,
                 "subdomini": emp.subdomini,
                 "domini_custom": emp.domini_custom,
+                "estat_domini": getattr(emp, "estat_domini", "NO_CONFIGURAT") or "NO_CONFIGURAT",
                 "vertical": emp.vertical or "SEVALOR",
                 "estat": emp.estat_pagament,
                 "estat_pagament": emp.estat_pagament,
@@ -608,7 +611,13 @@ async def crear_nou_tenant(
             detail=f"El correu electrònic '{email_boss_norm}' ja està registrat a la plataforma. Cal utilitzar un email únic.",
         )
 
-    subdomini_norm = payload.subdomini.strip().lower()
+    subdomini_input = payload.slug or payload.subdomini
+    if not subdomini_input:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Cal proporcionar el camp 'slug' o 'subdomini' per al subdomini base de garantia.",
+        )
+    subdomini_norm = subdomini_input.strip().lower()
     if subdomini_norm in {"api", "admin", "www", "app", "superadmin", "billing", "sevalor"}:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -632,6 +641,25 @@ async def crear_nou_tenant(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=f"El domini '{domini_custom_norm}' ja està en ús.",
             )
+
+    # Pre-validació DNS no bloquejant per al domini extern (Fase 1 / Fase 2)
+    estat_domini = "NO_CONFIGURAT"
+    easypanel_res = None
+    if domini_custom_norm:
+        try:
+            dns_res = await EasypanelService.verificar_dns_resolucio(domini_custom_norm)
+            dns_status = dns_res.get("status")
+            if dns_status == "DNS_CORRECTE":
+                estat_domini = "DNS_ACTIU"
+                if settings.EASYPANEL_API_TOKEN:
+                    easypanel_res = await EasypanelService.afegir_domini_pwa(domini_custom_norm)
+            else:
+                estat_domini = "PENDENT_DNS"
+        except Exception as dns_err:
+            logger.warning(
+                "Pre-validació DNS o registre Easypanel no ha bloquejat l'onboarding: %s", dns_err
+            )
+            estat_domini = "PENDENT_DNS"
 
     nou_id = uuid.uuid4()
     quota_bytes = payload.quota_disc_gb * 1024 * 1024 * 1024
@@ -672,6 +700,7 @@ async def crear_nou_tenant(
         nif=payload.nif.strip().upper(),
         subdomini=subdomini_norm,
         domini_custom=domini_custom_norm,
+        estat_domini=estat_domini,
         pla_subscripcio=pla_norm,
         estat_pagament="TRIAL",
         quota_operaris=quota_op_inicial,
@@ -751,8 +780,6 @@ async def crear_nou_tenant(
 
     import jwt
 
-    from app.core.config import settings
-
     expire = datetime.now(timezone.utc) + timedelta(hours=24)
     payload_jwt = {
         "sub": str(boss_user_id),
@@ -768,8 +795,10 @@ async def crear_nou_tenant(
         "tenant": {
             "id": emp_id_str,
             "rao_social": payload.rao_social,
+            "slug": subdomini_norm,
             "subdomini": subdomini_norm,
             "domini_custom": domini_custom_norm,
+            "estat_domini": estat_domini,
             "domini_complet": domini_base,
             "vertical": vertical_norm,
             "pla_subscripcio": pla_norm,
@@ -780,6 +809,7 @@ async def crear_nou_tenant(
             "estat_inicial": "TRIAL",
             "logotip_path": nova_empresa.logotip_path,
         },
+        "easypanel": easypanel_res,
     }
 
 
@@ -831,19 +861,29 @@ async def actualitzar_domini_tenant(
             )
         emp.subdomini = sub_clean
 
+    easypanel_res = None
+    if emp.domini_custom:
+        dns_res = await EasypanelService.verificar_dns_resolucio(emp.domini_custom)
+        dns_status = dns_res.get("status")
+        if dns_status == "DNS_CORRECTE":
+            emp.estat_domini = "DNS_ACTIU"
+            if settings.EASYPANEL_API_TOKEN:
+                easypanel_res = await EasypanelService.afegir_domini_pwa(emp.domini_custom)
+        else:
+            emp.estat_domini = "PENDENT_DNS"
+    else:
+        emp.estat_domini = "NO_CONFIGURAT"
+
     emp.updated_at = datetime.now(timezone.utc)
     await db.commit()
-
-    # Si s'ha actualitzat el domini custom i tenim EasyPanel configurat, intentem registrar-lo
-    easypanel_res = None
-    if emp.domini_custom and settings.EASYPANEL_API_TOKEN:
-        easypanel_res = await EasypanelService.afegir_domini_pwa(emp.domini_custom)
 
     return {
         "status": "OK",
         "empresa_id": empresa_id,
         "domini_custom": emp.domini_custom,
         "subdomini": emp.subdomini,
+        "slug": emp.subdomini,
+        "estat_domini": getattr(emp, "estat_domini", "NO_CONFIGURAT"),
         "domini_complet": emp.domini_custom or emp.subdomini,
         "easypanel": easypanel_res,
     }

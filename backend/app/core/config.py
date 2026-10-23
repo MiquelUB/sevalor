@@ -80,8 +80,23 @@ class Settings(BaseSettings):
     # Integració EasyPanel (automatització de dominis i SSL)
     EASYPANEL_URL: str | None = None
     EASYPANEL_API_TOKEN: str | None = None
+    EASYPANEL_API_KEY: str | None = None
     EASYPANEL_PROJECT: str = "sevalor"
+    EASYPANEL_PROJECT_NAME: str | None = None
     EASYPANEL_SERVICE_PWA: str = "pwa"
+    EASYPANEL_SERVICE_NAME: str | None = None
+
+    @property
+    def easypanel_token(self) -> str | None:
+        return self.EASYPANEL_API_KEY or self.EASYPANEL_API_TOKEN
+
+    @property
+    def easypanel_project(self) -> str:
+        return self.EASYPANEL_PROJECT_NAME or self.EASYPANEL_PROJECT or "sevalor"
+
+    @property
+    def easypanel_service(self) -> str:
+        return self.EASYPANEL_SERVICE_NAME or self.EASYPANEL_SERVICE_PWA or "pwa"
 
     # Entorn
     ENVIRONMENT: str = "development"

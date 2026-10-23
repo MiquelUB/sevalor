@@ -54,7 +54,11 @@ def create_access_token(
 async def login_operari(
     request: Request, login_data: LoginRequest, db: AsyncSession = Depends(get_db)
 ):
-    empresa_id = getattr(request.state, "empresa_id", None) or request.headers.get("X-Empresa-ID")
+    empresa_id = (
+        getattr(request.state, "empresa_id", None)
+        or request.headers.get("X-Tenant-ID")
+        or request.headers.get("X-Empresa-ID")
+    )
     empresa_uuid = None
 
     if empresa_id:

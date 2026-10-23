@@ -322,3 +322,51 @@ async def test_verificar_dns_endpoint(headers):
             headers=headers,
         )
         assert res_empty.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_onboarding_slug_desacoblat_i_activar_custom_domain(headers):
+    """Verifica el flux desacoblat de la Fase 2: slug intern + activació posterior de custom-domain."""
+    unique_suffix = uuid.uuid4().hex[:6]
+    slug_test = f"empresa-{unique_suffix}"
+    custom_domain_test = f"sevalor-{unique_suffix}.projectexinoxano.cat"
+
+    payload = {
+        "rao_social": f"Empresa Desacoblada {unique_suffix}",
+        "nif": "B" + str(uuid.uuid4())[:8].upper(),
+        "slug": slug_test,
+        "domini_custom": custom_domain_test,
+        "vertical": "BUILDINGPRO",
+        "pla_subscripcio": "PRO",
+        "boss_nif": "55566677K",
+        "boss_nom": "Ferran",
+        "boss_cognoms": "Roca",
+        "boss_email": f"ferran_{unique_suffix}@desacoblat.cat",
+    }
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        # 1. Onboarding amb slug
+        res = await ac.post(
+            "/api/v1/superadmin/tenants/onboarding", json=payload, headers=headers
+        )
+        assert res.status_code == 201, res.text
+        data = res.json()
+        assert data["status"] == "CREATED"
+        empresa_id = data["tenant"]["id"]
+        assert data["tenant"]["slug"] == slug_test
+        assert data["tenant"]["domini_custom"] == custom_domain_test
+        assert "estat_domini" in data["tenant"]
+
+        # 2. Endpoint nou: POST /superadmin/empreses/{empresa_id}/custom-domain
+        res_ssl = await ac.post(
+            f"/api/v1/superadmin/empreses/{empresa_id}/custom-domain",
+            json={"domini_custom": custom_domain_test},
+            headers=headers,
+        )
+        assert res_ssl.status_code == 200, res_ssl.text
+        ssl_data = res_ssl.json()
+        assert ssl_data["domini"] == custom_domain_test
+        assert ssl_data["status"] in ("OK", "PENDENT_DNS")
+        assert "estat_domini" in ssl_data
+        assert "missatge" in ssl_data
+

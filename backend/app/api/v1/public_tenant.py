@@ -16,22 +16,29 @@ router = APIRouter(prefix="/public/tenant", tags=["Tenant Públic"])
 
 class PublicTenantResponse(BaseModel):
     id: uuid.UUID
+    tenant_id: Optional[uuid.UUID] = None
     nom: str
     rao_social: str
     nom_comercial: Optional[str] = None
     subdomini: Optional[str] = None
     domini_custom: Optional[str] = None
     logotip_path: Optional[str] = None
+    logotip_url: Optional[str] = None
     primari_hsl: Optional[str] = None
     secundari_hsl: Optional[str] = None
     accent_hsl: Optional[str] = None
+    color_primari: Optional[str] = None
+    color_secundari: Optional[str] = None
+    color_accent: Optional[str] = None
     node_ia_actiu: bool = False
 
 
 @router.get("/resolve", response_model=PublicTenantResponse)
+@router.get("/tenant-config", response_model=PublicTenantResponse)
 async def resoldre_tenant_per_domini(
     request: Request,
     host: Optional[str] = Query(None, description="Domini explícit a resoldre (opcional)"),
+    domain: Optional[str] = Query(None, description="Domini explícit (àlies de host)"),
     db: AsyncSession = Depends(get_db),
 ) -> PublicTenantResponse:
     """Retorna les dades d'estil i marca pública de l'empresa segons el subdomini o domini propi.
@@ -39,7 +46,7 @@ async def resoldre_tenant_per_domini(
     Aquest endpoint és públic per permetre que la pantalla de login mostri la identitat corporativa,
     però NO exposa cap dada fiscal, bancària ni d'usuaris (Compliment RGPD i Zero-Trust).
     """
-    target_host = host or request.headers.get("x-forwarded-host") or request.headers.get("host") or ""
+    target_host = domain or host or request.headers.get("x-forwarded-host") or request.headers.get("host") or ""
     clean_host = (
         target_host.strip()
         .lower()
@@ -100,16 +107,26 @@ async def resoldre_tenant_per_domini(
         )
 
     nom_val = empresa.nom or "Empresa"
+    primari = empresa.primari_hsl or "210 100% 15%"
+    secundari = empresa.secundari_hsl or "38 92% 50%"
+    accent = empresa.accent_hsl or "190 90% 50%"
+    logo = empresa.logotip_path
+
     return PublicTenantResponse(
         id=empresa.id,
+        tenant_id=empresa.id,
         nom=nom_val,
         rao_social=nom_val,
         nom_comercial=nom_val,
         subdomini=empresa.subdomini,
         domini_custom=empresa.domini_custom,
-        logotip_path=empresa.logotip_path,
-        primari_hsl=empresa.primari_hsl or "210 100% 15%",
-        secundari_hsl=empresa.secundari_hsl or "38 92% 50%",
-        accent_hsl=empresa.accent_hsl or "190 90% 50%",
+        logotip_path=logo,
+        logotip_url=logo,
+        primari_hsl=primari,
+        secundari_hsl=secundari,
+        accent_hsl=accent,
+        color_primari=primari,
+        color_secundari=secundari,
+        color_accent=accent,
         node_ia_actiu=bool(getattr(empresa, "node_ia_actiu", False)),
     )

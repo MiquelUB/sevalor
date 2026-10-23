@@ -165,10 +165,13 @@ export default function SuperadminTenantOnboardingPage() {
     }
   };
 
-  // Pas 2: Domini Propi & Verificació Real DNS
-  const [tipusDomini, setTipusDomini] = useState<"PROPI" | "SEVALOR">("PROPI");
-  const [dominiEmpresa, setDominiEmpresa] = useState<string>("");
-  const [subdomini, setSubdomini] = useState<string>("");
+  // Pas 2: Model de Dominis Desacoblat (Fase 2)
+  // Camp 1 (Obligatori): Slug / Subdomini base de garantia
+  const [slug, setSlug] = useState<string>("");
+  const [slugManual, setSlugManual] = useState<boolean>(false);
+
+  // Camp 2 (Opcional): Domini personalitzat extern propi
+  const [dominiCustom, setDominiCustom] = useState<string>("");
   const [dnsResult, setDnsResult] = useState<any>(null);
   const [checkingDns, setCheckingDns] = useState<boolean>(false);
 
@@ -198,21 +201,33 @@ export default function SuperadminTenantOnboardingPage() {
       .catch(() => setLiveKpis(null));
   }, []);
 
-  const dominiNet = dominiEmpresa
+  // Càlcul intel·ligent del slug intern únic a PostgreSQL RLS
+  const slugFromRao = raoSocial
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+
+  const slugCalculat =
+    (slug.trim() ? slug.trim().toLowerCase().replace(/[^a-z0-9-]/g, "") : "") ||
+    (slugFromRao && !["sevalor", "admin", "api", "superadmin", "billing", "app"].includes(slugFromRao)
+      ? slugFromRao
+      : "") ||
+    `tenant-${Date.now().toString().slice(-4)}`;
+
+  const dominiCustomNet = dominiCustom
     .trim()
     .toLowerCase()
     .replace(/^https?:\/\//, "")
     .replace(/\/.*$/, "")
     .replace(/[^a-z0-9.-]/g, "");
 
-  // El subdomini o domini introduït mana de forma absoluta, sense prefixos forçats ni fallbacks a 'sevalor'
-  const fqdnResultant =
-    tipusDomini === "PROPI"
-      ? dominiNet
-      : `${(subdomini.trim() || "tenant").toLowerCase().replace(/[^a-z0-9-]/g, "")}.sevalor.app`;
+  const fqdnResultant = dominiCustomNet || `${slugCalculat}.sevalor.cat`;
 
   // Extracció de peces del domini per a la instrucció DNS CNAME
-  const dominiParts = dominiNet ? dominiNet.split(".").filter(Boolean) : [];
+  const dominiParts = dominiCustomNet ? dominiCustomNet.split(".").filter(Boolean) : [];
   const cnameHost =
     dominiParts.length > 2
       ? dominiParts.slice(0, dominiParts.length - 2).join(".")
@@ -223,39 +238,11 @@ export default function SuperadminTenantOnboardingPage() {
   const cnameRootDomain =
     dominiParts.length >= 2
       ? dominiParts.slice(-2).join(".")
-      : dominiNet || "empresa.cat";
-
-  // Càlcul intel·ligent del slug intern únic a PostgreSQL RLS (mai pot ser 'sevalor')
-  const slugFromRao = raoSocial
-    .trim()
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-
-  let domainSlug = "";
-  if (dominiParts.length >= 2) {
-    const genericPrefixes = new Set(["sevalor", "app", "gestio", "erp", "crm", "portal", "admin", "cloud", "core"]);
-    const candidate = dominiParts.find((p) => !genericPrefixes.has(p) && !["com", "cat", "es", "net", "org", "eu"].includes(p));
-    domainSlug = candidate || dominiParts[0];
-  }
-
-  let slugCalculat =
-    (tipusDomini === "SEVALOR" && subdomini.trim() ? subdomini.trim().toLowerCase().replace(/[^a-z0-9-]/g, "") : "") ||
-    (slugFromRao && slugFromRao !== "sevalor" ? slugFromRao : "") ||
-    (domainSlug && domainSlug !== "sevalor" ? domainSlug : "") ||
-    `tenant-${Date.now().toString().slice(-4)}`;
-
-  if (["sevalor", "admin", "api", "superadmin", "billing", "app"].includes(slugCalculat)) {
-    slugCalculat = slugFromRao && !["sevalor", "admin", "api", "superadmin", "billing", "app"].includes(slugFromRao)
-      ? slugFromRao
-      : `tenant-${Date.now().toString().slice(-4)}`;
-  }
+      : dominiCustomNet || "empresa.cat";
 
   const handleCheckDnsLive = async () => {
-    if (!fqdnResultant) {
-      setErrorMessage("Introdueix primer el domini de l'empresa per verificar la redirecció DNS.");
+    if (!dominiCustomNet) {
+      setErrorMessage("Introdueix primer un domini personalitzat extern per verificar la redirecció DNS.");
       return;
     }
     setCheckingDns(true);
@@ -264,13 +251,13 @@ export default function SuperadminTenantOnboardingPage() {
     try {
       const res = await apiFetch<any>("/superadmin/tenants/verificar-dns", {
         method: "POST",
-        body: JSON.stringify({ domini: fqdnResultant, fqdn: fqdnResultant }),
+        body: JSON.stringify({ domini: dominiCustomNet, fqdn: dominiCustomNet }),
       });
       setDnsResult(res);
     } catch (err: any) {
       setDnsResult({
         resolt: false,
-        fqdn: fqdnResultant,
+        fqdn: dominiCustomNet,
         detall: err.message || "Error comprovant el registre DNS.",
       });
     } finally {
@@ -290,23 +277,16 @@ export default function SuperadminTenantOnboardingPage() {
       return;
     }
 
-    if (tipusDomini === "PROPI") {
-      if (!dominiEmpresa.trim() || !dominiEmpresa.includes(".")) {
-        setDryRunRunning(false);
-        setDryRunSuccess(false);
-        setErrorMessage("Cal indicar un domini o subdomini d'empresa vàlid (exemple: sevalor.projectexinoxano.cat o app.soler.cat).");
-        return;
-      }
-    } else {
-      if (!subdomini.trim()) {
-        setDryRunRunning(false);
-        setDryRunSuccess(false);
-        setErrorMessage("Cal indicar un subdomini vàlid per a sevalor.app.");
-        return;
-      }
+    if (!slugCalculat || slugCalculat.length < 2) {
+      setDryRunRunning(false);
+      setDryRunSuccess(false);
+      setErrorMessage("Cal indicar un slug / subdomini intern de garantia vàlid (mínim 2 caràcters).");
+      return;
     }
 
-    await handleCheckDnsLive();
+    if (dominiCustomNet) {
+      await handleCheckDnsLive();
+    }
     setDryRunRunning(false);
     setDryRunSuccess(true);
   };
@@ -316,8 +296,9 @@ export default function SuperadminTenantOnboardingPage() {
     setNif("");
     setResponsable("");
     setEmailGerent("");
-    setDominiEmpresa("");
-    setSubdomini("");
+    setSlug("");
+    setSlugManual(false);
+    setDominiCustom("");
     setDnsResult(null);
     setDryRunSuccess(null);
     setErrorMessage(null);
@@ -333,15 +314,16 @@ export default function SuperadminTenantOnboardingPage() {
       const nom = nomParts[0] || "Gerent";
       const cognoms = nomParts.slice(1).join(" ") || "General";
 
-      const subdominiFinal = slugCalculat;
-      const dominiCustomFinal = tipusDomini === "PROPI" && fqdnResultant ? fqdnResultant : undefined;
+      const slugFinal = slugCalculat;
+      const dominiCustomFinal = dominiCustomNet || undefined;
 
       const data = await apiFetch<any>("/superadmin/tenants/onboarding", {
         method: "POST",
         body: JSON.stringify({
           rao_social: raoSocial.trim(),
           nif: nif.trim().toUpperCase(),
-          subdomini: subdominiFinal,
+          slug: slugFinal,
+          subdomini: slugFinal,
           domini_custom: dominiCustomFinal,
           vertical: vertical.trim(),
           magatzem_families_default: magatzemFamilies.trim() || undefined,
@@ -378,7 +360,7 @@ export default function SuperadminTenantOnboardingPage() {
       }
 
       setProvisionedSuccess(true);
-      const hostAcceso = dominiCustomFinal || `${subdominiFinal}.sevalor.app`;
+      const hostAcceso = dominiCustomFinal || `${slugFinal}.sevalor.cat`;
       setInvitationUrl(data?.tenant?.enllac_activacio_2fa || `https://${hostAcceso}/activacio`);
     } catch (err: any) {
       setErrorMessage(err.message || "Error durant el provisionament del tenant.");
@@ -752,7 +734,7 @@ export default function SuperadminTenantOnboardingPage() {
             </div>
           </div>
 
-          {/* PAS 2: Domini Propi & Redirecció DNS cap al nostre servidor */}
+          {/* PAS 2: Model de Dominis Desacoblat: Slug Base (Garantia) + Domini Extern (Opcional) */}
           <div className="bg-white dark:bg-slate-900 rounded-xl shadow-sm p-6 border border-slate-200 dark:border-slate-800 space-y-5">
             <div className="flex items-center justify-between border-b border-slate-200 dark:border-slate-800 pb-3">
               <div className="flex items-center gap-2">
@@ -761,44 +743,89 @@ export default function SuperadminTenantOnboardingPage() {
                 </span>
                 <div>
                   <h2 className="text-sm font-bold uppercase tracking-wider text-slate-800 dark:text-slate-200">
-                    2. Redirecció DNS del Subdomini de l'Empresa al Nostre Servidor
+                    2. Desacoblament de Dominis: Subdomini Base &amp; Domini Personalitzat
                   </h2>
                   <span className="text-[10px] font-mono text-slate-500">
-                    Comprovació en viu del registre CNAME / A abans d'activar el tenant
+                    Garantia d'accés immediat via subdomini intern + vinculació opcional de domini corporatiu del client
                   </span>
                 </div>
               </div>
-              <button
-                type="button"
-                onClick={handleCheckDnsLive}
-                disabled={checkingDns}
-                className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-mono text-xs font-bold shadow-sm transition-colors"
-              >
-                {checkingDns ? "Verificant DNS..." : "Comprovar Redirecció DNS en Viu"}
-              </button>
+              {dominiCustomNet && (
+                <button
+                  type="button"
+                  onClick={handleCheckDnsLive}
+                  disabled={checkingDns}
+                  className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-mono text-xs font-bold shadow-sm transition-colors"
+                >
+                  {checkingDns ? "Verificant DNS..." : "Comprovar DNS Extern en Viu"}
+                </button>
+              )}
             </div>
 
             <div className="p-3.5 rounded-xl border border-emerald-200 dark:border-emerald-800/60 bg-emerald-50/50 dark:bg-emerald-950/30 text-xs">
               <span className="font-bold flex items-center gap-1.5 mb-1 text-emerald-800 dark:text-emerald-300">
                 <Globe className="w-4 h-4 text-emerald-600" />
-                <span>Subdomini / Domini Corporatiu de l'Empresa (Multi-Tenant)</span>
+                <span>Arquitectura de Dominis Multi-Tenant Desacoblada</span>
               </span>
               <p className="text-[11px] text-slate-600 dark:text-slate-400 font-normal">
-                Cada empresa opera sobre el seu propi subdomini DNS (ex: <code>sevalormante.projectexinoxano.cat</code> o <code>sevalor.soler.cat</code>) apuntant a la nostra IP Hetzner.
+                L'empresa disposa sempre d'un <strong>subdomini de garantia permanent</strong> (ex: <code>{slugCalculat}.sevalor.cat</code>) perquè pugui operar immediatament. Opcionalment, si el client vol el seu propi domini (ex: <code>sevalormante.projectexinoxano.cat</code>), el pot configurar ara o posteriorment des de la seva fitxa.
               </p>
             </div>
 
-            <div className="space-y-4">
-                <div>
-                  <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                    Subdomini o Domini d'Accés Personalitzat (FQDN Complet)
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+              {/* CAMP 1: OBLIGATORI - SLUG / SUBDOMINI BASE */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <label className="block font-bold text-slate-700 dark:text-slate-300 text-xs">
+                    Camp 1 (Obligatori): Slug / Subdomini de Garantia
                   </label>
+                  <span className="text-[10px] font-mono text-emerald-600 dark:text-emerald-400 font-bold bg-emerald-100 dark:bg-emerald-950 px-2 py-0.5 rounded">
+                    Immediat (Sense DNS)
+                  </span>
+                </div>
+                <div className="flex items-center rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 overflow-hidden font-mono text-sm">
+                  <span className="px-3 text-slate-400 text-xs bg-slate-100 dark:bg-slate-800/80 border-r border-slate-200 dark:border-slate-700 py-2.5">
+                    https://
+                  </span>
                   <input
                     type="text"
-                    placeholder="ex. sevalor.projectexinoxano.cat o app.soler.cat"
-                    value={dominiEmpresa}
+                    placeholder="nomempresa"
+                    value={slug}
+                    onChange={(e) => {
+                      setSlugManual(true);
+                      setSlug(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ""));
+                    }}
+                    className="w-full bg-transparent p-2.5 font-bold text-slate-900 dark:text-white focus:outline-none"
+                  />
+                  <span className="px-3 text-emerald-600 dark:text-emerald-400 font-bold text-xs bg-emerald-50 dark:bg-emerald-950/60 border-l border-slate-200 dark:border-slate-700 py-2.5">
+                    .sevalor.cat
+                  </span>
+                </div>
+                <p className="text-[11px] text-slate-500">
+                  Subdomini intern aïllat a PostgreSQL RLS. Actiu des del segon 1 de la creació sense dependre de proveïdors DNS externs.
+                </p>
+              </div>
+
+              {/* CAMP 2: OPCIONAL - DOMINI PERSONALITZAT EXTERN */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <label className="block font-bold text-slate-700 dark:text-slate-300 text-xs">
+                    Camp 2 (Opcional): Domini Corporatiu del Client
+                  </label>
+                  <span className="text-[10px] font-mono text-slate-500 bg-slate-200 dark:bg-slate-800 px-2 py-0.5 rounded">
+                    Requereix CNAME/A
+                  </span>
+                </div>
+                <div className="flex items-center rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 overflow-hidden font-mono text-sm">
+                  <span className="px-3 text-slate-400 text-xs bg-slate-100 dark:bg-slate-800/80 border-r border-slate-200 dark:border-slate-700 py-2.5">
+                    https://
+                  </span>
+                  <input
+                    type="text"
+                    placeholder="ex. sevalormante.projectexinoxano.cat o erp.soler.cat"
+                    value={dominiCustom}
                     onChange={(e) =>
-                      setDominiEmpresa(
+                      setDominiCustom(
                         e.target.value
                           .toLowerCase()
                           .replace(/^https?:\/\//, "")
@@ -806,44 +833,50 @@ export default function SuperadminTenantOnboardingPage() {
                           .replace(/[^a-z0-9.-]/g, "")
                       )
                     }
-                    className="w-full p-2.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 font-mono font-bold text-sm"
+                    className="w-full bg-transparent p-2.5 font-bold text-slate-900 dark:text-white focus:outline-none"
                   />
-                  <p className="text-[11px] text-slate-500 mt-1">
-                    Introdueix directament el subdomini o domini complet. El valor introduït manarà de forma exacta com a domini de l'empresa (sense prefixos per defecte).
-                  </p>
                 </div>
+                <p className="text-[11px] text-slate-500">
+                  Si s'especifica, l'empresa també respondrà per aquest domini un cop el client configuri el seu DNS. Si encara no propaga, no bloquejarà l'alta.
+                </p>
+              </div>
+            </div>
 
-                {/* Instruccions de Redirecció DNS CNAME */}
-                <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 text-xs font-mono space-y-2">
-                  <div className="flex items-center justify-between">
-                    <span className="font-bold text-slate-800 dark:text-slate-200 uppercase text-[11px] flex items-center gap-1.5">
-                      <ExternalLink className="w-3.5 h-3.5 text-emerald-600" />
-                      <span>Pas Obligatori al Proveïdor DNS de l'Empresa ({cnameRootDomain})</span>
-                    </span>
+            {/* Instruccions de Redirecció DNS si hi ha domini custom */}
+            {dominiCustomNet ? (
+              <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 text-xs font-mono space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="font-bold text-slate-800 dark:text-slate-200 uppercase text-[11px] flex items-center gap-1.5">
+                    <ExternalLink className="w-3.5 h-3.5 text-emerald-600" />
+                    <span>Configuració DNS requerida al proveïdor del client ({cnameRootDomain})</span>
+                  </span>
+                </div>
+                <p className="text-[11px] text-slate-600 dark:text-slate-400 font-sans">
+                  Perquè <strong>{dominiCustomNet}</strong> carregui la plataforma, el client ha de crear aquest registre:
+                </p>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
+                  <div className="p-2.5 rounded bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800">
+                    <span className="text-slate-400 text-[10px] block font-bold">Registre Tipus A (Recomanat)</span>
+                    <span className="font-bold text-emerald-600 block text-xs">IP 178.104.83.189</span>
+                    <span className="text-[10px] text-slate-500">Host: {cnameHost}</span>
                   </div>
-                  <p className="text-[11px] text-slate-600 dark:text-slate-400 font-sans">
-                    Perquè <strong>{fqdnResultant || "el subdomini"}</strong> apunti a la infraestructura de Sevalor Suite a Hetzner Cloud, cal afegir aquest registre al panell DNS del client:
-                  </p>
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-1">
-                    <div className="p-2 rounded bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800">
-                      <span className="text-slate-400 text-[10px] block">Opció 1: Tipus A (Recomanat)</span>
-                      <span className="font-bold text-emerald-600 block">IP 178.104.83.189</span>
-                      <span className="text-[10px] text-slate-500">Host: {cnameHost}</span>
-                    </div>
-                    <div className="p-2 rounded bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800">
-                      <span className="text-slate-400 text-[10px] block">Opció 2: Tipus CNAME</span>
-                      <span className="font-bold text-slate-800 dark:text-slate-200 block break-all text-[11px]">sevalor-sevalor-pwa.80opze.easypanel.host</span>
-                      <span className="text-[10px] text-slate-500">Host: {cnameHost}</span>
-                    </div>
-                    <div className="p-2 rounded bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800/60">
-                      <span className="text-amber-700 dark:text-amber-400 text-[10px] block font-bold">Pas 2: EasyPanel</span>
-                      <span className="text-[11px] text-amber-900 dark:text-amber-200 block font-sans">
-                        Afegir <strong>{fqdnResultant || "el domini"}</strong> a EasyPanel (servei PWA &gt; Domains) per al certificat SSL Let's Encrypt.
-                      </span>
-                    </div>
+                  <div className="p-2.5 rounded bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800">
+                    <span className="text-slate-400 text-[10px] block font-bold">Registre Tipus CNAME</span>
+                    <span className="font-bold text-slate-800 dark:text-slate-200 block break-all text-[11px]">
+                      sevalor-sevalor-pwa.80opze.easypanel.host
+                    </span>
+                    <span className="text-[10px] text-slate-500">Host: {cnameHost}</span>
                   </div>
                 </div>
               </div>
+            ) : (
+              <div className="p-3 rounded-xl bg-slate-100/70 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-700 text-xs text-slate-600 dark:text-slate-400 flex items-center gap-2">
+                <Check className="w-4 h-4 text-emerald-500 shrink-0" />
+                <span>
+                  Sense domini extern. L'empresa quedarà disponible immediatament a <strong>https://{slugCalculat}.sevalor.cat</strong>.
+                </span>
+              </div>
+            )}
 
             {/* Resultat Real de la Sonda DNS (Zero Mock) */}
             {dnsResult && (

@@ -14,26 +14,16 @@ export function getApiBaseUrl(): string {
     const custom = localStorage.getItem("sevalor_api_url");
     if (custom) return custom.replace(/\/+$/, "");
 
-    // 2. Si estem al navegador en un domini remot o darrere de proxy Nginx (ports 80, 443, 8080, 8443):
+    // 2. Sempre que estem al navegador en un domini remot o propi de client:
     // Utilitzem ruta relativa /api/v1 del mateix origen per evitar problemes de Mixed Content i CORS
-    if (
-      (window.location.hostname !== "localhost" && window.location.hostname !== "127.0.0.1") ||
-      ["80", "443", "8080", "8443"].includes(window.location.port)
-    ) {
-      return `${window.location.origin}/api/v1`;
+    if (window.location.hostname !== "localhost" && window.location.hostname !== "127.0.0.1") {
+      return "/api/v1";
     }
 
     // 3. Variable d'entorn pública de Next.js
     const envUrl = process.env.NEXT_PUBLIC_API_URL;
-    if (envUrl) {
-      // Ignorar adreces internes de Docker com http://backend:8000 que el navegador de l'usuari mai pot resoldre
-      if (!envUrl.includes("://backend")) {
-        const isLocalUrl = envUrl.includes("127.0.0.1") || envUrl.includes("localhost");
-        const isLocalBrowser = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
-        if (isLocalUrl || !isLocalBrowser) {
-          return envUrl.replace(/\/+$/, "");
-        }
-      }
+    if (envUrl && !envUrl.includes("://backend")) {
+      return envUrl.replace(/\/+$/, "");
     }
 
     // 4. Per defecte en desenvolupament local directament contra el backend exposat
@@ -44,19 +34,17 @@ export function getApiBaseUrl(): string {
 }
 
 /**
- * Extreu l'empresa_id del host si el format és <tenant>.localhost o similar.
- * En producció es llegeix del subdomini configurat a EasyPanel.
+ * Extreu el tenant_id resolt pel hostname o guardat prèviament.
  */
 export function extractTenantId(): string | null {
   if (typeof window === "undefined") return null;
-  
-  // En aquesta fase, la API backend espera estrictament un UUID vàlid a la capçalera X-Empresa-ID.
-  // Els subdominis com 'tenant' no serveixen per a X-Empresa-ID directament (llevat que hi hagi un endpoint de resolució).
-  // Per tant, només lliurem l'ID si tenim l'UUID explícit desat.
-  
-  const saved = localStorage.getItem("sevalor_tenant_id");
-  if (saved) return saved;
-  
+
+  const sessionSaved = typeof sessionStorage !== "undefined" ? sessionStorage.getItem("sevalor_tenant_id") : null;
+  if (sessionSaved) return sessionSaved;
+
+  const localSaved = localStorage.getItem("sevalor_tenant_id");
+  if (localSaved) return localSaved;
+
   return null;
 }
 
@@ -137,8 +125,13 @@ export async function apiFetch<T = any>(
 
   // Tenant header si existeix
   const tenantId = extractTenantId();
-  if (tenantId && !headers["X-Empresa-ID"]) {
-    headers["X-Empresa-ID"] = tenantId;
+  if (tenantId) {
+    if (!headers["X-Empresa-ID"]) {
+      headers["X-Empresa-ID"] = tenantId;
+    }
+    if (!headers["X-Tenant-ID"]) {
+      headers["X-Tenant-ID"] = tenantId;
+    }
   }
 
   // Auth token

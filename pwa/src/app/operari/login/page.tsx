@@ -8,6 +8,7 @@ import {
   verifySentinelBlock,
 } from "@/lib/crypto";
 import { apiFetch, setAuthToken, getApiBaseUrl } from "@/lib/api";
+import { useChameleon } from "@/lib/chameleon";
 
 const NIF_STORAGE_KEY = "sevalor_operari_nif";
 const SENTINEL_SALT_KEY = "sevalor_sentinel_salt";
@@ -15,6 +16,7 @@ const SENTINEL_CIPHER_KEY = "sevalor_sentinel_cipher";
 const SENTINEL_IV_KEY = "sevalor_sentinel_iv";
 
 export default function OperariLoginPage() {
+  const { brand } = useChameleon();
   const [pin, setPin] = useState<string>("");
   const [nif, setNif] = useState<string>("");
   const [error, setError] = useState<string | null>(null);
@@ -118,12 +120,19 @@ export default function OperariLoginPage() {
     try {
       localStorage.setItem(NIF_STORAGE_KEY, operariNif);
 
-      // Autenticació contra backend
+      // Autenticació contra backend amb identificació de tenant (anti col·lisió PIN entre empreses)
+      const tenantId =
+        (typeof sessionStorage !== "undefined" ? sessionStorage.getItem("sevalor_tenant_id") : null) ||
+        (typeof localStorage !== "undefined" ? localStorage.getItem("sevalor_tenant_id") : null);
+
       const response = await apiFetch<{
         access_token: string;
         usuari: { id: string; nom: string; rol: string };
       }>("/operari_auth/login", {
         method: "POST",
+        headers: {
+          ...(tenantId ? { "X-Tenant-ID": tenantId, "X-Empresa-ID": tenantId } : {}),
+        },
         body: JSON.stringify({
           nif: operariNif,
           pin: codiPin,
@@ -240,17 +249,25 @@ export default function OperariLoginPage() {
 
         {/* Logo & Brand Name */}
         <div className="flex flex-col items-center gap-1.5">
-          <div className="w-14 h-14 rounded-2xl bg-white/10 backdrop-blur-md flex items-center justify-center border border-white/15 shadow-xl">
-            <span
-              className="material-symbols-outlined text-secondary-container text-[32px]"
-              style={{ fontVariationSettings: "'FILL' 1" }}
-            >
-              agriculture
-            </span>
+          <div className="w-16 h-16 rounded-2xl bg-white/10 backdrop-blur-md flex items-center justify-center border border-white/15 shadow-xl p-1.5 overflow-hidden">
+            {brand?.logotip_path ? (
+              <img
+                src={brand.logotip_path}
+                alt={brand.empresa_nom || "Logo Empresa"}
+                className="w-full h-full object-contain rounded-xl"
+              />
+            ) : (
+              <span
+                className="material-symbols-outlined text-secondary-container text-[32px]"
+                style={{ fontVariationSettings: "'FILL' 1" }}
+              >
+                agriculture
+              </span>
+            )}
           </div>
           <div className="text-center">
             <h1 className="text-2xl font-extrabold tracking-tight text-white">
-              Sevalor <span className="text-secondary-container">SEVALOR</span>
+              {brand?.empresa_nom || "Sevalor"} <span className="text-secondary-container">Suite</span>
             </h1>
             <p className="text-slate-400 text-xs font-medium mt-0.5">
               Introdueix el teu DNI/NIF i PIN d&apos;operari

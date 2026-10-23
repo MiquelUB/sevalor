@@ -3,7 +3,8 @@
 import React, { createContext, useContext, useEffect, useState } from "react";
 import { apiFetch } from "@/lib/api";
 
-interface ChameleonBrand {
+export interface ChameleonBrand {
+  tenant_id?: string;
   primari_hsl: string;   // "210 100% 15%"
   secundari_hsl: string; // "38 92% 50%"
   accent_hsl: string;    // "190 90% 50%"
@@ -13,12 +14,14 @@ interface ChameleonBrand {
 
 interface ChameleonContextValue {
   brand: ChameleonBrand | null;
+  tenantId: string | null;
   loading: boolean;
   error: string | null;
 }
 
 const ChameleonContext = createContext<ChameleonContextValue>({
   brand: null,
+  tenantId: null,
   loading: true,
   error: null,
 });
@@ -37,14 +40,17 @@ function applyChameleonCSS(brand: ChameleonBrand) {
   // Aplicar colors primari, secundari i accent
   if (brand.primari_hsl) {
     root.style.setProperty("--color-primary", brand.primari_hsl);
+    root.style.setProperty("--chameleon-primary", brand.primari_hsl);
     root.style.setProperty("--color-primary-foreground", "0 0% 100%");
   }
   if (brand.secundari_hsl) {
     root.style.setProperty("--color-secondary", brand.secundari_hsl);
+    root.style.setProperty("--chameleon-secondary", brand.secundari_hsl);
     root.style.setProperty("--color-secondary-foreground", "0 0% 100%");
   }
   if (brand.accent_hsl) {
     root.style.setProperty("--color-accent", brand.accent_hsl);
+    root.style.setProperty("--chameleon-accent", brand.accent_hsl);
     root.style.setProperty("--color-secondary-container", brand.accent_hsl);
     root.style.setProperty("--color-accent-foreground", "0 0% 100%");
   }
@@ -87,17 +93,34 @@ export function ChameleonProvider({ children }: { children: React.ReactNode }) {
     }
 
     const loadBrand = async () => {
+      const hostname = typeof window !== "undefined" ? window.location.hostname : "";
       try {
-        // 1. Intentar endpoint públic per host (funciona abans i després de login)
-        const publicTenant = await apiFetch<any>("/public/tenant/resolve");
-        if (publicTenant && publicTenant.id) {
+        // 1. Intentar endpoint públic per domini/host (funciona abans i després de login)
+        const endpoint = hostname
+          ? `/public/tenant-config?domain=${encodeURIComponent(hostname)}`
+          : "/public/tenant/resolve";
+        const publicTenant = await apiFetch<any>(endpoint);
+        if (publicTenant && (publicTenant.id || publicTenant.tenant_id)) {
+          const tenantId = String(publicTenant.tenant_id || publicTenant.id);
           const brandData: ChameleonBrand = {
-            primari_hsl: publicTenant.color_primari_hsl || "152 60% 25%",
-            secundari_hsl: publicTenant.color_secundari_hsl || "152 45% 15%",
-            accent_hsl: publicTenant.color_accent_hsl || "38 92% 50%",
-            logotip_path: publicTenant.logotip_url,
-            empresa_nom: publicTenant.nom_comercial || publicTenant.rao_social,
+            tenant_id: tenantId,
+            primari_hsl: publicTenant.color_primari || publicTenant.primari_hsl || "152 60% 25%",
+            secundari_hsl: publicTenant.color_secundari || publicTenant.secundari_hsl || "152 45% 15%",
+            accent_hsl: publicTenant.color_accent || publicTenant.accent_hsl || "38 92% 50%",
+            logotip_path: publicTenant.logotip_url || publicTenant.logotip_path,
+            empresa_nom: publicTenant.nom_comercial || publicTenant.rao_social || publicTenant.nom,
           };
+
+          if (typeof sessionStorage !== "undefined") {
+            sessionStorage.setItem("sevalor_tenant_id", tenantId);
+            if (brandData.empresa_nom) {
+              sessionStorage.setItem("sevalor_tenant_nom", brandData.empresa_nom);
+            }
+            if (brandData.logotip_path) {
+              sessionStorage.setItem("sevalor_tenant_logo", brandData.logotip_path);
+            }
+          }
+
           setBrand(brandData);
           applyChameleonCSS(brandData);
           setLoading(false);
@@ -110,8 +133,10 @@ export function ChameleonProvider({ children }: { children: React.ReactNode }) {
       // 2. Si no ha resolt pel host, provar endpoint de gestió de marca
       try {
         const data = await apiFetch<ChameleonBrand>("/gestio/configuracio/marca");
-        setBrand(data);
-        applyChameleonCSS(data);
+        if (data) {
+          setBrand(data);
+          applyChameleonCSS(data);
+        }
       } catch (err: any) {
         if (!err?.message?.includes("401") && !err?.message?.includes("403") && !err?.message?.includes("404")) {
           console.warn("[Chameleon] No s'ha pogut carregar la marca:", err.message);
@@ -126,7 +151,7 @@ export function ChameleonProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   return (
-    <ChameleonContext.Provider value={{ brand, loading, error }}>
+    <ChameleonContext.Provider value={{ brand, tenantId: brand?.tenant_id || null, loading, error }}>
       {children}
     </ChameleonContext.Provider>
   );
