@@ -4,7 +4,7 @@ import sys
 import uuid
 
 import bcrypt
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 
 # Inject backend path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -21,6 +21,11 @@ async def seed():
     print("⏳ Creant taules de la base de dades si no existeixen...")
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        await conn.execute(
+            text(
+                "ALTER TABLE empreses ADD COLUMN IF NOT EXISTS estat_domini VARCHAR(30) NOT NULL DEFAULT 'NO_CONFIGURAT'"
+            )
+        )
     print("✅ Taules comprovades correctament!")
 
     async with AsyncSessionLocal() as session:
@@ -37,6 +42,7 @@ async def seed():
                 nom="Sevalor Central",
                 nif="B12345678",
                 subdomini="admin",
+                estat_domini="NO_CONFIGURAT",
                 pla_subscripcio="ENTERPRISE",
                 estat_pagament="ACTIU",
             )

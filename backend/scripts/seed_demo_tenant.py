@@ -71,6 +71,7 @@ async def seed_demo():
                 nom="AgroServeis Demo SL",
                 nif="B98765432",
                 subdomini=subdomini,
+                estat_domini="NO_CONFIGURAT",
                 pla_subscripcio="ENTERPRISE",
                 estat_pagament="ACTIU",
                 vertical="CampoPro",
