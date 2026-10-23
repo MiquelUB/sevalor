@@ -90,7 +90,11 @@ export async function middleware(request: NextRequest) {
   const payload = token ? await verifyJwt(token, JWT_SECRET) : null;
   const role = payload?.rol?.toUpperCase();
 
-  const rawHost = request.headers.get('x-forwarded-host') || request.headers.get('host') || '';
+  const rawHost =
+    request.headers?.get?.('x-forwarded-host') ||
+    request.headers?.get?.('host') ||
+    request.nextUrl?.host ||
+    '';
   const host = rawHost.split(':')[0].toLowerCase().trim();
   const adminHost = (
     process.env.NEXT_PUBLIC_PLATFORM_ADMIN_HOST ||

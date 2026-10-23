@@ -35,7 +35,7 @@ async def test_public_tenant_resolve_success(db_session: AsyncSession):
     emp = Empresa(
         id=empresa_id,
         nom="Instal·lacions Soler",
-        nif="B12345678",
+        nif=f"B{uuid.uuid4().hex[:8].upper()}",
         subdomini=f"soler-{uuid.uuid4().hex[:4]}",
         domini_custom=domini_test,
         primari_hsl="152 60% 25%",
@@ -84,7 +84,7 @@ async def test_public_tenant_resolve_hibernant_or_suspes(db_session: AsyncSessio
     emp = Empresa(
         id=uuid.uuid4(),
         nom="Empresa Hibernant",
-        nif="B99999999",
+        nif=f"B{uuid.uuid4().hex[:8].upper()}",
         subdomini=f"hib-{uuid.uuid4().hex[:4]}",
         domini_custom=dom_hib,
         estat_pagament="HIBERNANT",
@@ -130,7 +130,7 @@ async def test_cross_tenant_domain_mismatch_blocked(db_session: AsyncSession):
     emp_b = Empresa(
         id=emp_b_id,
         nom="Empresa B",
-        nif="B22222222",
+        nif=f"B{uuid.uuid4().hex[:8].upper()}",
         subdomini=f"b-{uuid.uuid4().hex[:4]}",
         domini_custom=dom_b,
         estat_pagament="ACTIU",
