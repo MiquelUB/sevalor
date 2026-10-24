@@ -179,7 +179,7 @@ class EasypanelService:
                         list_res = await client.get(
                             list_url,
                             headers=headers,
-                            params={"projectName": project, "serviceName": service},
+                            params={"projectName": project},
                         )
                         if list_res.status_code == 200:
                             existing_domains = list_res.json()

@@ -83,7 +83,7 @@ class Settings(BaseSettings):
     EASYPANEL_API_KEY: str | None = None
     EASYPANEL_PROJECT: str = "sevalor"
     EASYPANEL_PROJECT_NAME: str | None = None
-    EASYPANEL_SERVICE_PWA: str = "pwa"
+    EASYPANEL_SERVICE_PWA: str = "sevalor-pwa"
     EASYPANEL_SERVICE_NAME: str | None = None
 
     @property
@@ -96,7 +96,7 @@ class Settings(BaseSettings):
 
     @property
     def easypanel_service(self) -> str:
-        return self.EASYPANEL_SERVICE_NAME or self.EASYPANEL_SERVICE_PWA or "pwa"
+        return self.EASYPANEL_SERVICE_NAME or self.EASYPANEL_SERVICE_PWA or "sevalor-pwa"
 
     # Entorn
     ENVIRONMENT: str = "development"
