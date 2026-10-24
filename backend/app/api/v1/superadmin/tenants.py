@@ -6,11 +6,13 @@ import os
 import re
 import shutil
 import socket
+import time
 import uuid
 import zipfile
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field, model_validator
@@ -93,6 +95,8 @@ class OnboardingTenantRequest(BaseModel):
     vertical: str = Field("SEVALOR", max_length=100)
     magatzem_families_default: Optional[str] = None
     agent_prompt_system: Optional[str] = None
+    node_ia_url: Optional[str] = None
+    estat_inicial: str = Field("TRIAL", pattern="^(TRIAL|ACTIU)$")
     pla_subscripcio: str = Field("STARTER", pattern="^(STARTER|PRO|ENTERPRISE|CUSTOM)$")
     quota_operaris: Optional[int] = Field(None, ge=1, le=500)
     quota_buffer_mb: int = Field(500, ge=50, le=50000)
@@ -112,6 +116,23 @@ class OnboardingTenantRequest(BaseModel):
     boss_telefon: Optional[str] = None
     feature_flags: Optional[Dict[str, bool]] = None
     logotip_base64: Optional[str] = None
+
+    @model_validator(mode="after")
+    def validar_copilot_prompt(self) -> "OnboardingTenantRequest":
+        copilot_ia = bool(self.feature_flags and self.feature_flags.get("copilot_ia"))
+        if copilot_ia:
+            if not self.agent_prompt_system or len(self.agent_prompt_system.strip()) < 5:
+                raise ValueError(
+                    "El prompt de sistema de Copilot (agent_prompt_system) és obligatori quan la IA està activada."
+                )
+        else:
+            self.agent_prompt_system = None
+            self.node_ia_url = None
+        return self
+
+
+class VerificarNodeIaRequest(BaseModel):
+    node_ia_url: str = Field(..., min_length=5, max_length=255)
 
 
 class UpdateDominiTenantRequest(BaseModel):
@@ -372,6 +393,96 @@ async def verificar_dns_domini(
         "error": res["error"],
         "missatge": missatge,
         "easypanel": easypanel_res,
+    }
+
+
+@router.post("/verificar-node-ia", response_model=Dict[str, Any])
+async def verificar_node_ia(
+    payload: VerificarNodeIaRequest,
+    claims: Dict[str, Any] = Depends(require_roles(["SUPERADMIN"])),
+) -> Dict[str, Any]:
+    """Verifica en viu la connectivitat amb el node dedicat d'IA (LM Studio / Ollama) amb diagnòstic de causa arrel."""
+    raw_url = payload.node_ia_url.strip()
+    if not (raw_url.startswith("http://") or raw_url.startswith("https://")):
+        return {
+            "status": "ERROR",
+            "motiu": "URL_INVALIDA",
+            "missatge": "L'adreça URL ha de començar per http:// o https:// (ex: http://192.168.1.100:1234)",
+            "models": [],
+            "latencia_ms": None,
+        }
+
+    base = raw_url.rstrip("/")
+    test_urls = (
+        [f"{base}/models"]
+        if base.endswith("/v1")
+        else [f"{base}/v1/models", f"{base}/api/tags", f"{base}/models"]
+    )
+
+    start = time.perf_counter()
+    last_error_motiu = "CONNEXIO_FALLIDA"
+    last_error_msg = "No s'ha pogut establir connexió amb el node d'IA."
+
+    async with httpx.AsyncClient(timeout=4.0) as client:
+        for url in test_urls:
+            try:
+                t0 = time.perf_counter()
+                resp = await client.get(url)
+                latencia = int((time.perf_counter() - t0) * 1000)
+                if resp.status_code == 200:
+                    models: List[str] = []
+                    try:
+                        data = resp.json()
+                        if isinstance(data, dict):
+                            if "data" in data and isinstance(data["data"], list):
+                                models = [
+                                    str(m.get("id") or m.get("name"))
+                                    for m in data["data"]
+                                    if isinstance(m, dict) and (m.get("id") or m.get("name"))
+                                ]
+                            elif "models" in data and isinstance(data["models"], list):
+                                models = [
+                                    str(m.get("name") or m.get("id"))
+                                    for m in data["models"]
+                                    if isinstance(m, dict) and (m.get("name") or m.get("id"))
+                                ]
+                    except Exception:
+                        pass
+                    return {
+                        "status": "OK",
+                        "motiu": "CONNEXIO_ESTABLERTA",
+                        "missatge": f"Connexió establerta correctament amb el node d'IA dedicat ({latencia} ms).",
+                        "models": models,
+                        "latencia_ms": latencia,
+                    }
+                else:
+                    last_error_motiu = "HTTP_ERROR"
+                    last_error_msg = f"El servei ha respost amb codi d'error HTTP {resp.status_code}."
+            except (httpx.ConnectTimeout, httpx.ReadTimeout):
+                last_error_motiu = "TIMEOUT"
+                last_error_msg = (
+                    "Temps d'espera esgotat (4s). Comprova que l'ordinador dedicat està encès "
+                    "i que el tallafocs permet el port d'entrada."
+                )
+                break
+            except httpx.ConnectError:
+                last_error_motiu = "PORT_TANCAT"
+                last_error_msg = (
+                    "Connexió rebutjada. El port està tancat o el servei d'IA (LM Studio / Ollama) "
+                    "no està en marxa a la IP/port indicats."
+                )
+                break
+            except Exception as e:
+                last_error_motiu = "ERROR_XARXA"
+                last_error_msg = f"Error de xarxa: {str(e)}"
+
+    total_latency = int((time.perf_counter() - start) * 1000)
+    return {
+        "status": "ERROR",
+        "motiu": last_error_motiu,
+        "missatge": last_error_msg,
+        "models": [],
+        "latencia_ms": total_latency,
     }
 
 
@@ -663,7 +774,7 @@ async def crear_nou_tenant(
 
     nou_id = uuid.uuid4()
     quota_bytes = payload.quota_disc_gb * 1024 * 1024 * 1024
-    vertical_norm = payload.vertical.strip().upper()
+    vertical_norm = payload.vertical.strip()
     pla_norm = payload.pla_subscripcio.strip().upper()
     quota_op_inicial = (
         payload.quota_operaris
@@ -672,6 +783,19 @@ async def crear_nou_tenant(
     )
     equips_list = (
         [item.model_dump() for item in payload.equips_ia_venuts] if payload.equips_ia_venuts else []
+    )
+
+    copilot_actiu = (
+        bool(payload.feature_flags.get("copilot_ia", False)) if payload.feature_flags else False
+    )
+    node_ia_url_final = (
+        payload.node_ia_url.strip() if (payload.node_ia_url and copilot_actiu) else None
+    )
+    node_ia_actiu_final = bool(node_ia_url_final and copilot_actiu)
+    agent_prompt_final = (
+        payload.agent_prompt_system.strip()
+        if (payload.agent_prompt_system and copilot_actiu)
+        else None
     )
 
     logotip_path = None
@@ -702,7 +826,7 @@ async def crear_nou_tenant(
         domini_custom=domini_custom_norm,
         estat_domini=estat_domini,
         pla_subscripcio=pla_norm,
-        estat_pagament="TRIAL",
+        estat_pagament=payload.estat_inicial,
         quota_operaris=quota_op_inicial,
         quota_buffer_mb=payload.quota_buffer_mb,
         tarifa_llicencia_base=payload.tarifa_llicencia_base or 0.0,
@@ -713,11 +837,11 @@ async def crear_nou_tenant(
         quota_disc_bytes_autoritzada=quota_bytes,
         vertical=vertical_norm,
         magatzem_families_default=payload.magatzem_families_default,
-        agent_prompt_system=payload.agent_prompt_system,
+        agent_prompt_system=agent_prompt_final,
+        node_ia_url=node_ia_url_final,
+        node_ia_actiu=node_ia_actiu_final,
         data_onboarding=datetime.now(timezone.utc),
-        feature_copilot_ia=payload.feature_flags.get("copilot_ia", False)
-        if payload.feature_flags
-        else False,
+        feature_copilot_ia=copilot_actiu,
         feature_flota=payload.feature_flags.get("flota_avancada", True)
         if payload.feature_flags
         else True,
@@ -755,7 +879,7 @@ async def crear_nou_tenant(
         quota_operaris_anterior=0,
         quota_operaris_nova=quota_op_inicial,
         estat_anterior=None,
-        estat_nou="TRIAL",
+        estat_nou=payload.estat_inicial,
         motiu="Alta inicial d'Onboarding",
     )
     db.add(historial_inicial)
@@ -806,7 +930,9 @@ async def crear_nou_tenant(
             "quota_buffer_mb": payload.quota_buffer_mb,
             "boss_usuari_id": str(boss_user_id),
             "enllac_activacio_2fa": enllac_activacio,
-            "estat_inicial": "TRIAL",
+            "estat_inicial": payload.estat_inicial,
+            "node_ia_url": nova_empresa.node_ia_url,
+            "node_ia_actiu": nova_empresa.node_ia_actiu,
             "logotip_path": nova_empresa.logotip_path,
         },
         "easypanel": easypanel_res,

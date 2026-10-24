@@ -44,6 +44,8 @@ async def test_superadmin_onboarding_nou_tenant(superadmin_headers, admin_sessio
         "boss_cognoms": "Puig",
         "boss_email": boss_email,
         "boss_telefon": "+34611223344",
+        "agent_prompt_system": "Prompt d'especialista del sector agronòmic per a Sevalor.",
+        "node_ia_url": "http://192.168.1.100:1234",
         "feature_flags": {
             "copilot_ia": True,
             "flota_avancada": True,

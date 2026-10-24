@@ -4,6 +4,7 @@ import { Sparkles, X, Send, ExternalLink, Bot, MessageSquare, Camera, Image as I
 import { apiFetch } from "@/lib/api";
 
 export default function CopilotWidget({ isMobile = false }: { isMobile?: boolean }) {
+  const [hasCopilotIa, setHasCopilotIa] = useState<boolean | null>(null);
   const [obert, setObert] = useState(false);
   const [missatgeXat, setMissatgeXat] = useState("");
   const [conversaXat, setConversaXat] = useState<any[]>([
@@ -11,6 +12,20 @@ export default function CopilotWidget({ isMobile = false }: { isMobile?: boolean
   ]);
   const [carregant, setCarregant] = useState(false);
   const [imatgeB64, setImatgeB64] = useState<string | null>(null);
+
+  React.useEffect(() => {
+    apiFetch<any>("/auth/me")
+      .then((res) => {
+        if (res && res.feature_copilot_ia === false) {
+          setHasCopilotIa(false);
+        } else {
+          setHasCopilotIa(true);
+        }
+      })
+      .catch(() => setHasCopilotIa(true));
+  }, []);
+
+  if (hasCopilotIa === false) return null;
 
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];

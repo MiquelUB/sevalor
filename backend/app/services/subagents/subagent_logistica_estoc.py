@@ -10,11 +10,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.models import (
     AlbaraProveidor,
     Article,
+    EinaCustodia,
     EstocMagatzem,
     FacturaProveidor,
+    Magatzem,
     MovimentEstoc,
     OrdreTreball,
     Proveidor,
+    Usuari,
 )
 from app.services.subagents.base import BaseSubagent
 from app.services.subagents.schemas import SCHEMAS_LOGISTICA_ESTOC
@@ -31,8 +34,11 @@ class SubagentLogisticaEstoc(BaseSubagent):
     system_prompt = (
         "Ets l'assistent expert en Logística i Magatzem de SEVALOR. "
         "La teva funció és verificar l'estoc real als magatzems, alertar de ruptures d'inventari, "
-        "auditar moviments i documents de proveïdors, i proposar replanificacions. Respon sempre en català "
-        "de forma concisa, professional i basant-te estrictament en les dades consultades a la base de dades."
+        "auditar moviments i documents de proveïdors, i consultar l'estat i custòdia d'eines i maquinària. "
+        "Tens dues eines mestres d'inventari: 'get_real_stock' per a materials consumibles (tubs, cables, vàlvules, químics) "
+        "i 'get_eines_stock' per a eines, maquinària i equips de treball (trepants, radials, escombres, escales). "
+        "Si l'usuari pregunta per eines, maquinària o qui té un equip, utilitza sempre 'get_eines_stock'. "
+        "Respon sempre en català de forma concisa, professional i basant-te estrictament en les dades consultades a la base de dades."
     )
 
     def can_handle(self, query: str, rol: str) -> bool:
@@ -68,6 +74,7 @@ class SubagentLogisticaEstoc(BaseSubagent):
             "bateria",
             "electrovalvula",
             "material",
+            "materials",
             "inventari",
             "magatzem",
             "proveïdor",
@@ -84,6 +91,22 @@ class SubagentLogisticaEstoc(BaseSubagent):
             "albarà de proveïdor",
             "albara proveidor",
             "comanda de compra",
+            "eina",
+            "eines",
+            "trepant",
+            "trepants",
+            "radial",
+            "radials",
+            "escombra",
+            "escombres",
+            "maquinària",
+            "maquinaria",
+            "escala",
+            "escales",
+            "martell",
+            "serra",
+            "calibració",
+            "calibracio",
         ]
         return any(k in q for k in paraules_clau)
 
@@ -99,6 +122,8 @@ class SubagentLogisticaEstoc(BaseSubagent):
     ) -> dict:
         if tool_name == "get_real_stock":
             return await self.tool_get_real_stock(db, empresa_id, args.get("article_ref", ""))
+        elif tool_name == "get_eines_stock":
+            return await self.tool_get_eines_stock(db, empresa_id, args.get("terme_cerca", ""))
         elif tool_name == "replanificar_ot":
             return await self.tool_replanificar_ot(
                 db, empresa_id, args.get("codi_ot", ""), args.get("nova_data", "")
@@ -506,6 +531,67 @@ class SubagentLogisticaEstoc(BaseSubagent):
             ),
         }
 
+    async def tool_get_eines_stock(
+        self, db: AsyncSession, empresa_id: uuid.UUID, terme_cerca: Optional[str] = None
+    ) -> dict:
+        stmt = (
+            select(
+                EinaCustodia,
+                Magatzem.nom.label("magatzem_nom"),
+                Magatzem.tipus.label("magatzem_tipus"),
+                Usuari.nom.label("custodi_nom"),
+                Usuari.cognoms.label("custodi_cognoms"),
+            )
+            .outerjoin(Magatzem, EinaCustodia.magatzem_id == Magatzem.id)
+            .outerjoin(Usuari, EinaCustodia.custodiat_per_operari_id == Usuari.id)
+            .where(EinaCustodia.empresa_id == empresa_id)
+        )
+        if terme_cerca and terme_cerca.strip():
+            filtre = f"%{terme_cerca.strip().lower()}%"
+            stmt = stmt.where(
+                or_(
+                    func.lower(EinaCustodia.nom).ilike(filtre),
+                    func.lower(func.coalesce(EinaCustodia.model, "")).ilike(filtre),
+                    func.lower(EinaCustodia.numero_serie).ilike(filtre),
+                )
+            )
+
+        res = await db.execute(stmt)
+        rows = res.all()
+
+        llista = []
+        for eina, mag_nom, mag_tipus, c_nom, c_cognoms in rows:
+            custodi = f"{c_nom} {c_cognoms}".strip() if c_nom else "Cap (Disponible a nau)"
+            ubicacio = mag_nom or "Nau Central Base"
+            es_furgoneta = mag_tipus == "FURGONETA"
+            llista.append(
+                {
+                    "id": str(eina.id),
+                    "nom": eina.nom,
+                    "model": eina.model,
+                    "numero_serie": eina.numero_serie,
+                    "estat": eina.estat,
+                    "ubicacio": ubicacio,
+                    "es_furgoneta": es_furgoneta,
+                    "custodi": custodi,
+                    "propera_calibracio": (
+                        eina.data_propera_calibracio.isoformat()
+                        if eina.data_propera_calibracio
+                        else None
+                    ),
+                }
+            )
+
+        return {
+            "total_trobades": len(llista),
+            "eines": llista,
+            "resum": (
+                f"S'han trobat {len(llista)} eines/equips registrats."
+                if llista
+                else "No s'ha trobat cap eina o maquinària registrada amb aquest criteri."
+            ),
+        }
+
     async def run_sovereign(
         self,
         pregunta: str,
@@ -572,7 +658,35 @@ class SubagentLogisticaEstoc(BaseSubagent):
                 t_res = await self.tool_replanificar_ot(db, empresa_id, codi_ot, nova_data)
                 return t_res.get("missatge", ""), "replanificar_ot", t_args, t_res, enllacos
 
-        # 5. Estoc físic real d'un article
+        # 5. Eines i maquinària (EinaCustodia)
+        paraules_eines = [
+            "eina", "eines", "trepant", "trepants", "radial", "radials",
+            "escombra", "escombres", "maquinària", "maquinaria", "escala",
+            "escales", "serra", "martell", "calibració", "calibracio", "qui té"
+        ]
+        if any(w in pregunta_lower for w in paraules_eines):
+            tool_name = "get_eines_stock"
+            terme_eina = ""
+            for pe in ["trepant", "radial", "escombra", "escala", "serra", "martell"]:
+                if pe in pregunta_lower:
+                    terme_eina = pe
+                    break
+            tool_args = {"terme_cerca": terme_eina or None}
+            tool_res = await self.tool_get_eines_stock(db, empresa_id, terme_eina or None)
+            total = tool_res["total_trobades"]
+            if total > 0:
+                detalls = "; ".join(
+                    [
+                        f"{e['nom']} ({e['estat']}, Ubicació: {e['ubicacio']}, Custodi: {e['custodi']})"
+                        for e in tool_res["eines"][:5]
+                    ]
+                )
+                resposta = f"S'han trobat {total} eines/equips registrats. Detall: {detalls}."
+            else:
+                resposta = f"No s'ha trobat cap eina o equip registrat per a '{terme_eina or 'la cerca'}'."
+            return resposta, tool_name, tool_args, tool_res, enllacos
+
+        # 6. Estoc físic real d'un article consumible (Article)
         stmt_arts = select(Article).where(Article.empresa_id == empresa_id)
         articles_db = (await db.execute(stmt_arts)).scalars().all()
 

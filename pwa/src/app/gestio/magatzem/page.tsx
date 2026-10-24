@@ -82,6 +82,11 @@ export default function GestioMagatzemPage() {
   const [fitxerOcr, setFitxerOcr] = useState<File | null>(null);
   const [processantOcr, setProcessantOcr] = useState(false);
   const [resultatOcr, setResultatOcr] = useState<any>(null);
+  const [hasCopilotIa, setHasCopilotIa] = useState<boolean>(true);
+  const [creantNovaFamiliaNou, setCreantNovaFamiliaNou] = useState<boolean>(false);
+  const [novaFamiliaTextNou, setNovaFamiliaTextNou] = useState<string>("");
+  const [creantNovaFamiliaEdit, setCreantNovaFamiliaEdit] = useState<boolean>(false);
+  const [novaFamiliaTextEdit, setNovaFamiliaTextEdit] = useState<string>("");
 
 
   // Formulari nou article
@@ -144,6 +149,9 @@ export default function GestioMagatzemPage() {
       }
       
       if (configData) {
+        if (configData.feature_copilot_ia !== undefined) {
+          setHasCopilotIa(Boolean(configData.feature_copilot_ia));
+        }
         if (configData.vertical) setVertical(configData.vertical);
         if (configData.magatzem_families_default) {
           setCustomFamilies(configData.magatzem_families_default.split(',').map((s: string) => s.trim()).filter(Boolean));
@@ -445,6 +453,24 @@ export default function GestioMagatzemPage() {
     return coincideixCerca && coincideixFamilia;
   });
 
+  const totesLesFamilies = Array.from(
+    new Set([
+      ...customFamilies,
+      ...articles.map((a) => a.familia).filter(Boolean),
+      "TUBERIA",
+      "VALVULERIA",
+      "ACCESSORIS",
+      "CABLES",
+      "QUADRES",
+      "ILLUMINACIO",
+      "SANITARIS",
+      "AIXETES",
+      "CLIMATITZACIO",
+      "EINES",
+      "GENERAL",
+    ])
+  ).sort();
+
 
   const renderFamilyOptions = () => {
     if (customFamilies.length > 0) {
@@ -575,13 +601,15 @@ export default function GestioMagatzemPage() {
             <span>Traspàs / Dotar</span>
           </button>
           
-          <button
-            onClick={() => setModalOcr(true)}
-            className="px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold flex items-center gap-1 shadow transition-all"
-          >
-            <Sparkles className="w-3.5 h-3.5" />
-            <span>Entrada Assistida IA</span>
-          </button>
+          {hasCopilotIa && (
+            <button
+              onClick={() => setModalOcr(true)}
+              className="px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold flex items-center gap-1 shadow transition-all"
+            >
+              <Sparkles className="w-3.5 h-3.5" />
+              <span>Entrada Assistida IA</span>
+            </button>
+          )}
 
           <button
             onClick={() => setModalNouArticle(true)}
@@ -1252,17 +1280,55 @@ export default function GestioMagatzemPage() {
                     <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-400 mb-1">
                       Família *
                     </label>
-                    <select
-                      value={nouArticle.familia}
-                      onChange={(e) => setNouArticle({ ...nouArticle, familia: e.target.value })}
-                      className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-semibold"
-                    >
-                      <option value="TUBERIA">Canonades i Tubs</option>
-                      <option value="VALVULERIA">Valvuleria</option>
-                      <option value="ACCESSORIS">Accessoris</option>
-                      <option value="EINES">Eines de Custòdia</option>
-                      <option value="GENERAL">General</option>
-                    </select>
+                    {!creantNovaFamiliaNou ? (
+                      <div className="flex items-center gap-1.5">
+                        <select
+                          value={nouArticle.familia}
+                          onChange={(e) => {
+                            if (e.target.value === "+_CREAR_NOVA_") {
+                              setCreantNovaFamiliaNou(true);
+                              setNovaFamiliaTextNou("");
+                            } else {
+                              setNouArticle({ ...nouArticle, familia: e.target.value });
+                            }
+                          }}
+                          className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-semibold"
+                        >
+                          {totesLesFamilies.map((fam) => (
+                            <option key={fam} value={fam}>
+                              {fam}
+                            </option>
+                          ))}
+                          <option value="+_CREAR_NOVA_">➕ + Crear nova família...</option>
+                        </select>
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-1.5">
+                        <input
+                          type="text"
+                          autoFocus
+                          placeholder="Escriu el nom de la nova família..."
+                          value={novaFamiliaTextNou}
+                          onChange={(e) => {
+                            setNovaFamiliaTextNou(e.target.value);
+                            setNouArticle({ ...nouArticle, familia: e.target.value.toUpperCase() });
+                          }}
+                          className="w-full px-3 py-2 rounded-xl border border-emerald-500 bg-emerald-50/40 dark:bg-emerald-950/40 text-xs font-bold uppercase"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setCreantNovaFamiliaNou(false);
+                            if (!nouArticle.familia) {
+                              setNouArticle({ ...nouArticle, familia: "GENERAL" });
+                            }
+                          }}
+                          className="px-2.5 py-2 rounded-xl bg-slate-200 dark:bg-slate-700 text-xs font-semibold text-slate-700 dark:text-slate-200 shrink-0"
+                        >
+                          Llista
+                        </button>
+                      </div>
+                    )}
                   </div>
                 )}
                 {nouArticle.tipus_creacio === "EINA" && (
@@ -1561,51 +1627,56 @@ export default function GestioMagatzemPage() {
                       )}
                     </div>
                     <div>
-                      <label className="block text-xs font-bold text-slate-600 dark:text-slate-400 mb-1">Família</label>
-                      <select
-                        value={articleEditant.familia}
-                        onChange={(e) => setArticleEditant({ ...articleEditant, familia: e.target.value })}
-                        className="w-full p-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs"
-                      >
-                      {vertical === "ELECTRICPRO" ? (
-                        <>
-                          <option value="CABLES">Cables i Conducció</option>
-                          <option value="QUADRES">Quadres i Proteccions</option>
-                          <option value="ILLUMINACIO">Il·luminació</option>
-                          <option value="MECANISMES">Mecanismes</option>
-                        </>
-                      ) : vertical === "HYDROPRO" ? (
-                        <>
-                          <option value="TUBERIA">Canonades i Tubs</option>
-                          <option value="VALVULERIA">Valvuleria</option>
-                          <option value="SANITARIS">Sanitaris</option>
-                          <option value="AIXETES">Aixetes</option>
-                        </>
-                      ) : vertical === "BUILDINGPRO" ? (
-                        <>
-                          <option value="CIMENT">Ciment i Àrids</option>
-                          <option value="FUSTA">Fusta i Fusteria</option>
-                          <option value="PINTURA">Pintures i Acabats</option>
-                          <option value="AILLAMENTS">Aïllaments</option>
-                        </>
+                      <label className="block text-xs font-bold text-slate-600 dark:text-slate-400 mb-1">
+                        Família del Producte
+                      </label>
+                      {!creantNovaFamiliaEdit ? (
+                        <select
+                          value={articleEditant.familia}
+                          onChange={(e) => {
+                            if (e.target.value === "+_CREAR_NOVA_") {
+                              setCreantNovaFamiliaEdit(true);
+                              setNovaFamiliaTextEdit("");
+                            } else {
+                              setArticleEditant({ ...articleEditant, familia: e.target.value });
+                            }
+                          }}
+                          className="w-full p-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-semibold"
+                        >
+                          {totesLesFamilies.map((fam) => (
+                            <option key={fam} value={fam}>
+                              {fam}
+                            </option>
+                          ))}
+                          {articleEditant.familia && !totesLesFamilies.includes(articleEditant.familia) && (
+                            <option value={articleEditant.familia}>{articleEditant.familia}</option>
+                          )}
+                          <option value="+_CREAR_NOVA_">➕ + Crear nova família...</option>
+                        </select>
                       ) : (
-                        <>
-                          <option value="TUBERIA">Canonades i Tubs</option>
-                          <option value="VALVULERIA">Valvuleria</option>
-                          <option value="ACCESSORIS">Accessoris</option>
-                          <option value="CABLES">Cables i Elèctric</option>
-                        </>
+                        <div className="flex items-center gap-1.5">
+                          <input
+                            type="text"
+                            autoFocus
+                            placeholder="Escriu el nom de la nova família..."
+                            value={novaFamiliaTextEdit}
+                            onChange={(e) => {
+                              setNovaFamiliaTextEdit(e.target.value);
+                              setArticleEditant({ ...articleEditant, familia: e.target.value.toUpperCase() });
+                            }}
+                            className="w-full p-2 rounded-xl border border-emerald-500 bg-emerald-50/40 dark:bg-emerald-950/40 text-xs font-bold uppercase"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setCreantNovaFamiliaEdit(false);
+                            }}
+                            className="px-2.5 py-2 rounded-xl bg-slate-200 dark:bg-slate-700 text-xs font-semibold text-slate-700 dark:text-slate-200 shrink-0"
+                          >
+                            Llista
+                          </button>
+                        </div>
                       )}
-                      <option value="GENERAL">General</option>
-                        {/* Preserve existing family if it was custom */}
-                        {![
-                          "TUBERIA", "VALVULERIA", "ACCESSORIS", "CABLES", "GENERAL",
-                          "QUADRES", "ILLUMINACIO", "MECANISMES", "SANITARIS", "AIXETES",
-                          "CIMENT", "FUSTA", "PINTURA", "AILLAMENTS"
-                        ].includes(articleEditant.familia) && (
-                          <option value={articleEditant.familia}>{articleEditant.familia}</option>
-                        )}
-                      </select>
                     </div>
                     <div>
                       <label className="block text-xs font-bold text-slate-600 dark:text-slate-400 mb-1">Unitat de Mesura</label>

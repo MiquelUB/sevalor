@@ -629,13 +629,16 @@ async def executar_eina(nom_eina: str, args: dict, db: AsyncSession, empresa_id:
 
 
 async def cridar_lm_studio(
-    pregunta: str, vertical: str = "SEVALOR", context_addicional: Optional[str] = None
+    pregunta: str,
+    vertical: str = "SEVALOR",
+    context_addicional: Optional[str] = None,
+    empresa: Optional[Empresa] = None,
+    node_ia_url: Optional[str] = None,
 ) -> Optional[str]:
-    """Cridar LM Studio per a generació de text estàndard / suport."""
+    """Cridar el node d'IA local dedicat de l'empresa. Zero egress a Hetzner."""
     lm_url = (
-        getattr(settings, "LM_STUDIO_URL", None)
-        or getattr(settings, "LMSTUDIO_URL", None)
-        or "http://127.0.0.1:1234/v1"
+        (empresa.node_ia_url.strip() if (empresa and empresa.node_ia_actiu and getattr(empresa, "feature_copilot_ia", True) and empresa.node_ia_url) else None)
+        or (node_ia_url.strip() if (node_ia_url and node_ia_url.strip()) else None)
     )
     if not lm_url:
         return None

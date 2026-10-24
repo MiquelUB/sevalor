@@ -7,7 +7,7 @@ from sqlalchemy import text as sa_text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.models.models import Client, TokenInvitacioTelegram
+from app.models.models import Client, Empresa, TokenInvitacioTelegram
 
 logger = logging.getLogger("telegram_service")
 
@@ -138,16 +138,19 @@ class TelegramService:
             "Context proporcionat:\n" + context_rag
         )
 
-        # En comptes d'usar directament cridar_lm_studio amb el prompt estàndard, fem una trucada adaptada o li passem el vertical
-        # Com cridar_lm_studio genera un system_prompt dins, la millor manera és injectar aquest súper-prompt al "context_addicional"
-        # i fer que la instrucció tingui més pes. O refer la trucada aquí mateix de forma independent per major seguretat.
-
-        lm_url = getattr(settings, "LM_STUDIO_URL", None) or getattr(settings, "LMSTUDIO_URL", None) or "http://127.0.0.1:1234/v1"
+        # La IA només opera si l'empresa té ordinador dedicat actiu. Zero egress a Hetzner.
+        stmt_emp = select(Empresa).where(Empresa.id == empresa_id)
+        emp_obj = (await db.execute(stmt_emp)).scalar_one_or_none()
+        lm_url = (
+            emp_obj.node_ia_url.strip()
+            if (emp_obj and emp_obj.node_ia_actiu and getattr(emp_obj, "feature_copilot_ia", True) and emp_obj.node_ia_url)
+            else None
+        )
         if not lm_url:
             if context_rag:
-                return f"L'assistent no està disponible en aquest moment, però he trobat això al manual:\n\n{context_rag}"
+                return f"Informació d'atenció al client:\n\n{context_rag}"
             else:
-                return "Ho sento, en aquest moment no et puc atendre i no he trobat resposta als manuals. Contacta amb atenció al client."
+                return "Gràcies pel vostre missatge. Hem registrat la vostra consulta i el nostre equip tècnic us respondrà aviat."
 
         base_url = lm_url.rstrip("/")
         endpoint = (

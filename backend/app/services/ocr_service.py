@@ -48,9 +48,14 @@ async def _cridar_ia_vision(
     text_contingut: str = "",
     imatge_b64: Optional[str] = None,
     max_tokens: int = 2000,
+    node_ia_url: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
-    """Crida el node local LM Studio (Qwen2.5-VL / compatible OpenAI) per extreure dades estructurades."""
-    lm_url = getattr(settings, "LM_STUDIO_URL", None) or "http://127.0.0.1:1234/v1"
+    """Crida el node local dedicat de l'empresa per extreure dades estructurades. Zero fallback a Hetzner."""
+    lm_url = node_ia_url.strip() if (node_ia_url and node_ia_url.strip()) else None
+    if not lm_url:
+        logger.info("Empresa sense node d'IA dedicat actiu. Zero egress d'IA a Hetzner (Constitució §2.V).")
+        return None
+
     base_url = lm_url.rstrip("/")
     endpoint = f"{base_url}/chat/completions" if base_url.endswith("/v1") else f"{base_url}/v1/chat/completions"
     model_name = getattr(settings, "LM_STUDIO_MODEL", "qwen2.5-vl-7b-instruct")
@@ -98,7 +103,7 @@ async def _cridar_ia_vision(
 
 
 
-async def processar_dni_ocr(file_bytes: bytes) -> Dict[str, Any]:
+async def processar_dni_ocr(file_bytes: bytes, node_ia_url: Optional[str] = None) -> Dict[str, Any]:
     """Extracció OCR de DNI / NIE."""
     text = _extreure_text_de_fitxer(file_bytes)
     raw_data: Dict[str, Optional[str]] = {
@@ -129,7 +134,7 @@ async def processar_dni_ocr(file_bytes: bytes) -> Dict[str, Any]:
             raw_data["data_caducitat"] = dates[-1]
 
     # Si cal suport d'IA local
-    if not raw_data["nif"]:
+    if not raw_data["nif"] and node_ia_url:
         prompt = (
             "Ets un extractor OCR de DNI/NIE espanyol. "
             "Retorna únicament un JSON amb les claus: nif, nom, cognoms, data_naixement, data_caducitat."
@@ -137,7 +142,7 @@ async def processar_dni_ocr(file_bytes: bytes) -> Dict[str, Any]:
         b64 = None
         if not text and len(file_bytes) > 0:
             b64 = base64.b64encode(file_bytes).decode("utf-8")
-        ai_res = await _cridar_ia_vision(prompt, text, b64)
+        ai_res = await _cridar_ia_vision(prompt, text, b64, node_ia_url=node_ia_url)
         if ai_res:
             for k in raw_data:
                 if ai_res.get(k):
@@ -151,7 +156,7 @@ async def processar_dni_ocr(file_bytes: bytes) -> Dict[str, Any]:
     }
 
 
-async def processar_albara_ocr(file_bytes: bytes) -> Dict[str, Any]:
+async def processar_albara_ocr(file_bytes: bytes, node_ia_url: Optional[str] = None) -> Dict[str, Any]:
     """Extracció OCR d'Albarà de proveïdor o material."""
     text = _extreure_text_de_fitxer(file_bytes)
     resultat: Dict[str, Any] = {
@@ -371,7 +376,7 @@ async def processar_albara_ocr(file_bytes: bytes) -> Dict[str, Any]:
             resultat["linies"] = linies
 
     # 2. Si no s'han obtingut línies o falta NIF, sol·licitar al node d'IA local (Multimodal / Text)
-    if not resultat["proveidor_nif"] or not resultat["linies"]:
+    if (not resultat["proveidor_nif"] or not resultat["linies"]) and node_ia_url:
         prompt = (
             "Ets un extractor OCR industrial d'albarans i factures de proveïdors de Sevalor Suite.\n"
             "Analitza el document i extreu les dades en format JSON pur:\n"
@@ -407,7 +412,7 @@ async def processar_albara_ocr(file_bytes: bytes) -> Dict[str, Any]:
         elif len(file_bytes) > 0:
             b64 = base64.b64encode(file_bytes).decode("utf-8")
 
-        ai_res = await _cridar_ia_vision(prompt, text, b64, max_tokens=2000)
+        ai_res = await _cridar_ia_vision(prompt, text, b64, max_tokens=2000, node_ia_url=node_ia_url)
         if ai_res:
             for k in ("proveidor_nif", "proveidor_nom", "numero_albara", "data_albara"):
                 if ai_res.get(k) and not resultat.get(k):
@@ -422,7 +427,7 @@ async def processar_albara_ocr(file_bytes: bytes) -> Dict[str, Any]:
 
 
 
-async def processar_ocr_document_vehicle(file_path: str) -> Dict[str, Any]:
+async def processar_ocr_document_vehicle(file_path: str, node_ia_url: Optional[str] = None) -> Dict[str, Any]:
     """Extracció OCR de Permís de Circulació / Targeta ITV de vehicle."""
     file_bytes = b""
     try:
@@ -474,7 +479,7 @@ async def processar_ocr_document_vehicle(file_path: str) -> Dict[str, Any]:
             resultat["data_matriculacio"] = dates[0]
 
     # Suport d'IA si manca bastidor o matrícula
-    if not resultat["matricula"] or not resultat["bastidor"]:
+    if (not resultat["matricula"] or not resultat["bastidor"]) and node_ia_url:
         prompt = (
             "Ets un extractor OCR de fitxes tècniques i permisos de circulació de vehicles a Espanya. "
             "Retorna ÚNICAMENT un JSON: matricula, bastidor (VIN de 17 caràcters), marca, model, titular, data_matriculacio."
@@ -482,7 +487,7 @@ async def processar_ocr_document_vehicle(file_path: str) -> Dict[str, Any]:
         b64 = None
         if not text and len(file_bytes) > 0:
             b64 = base64.b64encode(file_bytes).decode("utf-8")
-        ai_res = await _cridar_ia_vision(prompt, text, b64)
+        ai_res = await _cridar_ia_vision(prompt, text, b64, node_ia_url=node_ia_url)
         if ai_res:
             for k in ("matricula", "bastidor", "marca", "model", "titular", "data_matriculacio"):
                 if ai_res.get(k) and not resultat.get(k):
@@ -494,7 +499,7 @@ async def processar_ocr_document_vehicle(file_path: str) -> Dict[str, Any]:
     return resultat
 
 
-async def processar_ocr_proveidor(file_bytes: bytes) -> Dict[str, Any]:
+async def processar_ocr_proveidor(file_bytes: bytes, node_ia_url: Optional[str] = None) -> Dict[str, Any]:
     """Extracció OCR per a alta ràpida de proveïdors a 1-clic."""
     text = _extreure_text_de_fitxer(file_bytes)
     resultat: Dict[str, Any] = {
@@ -534,7 +539,7 @@ async def processar_ocr_proveidor(file_bytes: bytes) -> Dict[str, Any]:
         if adreca_m:
             resultat["adreca"] = adreca_m.group(1).strip()
 
-    if not resultat["nif"] or not resultat["rao_social"]:
+    if (not resultat["nif"] or not resultat["rao_social"]) and node_ia_url:
         prompt = (
             "Extreu dades fiscals d'empresa o proveïdor en JSON: "
             "nif, rao_social, adreca, telefon, email."
@@ -542,7 +547,7 @@ async def processar_ocr_proveidor(file_bytes: bytes) -> Dict[str, Any]:
         b64 = None
         if not text and len(file_bytes) > 0:
             b64 = base64.b64encode(file_bytes).decode("utf-8")
-        ai_res = await _cridar_ia_vision(prompt, text, b64)
+        ai_res = await _cridar_ia_vision(prompt, text, b64, node_ia_url=node_ia_url)
         if ai_res:
             for k in ("nif", "rao_social", "adreca", "telefon", "email"):
                 if ai_res.get(k) and not resultat.get(k):
@@ -554,7 +559,7 @@ async def processar_ocr_proveidor(file_bytes: bytes) -> Dict[str, Any]:
     return resultat
 
 
-async def processar_tiquet_ocr(file_bytes: bytes) -> Dict[str, Any]:
+async def processar_tiquet_ocr(file_bytes: bytes, node_ia_url: Optional[str] = None) -> Dict[str, Any]:
     """Extracció OCR de tiquets de carburant i despeses de camp."""
     text = _extreure_text_de_fitxer(file_bytes)
     resultat: Dict[str, Any] = {
@@ -587,7 +592,7 @@ async def processar_tiquet_ocr(file_bytes: bytes) -> Dict[str, Any]:
             resultat["data_tiquet"] = f"{data_m.group(3)}-{data_m.group(2)}-{data_m.group(1)}"
 
     # Si cal suport visual d'IA (foto del tiquet des del mòbil de l'operari)
-    if resultat["import_euros"] is None:
+    if resultat["import_euros"] is None and node_ia_url:
         prompt = (
             "Ets un extractor OCR de tiquets de benzina i despeses. "
             "Retorna únicament un JSON amb: import_euros (float), litres (float o null), data_tiquet (YYYY-MM-DD), nif_emissor (str)."
@@ -595,7 +600,7 @@ async def processar_tiquet_ocr(file_bytes: bytes) -> Dict[str, Any]:
         b64 = None
         if not text and len(file_bytes) > 0:
             b64 = base64.b64encode(file_bytes).decode("utf-8")
-        ai_res = await _cridar_ia_vision(prompt, text, b64)
+        ai_res = await _cridar_ia_vision(prompt, text, b64, node_ia_url=node_ia_url)
         if ai_res:
             if ai_res.get("import_euros") is not None:
                 try:

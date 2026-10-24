@@ -67,6 +67,7 @@ export default function LlistaMaquinesPage() {
   const router = useRouter();
 
   const [ordre, setOrdre] = useState<OrdreDetall | null>(null);
+  const [hasCopilotIa, setHasCopilotIa] = useState<boolean>(true);
   const [loading, setLoading] = useState(true);
   const [isOffline, setIsOffline] = useState(false);
   const [showPinModal, setShowPinModal] = useState(false);
@@ -194,6 +195,11 @@ export default function LlistaMaquinesPage() {
 
   useEffect(() => {
     loadFeina();
+    apiFetch<any>("/auth/me")
+      .then((me) => {
+        if (me && me.feature_copilot_ia === false) setHasCopilotIa(false);
+      })
+      .catch(() => {});
   }, [id]);
 
   const getAssetIcon = (tipus: string) => {
@@ -359,13 +365,15 @@ export default function LlistaMaquinesPage() {
               </span>
             </button>
 
-            <Link
-              href={`/operari/feines/${ordre.id}/copilot`}
-              className="py-3 px-3 rounded-xl bg-secondary-container hover:brightness-110 text-white text-xs font-bold flex flex-col items-center justify-center gap-1.5 shadow-sm transition-all text-center active:scale-95"
-            >
-              <Bot className="w-4 h-4" />
-              <span>Copilot IA</span>
-            </Link>
+            {hasCopilotIa && (
+              <Link
+                href={`/operari/feines/${ordre.id}/copilot`}
+                className="py-3 px-3 rounded-xl bg-secondary-container hover:brightness-110 text-white text-xs font-bold flex flex-col items-center justify-center gap-1.5 shadow-sm transition-all text-center active:scale-95"
+              >
+                <Bot className="w-4 h-4" />
+                <span>Copilot IA</span>
+              </Link>
+            )}
 
             <Link
               href={`/operari/feines/${ordre.id}/tancar`}

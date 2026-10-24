@@ -196,8 +196,26 @@ SCHEMA_GET_SUPPLIER_DOCS = {
     },
 }
 
+SCHEMA_GET_EINES_STOCK = {
+    "type": "function",
+    "function": {
+        "name": "get_eines_stock",
+        "description": "Consulta l'estat, disponibilitat, custodi i ubicació (nau central o furgoneta) d'eines, maquinària i equips de treball (ex: trepants, radials, escombres, escales).",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "terme_cerca": {
+                    "type": "string",
+                    "description": "Nom, model o tipus d'eina o maquinària (ex: 'trepant', 'escombra', 'radial'). Si és buit, retorna totes les eines.",
+                },
+            },
+        },
+    },
+}
+
 SCHEMAS_LOGISTICA_ESTOC: List[Dict[str, Any]] = [
     SCHEMA_GET_REAL_STOCK,
+    SCHEMA_GET_EINES_STOCK,
     SCHEMA_CHECK_ALLOCATION_SAFETY,
     SCHEMA_PROPOSE_PURCHASE_ORDER,
     SCHEMA_REPLANIFICAR_OT,

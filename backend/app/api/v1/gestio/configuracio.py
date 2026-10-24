@@ -328,6 +328,10 @@ async def obtenir_dades_empresa(
         "telegram_bot_actiu": empresa.telegram_bot_actiu,
         "telegram_estat_connexio": empresa.telegram_estat_connexio,
         "te_adn_marca": bool(empresa.adn_paleta_proposta),
+        "feature_copilot_ia": empresa.feature_copilot_ia,
+        "feature_flota": empresa.feature_flota,
+        "feature_planols": empresa.feature_planols,
+        "feature_telegram": empresa.feature_telegram,
         "node_ia_url": empresa.node_ia_url,
         "node_ia_actiu": empresa.node_ia_actiu,
     }

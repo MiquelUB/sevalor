@@ -203,6 +203,8 @@ async def test_onboarding_tenant_amb_domini_propi(headers):
         "boss_cognoms": "Soler",
         "boss_email": f"pere@{subdomini}.cat",
         "boss_telefon": "+34611223344",
+        "agent_prompt_system": "Prompt d'especialista elèctric REBT per a Soler Instal·lacions.",
+        "node_ia_url": "http://192.168.1.200:1234",
         "feature_flags": {
             "copilot_ia": True,
             "flota_avancada": True,
@@ -369,4 +371,73 @@ async def test_onboarding_slug_desacoblat_i_activar_custom_domain(headers):
         assert ssl_data["status"] in ("OK", "PENDENT_DNS")
         assert "estat_domini" in ssl_data
         assert "missatge" in ssl_data
+
+
+@pytest.mark.asyncio
+async def test_verificar_node_ia_diagnostics(headers):
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        # 1. URL invàlida
+        res_inv = await ac.post(
+            "/api/v1/superadmin/tenants/verificar-node-ia",
+            json={"node_ia_url": "ftp://servidor-ia:1234"},
+            headers=headers,
+        )
+        assert res_inv.status_code == 200
+        data_inv = res_inv.json()
+        assert data_inv["status"] == "ERROR"
+        assert data_inv["motiu"] == "URL_INVALIDA"
+
+        # 2. Port tancat / unreachable
+        res_closed = await ac.post(
+            "/api/v1/superadmin/tenants/verificar-node-ia",
+            json={"node_ia_url": "http://127.0.0.1:59999"},
+            headers=headers,
+        )
+        assert res_closed.status_code == 200
+        data_closed = res_closed.json()
+        assert data_closed["status"] == "ERROR"
+        assert data_closed["motiu"] in ("PORT_TANCAT", "TIMEOUT", "ERROR_XARXA")
+
+
+@pytest.mark.asyncio
+async def test_onboarding_copilot_ia_validation(headers):
+    unique_suffix = str(uuid.uuid4())[:8]
+    # 1. Error quan copilot_ia=True però agent_prompt_system està buit
+    payload_bad = {
+        "rao_social": f"Empresa IA {unique_suffix}",
+        "nif": "B" + str(uuid.uuid4())[:8].upper(),
+        "slug": f"slug-ia-{unique_suffix}",
+        "vertical": "Manteniment Climatització",
+        "pla_subscripcio": "PRO",
+        "boss_nif": "99988877L",
+        "boss_nom": "Jordi",
+        "boss_cognoms": "Vidal",
+        "boss_email": f"jordi_{unique_suffix}@ia-test.cat",
+        "feature_flags": {
+            "copilot_ia": True,
+        },
+        "agent_prompt_system": "",
+    }
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        res_bad = await ac.post(
+            "/api/v1/superadmin/tenants/onboarding", json=payload_bad, headers=headers
+        )
+        assert res_bad.status_code == 422
+
+        # 2. Èxit quan es proporciona prompt i node_ia_url
+        payload_ok = {
+            **payload_bad,
+            "agent_prompt_system": "Prompt d'enginyeria climàtica dedicat amb instruccions tècniques.",
+            "node_ia_url": "http://192.168.1.150:1234",
+            "estat_inicial": "ACTIU",
+        }
+        res_ok = await ac.post(
+            "/api/v1/superadmin/tenants/onboarding", json=payload_ok, headers=headers
+        )
+        assert res_ok.status_code == 201
+        data_ok = res_ok.json()
+        assert data_ok["tenant"]["estat_inicial"] == "ACTIU"
+        assert data_ok["tenant"]["node_ia_url"] == "http://192.168.1.150:1234"
+        assert data_ok["tenant"]["node_ia_actiu"] is True
+
 

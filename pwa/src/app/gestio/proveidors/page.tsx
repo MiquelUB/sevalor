@@ -84,6 +84,7 @@ export default function GestioProveidorsPage() {
 
   // Estat Modal Alta Proveïdor
   const [modalAltaObert, setModalAltaObert] = useState<boolean>(false);
+  const [hasCopilotIa, setHasCopilotIa] = useState<boolean>(true);
   const [ocrLoading, setOcrLoading] = useState(false);
   const [novaRaoSocial, setNovaRaoSocial] = useState<string>("");
   const [nouNif, setNouNif] = useState<string>("");
@@ -178,6 +179,11 @@ export default function GestioProveidorsPage() {
 
   useEffect(() => {
     fetchProveidors();
+    apiFetch<any>("/gestio/configuracio/empresa")
+      .then((c) => {
+        if (c && c.feature_copilot_ia === false) setHasCopilotIa(false);
+      })
+      .catch(() => {});
   }, [rolActiu]);
 
   // Simular / Reportar canvi d'IBAN (Spec 003 RF-09 / EDGE-01)
@@ -366,11 +372,13 @@ export default function GestioProveidorsPage() {
             <span>Refrescar</span>
           </button>
           <div className="flex items-center gap-2">
-            <label className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-mono font-bold bg-indigo-600 text-white hover:bg-indigo-700 shadow-sm cursor-pointer transition-all ${ocrLoading ? 'opacity-50 pointer-events-none' : ''}`}>
-              {ocrLoading ? <span className="animate-spin text-lg leading-none">⚙</span> : <span className="text-lg leading-none">✨</span>}
-              <span>{ocrLoading ? 'Processant IA...' : 'Alta OCR'}</span>
-              <input type="file" className="hidden" accept="image/*,.pdf" onChange={handleOcrUpload} />
-            </label>
+            {hasCopilotIa && (
+              <label className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-mono font-bold bg-indigo-600 text-white hover:bg-indigo-700 shadow-sm cursor-pointer transition-all ${ocrLoading ? 'opacity-50 pointer-events-none' : ''}`}>
+                {ocrLoading ? <span className="animate-spin text-lg leading-none">⚙</span> : <span className="text-lg leading-none">✨</span>}
+                <span>{ocrLoading ? 'Processant IA...' : 'Alta OCR'}</span>
+                <input type="file" className="hidden" accept="image/*,.pdf" onChange={handleOcrUpload} />
+              </label>
+            )}
             <button
               onClick={() => {
                 setNovaRaoSocial("");

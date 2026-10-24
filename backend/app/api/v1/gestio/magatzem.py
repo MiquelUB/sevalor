@@ -22,6 +22,7 @@ from app.core.security import require_roles  # noqa: E402
 from app.models.models import (  # noqa: E402
     AlbaraProveidor,
     Article,
+    Empresa,
     EstocMagatzem,
     FacturaProveidor,
     FullaPicking,
@@ -632,20 +633,38 @@ async def afegir_linia_picking(
     if estoc:
         disponible = float(estoc.quantitat_fisica) - float(estoc.quantitat_virtual_reservada)
         if payload.quantitat_prevista > disponible:
-            from app.api.v1.gestio.copilot import cridar_lm_studio
+            emp_res = await db.execute(select(Empresa).where(Empresa.id == uuid.UUID(empresa_id)))
+            empresa = emp_res.scalars().first()
+            avís_ia = None
+            if (
+                empresa
+                and getattr(empresa, "feature_copilot_ia", False)
+                and getattr(empresa, "node_ia_actiu", False)
+                and getattr(empresa, "node_ia_url", None)
+            ):
+                from app.api.v1.gestio.copilot import cridar_lm_studio
 
-            # RF-18 / RF-33: Intervenció del Copilot per avaluar Backorders o falta d'estoc
-            avís_ia = await cridar_lm_studio(
-                pregunta=f"S'ha intentat extreure {payload.quantitat_prevista} unitats de l'article {estoc.article_id}, però només hi ha {disponible} disponibles físicament. Si no hi ha comandes en trànsit, adverteix el cap de magatzem de forma tècnica i concisa.",
-                vertical="LOGISTICA",
-                context_addicional="El teu objectiu és bloquejar el picking i advertir del trencament d'estoc.",
+                # RF-18 / RF-33: Intervenció del Copilot per avaluar Backorders o falta d'estoc
+                avís_ia = await cridar_lm_studio(
+                    pregunta=(
+                        f"S'ha intentat extreure {payload.quantitat_prevista} unitats de l'article {estoc.article_id}, "
+                        f"però només hi ha {disponible} disponibles físicament. Si no hi ha comandes en trànsit, "
+                        "adverteix el cap de magatzem de forma tècnica i concisa."
+                    ),
+                    vertical="LOGISTICA",
+                    context_addicional="El teu objectiu és bloquejar el picking i advertir del trencament d'estoc.",
+                    empresa=empresa,
+                    node_ia_url=empresa.node_ia_url,
+                )
+
+            detail_msg = (
+                f"❌ Copilot IA: {avís_ia}"
+                if avís_ia
+                else f"Falta d'estoc: Només hi ha {disponible} unitats disponibles físiques per a l'article sol·licitat (es demanen {payload.quantitat_prevista})."
             )
-            if not avís_ia:
-                avís_ia = f"Comanda amb entrega parcial detectada (falta estoc): {disponible} unitats disponibles físiques. Bloqueig de picking matinal activat (Copilot Offline)."
-
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail=f"❌ Copilot IA: {avís_ia}",
+                detail=detail_msg,
             )
         estoc.quantitat_virtual_reservada = (
             float(estoc.quantitat_virtual_reservada) + payload.quantitat_prevista

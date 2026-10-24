@@ -184,6 +184,7 @@ class UserMeResponse(BaseModel):
     nom: str | None = None
     email: str | None = None
     is_impersonation: bool = False
+    feature_copilot_ia: bool = True
 
 
 @router.get("/me", response_model=UserMeResponse)
@@ -202,6 +203,18 @@ async def get_me(
     result = await db.execute(stmt)
     usuari = result.scalars().first()
 
+    emp_id = claims.get("empresa_id") or (str(usuari.empresa_id) if usuari and usuari.empresa_id else None)
+    has_copilot = True
+    if emp_id:
+        try:
+            emp_uuid = uuid.UUID(emp_id)
+            emp_res = await db.execute(select(Empresa.feature_copilot_ia).where(Empresa.id == emp_uuid))
+            f_val = emp_res.scalar()
+            if f_val is not None:
+                has_copilot = bool(f_val)
+        except Exception:
+            pass
+
     if not usuari:
         return UserMeResponse(
             id=str(user_uuid),
@@ -210,16 +223,17 @@ async def get_me(
             nom=claims.get("nom", "Usuari"),
             email=claims.get("email"),
             is_impersonation=is_impersonation,
+            feature_copilot_ia=has_copilot,
         )
 
     return UserMeResponse(
         id=str(usuari.id),
-        empresa_id=claims.get("empresa_id")
-        or (str(usuari.empresa_id) if usuari.empresa_id else None),
+        empresa_id=emp_id,
         rol=usuari.rol.upper(),
         nom=usuari.nom,
         email=usuari.email,
         is_impersonation=is_impersonation,
+        feature_copilot_ia=has_copilot,
     )
 
 

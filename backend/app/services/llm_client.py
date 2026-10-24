@@ -13,10 +13,8 @@ class LLMClientError(Exception):
 
 class LLMClient:
     def __init__(self, base_url: Optional[str] = None, timeout: int = 30):
-        from app.core.config import settings
-
-        url: str = str(base_url or getattr(settings, "LM_STUDIO_URL", None) or "http://127.0.0.1:1234/v1")
-        self.base_url = url.rstrip("/")
+        url: Optional[str] = str(base_url).rstrip("/") if (base_url and str(base_url).strip()) else None
+        self.base_url = url
         self.timeout = timeout
 
         # Max input length to prevent injection or context limit issues
@@ -38,6 +36,11 @@ class LLMClient:
         """
         Call a local LLM via an OpenAI-compatible API endpoint (like LM Studio).
         """
+        if not self.base_url:
+            raise LLMClientError(
+                "No s'ha configurat cap ordinador dedicat d'IA (node_ia_url) per a aquest client."
+            )
+
         # Validate inputs to prevent context limit exhaustion
         for msg in messages:
             content = msg.get("content", "")

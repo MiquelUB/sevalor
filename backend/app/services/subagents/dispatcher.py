@@ -413,13 +413,19 @@ class CopilotDispatcher:
         if empresa and empresa.agent_prompt_system:
             system_content += f"DIRECTRIUS DE L'EMPRESA: {empresa.agent_prompt_system}\n"
 
-        # ── 5. Intent d'Inferència amb LM Studio ──────────────────────────────
+        # ── 5. Intent d'Inferència amb Ordinador Local de l'Empresa ─────────────
+        # NORMA CONSTITUCIONAL: Zero fallback a Hetzner. La IA només corre al node dedicat de l'empresa.
         node_url = (
-            (empresa.node_ia_url.strip() if (empresa and empresa.node_ia_url and empresa.node_ia_url.strip()) else None)
-            or getattr(settings, "LM_STUDIO_URL", None)
-            or "http://127.0.0.1:1234/v1"
+            empresa.node_ia_url.strip()
+            if (empresa and empresa.node_ia_url and empresa.node_ia_url.strip())
+            else None
         )
-        es_actiu = (empresa.node_ia_actiu if empresa else False) or bool(getattr(settings, "LM_STUDIO_URL", None))
+        es_actiu = bool(
+            empresa
+            and getattr(empresa, "feature_copilot_ia", True)
+            and empresa.node_ia_actiu
+            and node_url
+        )
 
         resposta_ia: Optional[str] = None
         tool_name: Optional[str] = None

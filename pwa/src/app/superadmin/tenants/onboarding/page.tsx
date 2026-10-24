@@ -119,9 +119,18 @@ export default function SuperadminTenantOnboardingPage() {
   // Pas 1: Dades Fiscals & Marca Camaleó
   const [raoSocial, setRaoSocial] = useState<string>("");
   const [nif, setNif] = useState<string>("");
-  const [vertical, setVertical] = useState<string>("SEVALOR");
+  const [vertical, setVertical] = useState<string>("");
   const [magatzemFamilies, setMagatzemFamilies] = useState<string>("");
   const [agentPrompt, setAgentPrompt] = useState<string>("");
+  const [nodeIaUrl, setNodeIaUrl] = useState<string>("");
+  const [nodeIaTesting, setNodeIaTesting] = useState<boolean>(false);
+  const [nodeIaStatus, setNodeIaStatus] = useState<{
+    status: "OK" | "ERROR";
+    motiu?: string;
+    missatge?: string;
+    models?: string[];
+    latencia_ms?: number | null;
+  } | null>(null);
   const [responsable, setResponsable] = useState<string>("");
   const [emailGerent, setEmailGerent] = useState<string>("");
   const [telefon, setTelefon] = useState<string>("");
@@ -175,10 +184,9 @@ export default function SuperadminTenantOnboardingPage() {
   const [dnsResult, setDnsResult] = useState<any>(null);
   const [checkingDns, setCheckingDns] = useState<boolean>(false);
 
-  // Pas 4: Quotes d'Operaris (Llicència Variable) & Buffer Diari
-  const [tierPla, setTierPla] = useState<"STARTER" | "PRO" | "ENTERPRISE">("PRO");
-  const [quotaOperaris, setQuotaOperaris] = useState<number>(15);
-  const [quotaBufferMb, setQuotaBufferMb] = useState<number>(500);
+  // Pas 4: Llicència Inicial & Quotes d'Operaris
+  const [estatInicial, setEstatInicial] = useState<"TRIAL" | "ACTIU">("TRIAL");
+  const [quotaOperaris, setQuotaOperaris] = useState<number>(10);
   const [featureFlags, setFeatureFlags] = useState({
     copilot_ia: true,
     flota_avancada: true,
@@ -265,6 +273,31 @@ export default function SuperadminTenantOnboardingPage() {
     }
   };
 
+  const handleVerificarNodeIa = async () => {
+    if (!nodeIaUrl.trim()) {
+      setErrorMessage("Introdueix l'adreça URL del node dedicat d'IA (ex: http://192.168.1.100:1234).");
+      return;
+    }
+    setNodeIaTesting(true);
+    setNodeIaStatus(null);
+    setErrorMessage(null);
+    try {
+      const res = await apiFetch<any>("/superadmin/tenants/verificar-node-ia", {
+        method: "POST",
+        body: JSON.stringify({ node_ia_url: nodeIaUrl.trim() }),
+      });
+      setNodeIaStatus(res);
+    } catch (err: any) {
+      setNodeIaStatus({
+        status: "ERROR",
+        motiu: "ERROR_XARXA",
+        missatge: err.message || "Error contactant amb el node d'IA.",
+      });
+    } finally {
+      setNodeIaTesting(false);
+    }
+  };
+
   const handleExecuteDryRun = async () => {
     setDryRunRunning(true);
     setDryRunSuccess(null);
@@ -284,6 +317,21 @@ export default function SuperadminTenantOnboardingPage() {
       return;
     }
 
+    if (featureFlags.copilot_ia) {
+      if (!agentPrompt.trim() || agentPrompt.trim().length < 5) {
+        setDryRunRunning(false);
+        setDryRunSuccess(false);
+        setErrorMessage("El prompt de sistema de Copilot (agent_prompt_system) és obligatori quan la IA està activada.");
+        return;
+      }
+      if (!nodeIaUrl.trim()) {
+        setDryRunRunning(false);
+        setDryRunSuccess(false);
+        setErrorMessage("Cal indicar l'adreça URL del node d'IA dedicat quan la IA està activada.");
+        return;
+      }
+    }
+
     if (dominiCustomNet) {
       await handleCheckDnsLive();
     }
@@ -294,14 +342,22 @@ export default function SuperadminTenantOnboardingPage() {
   const handleResetForm = () => {
     setRaoSocial("");
     setNif("");
+    setVertical("");
     setResponsable("");
     setEmailGerent("");
+    setTelefon("");
     setSlug("");
     setSlugManual(false);
     setDominiCustom("");
     setDnsResult(null);
     setDryRunSuccess(null);
     setErrorMessage(null);
+    setNodeIaUrl("");
+    setNodeIaTesting(false);
+    setNodeIaStatus(null);
+    setAgentPrompt("");
+    setEstatInicial("TRIAL");
+    setQuotaOperaris(10);
     handleClearLogo();
     setPasActual(1);
   };
@@ -310,6 +366,19 @@ export default function SuperadminTenantOnboardingPage() {
     setProvisioning(true);
     setErrorMessage(null);
     try {
+      if (!raoSocial.trim() || !nif.trim() || !emailGerent.trim()) {
+        throw new Error("Cal omplir Raó Social, NIF i Email del gerent.");
+      }
+
+      if (featureFlags.copilot_ia) {
+        if (!agentPrompt.trim() || agentPrompt.trim().length < 5) {
+          throw new Error("El prompt de sistema de Copilot (agent_prompt_system) és obligatori quan la IA està activada.");
+        }
+        if (!nodeIaUrl.trim()) {
+          throw new Error("Cal indicar l'adreça URL del node d'IA dedicat quan la IA està activada.");
+        }
+      }
+
       const nomParts = responsable.trim().split(" ");
       const nom = nomParts[0] || "Gerent";
       const cognoms = nomParts.slice(1).join(" ") || "General";
@@ -325,13 +394,15 @@ export default function SuperadminTenantOnboardingPage() {
           slug: slugFinal,
           subdomini: slugFinal,
           domini_custom: dominiCustomFinal,
-          vertical: vertical.trim(),
+          vertical: vertical.trim() || "Manteniment i Serveis Tècnics",
           magatzem_families_default: magatzemFamilies.trim() || undefined,
-          agent_prompt_system: agentPrompt.trim() || undefined,
-          pla_subscripcio: tierPla,
+          agent_prompt_system: featureFlags.copilot_ia ? agentPrompt.trim() : undefined,
+          node_ia_url: featureFlags.copilot_ia ? nodeIaUrl.trim() : undefined,
+          estat_inicial: estatInicial,
+          pla_subscripcio: "PRO",
           quota_operaris: Number(quotaOperaris),
-          quota_buffer_mb: Number(quotaBufferMb),
-          quota_disc_gb: tierPla === "ENTERPRISE" ? 100 : tierPla === "PRO" ? 50 : 10,
+          quota_buffer_mb: 500,
+          quota_disc_gb: 10,
           primari_hsl: primariHsl.trim(),
           secundari_hsl: secundariHsl.trim(),
           accent_hsl: accentHsl.trim(),
@@ -467,35 +538,18 @@ export default function SuperadminTenantOnboardingPage() {
 
               <div className="sm:col-span-2">
                 <label className="block font-semibold text-slate-600 dark:text-slate-400 mb-1">
-                  Vertical Tècnica Especialitzada
+                  Vertical del Negoci (Especialitat)
                 </label>
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                  {[
-                    { id: "SEVALOR", label: "Sevalor", desc: "Agronòmic & Reg", hsl: ["142 71% 25%", "38 92% 50%", "160 84% 39%"] },
-                    { id: "ELECTRICPRO", label: "ElectricPro", desc: "Baixa Tensió REBT", hsl: ["210 100% 15%", "38 92% 50%", "190 90% 50%"] },
-                    { id: "HYDROPRO", label: "HydroPro", desc: "Aigua i Fontaneria", hsl: ["199 89% 28%", "170 80% 40%", "45 93% 47%"] },
-                    { id: "BUILDINGPRO", label: "BuildingPro", desc: "Climatització i Obres", hsl: ["25 85% 35%", "38 92% 50%", "15 80% 45%"] },
-                  ].map((item) => (
-                    <button
-                      key={item.id}
-                      type="button"
-                      onClick={() => {
-                        setVertical(item.id);
-                        setPrimariHsl(item.hsl[0]);
-                        setSecundariHsl(item.hsl[1]);
-                        setAccentHsl(item.hsl[2]);
-                      }}
-                      className={`p-2.5 rounded-lg border text-left transition-all ${
-                        vertical === item.id
-                          ? "border-emerald-600 bg-emerald-50 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300 font-bold shadow-sm"
-                          : "border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800"
-                      }`}
-                    >
-                      <span className="block text-xs font-bold">{item.label}</span>
-                      <span className="block text-[10px] text-slate-500">{item.desc}</span>
-                    </button>
-                  ))}
-                </div>
+                <input
+                  type="text"
+                  value={vertical}
+                  onChange={(e) => setVertical(e.target.value)}
+                  placeholder="ex: Manteniment d'Edificis, Instal·lacions Elèctriques, Neteja Industrial, Aigua i Fontaneria..."
+                  className="w-full p-2.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-200 font-medium"
+                />
+                <p className="text-[11px] text-slate-500 mt-1">
+                  Escriu la vertical o activitat principal. Les regles tècniques específiques i el comportament dels agents es defineixen al model de Copilot.
+                </p>
               </div>
 
               <div>
@@ -707,10 +761,10 @@ export default function SuperadminTenantOnboardingPage() {
                       </div>
                       <div>
                         <div className="text-xs font-black leading-tight">
-                          {raoSocial.trim() || "Instal·lacions Soler S.L."}
+                          Sevalor {raoSocial.trim() || "Empresa"}
                         </div>
                         <div className="text-[10px] opacity-80 font-mono">
-                          {vertical} • {fqdnResultant || "sevalor.app"}
+                          {vertical.trim() || "Manteniment i Serveis"} • {fqdnResultant || "sevalor.cat"}
                         </div>
                       </div>
                     </div>
@@ -720,7 +774,7 @@ export default function SuperadminTenantOnboardingPage() {
                         className="px-2 py-0.5 rounded-full text-[10px] font-bold text-slate-900 transition-colors"
                         style={{ backgroundColor: `hsl(${secundariHsl})` }}
                       >
-                        {tierPla}
+                        {estatInicial}
                       </span>
                       <span
                         className="w-2.5 h-2.5 rounded-full shadow-sm"
@@ -943,7 +997,7 @@ export default function SuperadminTenantOnboardingPage() {
             </div>
           </div>
 
-          {/* PAS 4: Número d'Operaris per Llicència, Buffer Diari i Feature Flags */}
+          {/* PAS 4: Llicència Inicial, Operaris Assignats & Feature Flags */}
           <div className="bg-white dark:bg-slate-900 rounded-xl shadow-sm p-6 border border-slate-200 dark:border-slate-800 space-y-4">
             <div className="flex items-center justify-between border-b border-slate-200 dark:border-slate-800 pb-3">
               <div className="flex items-center gap-2">
@@ -952,19 +1006,36 @@ export default function SuperadminTenantOnboardingPage() {
                 </span>
                 <div>
                   <h2 className="text-sm font-bold uppercase tracking-wider text-slate-800 dark:text-slate-200">
-                    4. Número d'Operaris Assignats per Llicència & Feature Flags
+                    4. Llicència Inicial, Operaris Assignats &amp; Feature Flags
                   </h2>
                   <span className="text-[10px] font-mono text-slate-500">
-                    El nombre d'operaris és totalment editable i pot variar amb el temps per a la facturació Veri*factu
+                    Definició de l'estat inicial de la llicència i assignació dels mòduls actius
                   </span>
                 </div>
               </div>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-xs">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
               <div>
                 <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">
-                  Número d'Operaris per Llicència
+                  Estat Inicial de la Llicència
+                </label>
+                <select
+                  value={estatInicial}
+                  onChange={(e) => setEstatInicial(e.target.value as "TRIAL" | "ACTIU")}
+                  className="w-full p-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-mono font-bold"
+                >
+                  <option value="TRIAL">TRIAL (Període de prova de 30 dies)</option>
+                  <option value="ACTIU">ACTIU (Llicència de producció activa)</option>
+                </select>
+                <span className="text-[10px] text-slate-400 block mt-0.5">
+                  Podràs canviar l'estat en qualsevol moment des de la fitxa del client
+                </span>
+              </div>
+
+              <div>
+                <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">
+                  Número d'Operaris Assignats per Llicència
                 </label>
                 <input
                   type="number"
@@ -975,43 +1046,7 @@ export default function SuperadminTenantOnboardingPage() {
                   className="w-full p-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-mono font-bold text-sm"
                 />
                 <span className="text-[10px] text-slate-400 block mt-0.5">
-                  Editable en qualsevol moment des del CRM
-                </span>
-              </div>
-
-              <div>
-                <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">
-                  Pla de Referència
-                </label>
-                <select
-                  value={tierPla}
-                  onChange={(e) => {
-                    const v = e.target.value as "STARTER" | "PRO" | "ENTERPRISE";
-                    setTierPla(v);
-                    setQuotaOperaris(v === "ENTERPRISE" ? 50 : v === "PRO" ? 15 : 5);
-                  }}
-                  className="w-full p-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-mono font-bold"
-                >
-                  <option value="STARTER">STARTER (5 operaris base)</option>
-                  <option value="PRO">PRO (15 operaris base)</option>
-                  <option value="ENTERPRISE">ENTERPRISE (50 operaris base)</option>
-                </select>
-              </div>
-
-              <div>
-                <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">
-                  Buffer Diari al Servidor (MB)
-                </label>
-                <input
-                  type="number"
-                  min={100}
-                  max={5000}
-                  value={quotaBufferMb}
-                  onChange={(e) => setQuotaBufferMb(Math.max(100, Number(e.target.value)))}
-                  className="w-full p-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-mono font-bold"
-                />
-                <span className="text-[10px] text-slate-400 block mt-0.5">
-                  Per a les ordres de treball d'avui
+                  Total de places d'operari de camp autoritzades per operar
                 </span>
               </div>
             </div>
@@ -1024,7 +1059,7 @@ export default function SuperadminTenantOnboardingPage() {
                 <label className="p-3 rounded-lg border border-slate-200 dark:border-slate-800 flex items-center justify-between cursor-pointer">
                   <div>
                     <span className="font-bold block text-slate-800 dark:text-slate-200">Copilot IA &amp; Whisper</span>
-                    <span className="text-[10px] text-slate-500">Transcripció i RAG sectorial</span>
+                    <span className="text-[10px] text-slate-500">Transcripció, OCR i RAG sectorial dedicat</span>
                   </div>
                   <input
                     type="checkbox"
@@ -1074,6 +1109,98 @@ export default function SuperadminTenantOnboardingPage() {
                 </label>
               </div>
             </div>
+
+            {/* SECCIÓ DEDICADA A COPILOT IA (NOMÉS SI ESTÀ ACTIVAT) */}
+            {featureFlags.copilot_ia && (
+              <div className="pt-3 border-t border-slate-200 dark:border-slate-800 space-y-4">
+                <div className="p-4 rounded-xl border border-indigo-200 dark:border-indigo-900 bg-indigo-50/50 dark:bg-indigo-950/30 space-y-3">
+                  <div className="flex items-center justify-between flex-wrap gap-2">
+                    <span className="text-xs font-bold text-indigo-900 dark:text-indigo-200 flex items-center gap-1.5">
+                      <Cpu className="w-4 h-4 text-indigo-600" />
+                      <span>Node d'IA Dedicat del Client (LM Studio / Ollama)</span>
+                    </span>
+                    <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-indigo-200 dark:bg-indigo-900 text-indigo-800 dark:text-indigo-200 font-bold">
+                      Sobirania de Dades &amp; RGPD
+                    </span>
+                  </div>
+
+                  <p className="text-[11px] text-slate-600 dark:text-slate-400">
+                    Introdueix la IP o URL de la màquina dedicada que allotja el model local. Hetzner mai processarà dades d'IA per a aquest client.
+                  </p>
+
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="text"
+                      placeholder="http://192.168.1.100:1234 o http://localhost:11434"
+                      value={nodeIaUrl}
+                      onChange={(e) => setNodeIaUrl(e.target.value)}
+                      className="flex-1 p-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 font-mono text-xs font-bold"
+                    />
+                    <button
+                      type="button"
+                      onClick={handleVerificarNodeIa}
+                      disabled={nodeIaTesting}
+                      className="px-3.5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-mono font-bold flex items-center gap-1.5 shadow transition-colors shrink-0"
+                    >
+                      <Activity className={`w-3.5 h-3.5 ${nodeIaTesting ? "animate-spin" : ""}`} />
+                      <span>{nodeIaTesting ? "Comprovant..." : "Provar Connexió Node IA"}</span>
+                    </button>
+                  </div>
+
+                  {/* Badge & Caixa de diagnòstic viu */}
+                  {nodeIaStatus && (
+                    <div
+                      className={`p-3 rounded-xl border text-xs font-mono space-y-1 ${
+                        nodeIaStatus.status === "OK"
+                          ? "bg-emerald-50 dark:bg-emerald-950/60 border-emerald-300 text-emerald-900 dark:text-emerald-200"
+                          : "bg-rose-50 dark:bg-rose-950/60 border-rose-300 text-rose-900 dark:text-rose-200"
+                      }`}
+                    >
+                      <div className="flex items-center gap-2 font-bold">
+                        {nodeIaStatus.status === "OK" ? (
+                          <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                        ) : (
+                          <AlertTriangle className="w-4 h-4 text-rose-600" />
+                        )}
+                        <span>
+                          {nodeIaStatus.status === "OK"
+                            ? `🟢 Connexió Correcta (${nodeIaStatus.latencia_ms} ms)`
+                            : `🔴 Error de Connexió [${nodeIaStatus.motiu || "ERROR"}]`}
+                        </span>
+                      </div>
+                      <p className="text-[11px] font-sans">{nodeIaStatus.missatge}</p>
+                      {nodeIaStatus.models && nodeIaStatus.models.length > 0 && (
+                        <div className="text-[10px] text-emerald-700 dark:text-emerald-300 pt-0.5">
+                          Models detectats al node: {nodeIaStatus.models.slice(0, 5).join(", ")}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                {/* PROMPT DE SISTEMA MANDATORI */}
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <label className="block text-xs font-bold text-slate-700 dark:text-slate-300">
+                      Prompt de Sistema d'Agents &amp; Copilot (Obligatori amb IA activa) *
+                    </label>
+                    <span className="text-[10px] font-mono text-emerald-600 dark:text-emerald-400 font-bold">
+                      Mandatori per a l'alta
+                    </span>
+                  </div>
+                  <textarea
+                    rows={6}
+                    value={agentPrompt}
+                    onChange={(e) => setAgentPrompt(e.target.value)}
+                    placeholder="Escriu les directrius sectorials del model: instruccions tècniques de l'especialitat, regles de revisió d'albarans, subagents encarregats, normatives REBT / Aigua / CTE aplicables i criteris d'auditoria..."
+                    className="w-full p-3 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs font-mono font-medium focus:outline-none focus:border-indigo-600"
+                  />
+                  <p className="text-[11px] text-slate-500">
+                    Aquest prompt governarà els subagents d'aquesta empresa. Si la casella Copilot IA està marcada, és estrictament necessari emplenar aquest camp abans de finalitzar l'onboarding.
+                  </p>
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Botons Finals d'Execució */}
@@ -1153,9 +1280,15 @@ export default function SuperadminTenantOnboardingPage() {
                 <span className="text-slate-500">Operaris Llicenciats:</span>
                 <span className="font-bold text-purple-600">{quotaOperaris} operaris</span>
               </div>
+              <div className="flex justify-between py-1 border-b border-slate-100 dark:border-slate-800">
+                <span className="text-slate-500">Estat Inicial:</span>
+                <span className="font-bold text-emerald-600">{estatInicial}</span>
+              </div>
               <div className="flex justify-between py-1">
-                <span className="text-slate-500">Buffer Diari Hetzner:</span>
-                <span className="font-bold text-slate-800 dark:text-slate-200">{quotaBufferMb} MB</span>
+                <span className="text-slate-500">Mòdul Copilot IA:</span>
+                <span className="font-bold text-slate-800 dark:text-slate-200">
+                  {featureFlags.copilot_ia ? "ACTIU (Dedicat)" : "DESACTIVAT"}
+                </span>
               </div>
             </div>
           </div>

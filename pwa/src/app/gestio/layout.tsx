@@ -59,7 +59,11 @@ function GestioLayoutContent({ children }: { children: React.ReactNode }) {
 
   // Base de dades per al meta-cercador Spotlight (carregada des del backend)
   const [itemsSpotlight, setItemsSpotlight] = useState<any[]>([]);
-  const [empresa, setEmpresa] = useState<{ nom?: string; nif?: string } | null>(null);
+  const [empresa, setEmpresa] = useState<{
+    nom?: string;
+    nif?: string;
+    feature_copilot_ia?: boolean;
+  } | null>(null);
 
   useEffect(() => {
     if (pathname === "/gestio/login") return;
@@ -160,7 +164,14 @@ function GestioLayoutContent({ children }: { children: React.ReactNode }) {
 
         {/* Navigation Links */}
         <nav className="flex-1 space-y-xs overflow-y-auto custom-scrollbar py-xs">
-          {navLinks.map((link) => {
+          {navLinks
+            .filter((link) => {
+              if (link.href === "/gestio/copilot" && empresa && empresa.feature_copilot_ia === false) {
+                return false;
+              }
+              return true;
+            })
+            .map((link) => {
             const isActive =
               link.href === "/gestio"
                 ? pathname === "/gestio"

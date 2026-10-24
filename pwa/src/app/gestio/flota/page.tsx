@@ -92,6 +92,7 @@ export default function GestioFlotaPage() {
 
   // Estat del formulari / modal de Nou Vehicle
   const [modalNouVehicleObert, setModalNouVehicleObert] = useState<boolean>(false);
+  const [hasCopilotIa, setHasCopilotIa] = useState<boolean>(true);
   const [ocrLoading, setOcrLoading] = useState<boolean>(false);
   const [novaMatricula, setNovaMatricula] = useState<string>("");
   const [novaMarca, setNovaMarca] = useState<string>("");
@@ -173,6 +174,11 @@ export default function GestioFlotaPage() {
 
   useEffect(() => {
     fetchVehicles();
+    apiFetch<any>("/gestio/configuracio/empresa")
+      .then((c) => {
+        if (c && c.feature_copilot_ia === false) setHasCopilotIa(false);
+      })
+      .catch(() => {});
   }, []);
 
   // Registrar resolució d'ITV (Spec 006 RF-18)
@@ -333,11 +339,13 @@ export default function GestioFlotaPage() {
             <span>Refrescar</span>
           </button>
           <div className="flex items-center gap-2">
-            <label className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-mono font-bold bg-indigo-600 text-white hover:bg-indigo-700 shadow-sm cursor-pointer transition-all ${ocrLoading ? 'opacity-50 pointer-events-none' : ''}`}>
-              {ocrLoading ? <span className="animate-spin text-lg leading-none">⚙</span> : <span className="text-lg leading-none">✨</span>}
-              <span>{ocrLoading ? 'Processant IA...' : 'Alta OCR'}</span>
-              <input type="file" className="hidden" accept="image/*,.pdf" onChange={handleOcrUpload} />
-            </label>
+            {hasCopilotIa && (
+              <label className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-mono font-bold bg-indigo-600 text-white hover:bg-indigo-700 shadow-sm cursor-pointer transition-all ${ocrLoading ? 'opacity-50 pointer-events-none' : ''}`}>
+                {ocrLoading ? <span className="animate-spin text-lg leading-none">⚙</span> : <span className="text-lg leading-none">✨</span>}
+                <span>{ocrLoading ? 'Processant IA...' : 'Alta OCR'}</span>
+                <input type="file" className="hidden" accept="image/*,.pdf" onChange={handleOcrUpload} />
+              </label>
+            )}
             <button
               onClick={() => {
                 setNovaMatricula("");
