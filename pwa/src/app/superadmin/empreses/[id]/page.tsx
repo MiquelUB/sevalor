@@ -1728,6 +1728,11 @@ export default function EmpresaDetailPage({ params }: { params: { id: string } }
                   IPs detectades pel servidor: {activarSslResult.ips_detectades.join(", ")}
                 </div>
               )}
+              {activarSslResult.easypanel && (
+                <div className="text-[11px] mt-1.5 p-2 rounded bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300">
+                  <strong>EasyPanel Telemetria:</strong> {activarSslResult.easypanel.detail || JSON.stringify(activarSslResult.easypanel)}
+                </div>
+              )}
             </div>
           )}
 

@@ -391,25 +391,51 @@ async def activar_custom_domain(
 
     if dns_status == "DNS_CORRECTE":
         empresa.estat_domini = "DNS_ACTIU"
+        easypanel_res = None
         if settings.easypanel_token:
             try:
                 easypanel_res = await EasypanelService.afegir_domini_pwa(target_domain)
             except Exception as e:
                 logger.error("Error registrant domini a Easypanel: %s", e)
-                easypanel_res = {"error": str(e)}
+                easypanel_res = {"ok": False, "status": "ERROR_EXCEPTION", "detail": str(e)}
+        else:
+            easypanel_res = {
+                "ok": False,
+                "status": "NO_TOKEN",
+                "detail": (
+                    "API Key d'EasyPanel no configurada al servidor (EASYPANEL_API_KEY buida a l'entorn del backend). "
+                    "Cal configurar EASYPANEL_API_KEY a les variables del backend a Hetzner per automatitzar el registre de dominis."
+                ),
+            }
 
         empresa.updated_at = datetime.now(timezone.utc)
         await db.commit()
 
-        return {
-            "status": "OK",
-            "estat_domini": "DNS_ACTIU",
-            "domini": target_domain,
-            "ips_detectades": dns_ips,
-            "missatge": (
+        if easypanel_res and easypanel_res.get("ok"):
+            missatge = (
                 f"✅ DNS resolt correctament apuntant a la IP del servidor ({settings.PLATFORM_EDGE_IP}). "
                 "Domini activat a EasyPanel amb certificat SSL automàtic."
-            ),
+            )
+            op_status = "OK"
+        elif easypanel_res and easypanel_res.get("status") == "NO_TOKEN":
+            missatge = (
+                f"⚠️ DNS resolt ({settings.PLATFORM_EDGE_IP}), però la clau d'EasyPanel (EASYPANEL_API_KEY) "
+                "no està informada a les variables del backend a Hetzner. El domini no s'ha pogut enviar a EasyPanel automàticament."
+            )
+            op_status = "PENDENT_PROXY"
+        else:
+            err_detail = easypanel_res.get("detail", "Error desconegut") if easypanel_res else "Sense resposta"
+            missatge = (
+                f"⚠️ DNS resolt ({settings.PLATFORM_EDGE_IP}), però EasyPanel ha retornat un avís: {err_detail}"
+            )
+            op_status = "ERROR_PROXY"
+
+        return {
+            "status": op_status,
+            "estat_domini": empresa.estat_domini,
+            "domini": target_domain,
+            "ips_detectades": dns_ips,
+            "missatge": missatge,
             "easypanel": easypanel_res,
         }
     else:

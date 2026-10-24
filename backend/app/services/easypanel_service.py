@@ -149,25 +149,35 @@ class EasypanelService:
             },
         }
 
+        candidate_services = [service]
+        if not service.startswith(f"{project}-"):
+            candidate_services.append(f"{project}-{service}")
+
         try:
             async with httpx.AsyncClient(timeout=15.0) as client:
-                res = await client.post(rest_url, headers=headers, json=rest_payload)
-                if res.status_code in (200, 201):
-                    logger.info(f"[EasyPanel] Domini '{domini_clean}' registrat amb èxit a EasyPanel.")
-                    return {
-                        "ok": True,
-                        "status": "SSL_ACTIU",
-                        "detail": f"Domini '{domini_clean}' registrat i certificat Let's Encrypt sol·licitat a EasyPanel.",
-                    }
+                last_res = None
+                for cand in candidate_services:
+                    rest_payload["serviceDestination"]["serviceName"] = cand
+                    res = await client.post(rest_url, headers=headers, json=rest_payload)
+                    last_res = res
+                    if res.status_code in (200, 201):
+                        logger.info(f"[EasyPanel] Domini '{domini_clean}' registrat amb èxit al servei '{cand}'.")
+                        return {
+                            "ok": True,
+                            "status": "SSL_ACTIU",
+                            "detail": f"Domini '{domini_clean}' registrat i certificat Let's Encrypt sol·licitat a EasyPanel (servei: {cand}).",
+                        }
+                    # Si no és error de servei no trobat, no té sentit provar el següent
+                    if "not found" not in res.text.lower() and "wrong service" not in res.text.lower():
+                        break
 
-                # Si falla (p.ex. si el domini ja existeix), intentar recuperar status
                 logger.warning(
-                    f"[EasyPanel] Resposta {res.status_code} afegint domini '{domini_clean}': {res.text}"
+                    f"[EasyPanel] Resposta {last_res.status_code if last_res else 'N/A'} afegint domini '{domini_clean}': {last_res.text if last_res else 'sense resposta'}"
                 )
                 return {
                     "ok": False,
                     "status": "ERROR_EASYPANEL",
-                    "detail": f"EasyPanel ha respost amb codi {res.status_code}: {res.text}",
+                    "detail": f"EasyPanel ha respost amb codi {last_res.status_code if last_res else 500}: {last_res.text if last_res else 'sense resposta'}",
                 }
         except Exception as exc:
             logger.error(f"[EasyPanel] Excepció en connectar amb EasyPanel: {exc}")
