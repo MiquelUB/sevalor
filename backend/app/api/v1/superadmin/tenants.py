@@ -377,7 +377,7 @@ async def verificar_dns_domini(
 
     # Si apunta a la nostra màquina i EasyPanel està configurat, podem registrar-lo automàticament
     easypanel_res = None
-    if apunta_a_nosaltres and settings.EASYPANEL_API_TOKEN:
+    if apunta_a_nosaltres and settings.easypanel_token:
         easypanel_res = await EasypanelService.afegir_domini_pwa(domini_clean)
 
     return {
@@ -762,7 +762,7 @@ async def crear_nou_tenant(
             dns_status = dns_res.get("status")
             if dns_status == "DNS_CORRECTE":
                 estat_domini = "DNS_ACTIU"
-                if settings.EASYPANEL_API_TOKEN:
+                if settings.easypanel_token:
                     easypanel_res = await EasypanelService.afegir_domini_pwa(domini_custom_norm)
             else:
                 estat_domini = "PENDENT_DNS"
@@ -993,7 +993,7 @@ async def actualitzar_domini_tenant(
         dns_status = dns_res.get("status")
         if dns_status == "DNS_CORRECTE":
             emp.estat_domini = "DNS_ACTIU"
-            if settings.EASYPANEL_API_TOKEN:
+            if settings.easypanel_token:
                 easypanel_res = await EasypanelService.afegir_domini_pwa(emp.domini_custom)
         else:
             emp.estat_domini = "PENDENT_DNS"
@@ -1649,7 +1649,7 @@ async def destroy_tenant(
     purgar_dades_tenant_destruit.apply_async(args=[tenant_id], countdown=30 * 24 * 3600)
 
     # Eliminar el domini d'EasyPanel per prevenir dangling DNS
-    if emp.domini_custom and settings.EASYPANEL_API_TOKEN:
+    if emp.domini_custom and settings.easypanel_token:
         try:
             await EasypanelService.eliminar_domini_pwa(emp.domini_custom)
         except Exception:

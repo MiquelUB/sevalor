@@ -107,18 +107,20 @@ class EasypanelService:
 
         # 2. Comprovació de configuració EasyPanel
         token = settings.easypanel_token
-        url_base = settings.EASYPANEL_URL
+        url_base = settings.EASYPANEL_URL or (
+            f"http://{settings.PLATFORM_EDGE_IP}:3000" if settings.PLATFORM_EDGE_IP else "http://127.0.0.1:3000"
+        )
         project = settings.easypanel_project
         service = settings.easypanel_service
 
-        if not url_base or not token:
+        if not token:
             logger.info(
                 f"[EasyPanel] Token no configurat. El domini '{domini_clean}' queda com a PENDENT_PROXY a la BD."
             )
             return {
                 "ok": False,
                 "status": "PENDENT_PROXY",
-                "detail": "API d'EasyPanel no configurada al fitxer .env (EASYPANEL_API_KEY buit). Cal registrar el domini manualment o configurar les credencials.",
+                "detail": "API d'EasyPanel no configurada al fitxer .env (EASYPANEL_API_KEY buit). Cal configurar la clau d'API per a registre automàtic.",
             }
 
         headers = {
@@ -127,64 +129,45 @@ class EasypanelService:
             "Content-Type": "application/json",
         }
 
-        # 3. Intentar via tRPC oficial d'EasyPanel (v2+)
-        trpc_url = f"{url_base.rstrip('/')}/api/trpc/services.domains.createServiceDomain?batch=1"
-        trpc_payload = {
-            "0": {
-                "json": {
-                    "projectName": project,
-                    "serviceName": service,
-                    "domain": domini_clean,
-                }
-            }
+        # 3. Registrar domini via API oficial d'EasyPanel (POST /api/createDomain)
+        rest_url = f"{url_base.rstrip('/')}/api/createDomain"
+        domain_id = f"{project}-{service}-{domini_clean.replace('.', '-')}"
+        rest_payload = {
+            "id": domain_id,
+            "host": domini_clean,
+            "path": "/",
+            "https": True,
+            "certificateResolver": "letsencrypt",
+            "wildcard": False,
+            "middlewares": [],
+            "destinationType": "service",
+            "serviceDestination": {
+                "projectName": project,
+                "serviceName": service,
+                "protocol": "http",
+                "port": 3000,
+            },
         }
 
         try:
             async with httpx.AsyncClient(timeout=15.0) as client:
-                res = await client.post(trpc_url, headers=headers, json=trpc_payload)
+                res = await client.post(rest_url, headers=headers, json=rest_payload)
                 if res.status_code in (200, 201):
-                    logger.info(f"[EasyPanel tRPC] Domini '{domini_clean}' registrat amb èxit a EasyPanel.")
+                    logger.info(f"[EasyPanel] Domini '{domini_clean}' registrat amb èxit a EasyPanel.")
                     return {
                         "ok": True,
                         "status": "SSL_ACTIU",
                         "detail": f"Domini '{domini_clean}' registrat i certificat Let's Encrypt sol·licitat a EasyPanel.",
                     }
 
-                # Si tRPC no respon 200, provar endpoint REST d'EasyPanel
-                rest_url = f"{url_base.rstrip('/')}/api/createDomain"
-                domain_id = f"{project}-{service}-{domini_clean.replace('.', '-')}"
-                rest_payload = {
-                    "id": domain_id,
-                    "host": domini_clean,
-                    "path": "/",
-                    "https": True,
-                    "certificateResolver": "letsencrypt",
-                    "wildcard": False,
-                    "destinationType": "service",
-                    "serviceDestination": {
-                        "projectName": project,
-                        "serviceName": service,
-                        "protocol": "http",
-                        "port": 3000,
-                    },
-                }
-
-                res_rest = await client.post(rest_url, headers=headers, json=rest_payload)
-                if res_rest.status_code in (200, 201):
-                    logger.info(f"[EasyPanel REST] Domini '{domini_clean}' registrat amb èxit a EasyPanel.")
-                    return {
-                        "ok": True,
-                        "status": "SSL_ACTIU",
-                        "detail": f"Domini '{domini_clean}' registrat i certificat Let's Encrypt sol·licitat a EasyPanel.",
-                    }
-
+                # Si falla (p.ex. si el domini ja existeix), intentar recuperar status
                 logger.warning(
-                    f"[EasyPanel] Error afegint domini '{domini_clean}': tRPC={res.status_code}, REST={res_rest.status_code}"
+                    f"[EasyPanel] Resposta {res.status_code} afegint domini '{domini_clean}': {res.text}"
                 )
                 return {
                     "ok": False,
                     "status": "ERROR_EASYPANEL",
-                    "detail": f"EasyPanel ha respost amb error: {res_rest.text or res.text}",
+                    "detail": f"EasyPanel ha respost amb codi {res.status_code}: {res.text}",
                 }
         except Exception as exc:
             logger.error(f"[EasyPanel] Excepció en connectar amb EasyPanel: {exc}")
@@ -203,12 +186,14 @@ class EasypanelService:
             return {"ok": False, "detail": str(err)}
 
         token = settings.easypanel_token
-        url_base = settings.EASYPANEL_URL
+        url_base = settings.EASYPANEL_URL or (
+            f"http://{settings.PLATFORM_EDGE_IP}:3000" if settings.PLATFORM_EDGE_IP else "http://127.0.0.1:3000"
+        )
         project = settings.easypanel_project
         service = settings.easypanel_service
 
-        if not url_base or not token:
-            return {"ok": False, "detail": "EasyPanel no configurat."}
+        if not token:
+            return {"ok": False, "detail": "Token d'EasyPanel no configurat."}
 
         headers = {
             "Authorization": f"Bearer {token}",
@@ -216,29 +201,19 @@ class EasypanelService:
             "Content-Type": "application/json",
         }
 
-        # Intentar tRPC destroy
-        trpc_url = f"{url_base.rstrip('/')}/api/trpc/services.domains.destroyServiceDomain?batch=1"
-        trpc_payload = {
-            "0": {
-                "json": {
-                    "projectName": project,
-                    "serviceName": service,
-                    "domain": domini_clean,
-                }
-            }
-        }
+        # Eliminar via API oficial d'EasyPanel (POST /api/deleteDomain)
+        domain_id = f"{project}-{service}-{domini_clean.replace('.', '-')}"
+        rest_url = f"{url_base.rstrip('/')}/api/deleteDomain"
 
         try:
             async with httpx.AsyncClient(timeout=15.0) as client:
-                res = await client.post(trpc_url, headers=headers, json=trpc_payload)
-                if res.status_code in (200, 204):
-                    return {"ok": True, "status": "ELIMINAT"}
-
-                # Fallback REST delete
-                domain_id = f"{project}-{service}-{domini_clean.replace('.', '-')}"
-                rest_url = f"{url_base.rstrip('/')}/api/deleteDomain"
                 res_rest = await client.post(rest_url, headers=headers, json={"id": domain_id})
-                return {"ok": res_rest.status_code in (200, 204), "status_code": res_rest.status_code}
+                if res_rest.status_code in (200, 204):
+                    return {"ok": True, "status": "ELIMINAT"}
+                logger.warning(
+                    f"[EasyPanel] Resposta {res_rest.status_code} eliminant domini '{domini_clean}': {res_rest.text}"
+                )
+                return {"ok": False, "status_code": res_rest.status_code, "detail": res_rest.text}
         except Exception as exc:
             logger.error(f"[EasyPanel] Error eliminant domini '{domini_clean}': {exc}")
             return {"ok": False, "detail": str(exc)}

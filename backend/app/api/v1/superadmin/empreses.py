@@ -391,7 +391,7 @@ async def activar_custom_domain(
 
     if dns_status == "DNS_CORRECTE":
         empresa.estat_domini = "DNS_ACTIU"
-        if settings.EASYPANEL_API_TOKEN:
+        if settings.easypanel_token:
             try:
                 easypanel_res = await EasypanelService.afegir_domini_pwa(target_domain)
             except Exception as e:
