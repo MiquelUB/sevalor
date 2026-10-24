@@ -764,6 +764,8 @@ async def crear_nou_tenant(
                 estat_domini = "DNS_ACTIU"
                 if settings.easypanel_token:
                     easypanel_res = await EasypanelService.afegir_domini_pwa(domini_custom_norm)
+                    if easypanel_res and easypanel_res.get("ok"):
+                        estat_domini = "SSL_ACTIU"
             else:
                 estat_domini = "PENDENT_DNS"
         except Exception as dns_err:
@@ -995,6 +997,8 @@ async def actualitzar_domini_tenant(
             emp.estat_domini = "DNS_ACTIU"
             if settings.easypanel_token:
                 easypanel_res = await EasypanelService.afegir_domini_pwa(emp.domini_custom)
+                if easypanel_res and easypanel_res.get("ok"):
+                    emp.estat_domini = "SSL_ACTIU"
         else:
             emp.estat_domini = "PENDENT_DNS"
     else:

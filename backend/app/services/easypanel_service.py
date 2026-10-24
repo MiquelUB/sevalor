@@ -93,7 +93,7 @@ class EasypanelService:
         # 1. Pre-validació DNS estricta
         if not skip_dns_check:
             dns_res = await cls.verificar_dns_resolucio(domini_clean)
-            if not dns_res["resolt"]:
+            if not dns_res.get("resolt", False):
                 logger.warning(
                     f"[EasyPanel] Pre-validació DNS fallida per a '{domini_clean}'. "
                     "Evitant crida a EasyPanel per protegir quota Let's Encrypt."
@@ -101,7 +101,7 @@ class EasypanelService:
                 return {
                     "ok": False,
                     "status": "PENDENT_DNS",
-                    "detail": dns_res["detail"],
+                    "detail": dns_res.get("detail", "DNS no resolt"),
                     "ips": dns_res.get("ips", []),
                 }
 
@@ -110,8 +110,11 @@ class EasypanelService:
         url_base = settings.EASYPANEL_URL or (
             f"http://{settings.PLATFORM_EDGE_IP}:3000" if settings.PLATFORM_EDGE_IP else "http://127.0.0.1:3000"
         )
-        project = settings.easypanel_project
+        project = settings.easypanel_project or "sevalor"
         service = settings.easypanel_service
+        # Normalitzar el servei frontend: a EasyPanel el servei Next.js és 'sevalor-pwa'
+        if service in ("pwa", "frontend", None, ""):
+            service = "sevalor-pwa"
 
         if not token:
             logger.info(
@@ -129,11 +132,14 @@ class EasypanelService:
             "Content-Type": "application/json",
         }
 
-        # 3. Registrar domini via API oficial d'EasyPanel (POST /api/createDomain)
-        rest_url = f"{url_base.rstrip('/')}/api/createDomain"
-        domain_id = f"{project}-{service}-{domini_clean.replace('.', '-')}"
+        del_url = f"{url_base.rstrip('/')}/api/deleteDomain"
+        list_url = f"{url_base.rstrip('/')}/api/listDomains"
+        create_url = f"{url_base.rstrip('/')}/api/createDomain"
+        update_url = f"{url_base.rstrip('/')}/api/updateDomain"
+        target_domain_id = f"{project}-{service}-{domini_clean.replace('.', '-')}"
+
         rest_payload = {
-            "id": domain_id,
+            "id": target_domain_id,
             "host": domini_clean,
             "path": "/",
             "https": True,
@@ -149,76 +155,72 @@ class EasypanelService:
             },
         }
 
-        candidate_services = [service]
-        if not service.startswith(f"{project}-"):
-            candidate_services.append(f"{project}-{service}")
-
         try:
             async with httpx.AsyncClient(timeout=15.0) as client:
-                last_res = None
-                for cand in candidate_services:
-                    rest_payload["serviceDestination"]["serviceName"] = cand
-                    res = await client.post(rest_url, headers=headers, json=rest_payload)
-                    last_res = res
-                    if res.status_code in (200, 201):
-                        logger.info(f"[EasyPanel] Domini '{domini_clean}' registrat amb èxit al servei '{cand}'.")
-                        return {
-                            "ok": True,
-                            "status": "SSL_ACTIU",
-                            "detail": f"Domini '{domini_clean}' registrat i certificat Let's Encrypt sol·licitat a EasyPanel (servei: {cand}).",
-                        }
-                    # Si no és error de servei no trobat, no té sentit provar el següent
-                    if "not found" not in res.text.lower() and "wrong service" not in res.text.lower():
-                        break
+                # PAS 1: Purgar qualsevol registre previ d'aquest domini a EasyPanel (Anti-Conflict)
+                # D'aquesta manera s'eliminen associacions orfes amb serveis antics ('pwa') o IDs desalineats.
+                try:
+                    list_res = await client.get(
+                        list_url,
+                        headers=headers,
+                        params={"projectName": project},
+                    )
+                    if list_res.status_code == 200:
+                        raw_domains = list_res.json()
+                        domain_list = raw_domains if isinstance(raw_domains, list) else raw_domains.get("data", [])
+                        if isinstance(domain_list, list):
+                            for item in domain_list:
+                                item_host = str(item.get("host", "")).strip().rstrip("/").lower()
+                                item_id = str(item.get("id", ""))
+                                if item_host == domini_clean or item_id.endswith(domini_clean.replace(".", "-")):
+                                    logger.info(
+                                        f"[EasyPanel] Detectat domini previ '{item_host}' (ID: {item_id}). Purgant per refrescar router Traefik..."
+                                    )
+                                    await client.post(del_url, headers=headers, json={"id": item_id})
+                except Exception as list_err:
+                    logger.warning(f"[EasyPanel] No s'ha pogut llistar dominis existents per purgar: {list_err}")
 
-                # Si el domini ja està registrat a EasyPanel al servei PWA, refrescar-lo per netejar l'estat d'ACME antic
-                if last_res and "already used" in last_res.text.lower():
-                    logger.info(f"[EasyPanel] Domini '{domini_clean}' ja existent. Refrescant configuració...")
+                # Purgat preventiu d'IDs coneguts que hagin pogut quedar orfes
+                proactive_ids = {
+                    f"{project}-pwa-{domini_clean.replace('.', '-')}",
+                    f"{project}-sevalor-pwa-{domini_clean.replace('.', '-')}",
+                    target_domain_id,
+                }
+                for leg_id in proactive_ids:
                     try:
-                        list_url = f"{url_base.rstrip('/')}/api/listDomains"
-                        list_res = await client.get(
-                            list_url,
-                            headers=headers,
-                            params={"projectName": project},
-                        )
-                        if list_res.status_code == 200:
-                            existing_domains = list_res.json()
-                            if isinstance(existing_domains, list):
-                                for dom in existing_domains:
-                                    if dom.get("host") == domini_clean:
-                                        dom_id = dom.get("id")
-                                        if dom_id:
-                                            del_url = f"{url_base.rstrip('/')}/api/deleteDomain"
-                                            await client.post(del_url, headers=headers, json={"id": dom_id})
-                                            # Re-crear domini net perquè Traefik generi el router amb el DNS actual
-                                            recreate_res = await client.post(rest_url, headers=headers, json=rest_payload)
-                                            if recreate_res.status_code in (200, 201):
-                                                logger.info(f"[EasyPanel] Domini '{domini_clean}' refrescat amb èxit a EasyPanel.")
-                                                return {
-                                                    "ok": True,
-                                                    "status": "SSL_ACTIU",
-                                                    "detail": f"Domini '{domini_clean}' refrescat i activat a EasyPanel.",
-                                                }
+                        await client.post(del_url, headers=headers, json={"id": leg_id})
+                    except Exception:
+                        pass
+
+                # PAS 2: Registrar el domini oficialment al servei Next.js PWA actiu
+                res = await client.post(create_url, headers=headers, json=rest_payload)
+                if res.status_code in (200, 201):
+                    logger.info(f"[EasyPanel] Domini '{domini_clean}' registrat amb èxit a '{project}/{service}'.")
+                    return {
+                        "ok": True,
+                        "status": "SSL_ACTIU",
+                        "detail": f"Domini '{domini_clean}' registrat correctament a EasyPanel (servei '{service}') amb certificat SSL automàtic.",
+                    }
+
+                # PAS 3: Si EasyPanel al·lega que ja existeix, provar actualització directa amb updateDomain
+                if res.status_code == 400 and "already used" in res.text.lower():
+                    logger.info("[EasyPanel] Domini ja existent segons validador. Aplicant updateDomain...")
+                    up_res = await client.post(update_url, headers=headers, json=rest_payload)
+                    if up_res.status_code in (200, 201):
+                        logger.info(f"[EasyPanel] Domini '{domini_clean}' actualitzat amb èxit via updateDomain.")
                         return {
                             "ok": True,
                             "status": "SSL_ACTIU",
-                            "detail": f"Domini '{domini_clean}' ja està assignat al servei PWA a EasyPanel.",
-                        }
-                    except Exception as refresh_err:
-                        logger.warning(f"[EasyPanel] Error refrescant domini existent: {refresh_err}")
-                        return {
-                            "ok": True,
-                            "status": "SSL_ACTIU",
-                            "detail": f"Domini '{domini_clean}' ja està assignat al servei PWA a EasyPanel.",
+                            "detail": f"Domini '{domini_clean}' actualitzat correctament a EasyPanel (servei '{service}') amb certificat SSL automàtic.",
                         }
 
                 logger.warning(
-                    f"[EasyPanel] Resposta {last_res.status_code if last_res else 'N/A'} afegint domini '{domini_clean}': {last_res.text if last_res else 'sense resposta'}"
+                    f"[EasyPanel] Resposta {res.status_code} afegint domini '{domini_clean}': {res.text}"
                 )
                 return {
                     "ok": False,
                     "status": "ERROR_EASYPANEL",
-                    "detail": f"EasyPanel ha respost amb codi {last_res.status_code if last_res else 500}: {last_res.text if last_res else 'sense resposta'}",
+                    "detail": f"EasyPanel ha respost amb codi {res.status_code}: {res.text}",
                 }
         except Exception as exc:
             logger.error(f"[EasyPanel] Excepció en connectar amb EasyPanel: {exc}")
@@ -240,8 +242,10 @@ class EasypanelService:
         url_base = settings.EASYPANEL_URL or (
             f"http://{settings.PLATFORM_EDGE_IP}:3000" if settings.PLATFORM_EDGE_IP else "http://127.0.0.1:3000"
         )
-        project = settings.easypanel_project
+        project = settings.easypanel_project or "sevalor"
         service = settings.easypanel_service
+        if service in ("pwa", "frontend", None, ""):
+            service = "sevalor-pwa"
 
         if not token:
             return {"ok": False, "detail": "Token d'EasyPanel no configurat."}
@@ -252,19 +256,43 @@ class EasypanelService:
             "Content-Type": "application/json",
         }
 
-        # Eliminar via API oficial d'EasyPanel (POST /api/deleteDomain)
-        domain_id = f"{project}-{service}-{domini_clean.replace('.', '-')}"
-        rest_url = f"{url_base.rstrip('/')}/api/deleteDomain"
+        del_url = f"{url_base.rstrip('/')}/api/deleteDomain"
+        list_url = f"{url_base.rstrip('/')}/api/listDomains"
 
         try:
             async with httpx.AsyncClient(timeout=15.0) as client:
-                res_rest = await client.post(rest_url, headers=headers, json={"id": domain_id})
-                if res_rest.status_code in (200, 204):
-                    return {"ok": True, "status": "ELIMINAT"}
-                logger.warning(
-                    f"[EasyPanel] Resposta {res_rest.status_code} eliminant domini '{domini_clean}': {res_rest.text}"
-                )
-                return {"ok": False, "status_code": res_rest.status_code, "detail": res_rest.text}
+                # 1. Buscar per host a la llista de dominis
+                try:
+                    list_res = await client.get(
+                        list_url,
+                        headers=headers,
+                        params={"projectName": project},
+                    )
+                    if list_res.status_code == 200:
+                        raw_domains = list_res.json()
+                        domain_list = raw_domains if isinstance(raw_domains, list) else raw_domains.get("data", [])
+                        if isinstance(domain_list, list):
+                            for item in domain_list:
+                                item_host = str(item.get("host", "")).strip().rstrip("/").lower()
+                                item_id = str(item.get("id", ""))
+                                if item_host == domini_clean or item_id.endswith(domini_clean.replace(".", "-")):
+                                    await client.post(del_url, headers=headers, json={"id": item_id})
+                except Exception as e:
+                    logger.warning(f"[EasyPanel] Error llistant dominis per eliminar: {e}")
+
+                # 2. Purgar per IDs coneguts
+                proactive_ids = {
+                    f"{project}-{service}-{domini_clean.replace('.', '-')}",
+                    f"{project}-pwa-{domini_clean.replace('.', '-')}",
+                    f"{project}-sevalor-pwa-{domini_clean.replace('.', '-')}",
+                }
+                for pid in proactive_ids:
+                    try:
+                        await client.post(del_url, headers=headers, json={"id": pid})
+                    except Exception:
+                        pass
+
+                return {"ok": True, "status": "ELIMINAT"}
         except Exception as exc:
             logger.error(f"[EasyPanel] Error eliminant domini '{domini_clean}': {exc}")
             return {"ok": False, "detail": str(exc)}

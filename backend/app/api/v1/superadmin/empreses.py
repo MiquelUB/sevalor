@@ -408,10 +408,10 @@ async def activar_custom_domain(
                 ),
             }
 
-        empresa.updated_at = datetime.now(timezone.utc)
-        await db.commit()
-
         if easypanel_res and easypanel_res.get("ok"):
+            empresa.estat_domini = "SSL_ACTIU"
+            empresa.updated_at = datetime.now(timezone.utc)
+            await db.commit()
             missatge = (
                 f"✅ DNS resolt correctament apuntant a la IP del servidor ({settings.PLATFORM_EDGE_IP}). "
                 "Domini activat a EasyPanel amb certificat SSL automàtic."
