@@ -171,6 +171,47 @@ class EasypanelService:
                     if "not found" not in res.text.lower() and "wrong service" not in res.text.lower():
                         break
 
+                # Si el domini ja està registrat a EasyPanel al servei PWA, refrescar-lo per netejar l'estat d'ACME antic
+                if last_res and "already used" in last_res.text.lower():
+                    logger.info(f"[EasyPanel] Domini '{domini_clean}' ja existent. Refrescant configuració...")
+                    try:
+                        list_url = f"{url_base.rstrip('/')}/api/listDomains"
+                        list_res = await client.get(
+                            list_url,
+                            headers=headers,
+                            params={"projectName": project, "serviceName": service},
+                        )
+                        if list_res.status_code == 200:
+                            existing_domains = list_res.json()
+                            if isinstance(existing_domains, list):
+                                for dom in existing_domains:
+                                    if dom.get("host") == domini_clean:
+                                        dom_id = dom.get("id")
+                                        if dom_id:
+                                            del_url = f"{url_base.rstrip('/')}/api/deleteDomain"
+                                            await client.post(del_url, headers=headers, json={"id": dom_id})
+                                            # Re-crear domini net perquè Traefik generi el router amb el DNS actual
+                                            recreate_res = await client.post(rest_url, headers=headers, json=rest_payload)
+                                            if recreate_res.status_code in (200, 201):
+                                                logger.info(f"[EasyPanel] Domini '{domini_clean}' refrescat amb èxit a EasyPanel.")
+                                                return {
+                                                    "ok": True,
+                                                    "status": "SSL_ACTIU",
+                                                    "detail": f"Domini '{domini_clean}' refrescat i activat a EasyPanel.",
+                                                }
+                        return {
+                            "ok": True,
+                            "status": "SSL_ACTIU",
+                            "detail": f"Domini '{domini_clean}' ja està assignat al servei PWA a EasyPanel.",
+                        }
+                    except Exception as refresh_err:
+                        logger.warning(f"[EasyPanel] Error refrescant domini existent: {refresh_err}")
+                        return {
+                            "ok": True,
+                            "status": "SSL_ACTIU",
+                            "detail": f"Domini '{domini_clean}' ja està assignat al servei PWA a EasyPanel.",
+                        }
+
                 logger.warning(
                     f"[EasyPanel] Resposta {last_res.status_code if last_res else 'N/A'} afegint domini '{domini_clean}': {last_res.text if last_res else 'sense resposta'}"
                 )
