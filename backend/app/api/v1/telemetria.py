@@ -224,12 +224,13 @@ async def get_system_kpis(db: AsyncSession = Depends(get_db_with_tenant_context)
                 res_tot_jornades = await db.execute(q_tot_jornades)
                 total_jornades = res_tot_jornades.scalar() or 0
 
-                # Càlcul del període de prova TRIAL (14 dies)
+                # Càlcul del període de prova TRIAL (reduït a 7 dies per a urgència comercial)
                 data_onboarding = emp.data_onboarding or emp.created_at or datetime.now(timezone.utc)
                 ara_utc = datetime.now(timezone.utc)
                 dies_onboarding = max(0, (ara_utc - data_onboarding).days) if data_onboarding else 0
+                durada_estat_trial = 7
                 dies_trial_restants = (
-                    max(0, 14 - dies_onboarding)
+                    max(0, durada_estat_trial - dies_onboarding)
                     if (emp.estat_pagament or "").upper() == "TRIAL"
                     else None
                 )

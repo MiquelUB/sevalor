@@ -2138,3 +2138,109 @@ class SaasHistorialLlicencia(Base):
         default=lambda: datetime.now(timezone.utc),
         server_default=text("now()"),
     )
+
+
+class SaasLead(Base):
+    """Prospecte o lead comercial B2B per a la prospecció de Sevalor Suite."""
+
+    __tablename__ = "saas_leads"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+        server_default=text("gen_random_uuid()"),
+    )
+    nom_empresa: Mapped[str] = mapped_column(String(150), nullable=False)
+    nom_contacte: Mapped[str] = mapped_column(String(100), nullable=False)
+    email: Mapped[str] = mapped_column(String(150), nullable=False, index=True)
+    telefon: Mapped[Optional[str]] = mapped_column(String(30))
+    vertical: Mapped[str] = mapped_column(String(100), default="CampoPro", server_default="CampoPro")
+    origen: Mapped[str] = mapped_column(String(50), default="WEB", server_default="WEB")
+    estat_qualificacio: Mapped[str] = mapped_column(
+        String(50), default="NOU", server_default="NOU", index=True
+    )  # NOU, CONTACTAT, QUALIFICAT, DEMO_DEMANADA, DEMO_ACTIVA, PROPOSTA_ENVIADA, GUANYAT, DESCARTAT
+    operaris_estimats: Mapped[int] = mapped_column(Integer, default=5, server_default=text("5"))
+    notes: Mapped[Optional[str]] = mapped_column(Text)
+    empresa_demo_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("empreses.id", ondelete="SET NULL"), nullable=True
+    )
+    data_inici_demo: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    data_fi_demo: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    dies_demo_durada: Mapped[int] = mapped_column(Integer, default=7, server_default=text("7"))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        server_default=text("now()"),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        server_default=text("now()"),
+    )
+
+
+class SaasOportunitat(Base):
+    """Oportunitat de negoci al Pipeline comercial (estil Twenty CRM Kanban)."""
+
+    __tablename__ = "saas_oportunitats"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+        server_default=text("gen_random_uuid()"),
+    )
+    lead_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("saas_leads.id", ondelete="CASCADE"), nullable=False
+    )
+    titol: Mapped[str] = mapped_column(String(200), nullable=False)
+    etapa: Mapped[str] = mapped_column(
+        String(50), default="PROSPECCIO", server_default="PROSPECCIO", index=True
+    )  # PROSPECCIO, QUALIFICACIO, DEMO_7_DIES, PROPOSTA, NEGOCIACIO, GUANYAT, PERDUT
+    valor_mensual_estimat: Mapped[float] = mapped_column(
+        Numeric(10, 2), default=0.00, server_default=text("0.00")
+    )
+    valor_ia_setup: Mapped[float] = mapped_column(
+        Numeric(10, 2), default=0.00, server_default=text("0.00")
+    )
+    probabilitat_percent: Mapped[int] = mapped_column(Integer, default=20, server_default=text("20"))
+    data_tancament_prevista: Mapped[Optional[date]] = mapped_column(Date)
+    motiu_perdua: Mapped[Optional[str]] = mapped_column(String(255))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        server_default=text("now()"),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        server_default=text("now()"),
+    )
+
+
+class SaasActivitatLead(Base):
+    """Timeline d'interaccions i notes comercials associades a un Lead."""
+
+    __tablename__ = "saas_activitats_lead"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+        server_default=text("gen_random_uuid()"),
+    )
+    lead_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("saas_leads.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    tipus: Mapped[str] = mapped_column(
+        String(30), default="NOTA", server_default="NOTA"
+    )  # NOTA, TRUCADA, REUNIO, EMAIL, DEMO_LLANCADA, ESTAT_CANVIAT
+    titol: Mapped[str] = mapped_column(String(200), nullable=False)
+    descripcio: Mapped[Optional[str]] = mapped_column(Text)
+    autor_nom: Mapped[str] = mapped_column(String(100), default="Superadmin", server_default="Superadmin")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        server_default=text("now()"),
+    )

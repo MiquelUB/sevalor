@@ -246,7 +246,7 @@ export default function SuperadminTelemetriaPage() {
   const tenantActiu = tenants.find((t) => t.id === empresaSeleccionadaId) || tenants[0];
 
   const esTrial = (tenantActiu?.estat_pagament || tenantActiu?.estat || "").toUpperCase() === "TRIAL";
-  const diesRestants = tenantActiu?.dies_trial_restants ?? 14;
+  const diesRestants = tenantActiu?.dies_trial_restants ?? 7;
   const diesConsumits = tenantActiu?.dies_trial_consumits ?? 0;
   const agentOffline = tenantActiu?.estat_pc_empresa === "OFFLINE";
   const agentOnline = tenantActiu?.estat_pc_empresa === "ONLINE";

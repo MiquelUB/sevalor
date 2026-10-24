@@ -24,6 +24,7 @@ import {
   Menu,
   X,
   HardHat,
+  Target,
 } from "lucide-react";
 import { clearAuthToken, setAuthToken, apiFetch } from "@/lib/api";
 
@@ -110,6 +111,18 @@ export default function SuperadminLayout({
 
   const navSections = [
     {
+      title: "Comercial & Vendes",
+      links: [
+        {
+          label: "CRM & Pipeline (7D)",
+          href: "/superadmin/crm",
+          icon: Target,
+          badge: "TWENTY",
+          desc: "Leads, Demos 7D & Facturació",
+        },
+      ],
+    },
+    {
       title: "SRE & Salut",
       links: [
         {
@@ -162,6 +175,9 @@ export default function SuperadminLayout({
   ];
 
   const isLinkActive = (href: string) => {
+    if (href === "/superadmin/crm") {
+      return pathname?.startsWith("/superadmin/crm");
+    }
     if (href === "/superadmin/telemetria") {
       return pathname === "/superadmin/telemetria" || pathname === "/superadmin";
     }
