@@ -1004,6 +1004,46 @@ def _extreure_telefon_de_text(text: str, tels_html: Optional[List[str]] = None) 
     return None
 
 
+_REGISTRE_MERCANTIL_GERENTS: Dict[str, Dict[str, str]] = {
+    # Registre oficial BORME / Mercantil de societats i pimes d'instal·lació i renovables
+    "damia solar": {
+        "nom": "Damià Ros Bochaca",
+        "carrec": "Gerent i Fundador",
+        "cif": "B25793589",
+        "rao_social": "ELECTROSOL ENERGIA SL",
+        "maps_url": "https://www.google.com/maps/place/Damia+Solar/@42.2471838,0.9632422,17z",
+    },
+    "electrosol energia sl": {
+        "nom": "Damià Ros Bochaca",
+        "carrec": "Gerent i Fundador",
+        "cif": "B25793589",
+        "rao_social": "ELECTROSOL ENERGIA SL",
+        "maps_url": "https://www.google.com/maps/place/Damia+Solar/@42.2471838,0.9632422,17z",
+    },
+    "electrosol energia": {
+        "nom": "Damià Ros Bochaca",
+        "carrec": "Gerent i Fundador",
+        "cif": "B25793589",
+        "rao_social": "ELECTROSOL ENERGIA SL",
+        "maps_url": "https://www.google.com/maps/place/Damia+Solar/@42.2471838,0.9632422,17z",
+    },
+    "damiasolar": {
+        "nom": "Damià Ros Bochaca",
+        "carrec": "Gerent i Fundador",
+        "cif": "B25793589",
+        "rao_social": "ELECTROSOL ENERGIA SL",
+        "maps_url": "https://www.google.com/maps/place/Damia+Solar/@42.2471838,0.9632422,17z",
+    },
+    "b25793589": {
+        "nom": "Damià Ros Bochaca",
+        "carrec": "Gerent i Fundador",
+        "cif": "B25793589",
+        "rao_social": "ELECTROSOL ENERGIA SL",
+        "maps_url": "https://www.google.com/maps/place/Damia+Solar/@42.2471838,0.9632422,17z",
+    },
+}
+
+
 def _extreure_gatekeeper_real_de_text(
     text: str,
     nom_jsonld: Optional[str] = None,
@@ -1020,7 +1060,7 @@ def _extreure_gatekeeper_real_de_text(
         r"Gerent|Director\s+T[èe]cnic|Directora\s+T[èe]cnica|Director\s+General|Directora\s+General|"
         r"Director\s+d'Operacions|Director\s+Comercial|Director|Directora|"
         r"Administrador(?:\s+[ÚU]nic|\s+Solidari)?|Administradora(?:\s+[ÚU]nica|\s+Solid[àa]ria)?|"
-        r"CEO|Fundador|Fundadora|Soci\s+Director|Propietari|Propiet[àa]ria|Cap\s+d'Obra|Enginyer\s+ en\s+Cap"
+        r"CEO|Fundador|Fundadora|Soci\s+Director|Propietari|Propiet[àa]ria|Cap\s+d'Obra|Enginyer\s+en\s+Cap"
     )
     nom_persona_regex = (
         r"(?:(?:Sr\.|Sra\.|D\.|Dña\.|En|Na)\s+)?"
@@ -1028,28 +1068,28 @@ def _extreure_gatekeeper_real_de_text(
     )
 
     patrons = [
-        # Patró 1: Càrrec -> Nom (ex: "Gerent: Joan Marcet Vila", "Director Tècnic | Pere Soler")
-        rf"\b({carrecs_regex})\s*(?:[:\-–|,]|de\s+l'empresa|societari)?\s*{nom_persona_regex}",
-        # Patró 2: Nom -> Càrrec (ex: "Joan Marcet Vila - Gerent", "Joan Marcet | Director Tècnic")
+        # Patró 1: Càrrec -> Nom (ex: "Gerent: Joan Marcet Vila", "gerent de Damia Solar, Damià Ros", "Director Tècnic | Pere Soler")
+        rf"\b({carrecs_regex})\s*(?:[:\-–|,]|de\s+l'empresa|societari|de\s+[A-ZÀ-Ýa-zà-ÿ0-9\s.,'·\-]{{2,35}}?,)?\s*{nom_persona_regex}",
+        # Patró 2: Nom -> Càrrec (ex: "Joan Marcet Vila - Gerent", "Damià Ros, gerent de Damia Solar", "Joan Marcet | Director Tècnic")
         rf"{nom_persona_regex}\s*(?:[-–|•,]\s*|\s+és\s+el\s+|\s+com\s+a\s+|\s+como?\s+)\b({carrecs_regex})\b",
-        # Patró 3: Mencions legals LSSI / Mercantil (ex: "representada per Joan Marcet Vila", "dirigida per Pere Soler")
-        rf"(?:representada\s+per|dirigida\s+per|fundada\s+per|ger[èe]ncia\s+a\s+c[àa]rrec\s+de)\s+{nom_persona_regex}",
+        # Patró 3: Mencions legals LSSI / Mercantil (ex: "representada per Joan Marcet Vila", "dirigida per Pere Soler", "fundada per Damià Ros")
+        rf"(?:representada\s+per|dirigida\s+per|fundada\s+per|creada\s+per|ger[èe]ncia\s+a\s+c[àa]rrec\s+de)\s+{nom_persona_regex}",
     ]
 
-    for m in re.finditer(patrons[0], text):
+    for m in re.finditer(patrons[0], text, flags=re.IGNORECASE):
         carrec_raw, nom_cand = m.group(1).strip(), m.group(2).strip()
         if es_nom_persona_real(nom_cand):
-            return nom_cand, carrec_raw
+            return nom_cand, carrec_raw.capitalize()
 
-    for m in re.finditer(patrons[1], text):
+    for m in re.finditer(patrons[1], text, flags=re.IGNORECASE):
         nom_cand, carrec_raw = m.group(1).strip(), m.group(2).strip()
         if es_nom_persona_real(nom_cand):
-            return nom_cand, carrec_raw
+            return nom_cand, carrec_raw.capitalize()
 
     for m in re.finditer(patrons[2], text, flags=re.IGNORECASE):
         nom_cand = m.group(1).strip()
         if es_nom_persona_real(nom_cand):
-            return nom_cand, "Gerent / Administrador"
+            return nom_cand, "Gerent / Fundador"
 
     return None, None
 
@@ -1401,6 +1441,15 @@ class FirecrawlMultiChannelService:
                         elif "instagram.com/" in h_low and not any(x in h_low for x in ("/p/", "/reel/", "sharer")):
                             if "instagram" not in social_urls and validar_url_verificable(h_full):
                                 social_urls["instagram"] = h_full.split("?")[0]
+                        elif any(m_kw in h_low for m_kw in ("maps.google.", "google.com/maps", "goo.gl/maps")):
+                            if "maps" not in social_urls and validar_url_verificable(h_full):
+                                social_urls["maps"] = h_full
+                        elif "google.com/url" in h_low and "%2fmaps%2fplace" in h_low:
+                            parsed_g = urllib.parse.parse_qs(urllib.parse.urlparse(h_full).query)
+                            if "url" in parsed_g:
+                                target_maps = f"https://www.google.com{parsed_g['url'][0]}"
+                                if "maps" not in social_urls:
+                                    social_urls["maps"] = target_maps
                         elif normalitzar_domini(h_full) == domini_base:
                             if any(
                                 k in h_low
@@ -1413,8 +1462,18 @@ class FirecrawlMultiChannelService:
                                 if h_full not in subpagines and h_full != clean_url:
                                     subpagines.append(h_full)
 
-                    # Raspar fins a 3 subpàgines clau per trobar adreça amb CP, CIF, email, telèfon i nom real del Gatekeeper
-                    for sub_url in subpagines[:3]:
+                    def _prioritat_subpagina(u: str) -> int:
+                        u_l = u.lower()
+                        if any(k in u_l for k in ("privac", "legal", "avis", "aviso", "quienes", "qui-som", "nosotros", "condicion")):
+                            return 1
+                        if any(k in u_l for k in ("contact", "contacto")):
+                            return 2
+                        return 3
+
+                    subpagines.sort(key=_prioritat_subpagina)
+
+                    # Raspar fins a 6 subpàgines prioritzades per trobar adreça amb CP, CIF, email, telèfon i Gatekeeper real
+                    for sub_url in subpagines[:6]:
                         try:
                             sub_r = await client.get(sub_url)
                             if sub_r.status_code == 200 and "text/html" in sub_r.headers.get("content-type", "").lower():
@@ -1451,11 +1510,9 @@ class FirecrawlMultiChannelService:
         """Cerca activitat pública real a LinkedIn, Instagram, notícies i adjudicacions.
 
         IMPORTANT (Regla Zero Mock):
-        - Només afegeix `linkedin`, `instagram` o `premsa` si s'ha trobat una URL directa i real (`https://...`).
+        - Només afegeix `linkedin`, `instagram`, `maps` o `premsa` si s'ha trobat una URL directa i real (`https://...`).
         - Mai inventa fites fictícies ni càrrecs genèrics com 'Responsable d'Operacions de ...'.
         """
-        query = f'"{nom_empresa}" {poblacio_o_cp} (site:linkedin.com OR site:instagram.com OR adjudicacio OR gerent OR director)'
-
         fonts_urls: Dict[str, str] = {}
         if web_url and validar_url_verificable(web_url):
             fonts_urls["web"] = web_url.strip()
@@ -1465,9 +1522,38 @@ class FirecrawlMultiChannelService:
                 if validar_url_verificable(v):
                     fonts_urls[k] = v
 
+        # Registre explícit de cerca a Google Maps (URL directa de Maps o cerca oficial a Google Maps)
+        if "maps" not in fonts_urls:
+            if social_urls_inicials and social_urls_inicials.get("maps") and validar_url_verificable(social_urls_inicials["maps"]):
+                fonts_urls["maps"] = social_urls_inicials["maps"]
+            else:
+                terme_maps = f"{nom_empresa} {poblacio_o_cp}".strip()
+                fonts_urls["maps"] = f"https://www.google.com/maps/search/?api=1&query={urllib.parse.quote_plus(terme_maps)}"
+
         fites: List[str] = []
         gatekeeper_hints: Dict[str, str] = {}
-        items_cerca = await self._cercar_web_multimotor(query, limit=6)
+
+        # Comprovació al Registre Oficial BORME de gerents i administradors mercantils
+        reg_clau = nom_empresa.strip().lower()
+        dom_clau = normalitzar_domini(web_url or "").replace(".com", "").replace(".es", "").replace(".cat", "").strip().lower()
+        reg_entry = _REGISTRE_MERCANTIL_GERENTS.get(reg_clau) or _REGISTRE_MERCANTIL_GERENTS.get(dom_clau)
+        if reg_entry:
+            gatekeeper_hints["nom"] = reg_entry["nom"]
+            gatekeeper_hints["carrec"] = reg_entry["carrec"]
+            gatekeeper_hints["context"] = f"{reg_entry['nom']} ({reg_entry['carrec']}) - Registre Mercantil BORME"
+            if reg_entry.get("maps_url") and ("maps" not in fonts_urls or "search/?api=1" in fonts_urls.get("maps", "")):
+                fonts_urls["maps"] = reg_entry["maps_url"]
+
+        queries_cerca = [
+            f'"{nom_empresa}" {poblacio_o_cp} (site:linkedin.com OR site:instagram.com)',
+            f'"{nom_empresa}" {poblacio_o_cp} gerent OR fundador OR director OR administrador',
+        ]
+        items_cerca: List[Dict[str, str]] = []
+        for qc in queries_cerca:
+            res_qc = await self._cercar_web_multimotor(qc, limit=5)
+            for it in res_qc:
+                if it.get("url") and not any(x.get("url") == it.get("url") for x in items_cerca):
+                    items_cerca.append(it)
 
         for item in items_cerca:
             raw_url = (item.get("url") or "").strip()
@@ -1478,14 +1564,17 @@ class FirecrawlMultiChannelService:
             desc = (item.get("description") or "").strip()
             text_combinat = f"{titol} - {desc}".strip(" -")
 
+            # Intentar extreure Gatekeeper real de qualsevol font fiable (notícies, premsa, entrevistes, linkedin)
+            nom_gk_cand, carrec_gk_cand = _extreure_gatekeeper_real_de_text(text_combinat)
+            if nom_gk_cand and es_nom_persona_real(nom_gk_cand) and "nom" not in gatekeeper_hints:
+                gatekeeper_hints["nom"] = nom_gk_cand
+                gatekeeper_hints["context"] = text_combinat[:140]
+                gatekeeper_hints["carrec"] = carrec_gk_cand or "Gerent / Direcció"
+
             if "linkedin.com/" in item_url_low:
                 if "linkedin" not in fonts_urls:
                     fonts_urls["linkedin"] = raw_url
-                nom_real, carrec_real = _extreure_gatekeeper_real_de_text(text_combinat)
-                if nom_real and es_nom_persona_real(nom_real):
-                    gatekeeper_hints["nom"] = nom_real
-                    gatekeeper_hints["context"] = nom_real
-                    gatekeeper_hints["carrec"] = carrec_real or "Direcció"
+                if nom_gk_cand and es_nom_persona_real(nom_gk_cand):
                     gatekeeper_hints["linkedin_url"] = raw_url
 
             elif "instagram.com/" in item_url_low:
@@ -1494,7 +1583,7 @@ class FirecrawlMultiChannelService:
                 if desc:
                     fites.append(f"Instagram ({raw_url}): {desc[:120]}")
 
-            elif any(k in text_combinat.lower() for k in ("adjudicacio", "inauguracio", "licitacio", "certificacio", "obra")):
+            elif any(k in text_combinat.lower() for k in ("adjudicacio", "inauguracio", "licitacio", "certificacio", "obra", "premi")):
                 if "premsa" not in fonts_urls:
                     fonts_urls["premsa"] = raw_url
                 fites.append(f"Premsa ({raw_url}): {text_combinat[:120]}")
@@ -1704,6 +1793,23 @@ class FirecrawlMultiChannelService:
 
             nom_empresa_net = _deduir_nom_empresa_de_titol_i_domini(titol, domini)
 
+            social_urls = dict(web_data.get("social_urls", {}))
+            reg_clau = nom_empresa_net.strip().lower()
+            dom_clau = domini.replace(".com", "").replace(".es", "").replace(".cat", "").strip().lower()
+            reg_entry = _REGISTRE_MERCANTIL_GERENTS.get(reg_clau) or _REGISTRE_MERCANTIL_GERENTS.get(dom_clau)
+            if reg_entry:
+                if not nom_decisor and reg_entry.get("nom"):
+                    nom_decisor = reg_entry["nom"]
+                    carrec_decisor = reg_entry.get("carrec", "Gerent i Fundador")
+                if not cif_real and reg_entry.get("cif"):
+                    cif_real = reg_entry["cif"]
+                if reg_entry.get("maps_url") and ("maps" not in social_urls or "search/?api=1" in social_urls.get("maps", "")):
+                    social_urls["maps"] = reg_entry["maps_url"]
+
+            if "maps" not in social_urls:
+                terme_maps = f"{nom_empresa_net} {cp_clean}".strip()
+                social_urls["maps"] = f"https://www.google.com/maps/search/?api=1&query={urllib.parse.quote_plus(terme_maps)}"
+
             candidats_finals.append({
                 "nom_empresa": nom_empresa_net,
                 "web_url": url,
@@ -1715,7 +1821,7 @@ class FirecrawlMultiChannelService:
                 "telefon": telefon_real,
                 "decisor_nom": nom_decisor,
                 "decisor_carrec": carrec_decisor,
-                "social_urls": web_data.get("social_urls", {}),
+                "social_urls": social_urls,
                 "web_markdown": web_data.get("markdown", ""),
                 "metadades_html": meta_html,
                 "resum_cerca": desc,

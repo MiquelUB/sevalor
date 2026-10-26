@@ -1769,6 +1769,17 @@ export default function SuperadminCrmPage() {
                                 <Instagram className="w-2.5 h-2.5" /> Instagram <ExternalLink className="w-2 h-2" />
                               </a>
                             )}
+                            {urlsMap.maps && (
+                              <a
+                                href={urlsMap.maps}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                title={urlsMap.maps}
+                                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-amber-50 hover:bg-amber-100 dark:bg-amber-950/50 dark:hover:bg-amber-900/70 text-amber-700 dark:text-amber-300 font-mono text-[9px] font-bold underline-offset-2 hover:underline"
+                              >
+                                <MapPin className="w-2.5 h-2.5" /> Maps <ExternalLink className="w-2 h-2" />
+                              </a>
+                            )}
                             {urlsMap.premsa && (
                               <a
                                 href={urlsMap.premsa}
@@ -2368,6 +2379,16 @@ export default function SuperadminCrmPage() {
                                     className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-pink-50 hover:bg-pink-100 dark:bg-pink-950/60 text-pink-700 dark:text-pink-300 font-mono text-[10px] font-bold hover:underline"
                                   >
                                     <Instagram className="w-3 h-3" /> Instagram <ExternalLink className="w-2.5 h-2.5" />
+                                  </a>
+                                )}
+                                {lUrls.maps && (
+                                  <a
+                                    href={lUrls.maps}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-amber-50 hover:bg-amber-100 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 font-mono text-[10px] font-bold hover:underline"
+                                  >
+                                    <MapPin className="w-3 h-3" /> Maps <ExternalLink className="w-2.5 h-2.5" />
                                   </a>
                                 )}
                               </div>
