@@ -36,7 +36,11 @@ def test_t004_config_settings_prospeccio_i_correu():
     assert hasattr(settings, "FIRECRAWL_API_URL")
     assert settings.FIRECRAWL_API_URL is not None
     assert hasattr(settings, "OPENROUTER_MODEL")
-    assert settings.OPENROUTER_MODEL == "deepseek/deepseek-chat"
+    assert settings.OPENROUTER_MODEL in ("deepseek/deepseek-chat", "deepseek/deepseek-v4-flash-0731")
+    assert hasattr(settings, "OPENROUTER_PROVIDER_ONLY")
+    assert "baidu/fp8" in settings.OPENROUTER_PROVIDER_ONLY
+    assert hasattr(settings, "OPENROUTER_PROVIDER_ALLOW_FALLBACKS")
+    assert settings.OPENROUTER_PROVIDER_ALLOW_FALLBACKS is False
     assert hasattr(settings, "STALWART_SMTP_HOST")
     assert hasattr(settings, "SUPERADMIN_OUTREACH_EMAIL")
     assert settings.SUPERADMIN_OUTREACH_EMAIL == "tecnic@sevalor.net"

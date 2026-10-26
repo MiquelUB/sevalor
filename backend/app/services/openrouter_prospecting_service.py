@@ -287,6 +287,8 @@ Resum del lloc web corporatiu:
             "response_format": {"type": "json_object"},
             "temperature": 0.2,
         }
+        if settings.OPENROUTER_PROVIDER_ONLY:
+            body["provider"] = settings.openrouter_provider_config
 
         try:
             async with httpx.AsyncClient(timeout=45.0) as client:

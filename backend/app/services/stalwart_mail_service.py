@@ -381,6 +381,7 @@ async def classificar_intencio_amb_deepseek(text: str) -> Tuple[str, int, str]:
                         ],
                         "response_format": {"type": "json_object"},
                         "temperature": 0.1,
+                        **({"provider": settings.openrouter_provider_config} if settings.OPENROUTER_PROVIDER_ONLY else {}),
                     },
                 )
                 if res.status_code == 200:

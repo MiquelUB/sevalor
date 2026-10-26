@@ -1,6 +1,7 @@
 """Configuració de l'aplicació Sevalor Suite."""
 
-from typing import List
+import json
+from typing import Any, Dict, List
 
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -73,7 +74,34 @@ class Settings(BaseSettings):
     # Motor de Prospecció, Firecrawl i OpenRouter (DeepSeek)
     FIRECRAWL_API_URL: str = "http://localhost:3002"
     OPENROUTER_API_KEY: str | None = None
-    OPENROUTER_MODEL: str = "deepseek/deepseek-chat"
+    OPENROUTER_MODEL: str = "deepseek/deepseek-v4-flash-0731"
+    OPENROUTER_PROVIDER_ONLY: List[str] = ["baidu/fp8"]
+    OPENROUTER_PROVIDER_ALLOW_FALLBACKS: bool = False
+
+    @field_validator("OPENROUTER_PROVIDER_ONLY", mode="before")
+    @classmethod
+    def assemble_provider_only(cls, v: Any) -> List[str]:
+        if isinstance(v, str):
+            if v.startswith("["):
+                try:
+                    parsed = json.loads(v)
+                    if isinstance(parsed, list):
+                        return [str(i).strip() for i in parsed]
+                except Exception:
+                    pass
+            return [i.strip() for i in v.split(",") if i.strip()]
+        elif isinstance(v, list):
+            return [str(i).strip() for i in v]
+        return ["baidu/fp8"]
+
+    @property
+    def openrouter_provider_config(self) -> Dict[str, Any]:
+        cfg: Dict[str, Any] = {
+            "allow_fallbacks": self.OPENROUTER_PROVIDER_ALLOW_FALLBACKS,
+        }
+        if self.OPENROUTER_PROVIDER_ONLY:
+            cfg["only"] = self.OPENROUTER_PROVIDER_ONLY
+        return cfg
 
     # Servidor de Correu Sobirà Stalwart & Outreach
     STALWART_SMTP_HOST: str = "localhost"
