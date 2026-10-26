@@ -353,6 +353,10 @@ async def classificar_intencio_amb_deepseek(text: str) -> Tuple[str, int, str]:
     dies_default = _extreure_dies_objeccio_temps(text)
     api_key = settings.OPENROUTER_API_KEY
     model = settings.OPENROUTER_MODEL or "deepseek/deepseek-chat"
+    if "/" not in model and "flash" in model.lower():
+        model = "deepseek/deepseek-v4.1-flash"
+    elif "/" not in model and "chat" in model.lower():
+        model = "deepseek/deepseek-chat"
 
     if api_key and not api_key.startswith("test_") and not api_key.startswith("mock_"):
         text_sani = _sanititzar_entrada_ia(text, 1500)

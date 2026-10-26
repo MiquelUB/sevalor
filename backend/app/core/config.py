@@ -74,9 +74,38 @@ class Settings(BaseSettings):
     # Motor de Prospecció, Firecrawl i OpenRouter (DeepSeek)
     FIRECRAWL_API_URL: str = "http://localhost:3002"
     OPENROUTER_API_KEY: str | None = None
-    OPENROUTER_MODEL: str = "deepseek/deepseek-v4-flash-0731"
+    OPENROUTER_MODEL: str = "deepseek/deepseek-v4.1-flash"
     OPENROUTER_PROVIDER_ONLY: List[str] = ["baidu/fp8"]
     OPENROUTER_PROVIDER_ALLOW_FALLBACKS: bool = False
+
+    @field_validator("OPENROUTER_MODEL", mode="before")
+    @classmethod
+    def assemble_openrouter_model(cls, v: Any) -> str:
+        if not v or not isinstance(v, str):
+            return "deepseek/deepseek-v4.1-flash"
+        s = v.strip().strip("\"'")
+        mapa = {
+            "deepseek v4.1 flash": "deepseek/deepseek-v4.1-flash",
+            "deepseek: deepseek v4.1 flash": "deepseek/deepseek-v4.1-flash",
+            "deepseek v4.1 flash 1017": "deepseek/deepseek-v4.1-flash-1017",
+            "deepseek v4 flash": "deepseek/deepseek-v4.1-flash",
+            "deepseek v4 flash 0731": "deepseek/deepseek-v4-flash-0731",
+            "deepseek/deepseek-v4-flash-0731": "deepseek/deepseek-v4-flash-0731",
+            "deepseek/deepseek-v4.1-flash": "deepseek/deepseek-v4.1-flash",
+            "deepseek v3": "deepseek/deepseek-chat",
+            "deepseek chat": "deepseek/deepseek-chat",
+            "deepseek/deepseek-chat": "deepseek/deepseek-chat",
+        }
+        low = s.lower()
+        if low in mapa:
+            return mapa[low]
+        if not s.startswith("deepseek/") and "v4.1" in low and "flash" in low:
+            return "deepseek/deepseek-v4.1-flash"
+        if not s.startswith("deepseek/") and "v4" in low and "flash" in low:
+            return "deepseek/deepseek-v4.1-flash"
+        if not s.startswith("deepseek/") and "chat" in low:
+            return "deepseek/deepseek-chat"
+        return s
 
     @field_validator("OPENROUTER_PROVIDER_ONLY", mode="before")
     @classmethod

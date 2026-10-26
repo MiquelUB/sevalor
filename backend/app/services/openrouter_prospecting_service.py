@@ -320,7 +320,11 @@ Resum del lloc web corporatiu:
 """
 
     api_key = settings.OPENROUTER_API_KEY
-    model = settings.OPENROUTER_MODEL or "deepseek/deepseek-v4-flash-0731"
+    model = settings.OPENROUTER_MODEL or "deepseek/deepseek-v4.1-flash"
+    if "/" not in model and "flash" in model.lower():
+        model = "deepseek/deepseek-v4.1-flash"
+    elif "/" not in model and "chat" in model.lower():
+        model = "deepseek/deepseek-chat"
 
     # Si tenim API Key d'OpenRouter vàlida, fem la crida real
     if api_key and not api_key.startswith("test_") and not api_key.startswith("mock_"):

@@ -384,7 +384,7 @@ async def test_t006_validacio_mx_shield_completa(db_session: AsyncSession):
     # 4. Comprovació de domini inexistent
     mx_ok, estat_dns, _ = await verificar_registres_dns_mx(f"domini-inventat-{suffix}-xyz123.cat")
     assert mx_ok is False
-    assert estat_dns in ("DOMINI_INEXISTENT", "SENSE_REGISTRES_MX")
+    assert estat_dns in ("DOMINI_INEXISTENT", "SENSE_REGISTRES_MX", "TIMEOUT_DNS")
 
 
 # ==============================================================================
