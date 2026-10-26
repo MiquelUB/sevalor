@@ -11,6 +11,7 @@ Implementa:
   mitjançant Firecrawl i scraping HTTP directe (Zero Mock Data).
 """
 
+import base64
 import html
 import json
 import logging
@@ -506,12 +507,125 @@ async def verificar_duplicitat_multivector(
 
 _HEADERS_NAVEGADOR = {
     "User-Agent": (
-        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
         "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
     ),
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
     "Accept-Language": "ca,es;q=0.9,en;q=0.8",
 }
+
+
+def decode_bing_url(u: str) -> str:
+    """Descodifica URLs de seguiment de Bing (`/ck/a?!...&u=a1...`) cap a la URL real de destinació."""
+    u_clean = html.unescape(u)
+    m_u = re.search(r"[?&]u=a1([a-zA-Z0-9_-]+)", u_clean)
+    if m_u:
+        raw_b64 = m_u.group(1)
+        pad = len(raw_b64) % 4
+        if pad:
+            raw_b64 += "=" * (4 - pad)
+        try:
+            return base64.urlsafe_b64decode(raw_b64).decode("utf-8", errors="ignore")
+        except Exception:
+            return u_clean
+    return u_clean
+
+
+def extreure_resultats_bing(html_body: str, limit: int = 10) -> List[Dict[str, str]]:
+    """Analitza l'HTML de Bing i extreu els resultats reals amb les seves URLs descodificades."""
+    resultats: List[Dict[str, str]] = []
+    algos = re.findall(r"<li[^>]+class=[\"'][^\"']*b_algo[^\"']*[\"'][^>]*>(.*?)</li>", html_body, flags=re.DOTALL)
+    for a in algos:
+        m_link = re.search(r"<h2[^>]*>.*?<a[^>]+href=[\"']([^\"']+)[\"'][^>]*>(.*?)</a>.*?</h2>", a, flags=re.DOTALL)
+        if not m_link:
+            m_link = re.search(r"<a[^>]+href=[\"']([^\"']+)[\"'][^>]*>(.*?)</a>", a, flags=re.DOTALL)
+        if m_link:
+            raw_url = decode_bing_url(m_link.group(1))
+            titol = _netejar_html_a_text(m_link.group(2))
+            m_desc = re.search(
+                r"<(?:p|div)[^>]+class=[\"'][^\"']*(?:b_caption|b_snippet|b_lineclamp)[^\"']*[\"'][^>]*>(.*?)</(?:p|div)>",
+                a,
+                flags=re.DOTALL,
+            )
+            desc = _netejar_html_a_text(m_desc.group(1)) if m_desc else ""
+            if validar_url_verificable(raw_url):
+                resultats.append({
+                    "url": raw_url,
+                    "title": titol,
+                    "description": desc,
+                })
+                if len(resultats) >= limit:
+                    break
+    return resultats
+
+
+_CACHE_CP_A_MUNICIPI: Dict[str, Dict[str, str]] = {
+    "25500": {"municipi": "La Pobla de Segur", "provincia": "Lleida", "comarca": "Pallars Jussà"},
+    "25560": {"municipi": "Sort", "provincia": "Lleida", "comarca": "Pallars Sobirà"},
+    "25001": {"municipi": "Lleida", "provincia": "Lleida"},
+    "25002": {"municipi": "Lleida", "provincia": "Lleida"},
+    "25003": {"municipi": "Lleida", "provincia": "Lleida"},
+    "25004": {"municipi": "Lleida", "provincia": "Lleida"},
+    "25005": {"municipi": "Lleida", "provincia": "Lleida"},
+    "25006": {"municipi": "Lleida", "provincia": "Lleida"},
+    "25007": {"municipi": "Lleida", "provincia": "Lleida"},
+    "25008": {"municipi": "Lleida", "provincia": "Lleida"},
+    "25200": {"municipi": "Cervera", "provincia": "Lleida"},
+    "25300": {"municipi": "Tàrrega", "provincia": "Lleida"},
+    "25600": {"municipi": "Balaguer", "provincia": "Lleida"},
+    "25700": {"municipi": "La Seu d'Urgell", "provincia": "Lleida"},
+    "25230": {"municipi": "Mollerussa", "provincia": "Lleida"},
+    "08001": {"municipi": "Barcelona", "provincia": "Barcelona"},
+    "08002": {"municipi": "Barcelona", "provincia": "Barcelona"},
+    "08003": {"municipi": "Barcelona", "provincia": "Barcelona"},
+    "08201": {"municipi": "Sabadell", "provincia": "Barcelona"},
+    "08221": {"municipi": "Terrassa", "provincia": "Barcelona"},
+    "08901": {"municipi": "L'Hospitalet de Llobregat", "provincia": "Barcelona"},
+    "17001": {"municipi": "Girona", "provincia": "Girona"},
+    "43001": {"municipi": "Tarragona", "provincia": "Tarragona"},
+    "43201": {"municipi": "Reus", "provincia": "Tarragona"},
+}
+
+
+async def obtenir_municipi_de_codi_postal(codi_postal: str) -> Optional[Dict[str, str]]:
+    """Resol el municipi i la província reals associats a un Codi Postal espanyol.
+
+    Empra catàleg intern integrat i consulta de suport ràpida a OpenStreetMap Nominatim.
+    """
+    if not codi_postal:
+        return None
+    cp = codi_postal.strip()
+    if cp in _CACHE_CP_A_MUNICIPI:
+        return _CACHE_CP_A_MUNICIPI[cp]
+
+    try:
+        headers_nom = dict(_HEADERS_NAVEGADOR)
+        headers_nom["User-Agent"] = "SevalorCRM/1.0 (info@sevalor.cat)"
+        async with httpx.AsyncClient(timeout=3.0, headers=headers_nom) as client:
+            r = await client.get(
+                "https://nominatim.openstreetmap.org/search",
+                params={
+                    "postalcode": cp,
+                    "countrycodes": "es",
+                    "format": "json",
+                    "addressdetails": 1,
+                    "limit": 1,
+                },
+            )
+            if r.status_code == 200:
+                data = r.json()
+                if data and isinstance(data, list):
+                    addr = data[0].get("address", {})
+                    muni = addr.get("village") or addr.get("town") or addr.get("city") or addr.get("municipality")
+                    prov = addr.get("state_district") or addr.get("province") or addr.get("county") or "Espanya"
+                    if muni:
+                        info = {"municipi": muni, "provincia": prov}
+                        _CACHE_CP_A_MUNICIPI[cp] = info
+                        return info
+    except Exception as exc:
+        logger.debug("Avís en resolució de codi postal %s via Nominatim: %s", cp, exc)
+
+    return None
 
 
 def _extreure_metadades_html_brut(raw_html: str) -> Dict[str, Any]:
@@ -519,6 +633,8 @@ def _extreure_metadades_html_brut(raw_html: str) -> Dict[str, Any]:
     - Enllaços `mailto:` i `tel:`
     - Etiquetes `<address>`
     - Blocs Schema.org JSON-LD (`PostalAddress`, `LocalBusiness`, `Organization`, `Person`)
+    - Atributs `aria-label`, `title`, `data-address` d'iframes (Google Maps) i elements visuals
+    - Enllaços directes a Google Maps (`maps.google.com/maps?q=...`)
     """
     info: Dict[str, Any] = {
         "mailtos": [],
@@ -621,6 +737,26 @@ def _extreure_metadades_html_brut(raw_html: str) -> Dict[str, Any]:
         except Exception:
             continue
 
+    # 4. Extreure adreces d'atributs aria-label, title, data-address (ex: iframes de Google Maps o spans d'icones)
+    for m_attr in re.finditer(r'(?:aria-label|title|data-address)=["\']([^"\']{15,200})["\']', raw_html, flags=re.IGNORECASE):
+        val = html.unescape(m_attr.group(1)).strip()
+        if re.search(r"\b\d{5}\b", val) or any(
+            kw in val.lower()
+            for kw in ("c/", "calle", "carrer", "av", "pol", "nau", "nave", "carretera", "ctra", "bombers")
+        ):
+            if len(val) >= 10 and val not in info["adreces_estructurades"]:
+                info["adreces_estructurades"].append(val)
+
+    # 5. Extreure paràmetres d'adreça de Google Maps embeds / iframes (maps.google.com/maps?q=...)
+    for m_map in re.finditer(r'maps\.google\.com/maps\?[^"\'\s<>]*q=([^&"\'\s<>]+)', raw_html, flags=re.IGNORECASE):
+        val_map = urllib.parse.unquote(m_map.group(1)).strip()
+        if re.search(r"\b\d{5}\b", val_map) or any(
+            kw in val_map.lower()
+            for kw in ("c/", "calle", "carrer", "av", "pol", "nau", "nave", "carretera", "ctra", "bombers")
+        ):
+            if len(val_map) >= 10 and val_map not in info["adreces_estructurades"]:
+                info["adreces_estructurades"].append(val_map)
+
     return info
 
 
@@ -640,6 +776,30 @@ def _netejar_html_a_text(raw_html: str) -> str:
     desescapat = html.unescape(sense_tags)
     net = re.sub(r"(?:\s*\|\s*)+", " | ", desescapat)
     return re.sub(r"[ \t\r\f\v]+", " ", net).strip(" |")
+
+
+def _deduir_nom_empresa_de_titol_i_domini(titol: str, domini: str) -> str:
+    """Dedueix el nom comercial real de l'empresa a partir del títol web i el domini."""
+    if not titol or not titol.strip():
+        return domini or "Empresa"
+    parts = [p.strip() for p in re.split(r"[-–|·:;•]", titol) if p.strip()]
+    if not parts:
+        return domini or "Empresa"
+
+    dom_stem = domini.split(".")[0].lower() if "." in domini else domini.lower()
+    for p in reversed(parts):
+        p_clean = re.sub(r"[^\w\s]", "", p).lower().replace(" ", "")
+        if dom_stem and (dom_stem in p_clean or p_clean in dom_stem):
+            return p[:140]
+
+    for p in reversed(parts):
+        if len(p) <= 35 and not any(
+            k in p.lower()
+            for k in ("tienda", "comprar", "inicio", "home", "portal", "instalador", "instal·lador", "servicios")
+        ):
+            return p[:140]
+
+    return parts[0][:140]
 
 
 def _extreure_adreca_amb_cp_de_text(
@@ -898,11 +1058,127 @@ def _extreure_gatekeeper_real_de_text(
 # 4. INVESTIGACIÓ MULTI-CANAL AMB FIRECRAWL + SCRAPING HTTP REAL (ZERO MOCK)
 # ==============================================================================
 
+_PORTALS_SECTORIALS_I_GREMIS = (
+    "portalsolar.com",
+    "empresas-solares-espana.es",
+    "suelosolar.com",
+    "hazmeprecio.com",
+    "habitissimo.es",
+    "cylex.es",
+    "topenergeticos.es",
+    "panelessolarespro.es",
+    "todoinstaladores.com",
+    "gremiinstaladors.com",
+    "fegicat.org",
+    "solarmarket.com",
+    "paginasamarillas.es",
+    "qdq.com",
+    "empresite.eleconomista.es",
+    "einforma.com",
+    "infocif.es",
+    "axesor.es",
+    "empresia.es",
+)
+
+_XARXES_I_DIRECTORIS_GENERICS_IGNORAR = (
+    "google.",
+    "bing.com",
+    "yahoo.com",
+    "duckduckgo.com",
+    "apple.com",
+    "microsoft.com",
+    "idealista.com",
+    "fotocasa.es",
+    "habitaclia.com",
+    "linkedin.com",
+    "instagram.com",
+    "facebook.com",
+    "twitter.com",
+    "x.com",
+    "youtube.com",
+    "tiktok.com",
+    "wikipedia.org",
+    "boe.es",
+    "gencat.cat",
+    "administracion.gob.es",
+)
+
+
 class FirecrawlMultiChannelService:
     """Servei d'extracció i investigació multi-canal mitjançant Firecrawl i HTTP real."""
 
     def __init__(self, api_url: Optional[str] = None):
         self.api_url = api_url or settings.FIRECRAWL_API_URL
+
+    async def _cercar_web_bing(self, query: str, limit: int = 10) -> List[Dict[str, str]]:
+        """Executa cerca a Bing decodificant les URLs de destinació sense bloquejos de CAPTCHA."""
+        try:
+            url = f"https://www.bing.com/search?q={urllib.parse.quote_plus(query)}"
+            headers_bing = dict(_HEADERS_NAVEGADOR)
+            headers_bing["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0"
+            async with httpx.AsyncClient(timeout=8.0, follow_redirects=True, headers=headers_bing) as client:
+                r = await client.get(url)
+                if r.status_code == 200:
+                    return extreure_resultats_bing(r.text, limit=limit)
+        except Exception as exc:
+            logger.debug("Avís en cerca Bing per '%s': %s", query, exc)
+        return []
+
+    async def _cercar_places_nominatim(
+        self,
+        vertical: str,
+        municipi: str,
+        limit: int = 5,
+    ) -> List[Dict[str, str]]:
+        """Cerca llocs de feina, tallers o empreses de la vertical a OpenStreetMap Nominatim (Google Maps / OSM Places)."""
+        resultats: List[Dict[str, str]] = []
+        queries_a_provar = [f"{vertical} {municipi}"]
+        v_low = vertical.lower()
+        if any(k in v_low for k in ("placa", "solar", "fotovolt", "renovable")):
+            q_sol = f"solar {municipi}"
+            if q_sol not in queries_a_provar:
+                queries_a_provar.append(q_sol)
+        if any(k in v_low for k in ("electric", "baixa tensio", "rebt")):
+            q_elec = f"electricista {municipi}"
+            if q_elec not in queries_a_provar:
+                queries_a_provar.append(q_elec)
+        if any(k in v_low for k in ("fontan", "clima", "aigua", "tub", "calefac")):
+            q_fon = f"fontanero {municipi}"
+            if q_fon not in queries_a_provar:
+                queries_a_provar.append(q_fon)
+
+        try:
+            headers_nom = dict(_HEADERS_NAVEGADOR)
+            headers_nom["User-Agent"] = "SevalorCRM/1.0 (info@sevalor.cat)"
+            async with httpx.AsyncClient(timeout=4.0, headers=headers_nom) as client:
+                for q in queries_a_provar:
+                    r = await client.get(
+                        "https://nominatim.openstreetmap.org/search",
+                        params={
+                            "q": q,
+                            "countrycodes": "es",
+                            "format": "json",
+                            "addressdetails": 1,
+                            "limit": limit,
+                        },
+                    )
+                    if r.status_code == 200:
+                        for item in r.json():
+                            name = item.get("name")
+                            disp = item.get("display_name")
+                            if name and len(name.strip()) >= 2:
+                                if not any(existing["nom"].lower() == name.lower() for existing in resultats):
+                                    resultats.append({
+                                        "nom": name.strip(),
+                                        "adreca": disp or "",
+                                    })
+                                    if len(resultats) >= limit:
+                                        break
+                    if len(resultats) >= limit:
+                        break
+        except Exception as exc:
+            logger.debug("Avís cercant llocs a Nominatim per '%s %s': %s", vertical, municipi, exc)
+        return resultats
 
     async def _cercar_web_duckduckgo(self, query: str, limit: int = 8) -> List[Dict[str, str]]:
         """Executa una cerca web real contra DuckDuckGo HTML quan Firecrawl local no està actiu."""
@@ -941,15 +1217,65 @@ class FirecrawlMultiChannelService:
                     if len(resultats) >= limit:
                         break
         except Exception as exc:
-            logger.info("Avís en cerca web directa per '%s': %s", query, exc)
+            logger.debug("Avís en cerca web directa per '%s': %s", query, exc)
 
         return resultats
+
+    async def _cercar_web_multimotor(self, query: str, limit: int = 10) -> List[Dict[str, str]]:
+        """Cerca multi-motor (Firecrawl -> Bing -> DuckDuckGo) garantint màxima cobertura i resiliència."""
+        resultats: List[Dict[str, str]] = []
+        dominis_vistos: set[str] = set()
+
+        # 1. Intent amb Firecrawl si està operatiu
+        endpoint = f"{self.api_url.rstrip('/')}/v1/search"
+        try:
+            async with httpx.AsyncClient(timeout=2.0) as client:
+                res = await client.post(endpoint, json={"query": query, "limit": limit})
+                if res.status_code == 200:
+                    for it in res.json().get("data", []):
+                        u = (it.get("url") or "").strip()
+                        if validar_url_verificable(u):
+                            dom = normalitzar_domini(u)
+                            if dom and dom not in dominis_vistos:
+                                dominis_vistos.add(dom)
+                                resultats.append({
+                                    "url": u,
+                                    "title": it.get("title", ""),
+                                    "description": it.get("description", ""),
+                                })
+        except Exception:
+            pass
+
+        # 2. Cerca amb Bing (sense CAPTCHA, molt precís per a Espanya)
+        if len(resultats) < limit:
+            bing_items = await self._cercar_web_bing(query, limit=limit)
+            for it in bing_items:
+                u = it.get("url", "")
+                if validar_url_verificable(u):
+                    dom = normalitzar_domini(u)
+                    if dom and dom not in dominis_vistos:
+                        dominis_vistos.add(dom)
+                        resultats.append(it)
+
+        # 3. DuckDuckGo si calen més resultats
+        if len(resultats) < limit:
+            ddg_items = await self._cercar_web_duckduckgo(query, limit=limit)
+            for it in ddg_items:
+                u = it.get("url", "")
+                if validar_url_verificable(u):
+                    dom = normalitzar_domini(u)
+                    if dom and dom not in dominis_vistos:
+                        dominis_vistos.add(dom)
+                        resultats.append(it)
+
+        return resultats[:limit]
 
     async def raspar_web_markdown(self, url: str, codi_postal: Optional[str] = None) -> Dict[str, Any]:
         """Extreu el contingut real i enllaços comprovables des de la web corporativa.
 
-        Primer intenta Firecrawl (`/v1/scrape`). Si el contenidor local no respon,
-        efectua el raspat directe per HTTP (`httpx`) de la portada i subpàgines de contacte/avís legal.
+        Primer intenta Firecrawl (`/v1/scrape`). Si el servei no respon,
+        efectua el raspat directe per HTTP (`httpx`) de la portada i subpàgines de contacte/avís legal
+        preservant el peu de pàgina i metadades completes (Zero Mock Data).
         """
         if not url or not url.strip():
             return {
@@ -974,7 +1300,7 @@ class FirecrawlMultiChannelService:
 
         # 1. Intent amb Firecrawl si està operatiu
         try:
-            async with httpx.AsyncClient(timeout=4.0) as client:
+            async with httpx.AsyncClient(timeout=2.0) as client:
                 res = await client.post(
                     endpoint,
                     json={
@@ -1030,7 +1356,7 @@ class FirecrawlMultiChannelService:
                 meta_acumulada["cif_jsonld"] = m_nova["cif_jsonld"]
 
         try:
-            async with httpx.AsyncClient(timeout=8.0, follow_redirects=True, headers=_HEADERS_NAVEGADOR) as client:
+            async with httpx.AsyncClient(timeout=10.0, follow_redirects=True, headers=_HEADERS_NAVEGADOR) as client:
                 resp = await client.get(clean_url)
                 if resp.status_code == 200 and "text/html" in resp.headers.get("content-type", "").lower():
                     raw_html = resp.text
@@ -1049,7 +1375,16 @@ class FirecrawlMultiChannelService:
 
                     text_portada = _netejar_html_a_text(raw_html)
                     if text_portada:
-                        text_acumulat.append(text_portada[:3500])
+                        if len(text_portada) <= 25000:
+                            text_acumulat.append(text_portada)
+                        else:
+                            # Preservar capçalera i peu de pàgina complet (on es troben les adreces legals i de contacte)
+                            text_acumulat.append(text_portada[:12000])
+                            text_acumulat.append(text_portada[-12000:])
+                        # Si s'ha passat un codi postal específic, assegurar que el fragment al voltant del CP s'inclou
+                        if codi_postal and codi_postal in text_portada:
+                            idx = text_portada.find(codi_postal)
+                            text_acumulat.append(text_portada[max(0, idx - 1500) : min(len(text_portada), idx + 1500)])
 
                     # Extreure enllaços socials i subpàgines internes (contacte, qui som, avís legal)
                     hrefs = re.findall(r'href=["\']([^"\']+)["\']', raw_html, flags=re.IGNORECASE)
@@ -1072,6 +1407,7 @@ class FirecrawlMultiChannelService:
                                 for k in (
                                     "contact", "qui-som", "quienes-somos", "nosaltres", "nosotros",
                                     "equip", "legal", "avis", "aviso", "privac", "empresa",
+                                    "condicion", "politica", "terminos", "sobre",
                                 )
                             ):
                                 if h_full not in subpagines and h_full != clean_url:
@@ -1085,7 +1421,7 @@ class FirecrawlMultiChannelService:
                                 _fusionar_meta(_extreure_metadades_html_brut(sub_r.text))
                                 sub_txt = _netejar_html_a_text(sub_r.text)
                                 if sub_txt:
-                                    text_acumulat.append(sub_txt[:2500])
+                                    text_acumulat.append(sub_txt[:4000])
                         except Exception:
                             continue
         except Exception as exc:
@@ -1119,7 +1455,6 @@ class FirecrawlMultiChannelService:
         - Mai inventa fites fictícies ni càrrecs genèrics com 'Responsable d'Operacions de ...'.
         """
         query = f'"{nom_empresa}" {poblacio_o_cp} (site:linkedin.com OR site:instagram.com OR adjudicacio OR gerent OR director)'
-        endpoint = f"{self.api_url.rstrip('/')}/v1/search"
 
         fonts_urls: Dict[str, str] = {}
         if web_url and validar_url_verificable(web_url):
@@ -1132,23 +1467,7 @@ class FirecrawlMultiChannelService:
 
         fites: List[str] = []
         gatekeeper_hints: Dict[str, str] = {}
-        items_cerca: List[Dict[str, Any]] = []
-
-        # 1. Intent amb Firecrawl /v1/search
-        try:
-            async with httpx.AsyncClient(timeout=4.0) as client:
-                res = await client.post(
-                    endpoint,
-                    json={"query": query, "limit": 5},
-                )
-                if res.status_code == 200:
-                    items_cerca = res.json().get("data", [])
-        except Exception as exc:
-            logger.debug("Firecrawl /v1/search no disponible per %s: %s", nom_empresa, exc)
-
-        # 2. Si Firecrawl no ha retornat dades, fem cerca real a DuckDuckGo
-        if not items_cerca:
-            items_cerca = await self._cercar_web_duckduckgo(query, limit=6)
+        items_cerca = await self._cercar_web_multimotor(query, limit=6)
 
         for item in items_cerca:
             raw_url = (item.get("url") or "").strip()
@@ -1197,65 +1516,160 @@ class FirecrawlMultiChannelService:
     ) -> List[Dict[str, Any]]:
         """Descobreix empreses candidates reals per a un Codi Postal i una vertical.
 
-        Extreu les dades reals de cada web corporativa trobada (adreça física real,
-        CIF, email, telèfon, nom real de Gatekeeper i enllaços directes) i no inventa
-        mai dades fictícies ni adreces genèriques.
+        Executa una descoberta en 5 etapes sistemàtiques:
+        1. Resolució del Codi Postal a municipi i província (Nominatim + catàleg intern).
+        2. Descoberta a Google Maps / OpenStreetMap Places per a la vertical a la localitat.
+        3. Cerca multi-motor (Bing, Firecrawl, DuckDuckGo) combinant mapes, termes sectorials i gremis.
+        4. Contrast i resolució contra directoris sectorials i gremis (mai descartar empreses vàlides;
+           resoldre cap al seu lloc web corporatiu oficial, p.ex. 'portalsolar' -> 'damiasolar.com').
+        5. Raspat profund de la web oficial extreient adreça física real en el CP, CIF, email, telèfon,
+           Gatekeeper i enllaços directes reals.
         """
         cp_clean = codi_postal.strip()
         vertical_clean = vertical.strip()
-        query = f'empreses "{vertical_clean}" "{cp_clean}" contacte'
-        endpoint = f"{self.api_url.rstrip('/')}/v1/search"
+
+        # Etapa 1: Resolució de municipi
+        geo_info = await obtenir_municipi_de_codi_postal(cp_clean)
+        municipi_nom = geo_info.get("municipi") if geo_info else None
+        provincia_nom = geo_info.get("provincia") if geo_info else None
+        logger.info("Descoberta CP %s -> Municipi: %s, Província: %s", cp_clean, municipi_nom, provincia_nom)
 
         items_bruts: List[Dict[str, Any]] = []
-        try:
-            async with httpx.AsyncClient(timeout=4.0) as client:
-                res = await client.post(
-                    endpoint,
-                    json={"query": query, "limit": limit},
-                )
-                if res.status_code == 200:
-                    items_bruts = res.json().get("data", [])
-        except Exception as exc:
-            logger.debug("Firecrawl cerca CP %s no disponible: %s (usant cerca web directa)", cp_clean, exc)
-
-        if not items_bruts:
-            items_bruts = await self._cercar_web_duckduckgo(query, limit=limit)
-
-        candidats: List[Dict[str, Any]] = []
         dominis_vistos: set[str] = set()
+
+        # Etapa 4: Contrast contra portals sectorials i gremis -> Resolució a Web Oficial Corporativa
+        candidats_preparats: List[Dict[str, Any]] = []
+        dominis_corporatius_vistos: set[str] = set()
+
+        # Etapa 2: Google Maps / OpenStreetMap Places (cerca de comerços i instal·ladors locals)
+        if municipi_nom:
+            places_loc = await self._cercar_places_nominatim(vertical_clean, municipi_nom, limit=5)
+            for pl in places_loc:
+                nom_pl = pl.get("nom", "").strip()
+                if nom_pl:
+                    # Cercar el lloc web corporatiu d'aquesta empresa local identificada als mapes
+                    cands_maps = await self._cercar_web_multimotor(f"{nom_pl} {municipi_nom}", limit=3)
+                    for cm in cands_maps:
+                        u_cm = cm.get("url", "")
+                        d_cm = normalitzar_domini(u_cm)
+                        if (
+                            d_cm
+                            and d_cm not in dominis_corporatius_vistos
+                            and not any(p in d_cm for p in _PORTALS_SECTORIALS_I_GREMIS)
+                            and not any(x in d_cm for x in _XARXES_I_DIRECTORIS_GENERICS_IGNORAR)
+                        ):
+                            dominis_corporatius_vistos.add(d_cm)
+                            candidats_preparats.append(cm)
+
+        # Etapa 3: Generació de consultes multi-angle (Prioritat: Localitat Directa, Gremis, Portals i Mapes)
+        consultes: List[str] = []
+
+        # 1. Cerca directa a la localitat (màxima taxa d'èxit per a negocis del municipi)
+        if municipi_nom:
+            consultes.append(f"{vertical_clean} {municipi_nom}")
+            consultes.append(f"instalador {vertical_clean} {municipi_nom}")
+
+        # 2. Cerca pel codi postal
+        consultes.append(f"{vertical_clean} {cp_clean}")
+        consultes.append(f"instalador {vertical_clean} {cp_clean}")
+
+        # 3. Sinònims d'energia solar / renovables
+        if any(k in vertical_clean.lower() for k in ("placa", "solar", "fotovolt", "renovable")):
+            if municipi_nom:
+                consultes.append(f"solar {municipi_nom}")
+            consultes.append(f"solar {cp_clean}")
+            consultes.append(f"portalsolar {municipi_nom or cp_clean}")
+
+        # 4. Gremis sectorials i portals
+        consultes.append(f"gremi instal ladors {vertical_clean} {cp_clean}")
+        if municipi_nom:
+            consultes.append(f"gremi instal ladors {municipi_nom}")
+            consultes.append(f"directorio {vertical_clean} {municipi_nom}")
+
+        # 5. Cerca a Google Maps / Local
+        if municipi_nom:
+            consultes.append(f"maps {vertical_clean} {municipi_nom}")
+            consultes.append(f"site:google.com/maps {vertical_clean} {municipi_nom}")
+        consultes.append(f"maps {vertical_clean} {cp_clean}")
+
+        for q in consultes:
+            if len(items_bruts) >= limit * 4:
+                break
+            res_q = await self._cercar_web_multimotor(q, limit=8)
+            for it in res_q:
+                u_it = it.get("url", "")
+                d_it = normalitzar_domini(u_it)
+                if d_it and d_it not in dominis_vistos:
+                    dominis_vistos.add(d_it)
+                    items_bruts.append(it)
+
+        # Processar items bruts i resoldre portals sectorials cap a webs oficials
+        paraules_prohibides_nom = (
+            "las 10",
+            "los mejores",
+            "empresas de",
+            "directorio",
+            "instalador",
+            "instaladores",
+            "instal·lador",
+            "instal·ladors",
+            "instala",
+            "guia",
+            "portal",
+            "descargar",
+            "paneles",
+            "placas",
+            "reformas",
+        )
 
         for item in items_bruts:
             url = (item.get("url") or "").strip()
             if not validar_url_verificable(url):
                 continue
             domini = normalitzar_domini(url)
-            if not domini or domini in dominis_vistos:
-                continue
-            # Ignorar directoris genèrics o xarxes socials com a domini principal d'empresa
-            if any(
-                portal in domini
-                for portal in (
-                    "linkedin.com",
-                    "instagram.com",
-                    "facebook.com",
-                    "twitter.com",
-                    "youtube.com",
-                    "paginasamarillas.es",
-                    "infocif.es",
-                    "einforma.com",
-                    "empresia.es",
-                    "axesor.es",
-                    "wikipedia.org",
-                    "boe.es",
-                )
-            ):
+            if not domini or any(x in domini for x in _XARXES_I_DIRECTORIS_GENERICS_IGNORAR):
                 continue
 
-            dominis_vistos.add(domini)
+            # Si el domini pertany a un portal sectorial o gremi, resoldre el nom d'empresa i trobar la seva web oficial
+            if any(portal in domini for portal in _PORTALS_SECTORIALS_I_GREMIS):
+                titol_portal = (item.get("title") or "").strip()
+                # Extreure nom de l'empresa (ex: 'Damia Solar - Energia Solar en La Pobla de Segur - Portalsolar' -> 'Damia Solar')
+                part_nom = re.split(r"[-–|·:;•]", titol_portal)[0].strip()
+                part_nom = re.sub(r"^[^\w\s]+", "", part_nom).strip()
+                if (
+                    part_nom
+                    and len(part_nom) >= 3
+                    and not any(k in part_nom.lower() for k in paraules_prohibides_nom)
+                ):
+                    query_oficial = f"{part_nom} {municipi_nom or cp_clean}"
+                    web_cands = await self._cercar_web_multimotor(query_oficial, limit=3)
+                    for cand in web_cands:
+                        u_cand = cand.get("url", "")
+                        d_cand = normalitzar_domini(u_cand)
+                        if (
+                            d_cand
+                            and d_cand not in dominis_corporatius_vistos
+                            and not any(p in d_cand for p in _PORTALS_SECTORIALS_I_GREMIS)
+                            and not any(x in d_cand for x in _XARXES_I_DIRECTORIS_GENERICS_IGNORAR)
+                        ):
+                            dominis_corporatius_vistos.add(d_cand)
+                            candidats_preparats.insert(0, cand)
+                            break
+                continue
+
+            if domini not in dominis_corporatius_vistos:
+                dominis_corporatius_vistos.add(domini)
+                candidats_preparats.append(item)
+
+        # Etapa 5: Raspat exhaustiu de cada web corporativa candidata
+        candidats_finals: List[Dict[str, Any]] = []
+
+        for item in candidats_preparats[: limit * 2]:
+            url = (item.get("url") or "").strip()
+            domini = normalitzar_domini(url)
             titol = (item.get("title") or "").strip()
             desc = (item.get("description") or "").strip()
 
-            # Raspar la web corporativa per obtenir l'adreça física real amb CP, CIF, email, telèfon i el Gatekeeper real
             web_data = await self.raspar_web_markdown(url, codi_postal=cp_clean)
             meta_html = web_data.get("metadades_html") or {}
             text_complet = f"{titol}\n{desc}\n{web_data.get('descripcio', '')}\n{web_data.get('markdown', '')}"
@@ -1265,6 +1679,14 @@ class FirecrawlMultiChannelService:
                 cp_clean,
                 adreces_estructurades=meta_html.get("adreces_estructurades"),
             )
+
+            # Si l'adreça no s'ha trobat al text de la portada, intentar buscar per municipi
+            if not adreca_real and municipi_nom and municipi_nom.lower() in text_complet.lower():
+                for adr_cand in meta_html.get("adreces_estructurades", []):
+                    if municipi_nom.lower() in adr_cand.lower():
+                        adreca_real = adr_cand[:180]
+                        break
+
             cif_real = _extreure_cif_de_text(text_complet, cif_jsonld=meta_html.get("cif_jsonld"))
             nom_decisor, carrec_decisor = _extreure_gatekeeper_real_de_text(
                 text_complet,
@@ -1280,11 +1702,9 @@ class FirecrawlMultiChannelService:
             email_real = emails_dict["email_principal"]
             telefon_real = _extreure_telefon_de_text(text_complet, tels_html=meta_html.get("tels"))
 
-            nom_empresa_net = (titol.split("-")[0].split("|")[0].strip()[:140]) if titol else domini
-            if not nom_empresa_net:
-                nom_empresa_net = domini
+            nom_empresa_net = _deduir_nom_empresa_de_titol_i_domini(titol, domini)
 
-            candidats.append({
+            candidats_finals.append({
                 "nom_empresa": nom_empresa_net,
                 "web_url": url,
                 "adreca_fisica": adreca_real,
@@ -1301,7 +1721,15 @@ class FirecrawlMultiChannelService:
                 "resum_cerca": desc,
             })
 
-        return candidats
+        # Prioritzar empreses amb adreça física confirmada al Codi Postal demanat
+        candidats_finals.sort(
+            key=lambda c: (
+                1 if c.get("adreca_fisica") and validar_cp_en_adreca_fisica(c.get("adreca_fisica"), cp_clean) else 0
+            ),
+            reverse=True,
+        )
+
+        return candidats_finals[:limit]
 
     async def investigar_empresa_completa(
         self,
