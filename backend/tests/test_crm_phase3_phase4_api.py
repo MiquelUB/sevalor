@@ -74,9 +74,39 @@ def boss_headers() -> dict[str, str]:
 
 @pytest.mark.asyncio
 async def test_t011_execucio_atomica_cp_i_streaming(superadmin_headers: dict[str, str]):
-    """Verifica l'execució d'un lot atòmic per Codi Postal amb vertical lliure i streaming SSE."""
+    """Verifica l'execució d'un lot atòmic per Codi Postal amb vertical lliure, links reals i streaming SSE."""
     suffix = uuid.uuid4().hex[:6]
     vertical_lliure = f"Manteniment de Climatització i Fred Industrial {suffix}"
+    dom_sel = f"climasegre-{suffix}.cat"
+    dom_desc = f"subministraments-{suffix}.cat"
+
+    candidats_reals = [
+        {
+            "nom_empresa": f"Clima i Fred Segre {suffix} SL",
+            "web_url": f"https://{dom_sel}",
+            "adreca_fisica": f"Polígon Industrial El Segre, Carrer del Metall, 14, 25001 Lleida ({suffix})",
+            "cif": f"B25{suffix.upper()[:6]}",
+            "email": f"jmarcet@{dom_sel}",
+            "telefon": "+34973240011",
+            "decisor_nom": "Joan Marcet Vila",
+            "decisor_carrec": "Director Tècnic",
+            "linkedin_url": f"https://www.linkedin.com/in/joan-marcet-{suffix}",
+            "instagram_url": f"https://www.instagram.com/climasegre_{suffix}/",
+            "fita_recent": "Adjudicació del manteniment de climatització de 4 naus logístiques a Lleida",
+            "web_markdown": "Empresa instal·ladora de climatització industrial amb 12 tècnics i servei 24h.",
+        },
+        {
+            "nom_empresa": f"Botiga Subministraments {suffix} SL",
+            "web_url": f"https://{dom_desc}",
+            "adreca_fisica": f"Avinguda Catalunya, 8, 25001 Lleida ({suffix})",
+            "cif": f"B25{uuid.uuid4().hex[:6].upper()}",
+            "email": f"info@{dom_desc}",
+            "telefon": "+34973240022",
+            "linkedin_url": f"https://www.linkedin.com/company/subministraments-{suffix}",
+            "instagram_url": f"https://www.instagram.com/subministraments_{suffix}/",
+            "web_markdown": "Venda de recanvis al detall en mostrador.",
+        },
+    ]
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
         # 1. Crear i executar tasca atòmica de CP
@@ -86,6 +116,7 @@ async def test_t011_execucio_atomica_cp_i_streaming(superadmin_headers: dict[str
                 "codi_postal": "25001",
                 "vertical": vertical_lliure,
                 "operaris_minims": 6,
+                "candidats_descoberts": candidats_reals,
             },
             headers=superadmin_headers,
         )
@@ -95,9 +126,9 @@ async def test_t011_execucio_atomica_cp_i_streaming(superadmin_headers: dict[str
         tasca_id = data["tasca_id"]
         assert data["codi_postal"] == "25001"
         assert data["vertical"] == vertical_lliure
-        assert data["total_trobats"] >= 2
-        assert data["total_seleccionats"] >= 1
-        assert data["total_descartats"] >= 1
+        assert data["total_trobats"] == 2
+        assert data["total_seleccionats"] == 1
+        assert data["total_descartats"] == 1
 
         # 2. Llistar tasques de CP i verificar que NO s'ha encadenat el CP 25002 (FR-003)
         list_res = await ac.get(
@@ -109,7 +140,7 @@ async def test_t011_execucio_atomica_cp_i_streaming(superadmin_headers: dict[str
         assert any(t["id"] == tasca_id and t["estat"] == "COMPLETAT" for t in tasques)
         assert not any(t["codi_postal"] == "25002" and t["vertical"] == vertical_lliure for t in tasques)
 
-        # 3. Obtenir detall complet de la tasca amb auditoria transparent de candidats
+        # 3. Obtenir detall complet de la tasca amb auditoria transparent de candidats i URLs directes
         det_res = await ac.get(
             f"/api/v1/superadmin/crm/prospeccio/tasques-cp/{tasca_id}",
             headers=superadmin_headers,
@@ -118,15 +149,22 @@ async def test_t011_execucio_atomica_cp_i_streaming(superadmin_headers: dict[str
         detall = det_res.json()
         assert detall["id"] == tasca_id
         assert "candidats" in detall
-        assert len(detall["candidats"]) >= 2
+        assert len(detall["candidats"]) == 2
         estats_cand = {c["estat_decisio"] for c in detall["candidats"]}
         assert "SELECCIONAT" in estats_cand
         assert "DESCARTAT" in estats_cand
         for c in detall["candidats"]:
             fonts = c.get("fonts_investigades") or ""
+            fonts_urls = c.get("fonts_urls") or {}
             assert "web" in fonts
             assert "linkedin" in fonts
             assert "instagram" in fonts
+            assert fonts_urls.get("web", "").startswith("https://")
+            assert fonts_urls.get("linkedin", "").startswith("https://www.linkedin.com/")
+            assert fonts_urls.get("instagram", "").startswith("https://www.instagram.com/")
+            if c["estat_decisio"] == "SELECCIONAT":
+                assert c["decisor_nom"] == "Joan Marcet Vila"
+                assert "25001" in (c["adreca_fisica"] or "")
 
         # 4. Comprovar streaming SSE
         stream_res = await ac.get(
@@ -138,6 +176,65 @@ async def test_t011_execucio_atomica_cp_i_streaming(superadmin_headers: dict[str
         stream_text = stream_res.text
         assert "event: status" in stream_text
         assert "event: progres" in stream_text
+
+
+@pytest.mark.asyncio
+async def test_t011_tallafocs_cp_adreca_fisica_i_gatekeeper_real(superadmin_headers: dict[str, str]):
+    """Verifica que es descarten candidats amb CP d'un comentari d'Instagram o amb nom de Gatekeeper genèric."""
+    suffix = uuid.uuid4().hex[:6]
+    candidats_invalids = [
+        {
+            # Error 1: L'adreça física és de 08015 (Barcelona), encara que un comentari d'Instagram digui 25560
+            "nom_empresa": f"Manteniments Pirineu {suffix} SL",
+            "web_url": f"https://mantenimentspirineu-{suffix}.cat",
+            "adreca_fisica": "Carrer Aragó, 120, 08015 Barcelona",
+            "cif": f"B25{suffix.upper()[:6]}",
+            "email": f"info@mantenimentspirineu-{suffix}.cat",
+            "decisor_nom": "Pere Puig Roca",
+            "decisor_carrec": "Gerent",
+            "fita_recent": "Instagram: Nova instal·lació i manteniment a la zona 25560 Sort",
+            "web_markdown": "Empresa de manteniment amb 10 operaris.",
+        },
+        {
+            # Error 2: L'adreça física sí que té el CP 25560, però el Gatekeeper és un càrrec genèric ("Responsable d'Operacions...")
+            "nom_empresa": f"Instal·lacions Sort {suffix} SL",
+            "web_url": f"https://instal-sort-{suffix}.cat",
+            "adreca_fisica": f"Avinguda Comtes de Pallars, 15, 25560 Sort ({suffix})",
+            "cif": f"B25{uuid.uuid4().hex[:6].upper()}",
+            "email": f"info@instal-sort-{suffix}.cat",
+            "decisor_nom": f"Responsable d'Operacions de Instal·lacions Sort {suffix} SL",
+            "decisor_carrec": "Director Tècnic",
+            "web_markdown": "Empresa de manteniment amb 9 operaris a Sort (25560).",
+        },
+    ]
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        res = await ac.post(
+            "/api/v1/superadmin/crm/prospeccio/tasques-cp",
+            json={
+                "codi_postal": "25560",
+                "vertical": "manteniment",
+                "operaris_minims": 5,
+                "candidats_descoberts": candidats_invalids,
+            },
+            headers=superadmin_headers,
+        )
+        assert res.status_code == 201, res.text
+        data = res.json()
+        assert data["total_trobats"] == 2
+        assert data["total_seleccionats"] == 0
+        assert data["total_descartats"] == 2
+
+        det_res = await ac.get(
+            f"/api/v1/superadmin/crm/prospeccio/tasques-cp/{data['tasca_id']}",
+            headers=superadmin_headers,
+        )
+        assert det_res.status_code == 200
+        cands = det_res.json()["candidats"]
+        assert all(c["estat_decisio"] == "DESCARTAT" for c in cands)
+        # El candidat amb nom genèric no ha de conservar mai el placeholder com a decisor_nom
+        cand_generic = next(c for c in cands if "Instal·lacions Sort" in c["nom_empresa"])
+        assert cand_generic["decisor_nom"] is None
 
 
 # ==============================================================================
@@ -566,3 +663,100 @@ async def test_zero_trust_seguretat_nous_endpoints(boss_headers: dict[str, str])
 
         r4 = await ac.get("/api/v1/superadmin/crm/prospeccio/exclusio-rgpd", headers=boss_headers)
         assert r4.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_editar_i_eliminar_lead_deal_i_candidat_crm(
+    superadmin_headers: dict[str, str],
+    db_session: AsyncSession,
+):
+    """Verifica l'edició completa i l'esborrat net de Leads, Deals (Oportunitats) i Candidats al CRM."""
+    suffix = uuid.uuid4().hex[:8]
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        # 1. Crear un Lead amb Deal inicial
+        res_create = await ac.post(
+            "/api/v1/superadmin/crm/prospeccio/leads",
+            json={
+                "nom_empresa": f"Instal·lacions Editables {suffix} SL",
+                "nom_contacte": "Marc Vila Soler",
+                "email": f"m.vila@{suffix}.cat",
+                "telefon": "+34612345678",
+                "vertical": "ElectricPro",
+                "operaris_estimats": 7,
+                "crear_oportunitat_inicial": True,
+                "valor_mensual_estimat": 126.0,
+            },
+            headers=superadmin_headers,
+        )
+        assert res_create.status_code == 201, res_create.text
+        lead_id = res_create.json()["lead_id"]
+        op_id = res_create.json()["oportunitat_id"]
+        assert op_id is not None
+
+        # 2. Editar el Lead (PUT) i comprovar normalització d'adreça, CIF i domini
+        res_edit_lead = await ac.put(
+            f"/api/v1/superadmin/crm/prospeccio/leads/{lead_id}",
+            json={
+                "nom_empresa": f"Instal·lacions Editades {suffix} SL",
+                "nom_contacte": "Marc Vila Soler",
+                "carrec_contacte": "Director Tècnic",
+                "email": f"marc.vila@{suffix}.cat",
+                "telefon": "+34973112233",
+                "cif": "b-25123456",
+                "web_url": f"https://www.{suffix}.cat/contacte",
+                "adreca_fisica": "Pol. Ind. El Segre, C/ Josep Baró, 14, 25001 Lleida",
+                "codi_postal": "25001",
+                "operaris_estimats": 10,
+            },
+            headers=superadmin_headers,
+        )
+        assert res_edit_lead.status_code == 200, res_edit_lead.text
+
+        det_lead = await ac.get(
+            f"/api/v1/superadmin/crm/prospeccio/leads/{lead_id}",
+            headers=superadmin_headers,
+        )
+        assert det_lead.status_code == 200
+        lead_json = det_lead.json()
+        assert lead_json["nom_empresa"] == f"Instal·lacions Editades {suffix} SL"
+        assert lead_json["cif"] == "B25123456"
+        assert lead_json["domini_normalitzat"] == f"{suffix}.cat"
+        assert lead_json["adreca_fisica"] == "Pol. Ind. El Segre, C/ Josep Baró, 14, 25001 Lleida"
+
+        # 3. Editar el Deal (Oportunitat) amb PUT
+        res_edit_op = await ac.put(
+            f"/api/v1/superadmin/crm/prospeccio/oportunitats/{op_id}",
+            json={
+                "titol": f"Deal Ampliat 10 Operaris - {suffix}",
+                "etapa": "PROPOSTA",
+                "valor_mensual_estimat": 180.0,
+                "valor_ia_setup": 250.0,
+                "probabilitat_percent": 65,
+            },
+            headers=superadmin_headers,
+        )
+        assert res_edit_op.status_code == 200, res_edit_op.text
+        op_json = res_edit_op.json()
+        assert op_json["titol"] == f"Deal Ampliat 10 Operaris - {suffix}"
+        assert op_json["nova_etapa"] == "PROPOSTA"
+        assert op_json["valor_mensual_estimat"] == 180.0
+
+        # 4. Eliminar el Deal (DELETE /oportunitats/{id})
+        res_del_op = await ac.delete(
+            f"/api/v1/superadmin/crm/prospeccio/oportunitats/{op_id}",
+            headers=superadmin_headers,
+        )
+        assert res_del_op.status_code == 200, res_del_op.text
+
+        # 5. Eliminar el Lead (DELETE /leads/{id})
+        res_del_lead = await ac.delete(
+            f"/api/v1/superadmin/crm/prospeccio/leads/{lead_id}",
+            headers=superadmin_headers,
+        )
+        assert res_del_lead.status_code == 200, res_del_lead.text
+
+        res_404 = await ac.get(
+            f"/api/v1/superadmin/crm/prospeccio/leads/{lead_id}",
+            headers=superadmin_headers,
+        )
+        assert res_404.status_code == 404

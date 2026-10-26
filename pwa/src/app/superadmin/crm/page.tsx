@@ -47,6 +47,7 @@ import {
   Briefcase,
   Instagram,
   Linkedin,
+  Trash2,
 } from "lucide-react";
 import { apiFetch, getApiBaseUrl, getAuthToken } from "@/lib/api";
 
@@ -58,8 +59,14 @@ interface Lead {
   id: string;
   nom_empresa: string;
   nom_contacte: string;
+  carrec_contacte?: string | null;
   email: string;
   telefon?: string | null;
+  cif?: string | null;
+  web_url?: string | null;
+  domini_normalitzat?: string | null;
+  adreca_fisica?: string | null;
+  codi_postal?: string | null;
   vertical: string;
   origen: string;
   estat_qualificacio: string;
@@ -115,6 +122,7 @@ interface CandidatCP {
   codi_postal: string;
   vertical: string;
   fonts_investigades?: string | null;
+  fonts_urls?: Record<string, string> | null;
   email_detectat?: string | null;
   telefon_detectat?: string | null;
   mx_validat?: boolean;
@@ -198,6 +206,36 @@ const VERTICAL_COLORS: Record<string, string> = {
   HydroPro: "bg-cyan-100 text-cyan-800 dark:bg-cyan-900/50 dark:text-cyan-300 border-cyan-300",
   BuildingPro: "bg-amber-100 text-amber-800 dark:bg-amber-900/50 dark:text-amber-300 border-amber-300",
 };
+
+function extreureUrlsFonts(
+  fontsRaw?: string | null,
+  webUrl?: string | null,
+  fontsUrlsObj?: Record<string, string> | null
+): Record<string, string> {
+  const mapa: Record<string, string> = {};
+  if (webUrl && (webUrl.startsWith("http://") || webUrl.startsWith("https://"))) {
+    mapa.web = webUrl.trim();
+  }
+  if (fontsUrlsObj && typeof fontsUrlsObj === "object") {
+    for (const [k, v] of Object.entries(fontsUrlsObj)) {
+      if (typeof v === "string" && (v.startsWith("http://") || v.startsWith("https://"))) {
+        mapa[k.toLowerCase()] = v.trim();
+      }
+    }
+  }
+  if (fontsRaw) {
+    for (const part of fontsRaw.split(",")) {
+      const item = part.trim();
+      if (item.includes("|")) {
+        const [canal, url] = item.split("|", 2);
+        if (url && (url.startsWith("http://") || url.startsWith("https://"))) {
+          mapa[canal.trim().toLowerCase()] = url.trim();
+        }
+      }
+    }
+  }
+  return mapa;
+}
 
 export default function SuperadminCrmPage() {
   const router = useRouter();
@@ -334,6 +372,69 @@ export default function SuperadminCrmPage() {
   });
   const [guardantExit, setGuardantExit] = useState(false);
   const [feedbackExitCreat, setFeedbackExitCreat] = useState<string | null>(null);
+
+  // ==========================================
+  // ESTATS EDICIÓ I ESBORRAT DE LEADS I DEALS (OPORTUNITATS)
+  // ==========================================
+  const [modalEditarLead, setModalEditarLead] = useState<{
+    open: boolean;
+    leadId: string;
+    nom_empresa: string;
+    nom_contacte: string;
+    carrec_contacte: string;
+    email: string;
+    telefon: string;
+    cif: string;
+    web_url: string;
+    adreca_fisica: string;
+    codi_postal: string;
+    vertical: string;
+    operaris_estimats: number;
+    estat_qualificacio: string;
+    notes: string;
+  }>({
+    open: false,
+    leadId: "",
+    nom_empresa: "",
+    nom_contacte: "",
+    carrec_contacte: "",
+    email: "",
+    telefon: "",
+    cif: "",
+    web_url: "",
+    adreca_fisica: "",
+    codi_postal: "",
+    vertical: "CampoPro",
+    operaris_estimats: 5,
+    estat_qualificacio: "QUALIFICAT",
+    notes: "",
+  });
+  const [guardantEditarLead, setGuardantEditarLead] = useState(false);
+
+  const [modalEditarDeal, setModalEditarDeal] = useState<{
+    open: boolean;
+    mode: "edit" | "create";
+    oportunitatId: string;
+    leadId: string;
+    nomEmpresa: string;
+    titol: string;
+    etapa: string;
+    valor_mensual_estimat: number;
+    valor_ia_setup: number;
+    probabilitat_percent: number;
+  }>({
+    open: false,
+    mode: "edit",
+    oportunitatId: "",
+    leadId: "",
+    nomEmpresa: "",
+    titol: "",
+    etapa: "PROSPECCIO",
+    valor_mensual_estimat: 90,
+    valor_ia_setup: 150,
+    probabilitat_percent: 30,
+  });
+  const [guardantDeal, setGuardantDeal] = useState(false);
 
   // ==========================================
   // CARREGAR DADES GENERALS
@@ -477,6 +578,179 @@ export default function SuperadminCrmPage() {
       carregarDades();
     } catch (err) {
       console.error("Error movent etapa:", err);
+    }
+  };
+
+  const obrirModalEditarLead = (leadObj: any) => {
+    setModalEditarLead({
+      open: true,
+      leadId: leadObj.id,
+      nom_empresa: leadObj.nom_empresa || "",
+      nom_contacte: leadObj.nom_contacte || "",
+      carrec_contacte: leadObj.carrec_contacte || "",
+      email: leadObj.email || "",
+      telefon: leadObj.telefon || "",
+      cif: leadObj.cif || "",
+      web_url: leadObj.web_url || "",
+      adreca_fisica: leadObj.adreca_fisica || "",
+      codi_postal: leadObj.codi_postal || "",
+      vertical: leadObj.vertical || "CampoPro",
+      operaris_estimats: Number(leadObj.operaris_estimats || 5),
+      estat_qualificacio: leadObj.estat_qualificacio || "QUALIFICAT",
+      notes: leadObj.notes || "",
+    });
+  };
+
+  const handleGuardarEditarLead = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!modalEditarLead.leadId) return;
+    setGuardantEditarLead(true);
+    try {
+      await apiFetch(`/superadmin/crm/prospeccio/leads/${modalEditarLead.leadId}`, {
+        method: "PUT",
+        body: JSON.stringify({
+          nom_empresa: modalEditarLead.nom_empresa,
+          nom_contacte: modalEditarLead.nom_contacte,
+          carrec_contacte: modalEditarLead.carrec_contacte,
+          email: modalEditarLead.email,
+          telefon: modalEditarLead.telefon,
+          cif: modalEditarLead.cif,
+          web_url: modalEditarLead.web_url,
+          adreca_fisica: modalEditarLead.adreca_fisica,
+          codi_postal: modalEditarLead.codi_postal,
+          vertical: modalEditarLead.vertical,
+          operaris_estimats: Number(modalEditarLead.operaris_estimats),
+          estat_qualificacio: modalEditarLead.estat_qualificacio,
+          notes: modalEditarLead.notes,
+        }),
+      });
+      const editedId = modalEditarLead.leadId;
+      setModalEditarLead({ ...modalEditarLead, open: false });
+      await carregarDades();
+      if (selectedLeadId === editedId) {
+        await obrirDetallLead(editedId);
+      }
+    } catch (err: any) {
+      alert("Error actualitzant prospecte: " + (err.message || err));
+    } finally {
+      setGuardantEditarLead(false);
+    }
+  };
+
+  const handleEliminarLead = async (leadId: string, nomEmpresa: string) => {
+    if (!confirm(`Segur que vols eliminar el prospecte '${nomEmpresa}' i tots els seus deals i activitats?`)) return;
+    try {
+      await apiFetch(`/superadmin/crm/prospeccio/leads/${leadId}`, {
+        method: "DELETE",
+      });
+      if (selectedLeadId === leadId) {
+        setSelectedLeadId(null);
+        setLeadDetall(null);
+      }
+      await carregarDades();
+      await carregarCalendari();
+      if (tascaSeleccionadaId) await carregarDetallTascaCP(tascaSeleccionadaId);
+    } catch (err: any) {
+      alert("Error eliminant prospecte: " + (err.message || err));
+    }
+  };
+
+  const obrirModalEditarDeal = (op: any, nomEmpresaFallback = "") => {
+    setModalEditarDeal({
+      open: true,
+      mode: "edit",
+      oportunitatId: op.id,
+      leadId: op.lead_id || selectedLeadId || "",
+      nomEmpresa: op.nom_empresa || nomEmpresaFallback || "",
+      titol: op.titol || "",
+      etapa: op.etapa || "PROSPECCIO",
+      valor_mensual_estimat: Number(op.valor_mensual_estimat ?? 0),
+      valor_ia_setup: Number(op.valor_ia_setup ?? 150),
+      probabilitat_percent: Number(op.probabilitat_percent ?? 30),
+    });
+  };
+
+  const obrirModalNouDeal = (leadObj: any) => {
+    setModalEditarDeal({
+      open: true,
+      mode: "create",
+      oportunitatId: "",
+      leadId: leadObj.id,
+      nomEmpresa: leadObj.nom_empresa || "",
+      titol: `Llicència ${leadObj.vertical || "CampoPro"} - ${leadObj.nom_empresa || ""}`,
+      etapa: "PROSPECCIO",
+      valor_mensual_estimat: Number((leadObj.operaris_estimats || 5) * 18),
+      valor_ia_setup: 150,
+      probabilitat_percent: 30,
+    });
+  };
+
+  const handleGuardarDeal = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setGuardantDeal(true);
+    try {
+      if (modalEditarDeal.mode === "create") {
+        await apiFetch("/superadmin/crm/prospeccio/oportunitats", {
+          method: "POST",
+          body: JSON.stringify({
+            lead_id: modalEditarDeal.leadId,
+            titol: modalEditarDeal.titol,
+            etapa: modalEditarDeal.etapa,
+            valor_mensual_estimat: Number(modalEditarDeal.valor_mensual_estimat),
+            valor_ia_setup: Number(modalEditarDeal.valor_ia_setup),
+            probabilitat_percent: Number(modalEditarDeal.probabilitat_percent),
+          }),
+        });
+      } else {
+        await apiFetch(`/superadmin/crm/prospeccio/oportunitats/${modalEditarDeal.oportunitatId}`, {
+          method: "PUT",
+          body: JSON.stringify({
+            titol: modalEditarDeal.titol,
+            etapa: modalEditarDeal.etapa,
+            valor_mensual_estimat: Number(modalEditarDeal.valor_mensual_estimat),
+            valor_ia_setup: Number(modalEditarDeal.valor_ia_setup),
+            probabilitat_percent: Number(modalEditarDeal.probabilitat_percent),
+          }),
+        });
+      }
+      const targetLeadId = modalEditarDeal.leadId;
+      setModalEditarDeal({ ...modalEditarDeal, open: false });
+      await carregarDades();
+      if (selectedLeadId && selectedLeadId === targetLeadId) {
+        await obrirDetallLead(selectedLeadId);
+      }
+    } catch (err: any) {
+      alert("Error desant deal: " + (err.message || err));
+    } finally {
+      setGuardantDeal(false);
+    }
+  };
+
+  const handleEliminarDeal = async (oportunitatId: string, titolDeal: string) => {
+    if (!confirm(`Segur que vols eliminar el deal '${titolDeal}' del Pipeline?`)) return;
+    try {
+      await apiFetch(`/superadmin/crm/prospeccio/oportunitats/${oportunitatId}`, {
+        method: "DELETE",
+      });
+      await carregarDades();
+      if (selectedLeadId) {
+        await obrirDetallLead(selectedLeadId);
+      }
+    } catch (err: any) {
+      alert("Error eliminant deal: " + (err.message || err));
+    }
+  };
+
+  const handleEliminarCandidatCp = async (candidatId: string, nomEmpresa: string) => {
+    if (!confirm(`Segur que vols eliminar el candidat '${nomEmpresa}' d'aquest lot de Codi Postal?`)) return;
+    try {
+      await apiFetch(`/superadmin/crm/prospeccio/candidats/${candidatId}`, {
+        method: "DELETE",
+      });
+      if (tascaSeleccionadaId) await carregarDetallTascaCP(tascaSeleccionadaId);
+      await carregarTasquesCP();
+    } catch (err: any) {
+      alert("Error eliminant candidat: " + (err.message || err));
     }
   };
 
@@ -1069,6 +1343,9 @@ export default function SuperadminCrmPage() {
                           <User className="w-3 h-3 text-slate-400" />
                           <span className="truncate">{op.nom_contacte}</span>
                         </div>
+                        <div className="text-[10px] text-slate-400 truncate font-medium" title={op.titol}>
+                          {op.titol}
+                        </div>
 
                         {/* Indicador de Demo de 7 dies si està en curs */}
                         {op.demo_activa && (
@@ -1091,8 +1368,30 @@ export default function SuperadminCrmPage() {
                             {op.valor_mensual_estimat} €/m
                           </span>
 
-                          {/* Controls ràpids per moure d'etapa */}
+                          {/* Controls ràpids per editar, eliminar i moure el Deal */}
                           <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                            <button
+                              title="Editar Deal / Oportunitat"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                obrirModalEditarDeal(op);
+                              }}
+                              className="p-1 rounded hover:bg-indigo-50 dark:hover:bg-indigo-950/50 text-slate-500 hover:text-indigo-600"
+                            >
+                              <Edit className="w-3 h-3" />
+                            </button>
+
+                            <button
+                              title="Eliminar Deal / Oportunitat"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleEliminarDeal(op.id, op.titol);
+                              }}
+                              className="p-1 rounded hover:bg-rose-50 dark:hover:bg-rose-950/50 text-slate-400 hover:text-rose-600"
+                            >
+                              <Trash2 className="w-3 h-3" />
+                            </button>
+
                             {etapaKey !== "GUANYAT" && (
                               <button
                                 title="Passar a Guanyat Replicable (T016)"
@@ -1384,23 +1683,50 @@ export default function SuperadminCrmPage() {
                       </td>
                     </tr>
                   ) : (
-                    candidatsFiltrats.map((cand) => (
+                    candidatsFiltrats.map((cand) => {
+                      const urlsMap = extreureUrlsFonts(cand.fonts_investigades, cand.web_url, cand.fonts_urls);
+                      return (
                       <tr key={cand.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/40 transition-colors">
                         <td className="py-3 px-4">
                           <div className="font-bold text-slate-900 dark:text-white">{cand.nom_empresa}</div>
-                          <div className="text-[11px] font-mono text-slate-400">
-                            {cand.cif || "Sense CIF"} • {cand.domini_normalitzat || "Sense web"}
+                          <div className="text-[11px] font-mono text-slate-400 flex items-center gap-1">
+                            <span>{cand.cif || "Sense CIF"} •</span>
+                            {urlsMap.web ? (
+                              <a
+                                href={urlsMap.web}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-indigo-600 dark:text-indigo-400 hover:underline inline-flex items-center gap-0.5"
+                              >
+                                <span>{cand.domini_normalitzat || urlsMap.web}</span>
+                                <ExternalLink className="w-2.5 h-2.5" />
+                              </a>
+                            ) : (
+                              <span>{cand.domini_normalitzat || "Sense web"}</span>
+                            )}
                           </div>
-                          {cand.adreca_fisica && (
-                            <div className="text-[10px] text-slate-500 truncate max-w-xs">{cand.adreca_fisica}</div>
+                          {cand.adreca_fisica ? (
+                            <div className="text-[10px] text-slate-600 dark:text-slate-400 truncate max-w-xs font-medium">
+                              📍 {cand.adreca_fisica}
+                            </div>
+                          ) : (
+                            <div className="text-[10px] text-rose-500 font-medium">
+                              Sense adreça física verificada al CP {cand.codi_postal}
+                            </div>
                           )}
                         </td>
 
                         <td className="py-3 px-4">
-                          <div className="font-medium text-slate-800 dark:text-slate-200">
-                            {cand.decisor_nom || "Decisor per confirmar"}
-                          </div>
-                          <div className="text-[11px] text-slate-400">{cand.decisor_carrec || "Direcció"}</div>
+                          {cand.decisor_nom ? (
+                            <div className="font-semibold text-slate-900 dark:text-slate-100">
+                              {cand.decisor_nom}
+                            </div>
+                          ) : (
+                            <div className="text-[11px] font-medium text-rose-600 dark:text-rose-400">
+                              Sense Gatekeeper nominal verificat
+                            </div>
+                          )}
+                          <div className="text-[11px] text-slate-400">{cand.decisor_carrec || "Sense càrrec"}</div>
                           {cand.email_detectat && (
                             <div className="text-[11px] font-mono text-indigo-600 dark:text-indigo-400">
                               {cand.email_detectat}
@@ -1410,20 +1736,49 @@ export default function SuperadminCrmPage() {
 
                         <td className="py-3 px-4">
                           <div className="flex flex-wrap gap-1">
-                            {cand.web_url && (
-                              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-blue-50 dark:bg-blue-950/50 text-blue-700 dark:text-blue-300 font-mono text-[9px] font-bold">
-                                <Globe className="w-2.5 h-2.5" /> Web
-                              </span>
+                            {urlsMap.web && (
+                              <a
+                                href={urlsMap.web}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                title={urlsMap.web}
+                                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-blue-50 hover:bg-blue-100 dark:bg-blue-950/50 dark:hover:bg-blue-900/70 text-blue-700 dark:text-blue-300 font-mono text-[9px] font-bold underline-offset-2 hover:underline"
+                              >
+                                <Globe className="w-2.5 h-2.5" /> Web <ExternalLink className="w-2 h-2" />
+                              </a>
                             )}
-                            {cand.fonts_investigades?.includes("linkedin") && (
-                              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-sky-50 dark:bg-sky-950/50 text-sky-700 dark:text-sky-300 font-mono text-[9px] font-bold">
-                                <Linkedin className="w-2.5 h-2.5" /> LinkedIn
-                              </span>
+                            {urlsMap.linkedin && (
+                              <a
+                                href={urlsMap.linkedin}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                title={urlsMap.linkedin}
+                                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-sky-50 hover:bg-sky-100 dark:bg-sky-950/50 dark:hover:bg-sky-900/70 text-sky-700 dark:text-sky-300 font-mono text-[9px] font-bold underline-offset-2 hover:underline"
+                              >
+                                <Linkedin className="w-2.5 h-2.5" /> LinkedIn <ExternalLink className="w-2 h-2" />
+                              </a>
                             )}
-                            {cand.fonts_investigades?.includes("instagram") && (
-                              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-pink-50 dark:bg-pink-950/50 text-pink-700 dark:text-pink-300 font-mono text-[9px] font-bold">
-                                <Instagram className="w-2.5 h-2.5" /> Instagram
-                              </span>
+                            {urlsMap.instagram && (
+                              <a
+                                href={urlsMap.instagram}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                title={urlsMap.instagram}
+                                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-pink-50 hover:bg-pink-100 dark:bg-pink-950/50 dark:hover:bg-pink-900/70 text-pink-700 dark:text-pink-300 font-mono text-[9px] font-bold underline-offset-2 hover:underline"
+                              >
+                                <Instagram className="w-2.5 h-2.5" /> Instagram <ExternalLink className="w-2 h-2" />
+                              </a>
+                            )}
+                            {urlsMap.premsa && (
+                              <a
+                                href={urlsMap.premsa}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                title={urlsMap.premsa}
+                                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-emerald-50 hover:bg-emerald-100 dark:bg-emerald-950/50 dark:hover:bg-emerald-900/70 text-emerald-700 dark:text-emerald-300 font-mono text-[9px] font-bold underline-offset-2 hover:underline"
+                              >
+                                <FileText className="w-2.5 h-2.5" /> Premsa <ExternalLink className="w-2 h-2" />
+                              </a>
                             )}
                           </div>
                           {cand.fita_recent && (
@@ -1473,23 +1828,34 @@ export default function SuperadminCrmPage() {
                         </td>
 
                         <td className="py-3 px-4 text-right">
-                          <button
-                            onClick={() =>
-                              setModalCorregir({
-                                open: true,
-                                candidat: cand,
-                                novaDecisio: cand.estat_decisio === "SELECCIONAT" ? "DESCARTAT" : "SELECCIONAT",
-                                motiu: "",
-                              })
-                            }
-                            className="px-2.5 py-1 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 text-xs font-semibold flex items-center gap-1.5 ml-auto transition-colors"
-                          >
-                            <Sliders className="w-3.5 h-3.5 text-indigo-500" />
-                            <span>Corregir Criteri</span>
-                          </button>
+                          <div className="flex items-center justify-end gap-1.5">
+                            <button
+                              onClick={() =>
+                                setModalCorregir({
+                                  open: true,
+                                  candidat: cand,
+                                  novaDecisio: cand.estat_decisio === "SELECCIONAT" ? "DESCARTAT" : "SELECCIONAT",
+                                  motiu: "",
+                                })
+                              }
+                              className="px-2.5 py-1 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 text-xs font-semibold flex items-center gap-1.5 transition-colors"
+                            >
+                              <Sliders className="w-3.5 h-3.5 text-indigo-500" />
+                              <span>Corregir Criteri</span>
+                            </button>
+
+                            <button
+                              title="Eliminar candidat del lot"
+                              onClick={() => handleEliminarCandidatCp(cand.id, cand.nom_empresa)}
+                              className="p-1.5 rounded-xl bg-rose-50 hover:bg-rose-100 dark:bg-rose-950/40 dark:hover:bg-rose-900/60 text-rose-600 dark:text-rose-400 transition-colors"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
                         </td>
                       </tr>
-                    ))
+                      );
+                    })
                   )}
                 </tbody>
               </table>
@@ -1842,12 +2208,28 @@ export default function SuperadminCrmPage() {
                         )}
                       </td>
                       <td className="py-3 px-4 text-right" onClick={(e) => e.stopPropagation()}>
-                        <button
-                          onClick={() => obrirDetallLead(l.id)}
-                          className="px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 text-xs font-semibold"
-                        >
-                          Veure Fitxa
-                        </button>
+                        <div className="flex items-center justify-end gap-1.5">
+                          <button
+                            onClick={() => obrirDetallLead(l.id)}
+                            className="px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 text-xs font-semibold"
+                          >
+                            Veure Fitxa
+                          </button>
+                          <button
+                            title="Editar Prospecte"
+                            onClick={() => obrirModalEditarLead(l)}
+                            className="p-1.5 rounded-lg bg-indigo-50 hover:bg-indigo-100 dark:bg-indigo-950/50 dark:hover:bg-indigo-900/70 text-indigo-600 dark:text-indigo-400"
+                          >
+                            <Edit className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            title="Eliminar Prospecte"
+                            onClick={() => handleEliminarLead(l.id, l.nom_empresa)}
+                            className="p-1.5 rounded-lg bg-rose-50 hover:bg-rose-100 dark:bg-rose-950/50 dark:hover:bg-rose-900/70 text-rose-600 dark:text-rose-400"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   ))
@@ -1876,6 +2258,7 @@ export default function SuperadminCrmPage() {
                   </h3>
                   <div className="flex items-center gap-2 text-xs text-slate-500 mt-0.5">
                     <span>Contacte: {leadDetall?.nom_contacte}</span>
+                    {leadDetall?.carrec_contacte && <span>({leadDetall.carrec_contacte})</span>}
                     <span>•</span>
                     <span>{leadDetall?.email}</span>
                   </div>
@@ -1883,6 +2266,26 @@ export default function SuperadminCrmPage() {
               </div>
 
               <div className="flex items-center gap-2">
+                {leadDetall && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => obrirModalEditarLead(leadDetall)}
+                      className="px-3 py-1.5 rounded-xl bg-indigo-50 hover:bg-indigo-100 dark:bg-indigo-950/60 dark:hover:bg-indigo-900/80 text-indigo-700 dark:text-indigo-300 text-xs font-semibold flex items-center gap-1.5 transition-colors"
+                    >
+                      <Edit className="w-3.5 h-3.5" />
+                      <span>Editar Lead</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleEliminarLead(leadDetall.id, leadDetall.nom_empresa)}
+                      className="px-3 py-1.5 rounded-xl bg-rose-50 hover:bg-rose-100 dark:bg-rose-950/60 dark:hover:bg-rose-900/80 text-rose-700 dark:text-rose-300 text-xs font-semibold flex items-center gap-1.5 transition-colors"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      <span>Eliminar</span>
+                    </button>
+                  </>
+                )}
                 <button
                   onClick={() => setSelectedLeadId(null)}
                   className="p-1.5 rounded-xl hover:bg-slate-200 dark:hover:bg-slate-800 text-slate-500"
@@ -1923,11 +2326,61 @@ export default function SuperadminCrmPage() {
                         </div>
                       </div>
 
-                      {leadDetall?.cif && (
+                      {(leadDetall?.cif || leadDetall?.web_url || leadDetall?.domini_normalitzat) && (
                         <div>
-                          <label className="text-[11px] text-slate-500">CIF & Domini</label>
+                          <label className="text-[11px] text-slate-500">CIF & Enllaços Comprobables</label>
                           <div className="text-xs font-mono mt-0.5 text-slate-900 dark:text-white">
-                            {leadDetall.cif} {leadDetall?.domini_normalitzat && `• ${leadDetall.domini_normalitzat}`}
+                            {leadDetall?.cif || "Sense CIF"}
+                          </div>
+                          {(() => {
+                            const lUrls = extreureUrlsFonts(
+                              leadDetall?.fonts_investigades,
+                              leadDetall?.web_url,
+                              leadDetall?.fonts_urls
+                            );
+                            return (
+                              <div className="flex flex-wrap gap-1.5 mt-1.5">
+                                {lUrls.web && (
+                                  <a
+                                    href={lUrls.web}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-blue-50 hover:bg-blue-100 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300 font-mono text-[10px] font-bold hover:underline"
+                                  >
+                                    <Globe className="w-3 h-3" /> Web <ExternalLink className="w-2.5 h-2.5" />
+                                  </a>
+                                )}
+                                {lUrls.linkedin && (
+                                  <a
+                                    href={lUrls.linkedin}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-sky-50 hover:bg-sky-100 dark:bg-sky-950/60 text-sky-700 dark:text-sky-300 font-mono text-[10px] font-bold hover:underline"
+                                  >
+                                    <Linkedin className="w-3 h-3" /> LinkedIn <ExternalLink className="w-2.5 h-2.5" />
+                                  </a>
+                                )}
+                                {lUrls.instagram && (
+                                  <a
+                                    href={lUrls.instagram}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-pink-50 hover:bg-pink-100 dark:bg-pink-950/60 text-pink-700 dark:text-pink-300 font-mono text-[10px] font-bold hover:underline"
+                                  >
+                                    <Instagram className="w-3 h-3" /> Instagram <ExternalLink className="w-2.5 h-2.5" />
+                                  </a>
+                                )}
+                              </div>
+                            );
+                          })()}
+                        </div>
+                      )}
+
+                      {leadDetall?.adreca_fisica && (
+                        <div>
+                          <label className="text-[11px] text-slate-500">Adreça Física (CP {leadDetall?.codi_postal})</label>
+                          <div className="text-xs mt-0.5 text-slate-800 dark:text-slate-200 font-medium">
+                            📍 {leadDetall.adreca_fisica}
                           </div>
                         </div>
                       )}
@@ -1954,6 +2407,67 @@ export default function SuperadminCrmPage() {
                           {leadDetall?.origen}
                         </div>
                       </div>
+                    </div>
+
+                    {/* GESTIÓ DE DEALS / OPORTUNITATS DEL PROSPECTE */}
+                    <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-800 space-y-2.5">
+                      <div className="flex items-center justify-between">
+                        <h4 className="text-xs font-bold text-slate-900 dark:text-white uppercase tracking-wider flex items-center gap-1.5">
+                          <Briefcase className="w-3.5 h-3.5 text-indigo-500" />
+                          <span>Deals / Oportunitats ({leadDetall?.oportunitats?.length || 0})</span>
+                        </h4>
+                        <button
+                          type="button"
+                          onClick={() => obrirModalNouDeal(leadDetall)}
+                          className="px-2 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-[10px] font-bold flex items-center gap-1"
+                        >
+                          <Plus className="w-3 h-3" />
+                          <span>Nou Deal</span>
+                        </button>
+                      </div>
+
+                      {(!leadDetall?.oportunitats || leadDetall.oportunitats.length === 0) ? (
+                        <div className="text-[11px] text-slate-400 py-2 text-center border border-dashed border-slate-200 dark:border-slate-700 rounded-xl">
+                          Sense deals al Pipeline.
+                        </div>
+                      ) : (
+                        <div className="space-y-2">
+                          {leadDetall.oportunitats.map((opItem: any) => (
+                            <div
+                              key={opItem.id}
+                              className="p-2.5 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-xs space-y-1.5"
+                            >
+                              <div className="font-bold text-slate-900 dark:text-white line-clamp-1">{opItem.titol}</div>
+                              <div className="flex items-center justify-between text-[11px] font-mono">
+                                <span className="px-1.5 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-semibold">
+                                  {opItem.etapa}
+                                </span>
+                                <span className="font-bold text-indigo-600 dark:text-indigo-400">
+                                  {opItem.valor_mensual_estimat} €/m ({opItem.probabilitat_percent}%)
+                                </span>
+                              </div>
+                              <div className="flex items-center justify-end gap-1.5 pt-1 border-t border-slate-100 dark:border-slate-800">
+                                <button
+                                  type="button"
+                                  onClick={() => obrirModalEditarDeal(opItem, leadDetall.nom_empresa)}
+                                  className="px-2 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 text-[10px] font-semibold flex items-center gap-1"
+                                >
+                                  <Edit className="w-3 h-3 text-indigo-500" />
+                                  <span>Editar Deal</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleEliminarDeal(opItem.id, opItem.titol)}
+                                  className="px-2 py-1 rounded-lg bg-rose-50 hover:bg-rose-100 dark:bg-rose-950/50 dark:hover:bg-rose-900/70 text-rose-600 dark:text-rose-400 text-[10px] font-semibold flex items-center gap-1"
+                                >
+                                  <Trash2 className="w-3 h-3" />
+                                  <span>Eliminar</span>
+                                </button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
                     </div>
 
                     {/* BOTÓ T016: REGISTRAR TANCAMENT D'ÈXIT REPLICABLE DES DE LA FITXA DEL PROSPECTE */}
@@ -2758,6 +3272,343 @@ export default function SuperadminCrmPage() {
                 >
                   Registrar Prospecte
                 </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ============================================================
+          MODAL EDITAR PROSPECTE (LEAD)
+          ============================================================ */}
+      {modalEditarLead.open && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in">
+          <div className="w-full max-w-2xl bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-2xl overflow-hidden max-h-[90vh] flex flex-col">
+            <div className="p-6 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between bg-slate-50/50 dark:bg-slate-800/30">
+              <h3 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                <Edit className="w-5 h-5 text-indigo-600" />
+                <span>Editar Prospecte (Lead)</span>
+              </h3>
+              <button
+                onClick={() => setModalEditarLead({ ...modalEditarLead, open: false })}
+                className="text-slate-400 hover:text-slate-600"
+              >
+                ✕
+              </button>
+            </div>
+
+            <form onSubmit={handleGuardarEditarLead} className="p-6 space-y-4 overflow-y-auto">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs font-semibold text-slate-700 dark:text-slate-300">Nom de l'Empresa *</label>
+                  <input
+                    type="text"
+                    required
+                    value={modalEditarLead.nom_empresa}
+                    onChange={(e) => setModalEditarLead({ ...modalEditarLead, nom_empresa: e.target.value })}
+                    className="w-full mt-1 px-3 py-2 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs font-semibold text-slate-700 dark:text-slate-300">CIF / NIF</label>
+                  <input
+                    type="text"
+                    placeholder="B12345678"
+                    value={modalEditarLead.cif}
+                    onChange={(e) => setModalEditarLead({ ...modalEditarLead, cif: e.target.value })}
+                    className="w-full mt-1 px-3 py-2 text-xs font-mono rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs font-semibold text-slate-700 dark:text-slate-300">
+                    Nom del Gatekeeper (Persona Real) *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={modalEditarLead.nom_contacte}
+                    onChange={(e) => setModalEditarLead({ ...modalEditarLead, nom_contacte: e.target.value })}
+                    className="w-full mt-1 px-3 py-2 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs font-semibold text-slate-700 dark:text-slate-300">Càrrec del Decisor</label>
+                  <input
+                    type="text"
+                    placeholder="Gerent / Director Tècnic"
+                    value={modalEditarLead.carrec_contacte}
+                    onChange={(e) => setModalEditarLead({ ...modalEditarLead, carrec_contacte: e.target.value })}
+                    className="w-full mt-1 px-3 py-2 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs font-semibold text-slate-700 dark:text-slate-300">Email *</label>
+                  <input
+                    type="email"
+                    required
+                    value={modalEditarLead.email}
+                    onChange={(e) => setModalEditarLead({ ...modalEditarLead, email: e.target.value })}
+                    className="w-full mt-1 px-3 py-2 text-xs font-mono rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs font-semibold text-slate-700 dark:text-slate-300">Telèfon</label>
+                  <input
+                    type="tel"
+                    placeholder="+34600123456"
+                    value={modalEditarLead.telefon}
+                    onChange={(e) => setModalEditarLead({ ...modalEditarLead, telefon: e.target.value })}
+                    className="w-full mt-1 px-3 py-2 text-xs font-mono rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div className="sm:col-span-2">
+                  <label className="text-xs font-semibold text-slate-700 dark:text-slate-300">Adreça Física Real</label>
+                  <input
+                    type="text"
+                    placeholder="Pol. Ind. El Segre, C/ Josep Baró, 14, 25001 Lleida"
+                    value={modalEditarLead.adreca_fisica}
+                    onChange={(e) => setModalEditarLead({ ...modalEditarLead, adreca_fisica: e.target.value })}
+                    className="w-full mt-1 px-3 py-2 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs font-semibold text-slate-700 dark:text-slate-300">Codi Postal</label>
+                  <input
+                    type="text"
+                    placeholder="25001"
+                    value={modalEditarLead.codi_postal}
+                    onChange={(e) => setModalEditarLead({ ...modalEditarLead, codi_postal: e.target.value })}
+                    className="w-full mt-1 px-3 py-2 text-xs font-mono rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div>
+                  <label className="text-xs font-semibold text-slate-700 dark:text-slate-300">Web URL</label>
+                  <input
+                    type="text"
+                    placeholder="https://empresa.cat"
+                    value={modalEditarLead.web_url}
+                    onChange={(e) => setModalEditarLead({ ...modalEditarLead, web_url: e.target.value })}
+                    className="w-full mt-1 px-3 py-2 text-xs font-mono rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs font-semibold text-slate-700 dark:text-slate-300">Vertical *</label>
+                  <input
+                    type="text"
+                    required
+                    value={modalEditarLead.vertical}
+                    onChange={(e) => setModalEditarLead({ ...modalEditarLead, vertical: e.target.value })}
+                    className="w-full mt-1 px-3 py-2 text-xs font-semibold rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs font-semibold text-slate-700 dark:text-slate-300">Operaris Estimats</label>
+                  <input
+                    type="number"
+                    min={1}
+                    max={500}
+                    value={modalEditarLead.operaris_estimats}
+                    onChange={(e) => setModalEditarLead({ ...modalEditarLead, operaris_estimats: Number(e.target.value) })}
+                    className="w-full mt-1 px-3 py-2 text-xs font-mono rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs font-semibold text-slate-700 dark:text-slate-300">Estat de Qualificació</label>
+                  <select
+                    value={modalEditarLead.estat_qualificacio}
+                    onChange={(e) => setModalEditarLead({ ...modalEditarLead, estat_qualificacio: e.target.value })}
+                    className="w-full mt-1 px-3 py-2 text-xs font-semibold rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800"
+                  >
+                    <option value="NOU">NOU</option>
+                    <option value="QUALIFICAT">QUALIFICAT</option>
+                    <option value="DEMO_ACTIVA">DEMO_ACTIVA</option>
+                    <option value="CONVERTIT">CONVERTIT</option>
+                    <option value="DESCARTAT">DESCARTAT</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="text-xs font-semibold text-slate-700 dark:text-slate-300">Notes</label>
+                  <input
+                    type="text"
+                    value={modalEditarLead.notes}
+                    onChange={(e) => setModalEditarLead({ ...modalEditarLead, notes: e.target.value })}
+                    className="w-full mt-1 px-3 py-2 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800"
+                  />
+                </div>
+              </div>
+
+              <div className="pt-4 flex items-center justify-between gap-2 border-t border-slate-100 dark:border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => handleEliminarLead(modalEditarLead.leadId, modalEditarLead.nom_empresa)}
+                  className="px-3.5 py-2 rounded-xl bg-rose-50 hover:bg-rose-100 dark:bg-rose-950/60 text-rose-700 dark:text-rose-300 text-xs font-bold flex items-center gap-1.5"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>Eliminar Prospecte</span>
+                </button>
+
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setModalEditarLead({ ...modalEditarLead, open: false })}
+                    className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-500 hover:text-slate-700"
+                  >
+                    Cancel·lar
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={guardantEditarLead}
+                    className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-xs font-bold shadow-sm"
+                  >
+                    {guardantEditarLead ? "Desant..." : "Guardar Canvis"}
+                  </button>
+                </div>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ============================================================
+          MODAL EDITAR / CREAR DEAL (OPORTUNITAT DEL PIPELINE)
+          ============================================================ */}
+      {modalEditarDeal.open && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in">
+          <div className="w-full max-w-lg bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-2xl overflow-hidden">
+            <div className="p-6 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between bg-slate-50/50 dark:bg-slate-800/30">
+              <h3 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                <Briefcase className="w-5 h-5 text-indigo-600" />
+                <span>
+                  {modalEditarDeal.mode === "create"
+                    ? `Nou Deal per a ${modalEditarDeal.nomEmpresa}`
+                    : `Editar Deal (${modalEditarDeal.nomEmpresa})`}
+                </span>
+              </h3>
+              <button
+                onClick={() => setModalEditarDeal({ ...modalEditarDeal, open: false })}
+                className="text-slate-400 hover:text-slate-600"
+              >
+                ✕
+              </button>
+            </div>
+
+            <form onSubmit={handleGuardarDeal} className="p-6 space-y-4">
+              <div>
+                <label className="text-xs font-semibold text-slate-700 dark:text-slate-300">Títol del Deal / Oportunitat *</label>
+                <input
+                  type="text"
+                  required
+                  value={modalEditarDeal.titol}
+                  onChange={(e) => setModalEditarDeal({ ...modalEditarDeal, titol: e.target.value })}
+                  className="w-full mt-1 px-3 py-2 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800"
+                />
+              </div>
+
+              <div>
+                <label className="text-xs font-semibold text-slate-700 dark:text-slate-300">Etapa del Pipeline *</label>
+                <select
+                  value={modalEditarDeal.etapa}
+                  onChange={(e) => setModalEditarDeal({ ...modalEditarDeal, etapa: e.target.value })}
+                  className="w-full mt-1 px-3 py-2 text-xs font-semibold rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800"
+                >
+                  {Object.entries(ETAPA_LABELS).map(([k, v]) => (
+                    <option key={k} value={k}>
+                      {v.label} — {v.desc}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="grid grid-cols-3 gap-3">
+                <div>
+                  <label className="text-xs font-semibold text-slate-700 dark:text-slate-300">MRR (€/mes)</label>
+                  <input
+                    type="number"
+                    min={0}
+                    step="0.01"
+                    value={modalEditarDeal.valor_mensual_estimat}
+                    onChange={(e) =>
+                      setModalEditarDeal({ ...modalEditarDeal, valor_mensual_estimat: Number(e.target.value) })
+                    }
+                    className="w-full mt-1 px-3 py-2 text-xs font-mono rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs font-semibold text-slate-700 dark:text-slate-300">Setup IA (€)</label>
+                  <input
+                    type="number"
+                    min={0}
+                    step="0.01"
+                    value={modalEditarDeal.valor_ia_setup}
+                    onChange={(e) => setModalEditarDeal({ ...modalEditarDeal, valor_ia_setup: Number(e.target.value) })}
+                    className="w-full mt-1 px-3 py-2 text-xs font-mono rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs font-semibold text-slate-700 dark:text-slate-300">Probabilitat (%)</label>
+                  <input
+                    type="number"
+                    min={0}
+                    max={100}
+                    value={modalEditarDeal.probabilitat_percent}
+                    onChange={(e) =>
+                      setModalEditarDeal({ ...modalEditarDeal, probabilitat_percent: Number(e.target.value) })
+                    }
+                    className="w-full mt-1 px-3 py-2 text-xs font-mono rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800"
+                  />
+                </div>
+              </div>
+
+              <div className="pt-4 flex items-center justify-between gap-2 border-t border-slate-100 dark:border-slate-800">
+                {modalEditarDeal.mode === "edit" ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const idToDel = modalEditarDeal.oportunitatId;
+                      const titolToDel = modalEditarDeal.titol;
+                      setModalEditarDeal({ ...modalEditarDeal, open: false });
+                      handleEliminarDeal(idToDel, titolToDel);
+                    }}
+                    className="px-3.5 py-2 rounded-xl bg-rose-50 hover:bg-rose-100 dark:bg-rose-950/60 text-rose-700 dark:text-rose-300 text-xs font-bold flex items-center gap-1.5"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>Eliminar Deal</span>
+                  </button>
+                ) : (
+                  <div />
+                )}
+
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setModalEditarDeal({ ...modalEditarDeal, open: false })}
+                    className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-500 hover:text-slate-700"
+                  >
+                    Cancel·lar
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={guardantDeal}
+                    className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-xs font-bold shadow-sm"
+                  >
+                    {guardantDeal ? "Desant..." : modalEditarDeal.mode === "create" ? "Crear Deal" : "Guardar Deal"}
+                  </button>
+                </div>
               </div>
             </form>
           </div>

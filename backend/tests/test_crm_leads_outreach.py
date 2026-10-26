@@ -122,6 +122,33 @@ async def test_execucio_atomica_cp_vertical_lliure_i_cerca_multicanal(
     """
     vertical_lliure = "Manteniment de climatització industrial i fred comercial"
     cp_test = "25001"
+    suffix = uuid.uuid4().hex[:6]
+
+    candidats_test = [
+        {
+            "nom_empresa": f"Clima Ponent Industrial {suffix} SL",
+            "web_url": f"https://climaponent-{suffix}.cat",
+            "adreca_fisica": f"Polígon Industrial Camí dels Frares, Nau 8, 25001 Lleida ({suffix})",
+            "cif": f"B25{suffix.upper()[:6]}",
+            "email": f"marta.soler@climaponent-{suffix}.cat",
+            "telefon": "+34973281122",
+            "decisor_nom": "Marta Soler Rovira",
+            "decisor_carrec": "Gerent",
+            "linkedin_url": f"https://www.linkedin.com/in/marta-soler-{suffix}",
+            "instagram_url": f"https://www.instagram.com/climaponent_{suffix}/",
+            "fita_recent": "Renovació de flota amb 7 furgonetes taller equipades",
+            "web_markdown": "Manteniment de climatització industrial amb 14 operaris en plantilla.",
+        },
+        {
+            "nom_empresa": f"Botiga Recanvis {suffix} SL",
+            "web_url": f"https://recanvis-{suffix}.cat",
+            "adreca_fisica": f"Carrer Major, 22, 25001 Lleida ({suffix})",
+            "cif": f"B25{uuid.uuid4().hex[:6].upper()}",
+            "email": f"botiga@recanvis-{suffix}.cat",
+            "linkedin_url": f"https://www.linkedin.com/company/recanvis-{suffix}",
+            "web_markdown": "Botiga de venda al detall de filtres i recanvis.",
+        },
+    ]
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
         # 1. Llançar cerca atòmica per CP
@@ -131,6 +158,7 @@ async def test_execucio_atomica_cp_vertical_lliure_i_cerca_multicanal(
                 "codi_postal": cp_test,
                 "vertical": vertical_lliure,
                 "operaris_minims": 6,
+                "candidats_descoberts": candidats_test,
             },
             headers=superadmin_headers,
         )

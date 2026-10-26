@@ -33,10 +33,20 @@ from app.models.models import (
     SaasLead,
 )
 from app.services.firecrawl_service import (
+    _extreure_adreca_amb_cp_de_text,
+    _extreure_emails_empresa_i_gatekeeper_de_text,
+    _extreure_gatekeeper_real_de_text,
+    _extreure_metadades_html_brut,
+    _extreure_telefon_de_text,
+    _netejar_html_a_text,
+    es_nom_persona_real,
+    extreure_mapa_fonts_urls,
     firecrawl_service,
+    formatar_fonts_verificables,
     normalitzar_adreca,
     normalitzar_cif,
     normalitzar_domini,
+    validar_cp_en_adreca_fisica,
     verificar_duplicitat_multivector,
 )
 from app.services.mx_shield_service import (
@@ -185,16 +195,142 @@ async def test_t005_deduplicacio_client_existent_i_rgpd(db_session: AsyncSession
 
 @pytest.mark.asyncio
 async def test_t005_firecrawl_investigacio_multicanal():
-    """Verifica l'extracció multi-canal (Web + LinkedIn + Instagram + Premsa)."""
+    """Verifica l'extracció multi-canal amb enllaços directes comprovables i Gatekeeper real."""
     res = await firecrawl_service.investigar_empresa_completa(
         nom_empresa="Electrotècnica Segre SL",
         web_url="https://electrotecnicasegre.cat",
         codi_postal="25001",
         vertical="Instal·lacions Elèctriques REBT",
+        dades_inicials={
+            "decisor_nom": "Jordi Soler Prat",
+            "decisor_carrec": "Director Tècnic",
+            "linkedin_url": "https://www.linkedin.com/in/jordi-soler-prat",
+            "instagram_url": "https://www.instagram.com/electrotecnicasegre/",
+            "web_markdown": "Empresa d'instal·lacions elèctriques industrials al Pol. Ind. El Segre, 25001 Lleida.",
+        },
     )
     assert "fonts_investigades" in res
-    assert "web" in res["fonts_investigades"]
+    assert any(f.startswith("web|https://electrotecnicasegre.cat") for f in res["fonts_investigades"])
+    assert any(f.startswith("linkedin|https://www.linkedin.com/") for f in res["fonts_investigades"])
+    assert any(f.startswith("instagram|https://www.instagram.com/") for f in res["fonts_investigades"])
+    assert res["gatekeeper_hints"].get("nom") == "Jordi Soler Prat"
     assert "web_markdown" in res
+
+
+def test_t005_validacions_cp_adreca_gatekeeper_real_i_urls():
+    """Verifica les 3 regles crítiques: CP en adreça física, Gatekeeper real (no genèric) i URLs directes."""
+    # Regla 1: Codi Postal en adreça física real (rebutjant comentaris d'Instagram o placeholders)
+    assert validar_cp_en_adreca_fisica("Avinguda Comtes de Pallars, 12, 25560 Sort", "25560") is True
+    assert validar_cp_en_adreca_fisica("Pol. Ind. El Segre, Nau 4, 25001 Lleida", "25560") is False
+    assert validar_cp_en_adreca_fisica("LinkedIn/Instagram: Nova instal·lació a la zona 25560", "25560") is False
+    assert validar_cp_en_adreca_fisica("Zona Codi Postal 25560", "25560") is False
+
+    # Regla 2: Nom i Cognom real de Gatekeeper (rebutjant tots els càrrecs i noms genèrics)
+    assert es_nom_persona_real("Joan Marcet Vila") is True
+    assert es_nom_persona_real("Antoni Vidal") is True
+    assert es_nom_persona_real("Marta de la Torre") is True
+    assert es_nom_persona_real("Responsable d'Operacions de Tècnics manteniment 25560 SL") is False
+    assert es_nom_persona_real("Director Tècnic") is False
+    assert es_nom_persona_real("Responsable Comercial") is False
+    assert es_nom_persona_real("Gerent") is False
+    assert es_nom_persona_real("Departament Tècnic") is False
+
+    # Regla 3: Enllaços directes comprovables per canal
+    fonts = formatar_fonts_verificables(
+        {
+            "linkedin": "https://www.linkedin.com/company/climasegre",
+            "instagram": "https://www.instagram.com/climasegre/",
+        },
+        web_url="https://climasegre.cat",
+    )
+    mapa = extreure_mapa_fonts_urls(",".join(fonts))
+    assert mapa["web"] == "https://climasegre.cat"
+    assert mapa["linkedin"] == "https://www.linkedin.com/company/climasegre"
+    assert mapa["instagram"] == "https://www.instagram.com/climasegre/"
+
+
+def test_t005_scraper_extraccio_adreca_email_gatekeeper_telefon_real():
+    """Verifica que el scraper extreu adreça física real (amb abreviatures i JSON-LD),
+    email real d'empresa i del Gatekeeper (`mailto:` i text), nom i càrrec real del Gatekeeper
+    i telèfon real (`tel:` i text).
+    """
+    raw_html = """
+    <html>
+      <head>
+        <title>Clima Pirineus SL - Instal·lacions</title>
+        <script type="application/ld+json">
+        {
+          "@context": "https://schema.org",
+          "@type": "LocalBusiness",
+          "name": "Clima Pirineus SL",
+          "taxID": "B25987654",
+          "email": "info@climapirineus.cat",
+          "telephone": "+34 973 62 01 23",
+          "address": {
+            "@type": "PostalAddress",
+            "streetAddress": "Pol. Ind. La Borda, Av. Generalitat, Núm. 14",
+            "postalCode": "25560",
+            "addressLocality": "Sort",
+            "addressRegion": "Lleida"
+          },
+          "founder": {
+            "@type": "Person",
+            "name": "Jordi Soler Puig",
+            "jobTitle": "Director Tècnic"
+          }
+        }
+        </script>
+      </head>
+      <body>
+        <div class="team">
+          <h4>Jordi Soler Puig</h4>
+          <p>Director Tècnic</p>
+          <a href="mailto:j.soler@climapirineus.cat">Contactar amb Direcció</a>
+          <a href="mailto:info@climapirineus.cat">Informació General</a>
+          <a href="tel:+34654321987">Mòbil Urgències</a>
+        </div>
+        <address>
+          Pol. Ind. La Borda, Av. Generalitat, Núm. 14, 25560 Sort (Lleida)
+        </address>
+      </body>
+    </html>
+    """
+    meta = _extreure_metadades_html_brut(raw_html)
+    text_net = _netejar_html_a_text(raw_html)
+
+    # 1. Adreça física real amb CP 25560 i abreviatures (Pol. Ind., Av., Núm.)
+    adreca = _extreure_adreca_amb_cp_de_text(
+        text_net,
+        "25560",
+        adreces_estructurades=meta["adreces_estructurades"],
+    )
+    assert adreca is not None
+    assert "25560" in adreca
+    assert "Generalitat" in adreca
+
+    # 2. Gatekeeper real (Nom i Cognom + Càrrec)
+    nom_gk, carrec_gk = _extreure_gatekeeper_real_de_text(
+        text_net,
+        nom_jsonld=meta["gatekeeper_nom"],
+        carrec_jsonld=meta["gatekeeper_carrec"],
+    )
+    assert nom_gk == "Jordi Soler Puig"
+    assert carrec_gk == "Director Tècnic"
+
+    # 3. Email real d'empresa + Email directe del Gatekeeper
+    emails = _extreure_emails_empresa_i_gatekeeper_de_text(
+        text_net,
+        domini_preferit="climapirineus.cat",
+        decisor_nom=nom_gk,
+        mailtos_html=meta["mailtos"],
+    )
+    assert emails["email_empresa"] == "info@climapirineus.cat"
+    assert emails["email_gatekeeper"] == "j.soler@climapirineus.cat"
+    assert emails["email_principal"] == "j.soler@climapirineus.cat"
+
+    # 4. Telèfon real (+34...)
+    telefon = _extreure_telefon_de_text(text_net, tels_html=meta["tels"])
+    assert telefon in ("+34973620123", "+34654321987")
 
 
 # ==============================================================================

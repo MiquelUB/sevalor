@@ -37,10 +37,15 @@ from app.models.models import (
     Vehicle,
 )
 from app.services.firecrawl_service import (
+    es_nom_persona_real,
+    extreure_mapa_fonts_urls,
     firecrawl_service,
+    formatar_fonts_verificables,
     normalitzar_adreca,
     normalitzar_cif,
     normalitzar_domini,
+    validar_cp_en_adreca_fisica,
+    validar_url_verificable,
     verificar_duplicitat_multivector,
 )
 from app.services.mx_shield_service import validar_email_mx
@@ -465,6 +470,7 @@ async def obtenir_detall_lead(
         "codi_postal": lead.codi_postal,
         "carrec_contacte": lead.carrec_contacte,
         "fonts_investigades": lead.fonts_investigades,
+        "fonts_urls": extreure_mapa_fonts_urls(lead.fonts_investigades, web_url=lead.web_url),
         "fita_recent": lead.fita_recent,
         "punt_dolor_detectat": lead.punt_dolor_detectat,
         "angle_atac": lead.angle_atac,
@@ -512,6 +518,7 @@ async def obtenir_detall_lead(
     }
 
 
+@router.put("/leads/{lead_id}", response_model=Dict[str, Any])
 @router.patch("/leads/{lead_id}", response_model=Dict[str, Any])
 async def actualitzar_lead(
     lead_id: str,
@@ -548,13 +555,20 @@ async def actualitzar_lead(
     if payload.notes is not None:
         lead.notes = payload.notes
     if payload.cif is not None:
-        lead.cif = payload.cif.strip().upper() or None
+        cif_clean = payload.cif.strip()
+        lead.cif = normalitzar_cif(cif_clean) if cif_clean else None
     if payload.web_url is not None:
-        lead.web_url = payload.web_url.strip() or None
+        web_clean = payload.web_url.strip()
+        lead.web_url = web_clean or None
+        if payload.domini_normalitzat is None:
+            lead.domini_normalitzat = normalitzar_domini(web_clean) if web_clean else None
     if payload.domini_normalitzat is not None:
         lead.domini_normalitzat = payload.domini_normalitzat.strip().lower() or None
     if payload.adreca_fisica is not None:
-        lead.adreca_fisica = payload.adreca_fisica.strip() or None
+        adr_clean = payload.adreca_fisica.strip()
+        lead.adreca_fisica = adr_clean or None
+        if payload.adreca_normalitzada is None:
+            lead.adreca_normalitzada = normalitzar_adreca(adr_clean) if adr_clean else None
     if payload.adreca_normalitzada is not None:
         lead.adreca_normalitzada = payload.adreca_normalitzada.strip().lower() or None
     if payload.codi_postal is not None:
@@ -587,7 +601,7 @@ async def actualitzar_lead(
     lead.updated_at = datetime.now(timezone.utc)
     await db.commit()
 
-    return {"status": "OK", "missatge": "Lead actualitzat correctament."}
+    return {"status": "OK", "missatge": "Lead actualitzat correctament.", "lead_id": str(lead.id)}
 
 
 @router.delete("/leads/{lead_id}", response_model=Dict[str, Any])
@@ -595,7 +609,7 @@ async def eliminar_lead(
     lead_id: str,
     db: AsyncSession = Depends(get_db_with_tenant_context),
 ) -> Dict[str, Any]:
-    """Elimina un lead i les seves oportunitats i activitats en cascada."""
+    """Elimina un lead i desvincula/neteja les seves oportunitats, activitats, correus i candidats."""
     try:
         lid = uuid.UUID(lead_id)
     except ValueError:
@@ -606,9 +620,29 @@ async def eliminar_lead(
     if not lead:
         raise HTTPException(status_code=404, detail="Lead no trobat.")
 
+    nom_emp = lead.nom_empresa
+
+    # Desvincular qualsevol candidat de prospecció que apuntés a aquest lead
+    res_cands = await db.execute(select(SaasProspeccioCandidat).where(SaasProspeccioCandidat.lead_id == lid))
+    for cand in res_cands.scalars().all():
+        cand.lead_id = None
+
+    # Eliminar correus, activitats i oportunitats associades
+    res_msgs = await db.execute(select(SaasCorreuMissatge).where(SaasCorreuMissatge.lead_id == lid))
+    for msg in res_msgs.scalars().all():
+        await db.delete(msg)
+
+    res_acts = await db.execute(select(SaasActivitatLead).where(SaasActivitatLead.lead_id == lid))
+    for act in res_acts.scalars().all():
+        await db.delete(act)
+
+    res_ops = await db.execute(select(SaasOportunitat).where(SaasOportunitat.lead_id == lid))
+    for op in res_ops.scalars().all():
+        await db.delete(op)
+
     await db.delete(lead)
     await db.commit()
-    return {"status": "OK", "missatge": f"Lead '{lead.nom_empresa}' eliminat correctament."}
+    return {"status": "OK", "missatge": f"Lead '{nom_emp}' eliminat correctament."}
 
 
 @router.post("/leads/{lead_id}/activitats", response_model=Dict[str, Any], status_code=status.HTTP_201_CREATED)
@@ -716,13 +750,73 @@ async def obtenir_pipeline_kanban(
     }
 
 
+@router.post("/oportunitats", response_model=Dict[str, Any], status_code=status.HTTP_201_CREATED)
+async def crear_oportunitat(
+    payload: OportunitatCreate,
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+) -> Dict[str, Any]:
+    """Crea una nova oportunitat comercial (Deal) vinculada a un lead existent."""
+    try:
+        lid = uuid.UUID(payload.lead_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="ID de lead invàlid.")
+
+    res_l = await db.execute(select(SaasLead).where(SaasLead.id == lid))
+    lead = res_l.scalars().first()
+    if not lead:
+        raise HTTPException(status_code=404, detail="Lead no trobat.")
+
+    ara = datetime.now(timezone.utc)
+    etapa_clean = payload.etapa.strip().upper()
+    if etapa_clean not in ETAPES_PIPELINE:
+        etapa_clean = "PROSPECCIO"
+
+    op_id = uuid.uuid4()
+    nova_op = SaasOportunitat(
+        id=op_id,
+        lead_id=lid,
+        titol=payload.titol.strip(),
+        etapa=etapa_clean,
+        valor_mensual_estimat=payload.valor_mensual_estimat,
+        valor_ia_setup=payload.valor_ia_setup,
+        probabilitat_percent=payload.probabilitat_percent,
+        data_tancament_prevista=payload.data_tancament_prevista,
+        rao_tancament_exit=payload.rao_tancament_exit,
+        requisits_replicables=payload.requisits_replicables,
+        es_replicable=payload.es_replicable,
+        created_at=ara,
+        updated_at=ara,
+    )
+    db.add(nova_op)
+
+    act = SaasActivitatLead(
+        id=uuid.uuid4(),
+        lead_id=lid,
+        tipus="NOTA",
+        titol=f"Nou Deal creat: {nova_op.titol}",
+        descripcio=f"Oportunitat creada a l'etapa {etapa_clean} ({payload.valor_mensual_estimat} €/mes).",
+        autor_nom="Superadmin",
+        created_at=ara,
+    )
+    db.add(act)
+    await db.commit()
+
+    return {
+        "status": "OK",
+        "oportunitat_id": str(op_id),
+        "missatge": f"Oportunitat '{nova_op.titol}' creada correctament.",
+    }
+
+
+@router.put("/oportunitats/{oportunitat_id}", response_model=Dict[str, Any])
+@router.patch("/oportunitats/{oportunitat_id}", response_model=Dict[str, Any])
 @router.patch("/oportunitats/{oportunitat_id}/etapa", response_model=Dict[str, Any])
-async def canviar_etapa_oportunitat(
+async def actualitzar_o_canviar_etapa_oportunitat(
     oportunitat_id: str,
     payload: OportunitatUpdate,
     db: AsyncSession = Depends(get_db_with_tenant_context),
 ) -> Dict[str, Any]:
-    """Mou una oportunitat d'etapa al Kanban (Drag & Drop) i afegeix traça al timeline."""
+    """Edita els camps d'una oportunitat (Deal) o la mou d'etapa al Kanban i registra traça al timeline."""
     try:
         op_id = uuid.UUID(oportunitat_id)
     except ValueError:
@@ -734,6 +828,8 @@ async def canviar_etapa_oportunitat(
         raise HTTPException(status_code=404, detail="Oportunitat no trobada.")
 
     etapa_anterior = op.etapa
+    if payload.titol is not None and payload.titol.strip():
+        op.titol = payload.titol.strip()
     if payload.etapa:
         nova_etapa = payload.etapa.strip().upper()
         if nova_etapa in ETAPES_PIPELINE:
@@ -745,6 +841,8 @@ async def canviar_etapa_oportunitat(
         op.valor_ia_setup = payload.valor_ia_setup
     if payload.probabilitat_percent is not None:
         op.probabilitat_percent = payload.probabilitat_percent
+    if payload.data_tancament_prevista is not None:
+        op.data_tancament_prevista = payload.data_tancament_prevista
     if payload.motiu_perdua is not None:
         op.motiu_perdua = payload.motiu_perdua
     if payload.rao_tancament_exit is not None:
@@ -758,7 +856,7 @@ async def canviar_etapa_oportunitat(
     op.updated_at = ara
 
     # Registre al timeline del lead
-    if payload.etapa and payload.etapa != etapa_anterior:
+    if payload.etapa and op.etapa != etapa_anterior:
         act = SaasActivitatLead(
             id=uuid.uuid4(),
             lead_id=op.lead_id,
@@ -769,9 +867,71 @@ async def canviar_etapa_oportunitat(
             created_at=ara,
         )
         db.add(act)
+    else:
+        act_edit = SaasActivitatLead(
+            id=uuid.uuid4(),
+            lead_id=op.lead_id,
+            tipus="NOTA",
+            titol=f"Deal actualitzat: {op.titol}",
+            descripcio=(
+                f"Valors actualitzats: {float(op.valor_mensual_estimat):.0f} €/mes · "
+                f"Setup IA {float(op.valor_ia_setup):.0f} € · Probabilitat {op.probabilitat_percent}%."
+            ),
+            autor_nom="Superadmin",
+            created_at=ara,
+        )
+        db.add(act_edit)
 
     await db.commit()
-    return {"status": "OK", "nova_etapa": op.etapa}
+    return {
+        "status": "OK",
+        "oportunitat_id": str(op.id),
+        "titol": op.titol,
+        "nova_etapa": op.etapa,
+        "valor_mensual_estimat": float(op.valor_mensual_estimat),
+        "valor_ia_setup": float(op.valor_ia_setup),
+        "probabilitat_percent": op.probabilitat_percent,
+        "missatge": "Oportunitat actualitzada correctament.",
+    }
+
+
+@router.delete("/oportunitats/{oportunitat_id}", response_model=Dict[str, Any])
+async def eliminar_oportunitat(
+    oportunitat_id: str,
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+) -> Dict[str, Any]:
+    """Elimina una oportunitat (Deal) del Pipeline i deixa constància al timeline del lead."""
+    try:
+        op_id = uuid.UUID(oportunitat_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="ID d'oportunitat invàlid.")
+
+    res_op = await db.execute(select(SaasOportunitat).where(SaasOportunitat.id == op_id))
+    op = res_op.scalars().first()
+    if not op:
+        raise HTTPException(status_code=404, detail="Oportunitat no trobada.")
+
+    titol_op = op.titol
+    lead_id_op = op.lead_id
+    ara = datetime.now(timezone.utc)
+
+    await db.delete(op)
+
+    res_l = await db.execute(select(SaasLead).where(SaasLead.id == lead_id_op))
+    if res_l.scalars().first():
+        act = SaasActivitatLead(
+            id=uuid.uuid4(),
+            lead_id=lead_id_op,
+            tipus="NOTA",
+            titol=f"Deal eliminat: {titol_op}",
+            descripcio=f"L'oportunitat '{titol_op}' ha estat eliminada del Pipeline.",
+            autor_nom="Superadmin",
+            created_at=ara,
+        )
+        db.add(act)
+
+    await db.commit()
+    return {"status": "OK", "missatge": f"Oportunitat '{titol_op}' eliminada correctament."}
 
 
 # ==========================================
@@ -1156,8 +1316,8 @@ async def crear_executar_tasca_cp(
     db.add(tasca)
     await db.flush()
 
-    # 1. Descoberta d'empreses per CP i vertical
-    if payload.candidats_descoberts:
+    # 1. Descoberta d'empreses per CP i vertical (Zero Mock Data: cap fallback sintètic)
+    if payload.candidats_descoberts is not None:
         candidats_raw = payload.candidats_descoberts
     else:
         candidats_raw = await firecrawl_service.descobrir_empreses_codi_postal(
@@ -1165,33 +1325,6 @@ async def crear_executar_tasca_cp(
             vertical=payload.vertical,
             limit=10,
         )
-
-    # Si en entorn aïllat o test no es troben resultats externs, avaluem candidats deterministes (seleccionat i descartat)
-    if not candidats_raw:
-        uid_sel = uuid.uuid4().hex[:6]
-        uid_desc = uuid.uuid4().hex[:6]
-        dom_sel = f"empresa-cp{payload.codi_postal.strip()}-{uid_sel}.cat"
-        dom_desc = f"botiga-cp{payload.codi_postal.strip()}-{uid_desc}.cat"
-        candidats_raw = [
-            {
-                "nom_empresa": f"Tècnics {payload.vertical.strip().split()[0]} {payload.codi_postal.strip()} SL",
-                "web_url": f"https://{dom_sel}",
-                "adreca_fisica": f"Carrer Industrial, 12, {payload.codi_postal.strip()} ({uid_sel})",
-                "cif": f"B{uuid.uuid4().hex[:8].upper()}",
-                "email": f"info@{dom_sel}",
-                "telefon": "+34973000111",
-                "resum_cerca": f"Empresa de serveis tècnics de {payload.vertical} a la zona de {payload.codi_postal}.",
-            },
-            {
-                "nom_empresa": f"Botiga Venda al Detall {payload.codi_postal.strip()} SL",
-                "web_url": f"https://{dom_desc}",
-                "adreca_fisica": f"Avinguda Comercial, 4, {payload.codi_postal.strip()} ({uid_desc})",
-                "cif": f"B{uuid.uuid4().hex[:8].upper()}",
-                "email": f"botiga@{dom_desc}",
-                "telefon": "+34973000222",
-                "resum_cerca": "Comerç minorista sense operaris d'instal·lació al terreny.",
-            },
-        ]
 
     tasca.total_trobats = len(candidats_raw)
     tot_sel = 0
@@ -1219,6 +1352,7 @@ async def crear_executar_tasca_cp(
 
         if es_dup:
             tot_dup += 1
+            fonts_dup = formatar_fonts_verificables({}, web_url=web)
             candidat_dup = SaasProspeccioCandidat(
                 id=cand_id,
                 tasca_id=tasca_id,
@@ -1230,7 +1364,7 @@ async def crear_executar_tasca_cp(
                 adreca_normalitzada=adr_norm,
                 codi_postal=payload.codi_postal.strip(),
                 vertical=payload.vertical.strip(),
-                fonts_investigades="web",
+                fonts_investigades=",".join(fonts_dup),
                 email_detectat=email_det,
                 telefon_detectat=item.get("telefon"),
                 mx_validat=False,
@@ -1245,18 +1379,33 @@ async def crear_executar_tasca_cp(
             db.add(candidat_dup)
             continue
 
-        # 3. Validació MX Shield
-        mx_valid, _ = await validar_email_mx(email_det, db=db)
-
-        # 4. Investigació multi-canal (Web + LinkedIn + Instagram + Premsa)
+        # 3. Investigació multi-canal (Web + LinkedIn + Instagram + Premsa amb URLs directes i extracció profunda)
         investigacio = await firecrawl_service.investigar_empresa_completa(
             nom_empresa=nom,
             web_url=web,
             codi_postal=payload.codi_postal,
             vertical=payload.vertical,
+            dades_inicials=item,
         )
 
-        # 5. Avaluació i Lead Scoring amb OpenRouter (DeepSeek)
+        # Enriquir adreça física, CIF, email (empresa i gatekeeper) i telèfon si s'han descobert a la web
+        if not adr and investigacio.get("adreca_detectada"):
+            adr = investigacio["adreca_detectada"]
+            adr_norm = normalitzar_adreca(adr) if adr else None
+        if not cif_norm and investigacio.get("cif_detectat"):
+            cif_norm = normalitzar_cif(investigacio["cif_detectat"])
+        if not email_det and investigacio.get("email_detectat"):
+            email_det = investigacio["email_detectat"]
+        email_empresa_det = item.get("email_empresa") or investigacio.get("email_empresa_detectat") or email_det
+        email_gk_det = item.get("email_gatekeeper") or investigacio.get("email_gatekeeper_detectat")
+        if email_gk_det:
+            email_det = email_gk_det
+        telefon_det = item.get("telefon") or investigacio.get("telefon_detectat")
+
+        # 4. Validació MX Shield sobre l'email verificat
+        mx_valid, _ = await validar_email_mx(email_det, db=db)
+
+        # 5. Avaluació i Lead Scoring amb OpenRouter (DeepSeek) + validació estricta post-IA
         avaluacio = await qualificar_candidat_amb_openrouter(
             nom_empresa=nom,
             web_url=web,
@@ -1264,28 +1413,67 @@ async def crear_executar_tasca_cp(
             vertical=payload.vertical,
             operaris_minims=payload.operaris_minims,
             web_markdown=investigacio.get("web_markdown", ""),
-            fonts_investigades=investigacio.get("fonts_investigades", ["web"]),
+            fonts_investigades=investigacio.get("fonts_investigades", []),
             fita_recent=investigacio.get("fita_recent"),
             gatekeeper_hints=investigacio.get("gatekeeper_hints", {}),
             db=db,
+            adreca_fisica=adr or "",
         )
+
+        # 6. TALLAFOCS INNEGOCIABLE DE LES 3 PREMISSES DE QUALITAT:
+        # Premissa A: L'adreça física HA de contenir el Codi Postal sol·licitat (mai comentaris de xarxes)
+        if not validar_cp_en_adreca_fisica(adr, payload.codi_postal.strip()):
+            avaluacio.estat_decisio = "DESCARTAT"
+            avaluacio.score = min(avaluacio.score, 30)
+            avaluacio.campanya_3_emails = []
+            avaluacio.motiu_detallat_ia = (
+                f"Descartat automàticament (Regla de Codi Postal en Adreça Física): L'adreça física verificada "
+                f"('{adr or 'No disponible'}') no conté el Codi Postal sol·licitat ({payload.codi_postal.strip()}). "
+                f"No s'accepten mencions de CP en comentaris o publicacions de xarxes socials."
+            )
+
+        # Premissa B: El Gatekeeper HA de tenir Nom i Cognom real (MAI càrrecs o noms genèrics)
+        if not es_nom_persona_real(avaluacio.decisor_nom):
+            avaluacio.decisor_nom = None
+            if avaluacio.estat_decisio == "SELECCIONAT":
+                avaluacio.estat_decisio = "DESCARTAT"
+                avaluacio.score = min(avaluacio.score, 40)
+                avaluacio.campanya_3_emails = []
+                avaluacio.motiu_detallat_ia = (
+                    "Descartat automàticament (Regla de Gatekeeper Real): No s'ha pogut verificar el nom i cognom real "
+                    "d'una persona física decisora (Gerent / Director Tècnic). Està prohibit utilitzar càrrecs genèrics "
+                    "com a nom de contacte."
+                )
+
+        # Premissa C: Enllaç web directe comprovable
+        if not validar_url_verificable(web):
+            avaluacio.estat_decisio = "DESCARTAT"
+            avaluacio.score = min(avaluacio.score, 20)
+            avaluacio.campanya_3_emails = []
+            avaluacio.motiu_detallat_ia = (
+                "Descartat automàticament (Regla d'Enllaços Comprobables): No disposa d'un enllaç web directe "
+                "i verificable."
+            )
 
         lead_creat_id: Optional[uuid.UUID] = None
 
-        if avaluacio.estat_decisio == "SELECCIONAT":
+        if avaluacio.estat_decisio == "SELECCIONAT" and avaluacio.decisor_nom:
             tot_sel += 1
             lead_creat_id = uuid.uuid4()
+            nota_emails = ""
+            if email_empresa_det and email_gk_det and email_empresa_det != email_gk_det:
+                nota_emails = f" [Email empresa: {email_empresa_det} | Email Gatekeeper: {email_gk_det}]"
             nou_lead = SaasLead(
                 id=lead_creat_id,
                 nom_empresa=nom,
-                nom_contacte=avaluacio.decisor_nom or "Responsable Comercial",
+                nom_contacte=avaluacio.decisor_nom,
                 email=email_det or f"contacte@{dom}",
-                telefon=item.get("telefon"),
+                telefon=telefon_det,
                 vertical=payload.vertical.strip(),
                 origen=f"SCRAPING_CP_{payload.codi_postal.strip()}",
                 estat_qualificacio="QUALIFICAT",
                 operaris_estimats=avaluacio.operaris_estimats,
-                notes=f"Generat des del lot CP {payload.codi_postal}. {avaluacio.motiu_detallat_ia}",
+                notes=f"Generat des del lot CP {payload.codi_postal}.{nota_emails} {avaluacio.motiu_detallat_ia}",
                 cif=cif_norm,
                 web_url=web,
                 domini_normalitzat=dom,
@@ -1345,7 +1533,7 @@ async def crear_executar_tasca_cp(
             vertical=payload.vertical.strip(),
             fonts_investigades=",".join(avaluacio.fonts_investigades),
             email_detectat=email_det,
-            telefon_detectat=item.get("telefon"),
+            telefon_detectat=telefon_det,
             mx_validat=mx_valid,
             operaris_estimats=avaluacio.operaris_estimats,
             decisor_nom=avaluacio.decisor_nom,
@@ -1463,6 +1651,7 @@ async def obtenir_detall_tasca_cp(
                 "codi_postal": c.codi_postal,
                 "vertical": c.vertical,
                 "fonts_investigades": c.fonts_investigades,
+                "fonts_urls": extreure_mapa_fonts_urls(c.fonts_investigades, web_url=c.web_url),
                 "email_detectat": c.email_detectat,
                 "telefon_detectat": c.telefon_detectat,
                 "mx_validat": c.mx_validat,
@@ -1682,6 +1871,49 @@ async def corregir_criteri_candidat(
         "motiu_correccio_humana": candidat.motiu_correccio_humana,
         "missatge": f"Decisió corregida a '{nova}' i regla d'aprenentatge registrada.",
     }
+
+
+@router.delete("/candidats/{candidat_id}", response_model=Dict[str, Any])
+async def eliminar_candidat_cp(
+    candidat_id: str,
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+) -> Dict[str, Any]:
+    """Elimina un candidat de prospecció del lot de Codi Postal i actualitza els comptadors de la tasca."""
+    try:
+        cid = uuid.UUID(candidat_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="ID de candidat invàlid.")
+
+    res_c = await db.execute(select(SaasProspeccioCandidat).where(SaasProspeccioCandidat.id == cid))
+    candidat = res_c.scalars().first()
+    if not candidat:
+        raise HTTPException(status_code=404, detail="Candidat no trobat.")
+
+    nom_cand = candidat.nom_empresa
+    decisio = candidat.decisio_humana or candidat.estat_decisio
+    tasca_id = candidat.tasca_id
+
+    # Desvincular feedback si en tenia
+    res_fb = await db.execute(select(SaasCriteriFeedback).where(SaasCriteriFeedback.candidat_id == cid))
+    for fb in res_fb.scalars().all():
+        fb.candidat_id = None
+
+    await db.delete(candidat)
+
+    # Actualitzar comptadors de la tasca mare
+    res_t = await db.execute(select(SaasProspeccioTasca).where(SaasProspeccioTasca.id == tasca_id))
+    tasca = res_t.scalars().first()
+    if tasca:
+        tasca.total_trobats = max(0, tasca.total_trobats - 1)
+        if decisio == "SELECCIONAT":
+            tasca.total_seleccionats = max(0, tasca.total_seleccionats - 1)
+        elif decisio == "DESCARTAT":
+            tasca.total_descartats = max(0, tasca.total_descartats - 1)
+        elif decisio == "DUPLICAT":
+            tasca.total_duplicats = max(0, tasca.total_duplicats - 1)
+
+    await db.commit()
+    return {"status": "OK", "missatge": f"Candidat '{nom_cand}' eliminat correctament."}
 
 
 @router.post("/oportunitats/{oportunitat_id}/registrar-exit", response_model=Dict[str, Any])
