@@ -164,5 +164,24 @@ services:
     security_opt:
       - no-new-privileges:true
 
+  # 9. Servidor de Correu Sobirà: Stalwart Mail Server (tecnic@sevalor.net a Hetzner)
+  stalwart_mail:
+    image: stalwartlabs/mail-server:latest
+    container_name: sevalor_stalwart_mail
+    restart: always
+    ports:
+      - "127.0.0.1:4110:4110" # Panell d'administració Web
+      - "127.0.0.1:25:25"     # SMTP entrant
+      - "127.0.0.1:465:465"   # SMTPS (Submission segura Thunderbird)
+      - "127.0.0.1:993:993"   # IMAPS (Lectura sincronitzada Thunderbird)
+    volumes:
+      - sevalor_stalwart_data:/opt/stalwart-mail
+    environment:
+      - STALWART_ADMIN_USER=${STALWART_USER:-admin}
+      - STALWART_ADMIN_SECRET=${STALWART_PASSWORD:-sevalor-stalwart-secret-2026}
+    security_opt:
+      - no-new-privileges:true
+
 volumes:
   sevalor_pgdata:
+  sevalor_stalwart_data:

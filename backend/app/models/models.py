@@ -2140,6 +2140,37 @@ class SaasHistorialLlicencia(Base):
     )
 
 
+class SaasProspeccioTasca(Base):
+    """Lot atòmic d'execució de prospecció per Codi Postal i Vertical Lliure."""
+
+    __tablename__ = "saas_prospeccio_tasques"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+        server_default=text("gen_random_uuid()"),
+    )
+    codi_postal: Mapped[str] = mapped_column(String(10), nullable=False, index=True)
+    vertical: Mapped[str] = mapped_column(String(150), nullable=False)
+    operaris_minims: Mapped[int] = mapped_column(Integer, default=5, server_default=text("5"))
+    estat: Mapped[str] = mapped_column(
+        String(30), default="PENDENT", server_default="PENDENT", index=True
+    )  # PENDENT, EXECUTANT, COMPLETAT, PAUSAT, ERROR
+    total_trobats: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+    total_seleccionats: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+    total_descartats: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+    total_duplicats: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+    resum_execucio: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    autor_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        server_default=text("now()"),
+    )
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class SaasLead(Base):
     """Prospecte o lead comercial B2B per a la prospecció de Sevalor Suite."""
 
@@ -2155,7 +2186,7 @@ class SaasLead(Base):
     nom_contacte: Mapped[str] = mapped_column(String(100), nullable=False)
     email: Mapped[str] = mapped_column(String(150), nullable=False, index=True)
     telefon: Mapped[Optional[str]] = mapped_column(String(30))
-    vertical: Mapped[str] = mapped_column(String(100), default="CampoPro", server_default="CampoPro")
+    vertical: Mapped[str] = mapped_column(String(150), default="CampoPro", server_default="CampoPro")
     origen: Mapped[str] = mapped_column(String(50), default="WEB", server_default="WEB")
     estat_qualificacio: Mapped[str] = mapped_column(
         String(50), default="NOU", server_default="NOU", index=True
@@ -2168,6 +2199,30 @@ class SaasLead(Base):
     data_inici_demo: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     data_fi_demo: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     dies_demo_durada: Mapped[int] = mapped_column(Integer, default=7, server_default=text("7"))
+
+    # Camps d'intel·ligència de prospecció, multi-validació i outreach
+    cif: Mapped[Optional[str]] = mapped_column(String(20), nullable=True, index=True)
+    web_url: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    domini_normalitzat: Mapped[Optional[str]] = mapped_column(String(150), nullable=True, index=True)
+    adreca_fisica: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    adreca_normalitzada: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, index=True)
+    codi_postal: Mapped[Optional[str]] = mapped_column(String(10), nullable=True, index=True)
+    carrec_contacte: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    fonts_investigades: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    fita_recent: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    punt_dolor_detectat: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    angle_atac: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    score_qualificacio: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+    justificacio_ia: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    mx_validat: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
+    esborrany_email_assumpte: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    esborrany_email_cos: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    rao_tancament_exit: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    es_tancament_replicable: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
+    tasca_prospeccio_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("saas_prospeccio_tasques.id", ondelete="SET NULL"), nullable=True
+    )
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
@@ -2207,6 +2262,9 @@ class SaasOportunitat(Base):
     probabilitat_percent: Mapped[int] = mapped_column(Integer, default=20, server_default=text("20"))
     data_tancament_prevista: Mapped[Optional[date]] = mapped_column(Date)
     motiu_perdua: Mapped[Optional[str]] = mapped_column(String(255))
+    rao_tancament_exit: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    requisits_replicables: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    es_replicable: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
@@ -2239,6 +2297,170 @@ class SaasActivitatLead(Base):
     titol: Mapped[str] = mapped_column(String(200), nullable=False)
     descripcio: Mapped[Optional[str]] = mapped_column(Text)
     autor_nom: Mapped[str] = mapped_column(String(100), default="Superadmin", server_default="Superadmin")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        server_default=text("now()"),
+    )
+
+
+class SaasProspeccioCandidat(Base):
+    """Registre transparent de candidats analitzats al Codi Postal (Seleccionats, Descartats, Duplicats)."""
+
+    __tablename__ = "saas_prospeccio_candidats"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+        server_default=text("gen_random_uuid()"),
+    )
+    tasca_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("saas_prospeccio_tasques.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    nom_empresa: Mapped[str] = mapped_column(String(150), nullable=False)
+    cif: Mapped[Optional[str]] = mapped_column(String(20), nullable=True, index=True)
+    web_url: Mapped[str] = mapped_column(String(255), nullable=False)
+    domini_normalitzat: Mapped[str] = mapped_column(String(150), nullable=False, index=True)
+    adreca_fisica: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    adreca_normalitzada: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, index=True)
+    codi_postal: Mapped[str] = mapped_column(String(10), nullable=False, index=True)
+    vertical: Mapped[str] = mapped_column(String(150), nullable=False)
+    fonts_investigades: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    email_detectat: Mapped[Optional[str]] = mapped_column(String(150), nullable=True)
+    telefon_detectat: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
+    mx_validat: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
+    operaris_estimats: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+    decisor_nom: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    decisor_carrec: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    fita_recent: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    punt_dolor: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    angle_atac: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    score: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+    estat_decisio: Mapped[str] = mapped_column(
+        String(30), nullable=False, index=True
+    )  # SELECCIONAT, DESCARTAT, DUPLICAT, ERROR_EXTRACCIO
+    vector_duplicitat: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    motiu_detallat_ia: Mapped[str] = mapped_column(Text, nullable=False)
+    corregit_huma: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
+    decisio_humana: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
+    motiu_correccio_humana: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    lead_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("saas_leads.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        server_default=text("now()"),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        server_default=text("now()"),
+    )
+
+
+class SaasCriteriFeedback(Base):
+    """Memòria del Doble Bucle d'Aprenentatge (Descarts justificats + Tancaments d'èxit replicables)."""
+
+    __tablename__ = "saas_criteris_feedback"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+        server_default=text("gen_random_uuid()"),
+    )
+    tipus_aprenentatge: Mapped[str] = mapped_column(
+        String(40), nullable=False, index=True
+    )  # CORRECCIO_DESCART, CORRECCIO_SELECCIO, TANCAMENT_EXIT_REPLICABLE
+    candidat_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("saas_prospeccio_candidats.id", ondelete="SET NULL"), nullable=True
+    )
+    lead_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("saas_leads.id", ondelete="SET NULL"), nullable=True
+    )
+    vertical: Mapped[str] = mapped_column(String(150), nullable=False, index=True)
+    nom_empresa: Mapped[str] = mapped_column(String(150), nullable=False)
+    web_url: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    resum_evidencies_o_requisits: Mapped[str] = mapped_column(Text, nullable=False)
+    decisio_ia_original: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
+    decisio_humana_correcta: Mapped[str] = mapped_column(String(30), nullable=False)
+    explicacio_humana_o_rao_exit: Mapped[str] = mapped_column(Text, nullable=False)
+    es_replicable: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
+    actiu: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("true"))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        server_default=text("now()"),
+    )
+
+
+class SaasCorreuMissatge(Base):
+    """Fils de correu (IMAP/SMTP), campanyes de 3 emails amb tempo i esdeveniments de calendari."""
+
+    __tablename__ = "saas_correu_missatges"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+        server_default=text("gen_random_uuid()"),
+    )
+    lead_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("saas_leads.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    tipus_item_calendari: Mapped[str] = mapped_column(
+        String(30), default="EMAIL_CAMPANYA", server_default="EMAIL_CAMPANYA"
+    )  # EMAIL_CAMPANYA, RESPOSTA_INBOUND, SEGUIMENT_CALENDARI, REUNIO_DEMO
+    pas_sequencia: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # 1, 2, 3
+    tempo_dies_offset: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))  # 0, 4, 8
+    data_programada: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    direccio: Mapped[str] = mapped_column(
+        String(20), default="OUTBOUND", server_default="OUTBOUND"
+    )  # OUTBOUND, INBOUND, INTERN_CALENDARI
+    estat_enviament: Mapped[str] = mapped_column(
+        String(30), default="ESBORRANY_PROGRAMAT", server_default="ESBORRANY_PROGRAMAT", index=True
+    )  # ESBORRANY_PROGRAMAT, APROVAT_ENVIAT, PAUSAT_PER_RESPOSTA, CANCEL_LAT, REBUT, COMPLETAT
+    remitent: Mapped[str] = mapped_column(String(150), nullable=False)
+    destinatari: Mapped[str] = mapped_column(String(150), nullable=False)
+    assumpte: Mapped[str] = mapped_column(String(255), nullable=False)
+    cos_text: Mapped[str] = mapped_column(Text, nullable=False)
+    message_id: Mapped[str] = mapped_column(String(255), unique=True, nullable=False, index=True)
+    in_reply_to: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, index=True)
+    references_header: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    intencio_ia: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    resum_ia: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    aprovat_per_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True)
+    sent_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        server_default=text("now()"),
+    )
+
+
+class SaasExclusioRgpd(Base):
+    """Llista negra universal d'exclusió RGPD / LSSI i rebots permanents (Do-Not-Contact)."""
+
+    __tablename__ = "saas_exclusio_rgpd"
+    __table_args__ = (
+        UniqueConstraint("email", "domini", name="uq_exclusio_email_domini"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+        server_default=text("gen_random_uuid()"),
+    )
+    email: Mapped[Optional[str]] = mapped_column(String(150), nullable=True, index=True)
+    domini: Mapped[str] = mapped_column(String(150), nullable=False, index=True)
+    cif: Mapped[Optional[str]] = mapped_column(String(20), nullable=True, index=True)
+    motiu: Mapped[str] = mapped_column(
+        String(50), default="OPTOUT_EXPLICIT", server_default="OPTOUT_EXPLICIT"
+    )  # OPTOUT_EXPLICIT, REBOT_HARD, MANUAL_SUPERADMIN
+    origen_message_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),

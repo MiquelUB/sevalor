@@ -70,6 +70,20 @@ class Settings(BaseSettings):
     # Bot de Telegram
     TELEGRAM_BOT_TOKEN: str | None = None
 
+    # Motor de Prospecció, Firecrawl i OpenRouter (DeepSeek)
+    FIRECRAWL_API_URL: str = "http://localhost:3002"
+    OPENROUTER_API_KEY: str | None = None
+    OPENROUTER_MODEL: str = "deepseek/deepseek-chat"
+
+    # Servidor de Correu Sobirà Stalwart & Outreach
+    STALWART_SMTP_HOST: str = "localhost"
+    STALWART_SMTP_PORT: int = 587
+    STALWART_IMAP_HOST: str = "localhost"
+    STALWART_IMAP_PORT: int = 993
+    STALWART_USER: str = "tecnic@sevalor.net"
+    STALWART_PASSWORD: str | None = None
+    SUPERADMIN_OUTREACH_EMAIL: str = "tecnic@sevalor.net"
+
     # Domini de desplegament (nginx + PWA)
     DOMAIN: str = "sevalor.app"
 
