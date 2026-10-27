@@ -142,6 +142,29 @@ class OrchestratorCandidateResult(BaseModel):
     agent3: Agent3SocialData
     avaluacio_final: LeadEvaluationSchema
 
+    def __getitem__(self, item: str) -> Any:
+        mapping = {
+            "adreca_detectada": self.agent1.adreca_fisica,
+            "cif_detectat": self.agent1.cif,
+            "email_detectat": self.agent1.email_principal,
+            "email_empresa_detectat": self.agent1.email_empresa,
+            "email_gatekeeper_detectat": self.agent1.email_gatekeeper,
+            "telefon_detectat": self.agent1.telefon,
+            "mx_validat": self.agent1.mx_valid,
+            "fonts_investigades": self.agent3.fonts_investigades,
+            "fita_recent": self.agent3.fita_social_destacada,
+            "avaluacio": self.avaluacio_final,
+        }
+        if item in mapping:
+            return mapping[item]
+        return getattr(self, item)
+
+    def get(self, item: str, default: Any = None) -> Any:
+        try:
+            return self[item]
+        except (KeyError, AttributeError):
+            return default
+
 
 # ==============================================================================
 # 2. AGENT 1: EXTRACCIÓ D'IDENTITAT, CONTACTE I GATEKEEPER PRIMARI
@@ -316,12 +339,12 @@ class Agent1IdentityExtractor:
         if not validar_url_verificable(web):
             passa_gate1 = False
             motiu_gate1 = (
-                "Descartat automàticament (Regla d'Enllaços Comprovables): No disposa d'un enllaç web directe i verificable."
+                "Descartat (Quality Gate 1 - Regla d'Enllaços Comprovables): No disposa d'un enllaç web directe i verificable."
             )
         elif not validar_cp_o_municipi_en_adreca(adr, cp_clean, municipi=municipi_esperat):
             passa_gate1 = False
             motiu_gate1 = (
-                f"Descartat (Ubicació Física): L'adreça ('{adr or 'No disponible'}') "
+                f"Descartat (Quality Gate 1 - Ubicació Física): L'adreça ('{adr or 'No disponible'}') "
                 f"no correspon al CP {cp_clean} ni al municipi ({municipi_esperat or 'N/A'})."
             )
 
@@ -353,6 +376,59 @@ class Agent1IdentityExtractor:
             passa_tallafocs_1=passa_gate1,
             motiu_tallafocs_1=motiu_gate1,
         )
+
+    async def extreure_identitat(
+        self,
+        nom_empresa: str,
+        web_url: str,
+        codi_postal: str,
+        municipi: Optional[str],
+        dades_inicials: Dict[str, Any],
+        db: AsyncSession,
+    ) -> Dict[str, Any]:
+        """Extreu identitat i contacte fiscal retornant un diccionari estructurat amb supera_gate_1."""
+        item = dict(dades_inicials or {})
+        item["nom_empresa"] = nom_empresa
+        item["web_url"] = web_url
+        res = await self.executar(
+            item_candidat=item,
+            codi_postal=codi_postal,
+            vertical=str(item.get("vertical") or "CampoPro"),
+            municipi_esperat=municipi,
+            db=db,
+        )
+        return {
+            "nom_empresa": res.nom_empresa,
+            "rao_social": res.rao_social,
+            "cif": res.cif,
+            "web_url": res.web_url,
+            "domini_normalitzat": res.domini_normalitzat,
+            "adreca_fisica": res.adreca_fisica,
+            "adreca_normalitzada": res.adreca_normalitzada,
+            "codi_postal": res.codi_postal,
+            "municipi": res.municipi,
+            "vertical": res.vertical,
+            "email_principal": res.email_principal,
+            "email_empresa": res.email_empresa,
+            "email_gatekeeper": res.email_gatekeeper,
+            "telefon": res.telefon,
+            "mx_valid": res.mx_valid,
+            "mx_validat": res.mx_valid,
+            "te_contacte_operatiu": res.te_contacte_operatiu,
+            "decisor_nom": res.gatekeeper_nom,
+            "decisor_carrec": res.gatekeeper_carrec,
+            "gatekeeper_nom": res.gatekeeper_nom,
+            "gatekeeper_carrec": res.gatekeeper_carrec,
+            "gatekeeper_origen": res.gatekeeper_origen,
+            "web_markdown": res.web_markdown,
+            "web_titol": res.web_titol,
+            "web_descripcio": res.web_descripcio,
+            "metadades_html": res.metadades_html,
+            "social_urls": res.social_urls_inicials,
+            "supera_gate_1": res.passa_tallafocs_1,
+            "motiu_fallada_gate_1": res.motiu_tallafocs_1,
+            "_model": res,
+        }
 
 
 # ==============================================================================
@@ -414,7 +490,7 @@ class Agent2OperationalScorer:
                 angle_atac="ANGLE_A_VISIBILITAT_TELEGRAM",
                 score_operatiu=25,
                 estat_pre_decisio="DESCARTAT",
-                motiu_scoring=f"Descartat perquè no compleix el mínim d'operaris de camp ({motiu_regla}).",
+                motiu_scoring=f"Descartat (Agent 2 - Comerç al detall): No compleix el mínim d'operaris de camp ({motiu_regla}).",
                 passa_tallafocs_2=False,
             )
 
@@ -499,6 +575,41 @@ class Agent2OperationalScorer:
             passa_tallafocs_2=True,
         )
 
+    async def avaluar_operativa(
+        self,
+        nom_empresa: str,
+        vertical: str,
+        operaris_minims: int,
+        web_markdown: str,
+        db: AsyncSession,
+    ) -> Dict[str, Any]:
+        """Avalua la capacitat operativa i el filtre de botiga de mostrador."""
+        identitat_tmp = Agent1IdentityData(
+            nom_empresa=nom_empresa,
+            web_url="https://verificacio-operativa.local",
+            domini_normalitzat="verificacio-operativa.local",
+            codi_postal="00000",
+            vertical=vertical,
+            web_markdown=web_markdown,
+            passa_tallafocs_1=True,
+        )
+        res = await self.executar(
+            identitat=identitat_tmp,
+            operaris_minims=operaris_minims,
+            db=db,
+        )
+        return {
+            "es_botiga_detall": res.es_botiga_detall,
+            "operaris_estimats": res.operaris_estimats,
+            "operaris_minims_exigits": res.operaris_minims_exigits,
+            "score_operatiu": res.score_operatiu,
+            "punt_dolor": res.punt_dolor_operatiu,
+            "angle_atac": res.angle_atac,
+            "motiu_descart": res.motiu_scoring if not res.passa_tallafocs_2 else None,
+            "passa_tallafocs_2": res.passa_tallafocs_2,
+            "_model": res,
+        }
+
 
 # ==============================================================================
 # 4. AGENT 3: CERCA A XARXES SOCIALS (LINKEDIN + INSTAGRAM + PREMSA)
@@ -578,6 +689,46 @@ class Agent3SocialIntelligence:
             fonts_investigades=fonts_formatades,
             fonts_urls=fonts_urls,
         )
+
+    async def investigar_xarxes(
+        self,
+        nom_empresa: str,
+        codi_postal: str,
+        municipi: Optional[str],
+        vertical: str,
+        web_url: str,
+        social_urls_inicials: Dict[str, str],
+        decisor_actual: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Cerca perfils socials i fites recents a LinkedIn/Instagram/Premsa."""
+        identitat_tmp = Agent1IdentityData(
+            nom_empresa=nom_empresa,
+            web_url=web_url,
+            domini_normalitzat=normalitzar_domini(web_url),
+            codi_postal=codi_postal,
+            municipi=municipi,
+            vertical=vertical,
+            gatekeeper_nom=decisor_actual,
+            social_urls_inicials=social_urls_inicials,
+        )
+        scoring_tmp = Agent2ScoringData()
+        res = await self.executar(
+            identitat=identitat_tmp,
+            scoring=scoring_tmp,
+        )
+        return {
+            "linkedin_empresa_url": res.linkedin_empresa_url,
+            "linkedin_gatekeeper_url": res.linkedin_gatekeeper_url,
+            "instagram_url": res.instagram_url,
+            "premsa_url": res.premsa_url,
+            "borme_url": res.borme_url,
+            "gatekeeper_nom_social": res.gatekeeper_nom_social,
+            "gatekeeper_carrec_social": res.gatekeeper_carrec_social,
+            "fita_social_destacada": res.fita_social_destacada,
+            "fonts_investigades": res.fonts_investigades,
+            "fonts_urls": res.fonts_urls,
+            "_model": res,
+        }
 
 
 # ==============================================================================
@@ -670,6 +821,196 @@ class ProspeccioAgentOrchestrator:
             ]
         return avaluacio
 
+    def _construir_descart_curtcircuit(
+        self,
+        id_data: Any,
+        fonts_verificades: List[str],
+        operaris_estimats: int,
+        score: int,
+        motiu: str,
+        punt_dolor: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Retorna un resultat estructurat immediat sense invocar l'Agent 3 ni l'LLM."""
+        def _get(key: str, default: Any = None) -> Any:
+            if isinstance(id_data, dict):
+                return id_data.get(key, default)
+            return getattr(id_data, key, default)
+
+        decisor_nom = _get("decisor_nom") or _get("gatekeeper_nom")
+        decisor_carrec = _get("decisor_carrec") or _get("gatekeeper_carrec")
+        mx_v = bool(_get("mx_validat", False) or _get("mx_valid", False))
+
+        return {
+            "adreca_detectada": _get("adreca_fisica"),
+            "cif_detectat": _get("cif"),
+            "email_detectat": _get("email_principal"),
+            "email_empresa_detectat": _get("email_empresa"),
+            "email_gatekeeper_detectat": _get("email_gatekeeper"),
+            "telefon_detectat": _get("telefon"),
+            "mx_validat": mx_v,
+            "fonts_investigades": fonts_verificades,
+            "fita_recent": None,
+            "avaluacio": LeadEvaluationSchema(
+                operaris_estimats=operaris_estimats,
+                decisor_nom=decisor_nom,
+                decisor_carrec=decisor_carrec,
+                fonts_investigades=fonts_verificades,
+                fita_recent=None,
+                punt_dolor=punt_dolor,
+                angle_atac="ANGLE_A_VISIBILITAT_TELEGRAM",
+                score=score,
+                estat_decisio="DESCARTAT",
+                motiu_detallat_ia=motiu,
+                campanya_3_emails=[],
+            ),
+        }
+
+    async def processar_candidat_complet(
+        self,
+        nom_empresa: str,
+        web_url: str,
+        codi_postal: str,
+        municipi: Optional[str],
+        vertical: str,
+        operaris_minims: int,
+        dades_inicials: Dict[str, Any],
+        db: AsyncSession,
+    ) -> Dict[str, Any]:
+        """Executa la cadena Agent 1 -> Agent 2 -> Agent 3 -> Orquestrador amb curtcircuit."""
+        # 1. Agent 1: Identitat, Adreça Física, BORME i MX Shield
+        id_data = await self.agent1.extreure_identitat(
+            nom_empresa=nom_empresa,
+            web_url=web_url,
+            codi_postal=codi_postal,
+            municipi=municipi,
+            dades_inicials=dades_inicials,
+            db=db,
+        )
+        fonts_base = formatar_fonts_verificables(id_data.get("social_urls", {}), web_url=web_url)
+
+        # CURTCIRCUIT 1: Falla Quality Gate 1 (URL invàlida o ubicació fora del CP/municipi)
+        if not id_data.get("supera_gate_1", True):
+            return self._construir_descart_curtcircuit(
+                id_data=id_data,
+                fonts_verificades=fonts_base,
+                operaris_estimats=0,
+                score=20,
+                motiu=id_data.get("motiu_fallada_gate_1")
+                or f"Descartat (Quality Gate 1): L'adreça ('{id_data.get('adreca_fisica') or 'No disponible'}') "
+                   f"no pertany al CP {codi_postal} ni al municipi ({municipi or 'N/A'}).",
+            )
+
+        # 2. Agent 2: Validació Operativa (Quadrilles vs Botiga de mostrador) i Doble Bucle
+        op_data = await self.agent2.avaluar_operativa(
+            nom_empresa=nom_empresa,
+            vertical=vertical,
+            operaris_minims=operaris_minims,
+            web_markdown=id_data.get("web_markdown", ""),
+            db=db,
+        )
+
+        # CURTCIRCUIT 2: Descart immediat si és botiga al detall / mostrador sense operaris
+        if op_data.get("es_botiga_detall", False) or not op_data.get("passa_tallafocs_2", True):
+            return self._construir_descart_curtcircuit(
+                id_data=id_data,
+                fonts_verificades=fonts_base,
+                operaris_estimats=op_data.get("operaris_estimats", 1),
+                score=op_data.get("score_operatiu", 25),
+                motiu=op_data.get("motiu_descart")
+                or "Descartat (Agent 2): Comerç de venda al detall sense quadrilles d'operaris al terreny.",
+                punt_dolor="Model enfocat a botiga física / mostrador sense tècnics de camp",
+            )
+
+        # 3. Agent 3: Intel·ligència Social (LinkedIn, Instagram, Premsa) - només per a candidats viables
+        social_data = await self.agent3.investigar_xarxes(
+            nom_empresa=nom_empresa,
+            codi_postal=codi_postal,
+            municipi=municipi,
+            vertical=vertical,
+            web_url=web_url,
+            social_urls_inicials=id_data.get("social_urls", {}),
+            decisor_actual=id_data.get("decisor_nom"),
+        )
+
+        gk_nom_consolidat = social_data.get("gatekeeper_nom_social") or id_data.get("decisor_nom")
+        gk_carrec_consolidat = social_data.get("gatekeeper_carrec_social") or id_data.get("decisor_carrec")
+        gatekeeper_hints_consolidats: Dict[str, str] = {}
+        if gk_nom_consolidat and es_nom_persona_real(gk_nom_consolidat):
+            gatekeeper_hints_consolidats["nom"] = gk_nom_consolidat
+            gatekeeper_hints_consolidats["context"] = gk_nom_consolidat
+            gatekeeper_hints_consolidats["carrec"] = gk_carrec_consolidat or "Gerent / Direcció"
+        if id_data.get("email_gatekeeper"):
+            gatekeeper_hints_consolidats["email"] = id_data["email_gatekeeper"]
+
+        # 4. Orquestrador Final: crida a qualificar_candidat_amb_openrouter
+        avaluacio = await qualificar_candidat_amb_openrouter(
+            nom_empresa=nom_empresa,
+            web_url=web_url,
+            codi_postal=codi_postal,
+            vertical=vertical,
+            operaris_minims=operaris_minims,
+            web_markdown=id_data.get("web_markdown", ""),
+            fonts_investigades=social_data.get("fonts_investigades", fonts_base),
+            fita_recent=social_data.get("fita_social_destacada"),
+            gatekeeper_hints=gatekeeper_hints_consolidats,
+            db=db,
+            adreca_fisica=id_data.get("adreca_fisica") or "",
+            municipi=municipi,
+            te_contacte_operatiu=bool(
+                (id_data.get("email_principal") and id_data.get("mx_validat")) or id_data.get("telefon")
+            ),
+        )
+
+        id_model = id_data.get("_model") or Agent1IdentityData(
+            nom_empresa=nom_empresa,
+            web_url=web_url,
+            domini_normalitzat=normalitzar_domini(web_url),
+            codi_postal=codi_postal,
+            municipi=municipi,
+            vertical=vertical,
+            gatekeeper_nom=gk_nom_consolidat,
+            gatekeeper_carrec=gk_carrec_consolidat,
+            adreca_fisica=id_data.get("adreca_fisica"),
+            email_principal=id_data.get("email_principal"),
+            telefon=id_data.get("telefon"),
+            passa_tallafocs_1=True,
+        )
+        op_model = op_data.get("_model") or Agent2ScoringData(
+            operaris_estimats=op_data.get("operaris_estimats", 5),
+            operaris_minims_exigits=operaris_minims,
+            punt_dolor_operatiu=op_data.get("punt_dolor"),
+            angle_atac=op_data.get("angle_atac", "ANGLE_A_VISIBILITAT_TELEGRAM"),
+            score_operatiu=op_data.get("score_operatiu", 80),
+        )
+        soc_model = social_data.get("_model") or Agent3SocialData(
+            linkedin_empresa_url=social_data.get("linkedin_empresa_url"),
+            instagram_url=social_data.get("instagram_url"),
+            gatekeeper_nom_social=gk_nom_consolidat,
+            gatekeeper_carrec_social=gk_carrec_consolidat,
+            fita_social_destacada=social_data.get("fita_social_destacada"),
+            fonts_investigades=social_data.get("fonts_investigades", fonts_base),
+        )
+
+        avaluacio = self._enriquir_emails_amb_context_social(
+            avaluacio=avaluacio,
+            identitat=id_model,
+            scoring=op_model,
+            social=soc_model,
+        )
+
+        return {
+            "adreca_detectada": id_data.get("adreca_fisica"),
+            "cif_detectat": id_data.get("cif"),
+            "email_detectat": id_data.get("email_principal"),
+            "email_empresa_detectat": id_data.get("email_empresa"),
+            "email_gatekeeper_detectat": id_data.get("email_gatekeeper"),
+            "telefon_detectat": id_data.get("telefon"),
+            "mx_validat": bool(id_data.get("mx_validat", False)),
+            "fonts_investigades": social_data.get("fonts_investigades", fonts_base),
+            "fita_recent": social_data.get("fita_social_destacada"),
+            "avaluacio": avaluacio,
+        }
+
     async def executar_pipeline_candidat(
         self,
         item_candidat: Dict[str, Any],
@@ -679,18 +1020,8 @@ class ProspeccioAgentOrchestrator:
         municipi_esperat: Optional[str],
         db: AsyncSession,
     ) -> OrchestratorCandidateResult:
-        """Executa el flux complet coordinat: Agent 1 -> Agent 2 -> Agent 3 -> Validació i Redacció."""
-        nom_ini = (item_candidat.get("nom_empresa") or "Empresa Sense Nom").strip()
+        """Executa el flux complet coordinat: Agent 1 -> Agent 2 -> Agent 3 -> Validació i Redacció amb Fast-Fail Curtcircuit."""
         web_ini = (item_candidat.get("web_url") or "").strip()
-
-        # Executar investigació completa unificada per mantenir compatibilitat amb mocks de tests i caché HTTP
-        investigacio_completa = await firecrawl_service.investigar_empresa_completa(
-            nom_empresa=nom_ini,
-            web_url=web_ini,
-            codi_postal=codi_postal,
-            vertical=vertical,
-            dades_inicials=item_candidat,
-        )
 
         # ------------------------------------------------------------------
         # FASE 1: Agent 1 (Extracció d'Identitat, Contacte i Gatekeeper)
@@ -701,8 +1032,47 @@ class ProspeccioAgentOrchestrator:
             vertical=vertical,
             municipi_esperat=municipi_esperat,
             db=db,
-            investigacio_precalculada=investigacio_completa,
         )
+
+        fonts_base = formatar_fonts_verificables(dades_agent1.social_urls_inicials, web_url=web_ini)
+
+        # CURTCIRCUIT 1: Falla Quality Gate 1 (URL invàlida o fora de CP/municipi)
+        if not dades_agent1.passa_tallafocs_1:
+            motiu_gate1 = (
+                dades_agent1.motiu_tallafocs_1
+                or f"Descartat (Quality Gate 1): L'adreça ('{dades_agent1.adreca_fisica or 'No disponible'}') "
+                   f"no pertany al CP {codi_postal} ni al municipi ({municipi_esperat or 'N/A'})."
+            )
+            avaluacio_c1 = LeadEvaluationSchema(
+                operaris_estimats=0,
+                decisor_nom=dades_agent1.gatekeeper_nom,
+                decisor_carrec=dades_agent1.gatekeeper_carrec,
+                fonts_investigades=fonts_base,
+                fita_recent=None,
+                punt_dolor=None,
+                angle_atac="ANGLE_A_VISIBILITAT_TELEGRAM",
+                score=20,
+                estat_decisio="DESCARTAT",
+                motiu_detallat_ia=motiu_gate1,
+                campanya_3_emails=[],
+            )
+            return OrchestratorCandidateResult(
+                agent1=dades_agent1,
+                agent2=Agent2ScoringData(
+                    operaris_estimats=0,
+                    operaris_minims_exigits=operaris_minims,
+                    es_botiga_detall=False,
+                    score_operatiu=20,
+                    estat_pre_decisio="DESCARTAT",
+                    motiu_scoring=motiu_gate1,
+                    passa_tallafocs_2=False,
+                ),
+                agent3=Agent3SocialData(
+                    fonts_investigades=fonts_base,
+                    fonts_urls=dades_agent1.social_urls_inicials,
+                ),
+                avaluacio_final=avaluacio_c1,
+            )
 
         # ------------------------------------------------------------------
         # FASE 2: Agent 2 (Validació de Puntuació, Quadrilles i Actualitat)
@@ -711,16 +1081,44 @@ class ProspeccioAgentOrchestrator:
             identitat=dades_agent1,
             operaris_minims=operaris_minims,
             db=db,
-            fita_inicial=investigacio_completa.get("fita_recent") or item_candidat.get("fita_recent"),
+            fita_inicial=item_candidat.get("fita_recent"),
         )
 
+        # CURTCIRCUIT 2: Descart immediat si és botiga de mostrador o no supera el Tallafocs 2
+        if dades_agent2.es_botiga_detall or not dades_agent2.passa_tallafocs_2:
+            motiu_gate2 = (
+                dades_agent2.motiu_scoring
+                or "Descartat (Agent 2): Comerç de venda al detall sense quadrilles d'operaris al terreny."
+            )
+            avaluacio_c2 = LeadEvaluationSchema(
+                operaris_estimats=dades_agent2.operaris_estimats,
+                decisor_nom=dades_agent1.gatekeeper_nom,
+                decisor_carrec=dades_agent1.gatekeeper_carrec,
+                fonts_investigades=fonts_base,
+                fita_recent=dades_agent2.noticies_i_fites_recents,
+                punt_dolor=dades_agent2.punt_dolor_operatiu or "Model enfocat a botiga física / mostrador sense tècnics de camp",
+                angle_atac=dades_agent2.angle_atac,
+                score=dades_agent2.score_operatiu,
+                estat_decisio="DESCARTAT",
+                motiu_detallat_ia=motiu_gate2,
+                campanya_3_emails=[],
+            )
+            return OrchestratorCandidateResult(
+                agent1=dades_agent1,
+                agent2=dades_agent2,
+                agent3=Agent3SocialData(
+                    fonts_investigades=fonts_base,
+                    fonts_urls=dades_agent1.social_urls_inicials,
+                ),
+                avaluacio_final=avaluacio_c2,
+            )
+
         # ------------------------------------------------------------------
-        # FASE 3: Agent 3 (Cerca a Xarxes Socials: LinkedIn, Instagram, Premsa)
+        # FASE 3: Agent 3 (Cerca a Xarxes Socials: LinkedIn, Instagram, Premsa) - NOMÉS PER A CANDIDATS VIABLES
         # ------------------------------------------------------------------
         dades_agent3 = await self.agent3.executar(
             identitat=dades_agent1,
             scoring=dades_agent2,
-            investigacio_precalculada=investigacio_completa,
         )
 
         # Sincronitzar el Gatekeeper si l'Agent 3 l'ha descobert a LinkedIn

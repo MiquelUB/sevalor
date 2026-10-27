@@ -984,5 +984,87 @@ async def test_t007_arquitectura_multi_agent_i_orquestrador(db_session: AsyncSes
     assert res_botiga.avaluacio_final.campanya_3_emails == []
 
 
+@pytest.mark.asyncio
+async def test_t007_curtcircuit_fast_fail_orquestrador(db_session: AsyncSession) -> None:
+    """Verifica el Curtcircuit (Fast-Fail) a l'Orquestrador Multi-Agent per estalviar cerques i LLM."""
+    from app.services.prospeccio_agents_service import prospeccio_orchestrator
+
+    # 1. Curtcircuit 1: Falla Quality Gate 1 per ubicació aliena (Madrid vs Lleida 25001)
+    res_cc1 = await prospeccio_orchestrator.processar_candidat_complet(
+        nom_empresa="Instal·lacions Centro Madrid SL",
+        web_url="https://centromadrid.es",
+        codi_postal="25001",
+        municipi="Lleida",
+        vertical="ElectricPro",
+        operaris_minims=5,
+        dades_inicials={
+            "adreca_fisica": "Paseo de la Castellana 100, 28046 Madrid",
+            "email": "madrid@centromadrid.es",
+            "telefon": "+34912345678",
+            "web_markdown": "Instal·lacions d'alta tensió a la comunitat de Madrid.",
+        },
+        db=db_session,
+    )
+
+    assert res_cc1["avaluacio"].estat_decisio == "DESCARTAT"
+    assert res_cc1["avaluacio"].score == 20
+    assert "Quality Gate 1" in res_cc1["avaluacio"].motiu_detallat_ia
+    assert res_cc1["fita_recent"] is None
+    assert res_cc1["avaluacio"].campanya_3_emails == []
+
+    # 2. Curtcircuit 2: Falla Agent 2 per botiga física / venda al detall de mostrador
+    res_cc2 = await prospeccio_orchestrator.processar_candidat_complet(
+        nom_empresa="Ferreteria i Botiga Lleida SL",
+        web_url="https://botigalleida.cat",
+        codi_postal="25001",
+        municipi="Lleida",
+        vertical="ElectricPro",
+        operaris_minims=5,
+        dades_inicials={
+            "adreca_fisica": "Carrer Major 12, 25001 Lleida",
+            "email": "vendes@botigalleida.cat",
+            "telefon": "+34973223344",
+            "web_markdown": "Botiga de mostrador i venda al detall de subministraments elèctrics.",
+        },
+        db=db_session,
+    )
+
+    assert res_cc2["avaluacio"].estat_decisio == "DESCARTAT"
+    assert res_cc2["avaluacio"].score == 25
+    assert "Agent 2" in res_cc2["avaluacio"].motiu_detallat_ia
+    assert res_cc2["avaluacio"].punt_dolor == "Model enfocat a botiga física / mostrador sense tècnics de camp"
+    assert res_cc2["avaluacio"].campanya_3_emails == []
+
+    # 3. Candidat Viable: Passa Gate 1 i Gate 2, executa Agent 3 i genera els correus
+    res_viable = await prospeccio_orchestrator.processar_candidat_complet(
+        nom_empresa="Electrotècnia del Segre SL",
+        web_url="https://electrotecniasegre.cat",
+        codi_postal="25001",
+        municipi="Lleida",
+        vertical="ElectricPro",
+        operaris_minims=5,
+        dades_inicials={
+            "adreca_fisica": "Polígon El Segre, Carrer Indústria 5, 25001 Lleida",
+            "email": "contacte@electrotecniasegre.cat",
+            "telefon": "+34973556677",
+            "decisor_nom": "Jordi Farré",
+            "decisor_carrec": "Director Tècnic",
+            "fonts_urls": {"linkedin": "https://linkedin.com/company/electrotecnia-segre"},
+            "web_markdown": (
+                "Electrotècnia del Segre SL compta amb 8 operaris qualificats per a manteniments i quadres elèctrics "
+                "industrials a la demarcació de Lleida."
+            ),
+            "fita_recent": "Certificació ISO 9001 i nou contracte amb el Parc Científic de Lleida",
+        },
+        db=db_session,
+    )
+
+    assert res_viable["avaluacio"].estat_decisio == "SELECCIONAT"
+    assert res_viable["avaluacio"].score >= 65
+    assert len(res_viable["avaluacio"].campanya_3_emails) == 3
+    assert all("whatsapp" not in c.cos_text.lower() for c in res_viable["avaluacio"].campanya_3_emails)
+
+
+
 
 
