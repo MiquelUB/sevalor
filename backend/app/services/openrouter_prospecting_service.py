@@ -382,8 +382,8 @@ REGLES INNEGOCIABLES DE VALIDACIÓ (TOLERÀNCIA ZERO):
 {exit_str}
 
 CRITERIS DE PUNTUACIÓ (SCORE 0-100):
-- Si l'empresa no té adreça física al CP demanat, o no té un Gatekeeper amb nom i cognom real identificat, o és una botiga de venda al detall sense operaris de camp: DESCARTAR (`estat_decisio = "DESCARTAT"`, Score < 50).
-- Si l'empresa té adreça física verificada al CP, té un Gatekeeper amb nom i cognom real, i disposa de quadrilla d'operaris de camp: SELECCIONAR (`estat_decisio = "SELECCIONAT"`, Score >= 70).
+- Si l'empresa pertany a una altra localitat allunyada fora del CP/municipi demanat, o no té ni Gatekeeper ni contacte operatiu verificat, o és una botiga de venda al detall sense operaris de camp: DESCARTAR (`estat_decisio = "DESCARTAT"`, Score < 50).
+- Si l'empresa opera o té seu al CP o municipi demanat, disposa de quadrilla d'operaris de camp (>= mínim exigit), i té un Gatekeeper amb nom i cognom real O bé disposa de contacte operatiu verificat: SELECCIONAR (`estat_decisio = "SELECCIONAT"`, Score >= 70).
 - Si a més s'assembla a un patró d'èxit replicable: LOOKALIKE BOOST (Score >= 85).
 
 ESTRUCTURA DE LA CAMPANYA DE 3 EMAILS AMB TEMPO (SI ÉS SELECCIONAT):

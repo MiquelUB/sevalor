@@ -204,7 +204,7 @@ class Agent1IdentityExtractor:
             adr = investigacio_precalculada["adreca_detectada"]
         if not adr:
             adr = _extreure_adreca_amb_cp_de_text(
-                web_markdown,
+                f"{web_titol}\n{web_desc}\n{web_markdown}",
                 cp_clean,
                 adreces_estructurades=meta_html.get("adreces_estructurades"),
                 municipi=municipi_esperat,
@@ -297,8 +297,16 @@ class Agent1IdentityExtractor:
             or _extreure_telefon_de_text(web_markdown, tels_html=meta_html.get("tels"))
         )
 
-        # 4. Validació MX Shield en viu
+        # 4. Validació MX Shield en viu (amb fallback al correu corporatiu del domini si l'empresa usa formulari web)
         mx_valid, _ = await validar_email_mx(email_principal, db=db)
+        if not email_principal and dom and "." in dom:
+            cand_info_email = f"info@{dom}"
+            mx_dom_valid, _ = await validar_email_mx(cand_info_email, db=db)
+            if mx_dom_valid:
+                email_principal = cand_info_email
+                email_empresa = email_empresa or cand_info_email
+                mx_valid = True
+
         te_contacte_operatiu = bool((email_principal and mx_valid) or telefon_det)
 
         # 5. Tallafocs 1 (Quality Gate 1: URL verificable + Ubicació al CP o Municipi)

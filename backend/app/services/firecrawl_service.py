@@ -95,6 +95,34 @@ _PARAULES_GENERIQUES_PROHIBIDES = {
     "centraleta",
     "recepcio",
     "secretaria",
+    "espana",
+    "catalunya",
+    "cataluna",
+    "barcelona",
+    "lleida",
+    "girona",
+    "tarragona",
+    "terrassa",
+    "sabadell",
+    "hambre",
+    "energia",
+    "electricitat",
+    "electricidad",
+    "fontaneria",
+    "climatitzacio",
+    "climatizacion",
+    "reforma",
+    "reformes",
+    "reformas",
+    "projectes",
+    "proyectos",
+    "sistemes",
+    "sistemas",
+    "solucions",
+    "soluciones",
+    "ajuntament",
+    "ayuntamiento",
+    "diputacio",
 }
 
 _PARTICULES_NOM = {"de", "del", "d", "la", "les", "el", "els", "i", "y", "san", "sant", "santa", "vda"}
@@ -242,12 +270,12 @@ def validar_cp_en_adreca_fisica(adreca: Optional[str], codi_postal: str) -> bool
     if any(p in adr_lower for p in patrons_prohibits):
         return False
 
-    # Ha de contenir el Codi Postal exacte com a paraula completa
-    if not re.search(rf"\b{re.escape(cp_clean)}\b", adr_clean):
+    # Ha de contenir el Codi Postal exacte com a paraula completa (no com a codi de producte tipus APB-08221-G)
+    if not re.search(rf"(?<![A-Za-z0-9])\b{re.escape(cp_clean)}\b(?![\-[A-Za-z0-9])", adr_clean):
         return False
 
     # Si l'adreça conté un altre codi postal de 5 dígits diferent del demanat i el demanat no és el CP principal
-    tots_cps = re.findall(r"\b(?:0[1-9]|[1-4]\d|5[0-2])\d{3}\b", adr_clean)
+    tots_cps = re.findall(r"(?<![A-Za-z0-9])\b(?:0[1-9]|[1-4]\d|5[0-2])\d{3}\b(?![\-[A-Za-z0-9])", adr_clean)
     if tots_cps and cp_clean not in tots_cps:
         return False
 
@@ -268,22 +296,29 @@ def validar_cp_o_municipi_en_adreca(
     """Valida l'adreça física per Codi Postal exacte, prefix comarcal (3 dígits + municipi) o nom de municipi."""
     if validar_cp_en_adreca_fisica(adreca, codi_postal):
         return True
-    if not adreca or len(adreca.strip()) < 10:
+    if not adreca or len(adreca.strip()) < 8:
         return False
 
     adr_norm = unicodedata.normalize("NFKD", adreca).encode("ASCII", "ignore").decode("utf-8").lower()
-    # Si no té CP de 5 dígits explícit però conté el municipi i un indicador de via/polígon real:
+    # Rebutjar falses adreces de xarxes socials
+    if any(p in adr_norm for p in ("zona codi postal", "instagram", "linkedin", "facebook", "twitter", "tiktok", "hashtag")):
+        return False
+
+    # Si conté el municipi i un indicador de via/polígon/seu o un CP de la mateixa província:
     if municipi and len(municipi.strip()) >= 3:
         muni_norm = unicodedata.normalize("NFKD", municipi.strip()).encode("ASCII", "ignore").decode("utf-8").lower()
-        te_via = any(
+        te_via_o_seu = any(
             k in adr_norm
-            for k in ("carrer", "calle", "c/", "av", "pol", "nau", "nave", "ctra", "carretera", "pl", "cami", "km")
+            for k in (
+                "carrer", "calle", "c/", "av", "pol", "nau", "nave", "ctra",
+                "carretera", "pl", "cami", "km", "partida", "passatge", "ronda",
+                "seu", "ubicacio", "poligon",
+            )
         )
-        # Acceptar si pertany al mateix municipi (encara que el polígon tingui un CP adjacent de la mateixa província)
         prefix_prov = codi_postal.strip()[:2]
-        cps_detectats = re.findall(r"\b(?:0[1-9]|[1-4]\d|5[0-2])\d{3}\b", adreca)
+        cps_detectats = re.findall(r"(?<![A-Za-z0-9])\b(?:0[1-9]|[1-4]\d|5[0-2])\d{3}\b(?![\-[A-Za-z0-9])", adreca)
         cp_compatible = not cps_detectats or any(c.startswith(prefix_prov) for c in cps_detectats)
-        if muni_norm in adr_norm and te_via and cp_compatible:
+        if muni_norm in adr_norm and (te_via_o_seu or bool(cps_detectats)) and cp_compatible:
             return True
 
     return False
@@ -799,22 +834,24 @@ def _extreure_metadades_html_brut(raw_html: str) -> Dict[str, Any]:
             continue
 
     # 4. Extreure adreces d'atributs aria-label, title, data-address (ex: iframes de Google Maps o spans d'icones)
+    patro_via_meta = re.compile(
+        r"\b(?:c/|calle|carrer|av\.|avda\.|avinguda|avenida|pol\.?\s*ind|pol[íi]gon|nau|nave|carretera|ctra\.|bombers)\b",
+        flags=re.IGNORECASE,
+    )
+    paraules_ui_excloure = ("navigation", "navegació", "navegacio", "menu", "menú", "polietil", "política", "politica", "cookies")
     for m_attr in re.finditer(r'(?:aria-label|title|data-address)=["\']([^"\']{15,200})["\']', raw_html, flags=re.IGNORECASE):
         val = html.unescape(m_attr.group(1)).strip()
-        if re.search(r"\b\d{5}\b", val) or any(
-            kw in val.lower()
-            for kw in ("c/", "calle", "carrer", "av", "pol", "nau", "nave", "carretera", "ctra", "bombers")
-        ):
+        val_l = val.lower()
+        if any(bad in val_l for bad in paraules_ui_excloure):
+            continue
+        if re.search(r"\b(?:0[1-9]|[1-4]\d|5[0-2])\d{3}\b", val) or patro_via_meta.search(val):
             if len(val) >= 10 and val not in info["adreces_estructurades"]:
                 info["adreces_estructurades"].append(val)
 
     # 5. Extreure paràmetres d'adreça de Google Maps embeds / iframes (maps.google.com/maps?q=...)
     for m_map in re.finditer(r'maps\.google\.com/maps\?[^"\'\s<>]*q=([^&"\'\s<>]+)', raw_html, flags=re.IGNORECASE):
         val_map = urllib.parse.unquote(m_map.group(1)).strip()
-        if re.search(r"\b\d{5}\b", val_map) or any(
-            kw in val_map.lower()
-            for kw in ("c/", "calle", "carrer", "av", "pol", "nau", "nave", "carretera", "ctra", "bombers")
-        ):
+        if re.search(r"\b(?:0[1-9]|[1-4]\d|5[0-2])\d{3}\b", val_map) or patro_via_meta.search(val_map):
             if len(val_map) >= 10 and val_map not in info["adreces_estructurades"]:
                 info["adreces_estructurades"].append(val_map)
 
@@ -917,11 +954,41 @@ def _extreure_adreca_amb_cp_de_text(
             if validar_cp_en_adreca_fisica(frag, cp):
                 return frag[:180]
 
-    # 5. Comprovar flexibilització geogràfica (nom de municipi en adreces estructurades)
+    # 5. Comprovar flexibilització geogràfica (nom de municipi o CP adjacent del mateix municipi al text i metadades)
     if municipi and len(municipi.strip()) >= 3:
+        muni_clean = municipi.strip()
+        prefix_prov = cp[:2]
         for adr_est in (adreces_estructurades or []):
-            if validar_cp_o_municipi_en_adreca(adr_est, cp, municipi=municipi):
+            if validar_cp_o_municipi_en_adreca(adr_est, cp, municipi=muni_clean):
                 return adr_est[:180]
+
+        # 5.1 Cercar al text una via/polígon que contingui el municipi o un CP de la mateixa província + municipi
+        patro_via_muni = re.compile(
+            rf"((?:C/|C\.|Carrer|Calle|Av\.|Avda\.|Avinguda|Avenida|Pol\.?\s*Ind\.?|Pol[íi]gon(?:o)?\s+Industrial|"
+            rf"Crta\.|Ctra\.|Carretera|Passeig|Paseo|Pla[çc]a|Plaza|Cam[íi]|Camino|Partida|Travessera|Ronda|Nau|Nave)"
+            rf"[^\n;|<>]{{3,120}}?\b{re.escape(muni_clean)}\b)",
+            flags=re.IGNORECASE,
+        )
+        for m_vm in patro_via_muni.finditer(text):
+            cand_vm = re.sub(r"\s+", " ", m_vm.group(1)).strip(" ,.-;|")
+            if validar_cp_o_municipi_en_adreca(cand_vm, cp, municipi=muni_clean):
+                return cand_vm[:180]
+
+        # 5.2 Cercar als blocs separats per '|' o '\n' que continguin el municipi i indicador de via o CP provincial
+        for bloc_m in re.split(r"[\n|;]", text):
+            bloc_m_net = re.sub(r"\s+", " ", bloc_m).strip(" ,.-")
+            if len(bloc_m_net) <= 180 and re.search(rf"\b{re.escape(muni_clean)}\b", bloc_m_net, flags=re.IGNORECASE):
+                if validar_cp_o_municipi_en_adreca(bloc_m_net, cp, municipi=muni_clean):
+                    return bloc_m_net
+
+        # 5.3 Si la web confirma explícitament el municipi o el CP al seu contingut corporatiu (encara que ometi el carrer)
+        muni_norm = unicodedata.normalize("NFKD", muni_clean).encode("ASCII", "ignore").decode("utf-8").lower()
+        text_norm = unicodedata.normalize("NFKD", text).encode("ASCII", "ignore").decode("utf-8").lower()
+        if re.search(rf"\b{re.escape(muni_norm)}\b", text_norm):
+            # Verificar que no hi hagi explícitament un altre CP d'una altra província com a única adreça
+            tots_cps_text = re.findall(r"(?<![A-Za-z0-9])\b(?:0[1-9]|[1-4]\d|5[0-2])\d{3}\b(?![\-[A-Za-z0-9])", text)
+            if not tots_cps_text or any(c.startswith(prefix_prov) for c in tots_cps_text):
+                return f"Seu operativa a {muni_clean} (CP {cp})"
 
     return None
 
@@ -1185,6 +1252,23 @@ _PORTALS_SECTORIALS_I_GREMIS = (
     "infocif.es",
     "axesor.es",
     "empresia.es",
+    "trustlocal.es",
+    "instaladoresoficiales.com",
+    "buscaelectricista.com",
+    "guiagro.es",
+    "casahogar.com",
+    "directorio-empresa.es",
+    "cronoshare.com",
+    "zaask.es",
+    "prontopro.es",
+    "certicalia.com",
+    "todosbiz.es",
+    "fixalista.com",
+    "fontaneriaelrayo.es",
+    "vulka.es",
+    "kompass.com",
+    "iberinform.es",
+    "expansion.com",
 )
 
 _XARXES_I_DIRECTORIS_GENERICS_IGNORAR = (
@@ -1208,7 +1292,77 @@ _XARXES_I_DIRECTORIS_GENERICS_IGNORAR = (
     "boe.es",
     "gencat.cat",
     "administracion.gob.es",
+    "juntadeandalucia.es",
+    "softonic.com",
+    "ninite.com",
+    "uptodown.com",
+    "malavida.com",
+    "lapobladesegur.cat",
+    "agrobiotechforum.com",
+    "ree.es",
+    "obramat.es",
+    "leroymerlin.es",
+    "bricomart.es",
+    "amazon.es",
+    ".gob.es",
+    "ign.es",
+    "magicospirineos.com",
 )
+
+
+def _expandir_termes_cerca_vertical(vertical: str) -> List[str]:
+    """Tradueix noms de verticals de marca (CampoPro, ElectricPro, HydroPro, BuildingPro) o text lliure
+    a termes de cerca B2B reals d'empreses instal·ladores i de manteniment en català i castellà.
+    """
+    v_clean = vertical.strip()
+    v_low = unicodedata.normalize("NFKD", v_clean).encode("ASCII", "ignore").decode("utf-8").lower()
+
+    if v_low in ("campopro", "campo pro") or any(k in v_low for k in ("agricol", "reg ", "riego", "agrar")):
+        return [
+            "instalaciones riego agricola",
+            "regs i bombament agricola",
+            "empresa sistemes de reg",
+            "serveis agraris i reg",
+        ]
+    if v_low in ("electricpro", "electric pro") or any(k in v_low for k in ("electric", "baixa tensio", "rebt")):
+        return [
+            "instalaciones electricas",
+            "instal·lacions electriques",
+            "electricista manteniment industrial",
+            "empresa instaladora electrica",
+        ]
+    if v_low in ("hydropro", "hydro pro", "climapro") or any(
+        k in v_low for k in ("fontan", "aigua", "hidraul", "lampist", "climatitz", "calefac")
+    ):
+        return [
+            "fontaneria i climatitzacio",
+            "instalaciones fontaneria calefaccion",
+            "lampisteria i climatitzacio",
+            "empresa instaladora fontaneria",
+        ]
+    if v_low in ("buildingpro", "building pro") or any(
+        k in v_low for k in ("edificac", "construcc", "rehabilitac", "reform", "obra")
+    ):
+        return [
+            "empresa constructora i reformes",
+            "rehabilitacio d'edificis",
+            "construccions i manteniment",
+            "obres i rehabilitacions",
+        ]
+    if any(k in v_low for k in ("placa", "solar", "fotovolt", "renovable")):
+        return [
+            "instalaciones placas solares",
+            "energia solar fotovoltaica",
+            "empresa instaladora solar",
+            v_clean,
+        ]
+
+    # Per a qualsevol altra vertical escrita lliurement per l'humà
+    return [
+        v_clean,
+        f"empresa instaladora {v_clean}",
+        f"manteniment {v_clean}",
+    ]
 
 
 class FirecrawlMultiChannelService:
@@ -1546,6 +1700,10 @@ class FirecrawlMultiChannelService:
                     # Extreure enllaços socials i subpàgines internes (contacte, qui som, avís legal)
                     hrefs = re.findall(r'href=["\']([^"\']+)["\']', raw_html, flags=re.IGNORECASE)
                     subpagines: List[str] = []
+                    parsed_clean = urllib.parse.urlparse(clean_url)
+                    if parsed_clean.path and parsed_clean.path not in ("", "/"):
+                        root_home = f"{parsed_clean.scheme}://{parsed_clean.netloc}/"
+                        subpagines.append(root_home)
                     for h in hrefs:
                         h_str = html.unescape(h.strip())
                         if h_str.lower().startswith(("mailto:", "tel:", "javascript:")):
@@ -1767,17 +1925,22 @@ class FirecrawlMultiChannelService:
                             dominis_corporatius_vistos.add(d_cm)
                             candidats_preparats.append(cm)
 
-        # Etapa 3: Generació de consultes multi-angle (Prioritat: Localitat Directa, Gremis, Portals i Mapes)
+        # Etapa 3: Generació de consultes multi-angle (amb traducció semàntica de verticals de marca a termes B2B reals)
         consultes: List[str] = []
+        termes_cerca = _expandir_termes_cerca_vertical(vertical_clean)
 
-        # 1. Cerca directa a la localitat (màxima taxa d'èxit per a negocis del municipi)
+        # 1. Cerca directa a la localitat i codi postal amb els termes B2B reals del sector
+        for terme in termes_cerca[:3]:
+            if municipi_nom:
+                consultes.append(f'{terme} "{municipi_nom}"')
+                consultes.append(f'{terme} "{cp_clean}" OR "{municipi_nom}"')
+            else:
+                consultes.append(f'{terme} "{cp_clean}"')
+
+        # 2. Cerca per codi postal i societat/instal·lacions locals
         if municipi_nom:
-            consultes.append(f"{vertical_clean} {municipi_nom}")
-            consultes.append(f"instalador {vertical_clean} {municipi_nom}")
-
-        # 2. Cerca pel codi postal
-        consultes.append(f"{vertical_clean} {cp_clean}")
-        consultes.append(f"instalador {vertical_clean} {cp_clean}")
+            consultes.append(f'"{municipi_nom}" ({termes_cerca[0]})')
+        consultes.append(f'{termes_cerca[0]} {cp_clean}')
 
         # 3. Sinònims d'energia solar / renovables
         if any(k in vertical_clean.lower() for k in ("placa", "solar", "fotovolt", "renovable")):
@@ -1786,17 +1949,9 @@ class FirecrawlMultiChannelService:
             consultes.append(f"solar {cp_clean}")
             consultes.append(f"portalsolar {municipi_nom or cp_clean}")
 
-        # 4. Gremis sectorials i portals
-        consultes.append(f"gremi instal ladors {vertical_clean} {cp_clean}")
+        # 4. Gremis sectorials i portals locals
         if municipi_nom:
-            consultes.append(f"gremi instal ladors {municipi_nom}")
-            consultes.append(f"directorio {vertical_clean} {municipi_nom}")
-
-        # 5. Cerca a Google Maps / Local
-        if municipi_nom:
-            consultes.append(f"maps {vertical_clean} {municipi_nom}")
-            consultes.append(f"site:google.com/maps {vertical_clean} {municipi_nom}")
-        consultes.append(f"maps {vertical_clean} {cp_clean}")
+            consultes.append(f"empresas {termes_cerca[0]} {municipi_nom}")
 
         for q in consultes:
             if len(items_bruts) >= limit * 4:
@@ -1819,26 +1974,49 @@ class FirecrawlMultiChannelService:
             "instaladores",
             "instal·lador",
             "instal·ladors",
+            "instalaciones",
+            "instal·lacions",
             "instala",
+            "electricistas",
+            "fontaneros",
             "guia",
             "portal",
             "descargar",
             "paneles",
             "placas",
             "reformas",
+            "precios",
+            "presupuesto",
         )
 
         for item in items_bruts:
             url = (item.get("url") or "").strip()
             if not validar_url_verificable(url):
                 continue
+            url_low = url.lower()
+            if any(bad_p in url_low for bad_p in ("/producto/", "/descargas/", "/programa/", "/login", "/mapa-web")):
+                continue
             domini = normalitzar_domini(url)
             if not domini or any(x in domini for x in _XARXES_I_DIRECTORIS_GENERICS_IGNORAR):
                 continue
+            titol_item_low = (item.get("title") or "").lower()
+            if any(
+                inst in domini or inst in titol_item_low
+                for inst in ("ajuntament", "ayuntamiento", "diputacio", "diputacion", "seuelectronica", "sede-electronica", "consellcomarcal")
+            ):
+                continue
+            if municipi_nom:
+                muni_slug = re.sub(r"[^a-z0-9]", "", unicodedata.normalize("NFKD", municipi_nom).encode("ASCII", "ignore").decode("utf-8").lower())
+                dom_stem = domini.split(".")[0].replace("-", "")
+                if muni_slug and dom_stem == muni_slug:
+                    continue
 
             # Si el domini pertany a un portal sectorial o gremi, resoldre el nom d'empresa i trobar la seva web oficial
             if any(portal in domini for portal in _PORTALS_SECTORIALS_I_GREMIS):
                 titol_portal = (item.get("title") or "").strip()
+                desc_portal = (item.get("description") or "").strip()
+                noms_a_resoldre: List[str] = []
+
                 # Extreure nom de l'empresa (ex: 'Damia Solar - Energia Solar en La Pobla de Segur - Portalsolar' -> 'Damia Solar')
                 part_nom = re.split(r"[-–|·:;•]", titol_portal)[0].strip()
                 part_nom = re.sub(r"^[^\w\s]+", "", part_nom).strip()
@@ -1847,7 +2025,19 @@ class FirecrawlMultiChannelService:
                     and len(part_nom) >= 3
                     and not any(k in part_nom.lower() for k in paraules_prohibides_nom)
                 ):
-                    query_oficial = f"{part_nom} {municipi_nom or cp_clean}"
+                    noms_a_resoldre.append(part_nom)
+                else:
+                    # Si és una pàgina de llistat del directori local, extreure noms d'empreses (SL, SA, o títols de fitxa)
+                    for m_soc in re.finditer(
+                        r"\b([A-ZÀ-Ý][A-Za-zÀ-ÿ0-9&\s.\-]{2,40}?\s+(?:S\.?L\.?U?\.?|S\.?A\.?|S\.?C\.?P\.?))\b",
+                        f"{titol_portal} | {desc_portal}",
+                    ):
+                        cand_soc = m_soc.group(1).strip()
+                        if cand_soc not in noms_a_resoldre:
+                            noms_a_resoldre.append(cand_soc)
+
+                for nom_res in noms_a_resoldre[:3]:
+                    query_oficial = f'"{nom_res}" {municipi_nom or cp_clean}'
                     web_cands = await self._cercar_web_multimotor(query_oficial, limit=3)
                     for cand in web_cands:
                         u_cand = cand.get("url", "")
@@ -1884,6 +2074,7 @@ class FirecrawlMultiChannelService:
                 text_complet,
                 cp_clean,
                 adreces_estructurades=meta_html.get("adreces_estructurades"),
+                municipi=municipi_nom,
             )
 
             # Si l'adreça no s'ha trobat al text de la portada, intentar buscar per municipi
