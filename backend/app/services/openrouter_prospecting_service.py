@@ -251,6 +251,18 @@ def _aplicar_regles_estrictes_post_avaluacio(
     """Valida CP/municipi i permet seleccionar leads amb contacte operatiu encara que falti el nom del Gatekeeper."""
     avaluacio.fonts_investigades = fonts_verificades
 
+    # 1. Validació de l'adreça física al CP exacte o al mateix municipi/polígon industrial
+    if adreca_fisica is not None and not validar_cp_o_municipi_en_adreca(adreca_fisica, codi_postal, municipi=municipi):
+        if avaluacio.estat_decisio == "SELECCIONAT":
+            avaluacio.estat_decisio = "DESCARTAT"
+            avaluacio.score = min(avaluacio.score, 30)
+            avaluacio.campanya_3_emails = []
+            avaluacio.motiu_detallat_ia = (
+                f"Descartat (Ubicació Física): L'adreça ('{adreca_fisica or 'No disponible'}') "
+                f"no correspon al CP {codi_postal.strip()} ni al municipi ({municipi or 'N/A'})."
+            )
+
+    # 2. Gatekeeper Nominal vs Lead Corporatiu amb Contacte Directe Verificat
     if not es_nom_persona_real(avaluacio.decisor_nom):
         avaluacio.decisor_nom = None
         if avaluacio.estat_decisio == "SELECCIONAT":
@@ -261,24 +273,6 @@ def _aplicar_regles_estrictes_post_avaluacio(
                 avaluacio.motiu_detallat_ia = (
                     "Descartat automàticament: No s'ha pogut verificar el Gatekeeper ni contacte operatiu suficient."
                 )
-            else:
-                # NO descartem un lead potent amb operaris i contacte real: penalitzem score i marquem per revisió
-                avaluacio.score = max(65, min(avaluacio.score - 12, 78))
-                avaluacio.decisor_carrec = avaluacio.decisor_carrec or "Direcció / Gerència (Pendent nom)"
-                avaluacio.motiu_detallat_ia = (
-                    f"[AVÍS: Decisor nominal pendent d'identificar] {avaluacio.motiu_detallat_ia} "
-                    f"S'admet pels seus indicadors operatius ({avaluacio.operaris_estimats} operaris) i contacte verificat."
-                )
-
-    if adreca_fisica is not None and not validar_cp_o_municipi_en_adreca(adreca_fisica, codi_postal, municipi=municipi):
-        if avaluacio.estat_decisio == "SELECCIONAT":
-            avaluacio.estat_decisio = "DESCARTAT"
-            avaluacio.score = min(avaluacio.score, 30)
-            avaluacio.campanya_3_emails = []
-            avaluacio.motiu_detallat_ia = (
-                f"Descartat (Ubicació Física): L'adreça ('{adreca_fisica or 'No disponible'}') "
-                f"no correspon al CP {codi_postal.strip()} ni al municipi ({municipi or 'N/A'})."
-            )
 
     return avaluacio
 
