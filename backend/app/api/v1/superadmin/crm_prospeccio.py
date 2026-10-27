@@ -37,7 +37,6 @@ from app.models.models import (
     Vehicle,
 )
 from app.services.firecrawl_service import (
-    es_nom_persona_real,
     extreure_mapa_fonts_urls,
     firecrawl_service,
     formatar_fonts_verificables,
@@ -45,15 +44,11 @@ from app.services.firecrawl_service import (
     normalitzar_cif,
     normalitzar_domini,
     obtenir_municipi_de_codi_postal,
-    validar_cp_o_municipi_en_adreca,
-    validar_url_verificable,
     verificar_duplicitat_multivector,
 )
 from app.services.mx_shield_service import validar_email_mx
-from app.services.openrouter_prospecting_service import (
-    EmailStepSchema,
-    qualificar_candidat_amb_openrouter,
-)
+from app.services.openrouter_prospecting_service import EmailStepSchema
+from app.services.prospeccio_agents_service import prospeccio_orchestrator
 from app.services.stalwart_mail_service import (
     aprovar_i_enviar_correu_calendari,
     processar_resposta_inbound,
@@ -1383,89 +1378,27 @@ async def crear_executar_tasca_cp(
             db.add(candidat_dup)
             continue
 
-        # 3. Investigació multi-canal (Web + LinkedIn + Instagram + Premsa amb URLs directes i extracció profunda)
-        investigacio = await firecrawl_service.investigar_empresa_completa(
-            nom_empresa=nom,
-            web_url=web,
-            codi_postal=payload.codi_postal,
-            vertical=payload.vertical,
-            dades_inicials=item,
-        )
-
-        # Enriquir adreça física, CIF, email (empresa i gatekeeper) i telèfon si s'han descobert a la web
-        if not adr and investigacio.get("adreca_detectada"):
-            adr = investigacio["adreca_detectada"]
-            adr_norm = normalitzar_adreca(adr) if adr else None
-        if not cif_norm and investigacio.get("cif_detectat"):
-            cif_norm = normalitzar_cif(investigacio["cif_detectat"])
-        if not email_det and investigacio.get("email_detectat"):
-            email_det = investigacio["email_detectat"]
-        email_empresa_det = item.get("email_empresa") or investigacio.get("email_empresa_detectat") or email_det
-        email_gk_det = item.get("email_gatekeeper") or investigacio.get("email_gatekeeper_detectat")
-        if email_gk_det:
-            email_det = email_gk_det
-        telefon_det = item.get("telefon") or investigacio.get("telefon_detectat")
-
-        # 4. Validació MX Shield sobre l'email verificat
-        mx_valid, _ = await validar_email_mx(email_det, db=db)
-        te_contacte_operatiu = bool((email_det and mx_valid) or telefon_det)
-
-        # 5. Avaluació i Lead Scoring amb OpenRouter (DeepSeek) + validació estricta post-IA
-        avaluacio = await qualificar_candidat_amb_openrouter(
-            nom_empresa=nom,
-            web_url=web,
+        # 3. Pipeline Multi-Agent amb Orquestrador Supervisor (Agent 1 Identitat -> Agent 2 Scoring -> Agent 3 Social -> Orquestrador)
+        resultat_orquestrat = await prospeccio_orchestrator.executar_pipeline_candidat(
+            item_candidat=item,
             codi_postal=payload.codi_postal,
             vertical=payload.vertical,
             operaris_minims=payload.operaris_minims,
-            web_markdown=investigacio.get("web_markdown", ""),
-            fonts_investigades=investigacio.get("fonts_investigades", []),
-            fita_recent=investigacio.get("fita_recent"),
-            gatekeeper_hints=investigacio.get("gatekeeper_hints", {}),
+            municipi_esperat=municipi_esperat,
             db=db,
-            adreca_fisica=adr or "",
-            municipi=municipi_esperat,
-            te_contacte_operatiu=te_contacte_operatiu,
         )
+        dades_id = resultat_orquestrat.agent1
+        avaluacio = resultat_orquestrat.avaluacio_final
 
-        # 6. TALLAFOCS PONDERAT DE LES 3 PREMISSES DE QUALITAT:
-        # Premissa A: Adreça verificada al CP exacte o al mateix municipi/polígon industrial
-        if not validar_cp_o_municipi_en_adreca(adr, payload.codi_postal.strip(), municipi=municipi_esperat):
-            avaluacio.estat_decisio = "DESCARTAT"
-            avaluacio.score = min(avaluacio.score, 30)
-            avaluacio.campanya_3_emails = []
-            avaluacio.motiu_detallat_ia = (
-                f"Descartat (Ubicació Física): L'adreça ('{adr or 'No disponible'}') "
-                f"no correspon al CP {payload.codi_postal.strip()} ni al municipi ({municipi_esperat or 'N/A'})."
-            )
-
-        # Premissa B: Gatekeeper Nominal vs Lead Corporatiu amb Contacte Directe Verificat
-        if not es_nom_persona_real(avaluacio.decisor_nom):
-            avaluacio.decisor_nom = None
-            if avaluacio.estat_decisio == "SELECCIONAT":
-                if te_contacte_operatiu and avaluacio.operaris_estimats >= payload.operaris_minims:
-                    # NO descartem un lead potent amb operaris i contacte real: penalitzem score i marquem per revisió
-                    avaluacio.score = max(65, min(avaluacio.score - 12, 78))
-                    avaluacio.decisor_carrec = avaluacio.decisor_carrec or "Direcció / Gerència (Pendent nom)"
-                    avaluacio.motiu_detallat_ia = (
-                        f"[AVÍS: Decisor nominal pendent d'identificar] {avaluacio.motiu_detallat_ia} "
-                        f"S'admet pels seus indicadors operatius ({avaluacio.operaris_estimats} operaris) i contacte verificat."
-                    )
-                else:
-                    avaluacio.estat_decisio = "DESCARTAT"
-                    avaluacio.score = min(avaluacio.score, 40)
-                    avaluacio.campanya_3_emails = []
-                    avaluacio.motiu_detallat_ia = (
-                        "Descartat: Sense Gatekeeper nominal identificat ni dades de contacte/operaris suficients."
-                    )
-
-        # Premissa C: Enllaç web directe comprovable
-        if not validar_url_verificable(web):
-            avaluacio.estat_decisio = "DESCARTAT"
-            avaluacio.score = min(avaluacio.score, 20)
-            avaluacio.campanya_3_emails = []
-            avaluacio.motiu_detallat_ia = (
-                "Descartat automàticament (Regla d'Enllaços Comprovables): No disposa d'un enllaç web directe i verificable."
-            )
+        adr = dades_id.adreca_fisica
+        adr_norm = dades_id.adreca_normalitzada
+        cif_norm = dades_id.cif
+        email_det = dades_id.email_principal
+        email_empresa_det = dades_id.email_empresa
+        email_gk_det = dades_id.email_gatekeeper
+        telefon_det = dades_id.telefon
+        mx_valid = dades_id.mx_valid
+        te_contacte_operatiu = dades_id.te_contacte_operatiu
 
         lead_creat_id: Optional[uuid.UUID] = None
 

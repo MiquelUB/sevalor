@@ -914,4 +914,75 @@ async def test_t007_openrouter_reintent_429_i_recuperacio(db_session: AsyncSessi
     assert len(resultat.campanya_3_emails) == 1
 
 
+@pytest.mark.asyncio
+async def test_t007_arquitectura_multi_agent_i_orquestrador(db_session: AsyncSession):
+    """Verifica el flux complet de l'Arquitectura Multi-Agent (Agent 1, Agent 2, Agent 3 i Orquestrador)."""
+    from app.services.prospeccio_agents_service import prospeccio_orchestrator
+
+    # 1. Candidat òptim amb Gatekeeper, contacte operatiu i xarxes socials
+    item_optim = {
+        "nom_empresa": "Solar i Reg del Pallars SL",
+        "web_url": "https://solarpallars.cat",
+        "adreca_fisica": "Polígon Industrial Els Raiers, Nau 7, 25500 La Pobla de Segur",
+        "cif": "B25889900",
+        "email": "gerencia@solarpallars.cat",
+        "telefon": "+34655443322",
+        "decisor_nom": "Arnau Subirà",
+        "decisor_carrec": "Director Tècnic",
+        "linkedin_url": "https://www.linkedin.com/company/solarpallars",
+        "instagram_url": "https://www.instagram.com/solarpallars/",
+        "web_markdown": (
+            "Solar i Reg del Pallars SL disposa de 12 tècnics instal·ladors de camp per a bombament solar "
+            "i automatització de reg agrícola a la comarca del Pallars."
+        ),
+        "fita_recent": "Nova adjudicació de bombament solar de 150 kWp a la Conca de Tremp",
+    }
+
+    res_optim = await prospeccio_orchestrator.executar_pipeline_candidat(
+        item_candidat=item_optim,
+        codi_postal="25500",
+        vertical="Energia Solar i Reg Agrícola",
+        operaris_minims=5,
+        municipi_esperat="La Pobla de Segur",
+        db=db_session,
+    )
+
+    assert res_optim.agent1.passa_tallafocs_1 is True
+    assert res_optim.agent1.gatekeeper_nom == "Arnau Subirà"
+    assert res_optim.agent1.te_contacte_operatiu is True
+    assert res_optim.agent2.passa_tallafocs_2 is True
+    assert res_optim.agent2.operaris_estimats == 12
+    assert any("linkedin|" in f for f in res_optim.agent3.fonts_investigades)
+    assert any("instagram|" in f for f in res_optim.agent3.fonts_investigades)
+    assert res_optim.avaluacio_final.estat_decisio == "SELECCIONAT"
+    assert res_optim.avaluacio_final.decisor_nom == "Arnau Subirà"
+    assert len(res_optim.avaluacio_final.campanya_3_emails) == 3
+    assert "Arnau Subirà" in res_optim.avaluacio_final.campanya_3_emails[0].cos_text
+    assert all("whatsapp" not in c.cos_text.lower() for c in res_optim.avaluacio_final.campanya_3_emails)
+
+    # 2. Candidat botiga al detall -> Descartat per Agent 2 (Tallafocs 2)
+    item_botiga = {
+        "nom_empresa": "Botiga Venda Detall Solar Pallars SL",
+        "web_url": "https://botigasolarpallars.cat",
+        "adreca_fisica": "Av. Verdaguer 10, 25500 La Pobla de Segur",
+        "email": "info@botigasolarpallars.cat",
+        "telefon": "+34973680011",
+        "web_markdown": "Botiga de venda al detall de bateries i material elèctric de mostrador.",
+    }
+
+    res_botiga = await prospeccio_orchestrator.executar_pipeline_candidat(
+        item_candidat=item_botiga,
+        codi_postal="25500",
+        vertical="Energia Solar",
+        operaris_minims=5,
+        municipi_esperat="La Pobla de Segur",
+        db=db_session,
+    )
+    assert res_botiga.agent2.es_botiga_detall is True
+    assert res_botiga.agent2.passa_tallafocs_2 is False
+    assert res_botiga.avaluacio_final.estat_decisio == "DESCARTAT"
+    assert res_botiga.avaluacio_final.campanya_3_emails == []
+
+
+
 
