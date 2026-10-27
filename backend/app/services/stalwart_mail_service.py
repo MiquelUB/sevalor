@@ -106,12 +106,12 @@ async def programar_campanya_3_emails(
             data_programada=data_prog,
             direccio="OUTBOUND",
             estat_enviament="ESBORRANY_PROGRAMAT",
-            remitent=settings.SUPERADMIN_OUTREACH_EMAIL or "tecnic@sevalor.net",
-            destinatari=lead.email,
-            assumpte=step.assumpte.strip(),
+            remitent=(settings.SUPERADMIN_OUTREACH_EMAIL or "tecnic@sevalor.net")[:150],
+            destinatari=lead.email[:150],
+            assumpte=step.assumpte.strip()[:255],
             cos_text=cos_amb_peu,
-            message_id=actual_msg_id,
-            in_reply_to=in_reply_to,
+            message_id=actual_msg_id[:255],
+            in_reply_to=in_reply_to[:255] if in_reply_to else None,
             references_header=references,
             created_at=ara,
         )
@@ -120,7 +120,7 @@ async def programar_campanya_3_emails(
 
     # Actualitzar l'esborrany ràpid a la fitxa del lead
     if campanya:
-        lead.esborrany_email_assumpte = campanya[0].assumpte
+        lead.esborrany_email_assumpte = campanya[0].assumpte[:255]
         lead.esborrany_email_cos = campanya[0].cos_text
         lead.updated_at = ara
 

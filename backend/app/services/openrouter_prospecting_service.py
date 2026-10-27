@@ -108,11 +108,11 @@ class EmailStepSchema(BaseModel):
                 offsets = {1: 0, 2: 4, 3: 8}
                 data["tempo_offset_dies"] = offsets.get(data["pas"], 0)
 
-        # Assumpte (mínim 5 caràcters)
+        # Assumpte (mínim 5 caràcters, màxim 255)
         assumpte = data.get("assumpte") or data.get("subject") or data.get("titol") or ""
         if len(str(assumpte).strip()) < 5:
             assumpte = "Optimització de procesos tècnics amb Sevalor Suite"
-        data["assumpte"] = str(assumpte).strip()
+        data["assumpte"] = str(assumpte).strip()[:255]
 
         # Cos text (mínim 20 caràcters)
         cos = (

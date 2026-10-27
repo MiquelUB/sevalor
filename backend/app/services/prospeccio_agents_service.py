@@ -627,7 +627,7 @@ class ProspeccioAgentOrchestrator:
                 EmailStepSchema(
                     pas=1,
                     tempo_offset_dies=0,
-                    assumpte=f"Optimització operativa per a {identitat.nom_empresa} ({identitat.vertical})",
+                    assumpte=f"Optimització operativa per a {identitat.nom_empresa} ({identitat.vertical})"[:255],
                     cos_text=(
                         f"Hola {salutacio},\n\n"
                         f"Hem estat seguint l'activitat recent de {identitat.nom_empresa} a través de {canal_str} "
@@ -643,7 +643,7 @@ class ProspeccioAgentOrchestrator:
                 EmailStepSchema(
                     pas=2,
                     tempo_offset_dies=4,
-                    assumpte=f"Cas d'èxit en {identitat.vertical}: de la furgoneta a la factura Veri*factu",
+                    assumpte=f"Cas d'èxit en {identitat.vertical}: de la furgoneta a la factura Veri*factu"[:255],
                     cos_text=(
                         f"Hola {salutacio},\n\n"
                         f"Fa uns dies us escrivíem sobre la gestió de les vostres quadrilles. "
@@ -657,7 +657,7 @@ class ProspeccioAgentOrchestrator:
                 EmailStepSchema(
                     pas=3,
                     tempo_offset_dies=8,
-                    assumpte=f"Activació de Demo Real de 7 dies per a {identitat.nom_empresa}",
+                    assumpte=f"Activació de Demo Real de 7 dies per a {identitat.nom_empresa}"[:255],
                     cos_text=(
                         f"Hola {salutacio},\n\n"
                         f"Per no robar-vos més temps: si voleu comprovar directament al terreny com funciona "
