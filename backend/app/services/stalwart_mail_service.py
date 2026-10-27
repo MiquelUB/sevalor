@@ -136,7 +136,7 @@ async def programar_campanya_3_emails(
     )
     db.add(act)
 
-    await db.commit()
+    await db.flush()
     return missatges_creats
 
 

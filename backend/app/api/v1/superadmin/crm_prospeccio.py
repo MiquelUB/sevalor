@@ -37,6 +37,7 @@ from app.models.models import (
     Vehicle,
 )
 from app.services.firecrawl_service import (
+    es_nom_persona_real,
     extreure_mapa_fonts_urls,
     firecrawl_service,
     formatar_fonts_verificables,
@@ -44,11 +45,15 @@ from app.services.firecrawl_service import (
     normalitzar_cif,
     normalitzar_domini,
     obtenir_municipi_de_codi_postal,
+    validar_cp_o_municipi_en_adreca,
+    validar_url_verificable,
     verificar_duplicitat_multivector,
 )
 from app.services.mx_shield_service import validar_email_mx
-from app.services.openrouter_prospecting_service import EmailStepSchema
-from app.services.prospeccio_agents_service import prospeccio_orchestrator
+from app.services.openrouter_prospecting_service import (
+    EmailStepSchema,
+    qualificar_candidat_amb_openrouter,
+)
 from app.services.stalwart_mail_service import (
     aprovar_i_enviar_correu_calendari,
     processar_resposta_inbound,
@@ -1330,218 +1335,275 @@ async def crear_executar_tasca_cp(
     geo_muni = await obtenir_municipi_de_codi_postal(payload.codi_postal.strip())
     municipi_esperat = geo_muni.get("municipi") if geo_muni else None
 
+    cp_clean = payload.codi_postal.strip()[:10]
+    vertical_clean = payload.vertical.strip()[:150]
+
     for item in candidats_raw:
         cand_id = uuid.uuid4()
         nom = (item.get("nom_empresa") or "Empresa Sense Nom").strip()[:150]
         web = (item.get("web_url") or "").strip()[:255]
         dom = normalitzar_domini(web)[:150]
-        adr = item.get("adreca_fisica")
-        if adr:
-            adr = str(adr).strip()[:255]
+        adr = (item.get("adreca_fisica") or "").strip()[:255] or None
         adr_norm = normalitzar_adreca(adr)[:255] if adr else None
         cif_raw = item.get("cif")
         cif_norm = normalitzar_cif(cif_raw)[:20] if cif_raw else None
-        email_det = item.get("email")
-        if email_det:
-            email_det = str(email_det).strip()[:150]
-        telefon_det = item.get("telefon")
-        if telefon_det:
-            telefon_det = str(telefon_det).strip()[:30]
-
-        # 2. Multi-Validació de 3 vectors contra saas_leads, empreses i saas_exclusio_rgpd
-        es_dup, vector_dup, motiu_dup = await verificar_duplicitat_multivector(
-            db=db,
-            domini=dom,
-            adreca=adr_norm,
-            cif=cif_norm,
-        )
-
-        if es_dup:
-            tot_dup += 1
-            fonts_dup = formatar_fonts_verificables({}, web_url=web)
-            candidat_dup = SaasProspeccioCandidat(
-                id=cand_id,
-                tasca_id=tasca_id,
-                nom_empresa=nom[:150],
-                cif=cif_norm[:20] if cif_norm else None,
-                web_url=(web or f"https://{dom or 'empresa.local'}")[:255],
-                domini_normalitzat=(dom or "sense-domini.local")[:150],
-                adreca_fisica=adr[:255] if adr else None,
-                adreca_normalitzada=adr_norm[:255] if adr_norm else None,
-                codi_postal=payload.codi_postal.strip()[:10],
-                vertical=payload.vertical.strip()[:150],
-                fonts_investigades=",".join(fonts_dup),
-                email_detectat=email_det[:150] if email_det else None,
-                telefon_detectat=telefon_det[:30] if telefon_det else None,
-                mx_validat=False,
-                operaris_estimats=0,
-                score=0,
-                estat_decisio="DUPLICAT",
-                vector_duplicitat=vector_dup[:50] if vector_dup else None,
-                motiu_detallat_ia=motiu_dup or "Candidat duplicat segons filtre multi-vector.",
-                created_at=ara,
-                updated_at=ara,
-            )
-            db.add(candidat_dup)
-            continue
+        email_det = (item.get("email") or "").strip()[:150] or None
+        telefon_det = (item.get("telefon") or "").strip()[:30] or None
 
         try:
-            # 3. Pipeline Multi-Agent amb Orquestrador Supervisor (Agent 1 Identitat -> Agent 2 Scoring -> Agent 3 Social -> Orquestrador)
-            resultat_orquestrat = await prospeccio_orchestrator.executar_pipeline_candidat(
-                item_candidat=item,
-                codi_postal=payload.codi_postal,
-                vertical=payload.vertical,
-                operaris_minims=payload.operaris_minims,
-                municipi_esperat=municipi_esperat,
-                db=db,
-            )
-            dades_id = resultat_orquestrat.agent1
-            avaluacio = resultat_orquestrat.avaluacio_final
-
-            adr = dades_id.adreca_fisica[:255] if dades_id.adreca_fisica else None
-            adr_norm = dades_id.adreca_normalitzada[:255] if dades_id.adreca_normalitzada else None
-            cif_norm = dades_id.cif[:20] if dades_id.cif else None
-            email_det = dades_id.email_principal[:150] if dades_id.email_principal else None
-            email_empresa_det = dades_id.email_empresa[:150] if dades_id.email_empresa else None
-            email_gk_det = dades_id.email_gatekeeper[:150] if dades_id.email_gatekeeper else None
-            telefon_det = dades_id.telefon[:30] if dades_id.telefon else None
-            mx_valid = dades_id.mx_valid
-            te_contacte_operatiu = dades_id.te_contacte_operatiu
-
-            decisor_nom = avaluacio.decisor_nom[:100] if avaluacio.decisor_nom else None
-            decisor_carrec = avaluacio.decisor_carrec[:100] if avaluacio.decisor_carrec else None
-            angle_atac = avaluacio.angle_atac[:50] if avaluacio.angle_atac else None
-
-            lead_creat_id: Optional[uuid.UUID] = None
-
-            # Permetre la creació del Lead si ha estat SELECCIONAT (amb nom real o amb contacte operatiu verificat)
-            if avaluacio.estat_decisio == "SELECCIONAT" and (decisor_nom or te_contacte_operatiu):
-                tot_sel += 1
-                lead_creat_id = uuid.uuid4()
-                nom_contacte_final = (decisor_nom or f"Direcció Tècnica ({nom[:75]})")[:100]
-                nota_emails = ""
-                if email_empresa_det and email_gk_det and email_empresa_det != email_gk_det:
-                    nota_emails = f" [Email empresa: {email_empresa_det} | Email Gatekeeper: {email_gk_det}]"
-
-                email_lead = (email_det or f"contacte@{dom or 'empresa.local'}")[:150]
-
-                nou_lead = SaasLead(
-                    id=lead_creat_id,
-                    nom_empresa=nom[:150],
-                    nom_contacte=nom_contacte_final,
-                    email=email_lead,
-                    telefon=telefon_det[:30] if telefon_det else None,
-                    vertical=payload.vertical.strip()[:150],
-                    origen=f"SCRAPING_CP_{payload.codi_postal.strip()}"[:50],
-                    estat_qualificacio="QUALIFICAT",
-                    operaris_estimats=avaluacio.operaris_estimats,
-                    notes=f"Generat des del lot CP {payload.codi_postal}.{nota_emails} {avaluacio.motiu_detallat_ia}",
-                    cif=cif_norm[:20] if cif_norm else None,
-                    web_url=(web or f"https://{dom or 'empresa.local'}")[:255],
-                    domini_normalitzat=(dom or "sense-domini.local")[:150],
-                    adreca_fisica=adr[:255] if adr else None,
-                    adreca_normalitzada=adr_norm[:255] if adr_norm else None,
-                    codi_postal=payload.codi_postal.strip()[:10],
-                    carrec_contacte=decisor_carrec[:100] if decisor_carrec else None,
-                    fonts_investigades=",".join(avaluacio.fonts_investigades),
-                    fita_recent=avaluacio.fita_recent,
-                    punt_dolor_detectat=avaluacio.punt_dolor,
-                    angle_atac=angle_atac[:50] if angle_atac else None,
-                    score_qualificacio=avaluacio.score,
-                    justificacio_ia=avaluacio.motiu_detallat_ia,
-                    mx_validat=mx_valid,
-                    tasca_prospeccio_id=tasca_id,
-                    created_at=ara,
-                    updated_at=ara,
+            async with db.begin_nested():
+                # 2. Multi-Validació de 3 vectors contra saas_leads, empreses i saas_exclusio_rgpd
+                es_dup, vector_dup, motiu_dup = await verificar_duplicitat_multivector(
+                    db=db,
+                    domini=dom,
+                    adreca=adr_norm,
+                    cif=cif_norm,
                 )
-                db.add(nou_lead)
-                await db.flush()
 
-                # Oportunitat inicial al Kanban
-                titol_op = f"Llicència {payload.vertical.strip()[:40]} - {nom[:140]}"[:200]
-                nova_op = SaasOportunitat(
-                    id=uuid.uuid4(),
-                    lead_id=lead_creat_id,
-                    titol=titol_op,
-                    etapa="PROSPECCIO",
-                    valor_mensual_estimat=float(avaluacio.operaris_estimats * 18.0),
-                    valor_ia_setup=150.0,
-                    probabilitat_percent=30,
-                    created_at=ara,
-                    updated_at=ara,
-                )
-                db.add(nova_op)
-
-                # Programar els 3 correus al Calendari Comercial (Dia 0, Dia +4, Dia +8)
-                if avaluacio.campanya_3_emails:
-                    await programar_campanya_3_emails(
-                        lead_id=lead_creat_id,
-                        campanya=avaluacio.campanya_3_emails,
-                        db=db,
-                        data_base=ara,
+                if es_dup:
+                    tot_dup += 1
+                    fonts_dup = formatar_fonts_verificables({}, web_url=web)
+                    candidat_dup = SaasProspeccioCandidat(
+                        id=cand_id,
+                        tasca_id=tasca_id,
+                        nom_empresa=nom,
+                        cif=cif_norm,
+                        web_url=web or f"https://{dom or 'duplicat.invalid'}"[:255],
+                        domini_normalitzat=dom or "duplicat.invalid",
+                        adreca_fisica=adr,
+                        adreca_normalitzada=adr_norm,
+                        codi_postal=cp_clean,
+                        vertical=vertical_clean,
+                        fonts_investigades=",".join(fonts_dup),
+                        email_detectat=email_det,
+                        telefon_detectat=telefon_det,
+                        mx_validat=False,
+                        operaris_estimats=0,
+                        score=0,
+                        estat_decisio="DUPLICAT",
+                        vector_duplicitat=(vector_dup or "DOMINI_WEB")[:50],
+                        motiu_detallat_ia=motiu_dup or "Candidat duplicat segons filtre multi-vector.",
+                        created_at=ara,
+                        updated_at=ara,
                     )
-            else:
-                tot_desc += 1
+                    db.add(candidat_dup)
+                    continue
 
-            candidat_registre = SaasProspeccioCandidat(
-                id=cand_id,
-                tasca_id=tasca_id,
-                nom_empresa=nom[:150],
-                cif=cif_norm[:20] if cif_norm else None,
-                web_url=(web or f"https://{dom or 'empresa.local'}")[:255],
-                domini_normalitzat=(dom or "sense-domini.local")[:150],
-                adreca_fisica=adr[:255] if adr else None,
-                adreca_normalitzada=adr_norm[:255] if adr_norm else None,
-                codi_postal=payload.codi_postal.strip()[:10],
-                vertical=payload.vertical.strip()[:150],
-                fonts_investigades=",".join(avaluacio.fonts_investigades),
-                email_detectat=email_det[:150] if email_det else None,
-                telefon_detectat=telefon_det[:30] if telefon_det else None,
-                mx_validat=mx_valid,
-                operaris_estimats=avaluacio.operaris_estimats,
-                decisor_nom=decisor_nom[:100] if decisor_nom else None,
-                decisor_carrec=decisor_carrec[:100] if decisor_carrec else None,
-                fita_recent=avaluacio.fita_recent,
-                punt_dolor=avaluacio.punt_dolor,
-                angle_atac=angle_atac[:50] if angle_atac else None,
-                score=avaluacio.score,
-                estat_decisio=avaluacio.estat_decisio[:30],
-                vector_duplicitat=None,
-                motiu_detallat_ia=avaluacio.motiu_detallat_ia or "Avaluació completada.",
-                lead_id=lead_creat_id,
-                created_at=ara,
-                updated_at=ara,
-            )
-            db.add(candidat_registre)
+                # 3. Investigació multi-canal / multi-agent
+                investigacio = await firecrawl_service.investigar_empresa_completa(
+                    nom_empresa=nom,
+                    web_url=web,
+                    codi_postal=cp_clean,
+                    vertical=vertical_clean,
+                    dades_inicials=item,
+                )
 
-        except Exception as cand_exc:
-            logger.exception("Error processant candidat %s al lot CP %s: %s", nom, payload.codi_postal, cand_exc)
+                if not adr and investigacio.get("adreca_detectada"):
+                    adr = str(investigacio["adreca_detectada"]).strip()[:255] or None
+                    adr_norm = normalitzar_adreca(adr)[:255] if adr else None
+                if not cif_norm and investigacio.get("cif_detectat"):
+                    cif_norm = normalitzar_cif(str(investigacio["cif_detectat"]))[:20] or None
+                if not email_det and investigacio.get("email_detectat"):
+                    email_det = str(investigacio["email_detectat"]).strip()[:150] or None
+
+                email_empresa_det = (
+                    item.get("email_empresa") or investigacio.get("email_empresa_detectat") or email_det
+                )
+                email_gk_det = item.get("email_gatekeeper") or investigacio.get("email_gatekeeper_detectat")
+                if email_gk_det:
+                    email_det = str(email_gk_det).strip()[:150]
+                if not telefon_det and investigacio.get("telefon_detectat"):
+                    telefon_det = str(investigacio["telefon_detectat"]).strip()[:30] or None
+
+                # 4. Validació MX Shield
+                mx_valid, _ = await validar_email_mx(email_det, db=db)
+                te_contacte_operatiu = bool((email_det and mx_valid) or telefon_det)
+
+                # 5. Avaluació i Lead Scoring amb OpenRouter / Orquestrador
+                avaluacio = await qualificar_candidat_amb_openrouter(
+                    nom_empresa=nom,
+                    web_url=web,
+                    codi_postal=cp_clean,
+                    vertical=vertical_clean,
+                    operaris_minims=payload.operaris_minims,
+                    web_markdown=investigacio.get("web_markdown", ""),
+                    fonts_investigades=investigacio.get("fonts_investigades", []),
+                    fita_recent=investigacio.get("fita_recent"),
+                    gatekeeper_hints=investigacio.get("gatekeeper_hints", {}),
+                    db=db,
+                    adreca_fisica=adr or "",
+                    municipi=municipi_esperat,
+                    te_contacte_operatiu=te_contacte_operatiu,
+                )
+
+                # 6. TALLAFOCS PONDERAT DE LES 3 PREMISSES DE QUALITAT:
+                if not validar_cp_o_municipi_en_adreca(adr, cp_clean, municipi=municipi_esperat):
+                    avaluacio.estat_decisio = "DESCARTAT"
+                    avaluacio.score = min(avaluacio.score, 30)
+                    avaluacio.campanya_3_emails = []
+                    avaluacio.motiu_detallat_ia = (
+                        f"Descartat (Ubicació Física): L'adreça ('{adr or 'No disponible'}') "
+                        f"no correspon al CP {cp_clean} ni al municipi ({municipi_esperat or 'N/A'})."
+                    )
+
+                if not es_nom_persona_real(avaluacio.decisor_nom):
+                    avaluacio.decisor_nom = None
+                    if avaluacio.estat_decisio == "SELECCIONAT":
+                        if te_contacte_operatiu and avaluacio.operaris_estimats >= payload.operaris_minims:
+                            avaluacio.score = max(65, min(avaluacio.score - 12, 78))
+                            avaluacio.decisor_carrec = (
+                                avaluacio.decisor_carrec or "Direcció / Gerència (Pendent nom)"
+                            )[:100]
+                            avaluacio.motiu_detallat_ia = (
+                                f"[AVÍS: Decisor nominal pendent d'identificar] {avaluacio.motiu_detallat_ia} "
+                                f"S'admet pels seus indicadors operatius ({avaluacio.operaris_estimats} operaris) "
+                                f"i contacte verificat."
+                            )
+                        else:
+                            avaluacio.estat_decisio = "DESCARTAT"
+                            avaluacio.score = min(avaluacio.score, 40)
+                            avaluacio.campanya_3_emails = []
+                            avaluacio.motiu_detallat_ia = (
+                                "Descartat: Sense Gatekeeper nominal identificat ni dades de contacte/operaris suficients."
+                            )
+
+                if not validar_url_verificable(web):
+                    avaluacio.estat_decisio = "DESCARTAT"
+                    avaluacio.score = min(avaluacio.score, 20)
+                    avaluacio.campanya_3_emails = []
+                    avaluacio.motiu_detallat_ia = (
+                        "Descartat automàticament (Regla d'Enllaços Comprovables): "
+                        "No disposa d'un enllaç web directe i verificable."
+                    )
+
+                lead_creat_id: Optional[uuid.UUID] = None
+                decisor_nom_clean = avaluacio.decisor_nom.strip()[:100] if avaluacio.decisor_nom else None
+                decisor_carrec_clean = avaluacio.decisor_carrec.strip()[:100] if avaluacio.decisor_carrec else None
+
+                if avaluacio.estat_decisio == "SELECCIONAT" and (decisor_nom_clean or te_contacte_operatiu):
+                    tot_sel += 1
+                    lead_creat_id = uuid.uuid4()
+                    nom_contacte_final = (decisor_nom_clean or f"Direcció Tècnica ({nom[:75]})")[:100]
+                    email_final = (email_det or f"contacte@{dom or 'empresa.cat'}")[:150]
+                    nota_emails = ""
+                    if email_empresa_det and email_gk_det and email_empresa_det != email_gk_det:
+                        nota_emails = f" [Email empresa: {email_empresa_det} | Email Gatekeeper: {email_gk_det}]"
+
+                    nou_lead = SaasLead(
+                        id=lead_creat_id,
+                        nom_empresa=nom,
+                        nom_contacte=nom_contacte_final,
+                        email=email_final,
+                        telefon=telefon_det,
+                        vertical=vertical_clean,
+                        origen=f"SCRAPING_CP_{cp_clean}"[:50],
+                        estat_qualificacio="QUALIFICAT",
+                        operaris_estimats=avaluacio.operaris_estimats,
+                        notes=f"Generat des del lot CP {cp_clean}.{nota_emails} {avaluacio.motiu_detallat_ia}",
+                        cif=cif_norm,
+                        web_url=web,
+                        domini_normalitzat=dom,
+                        adreca_fisica=adr,
+                        adreca_normalitzada=adr_norm,
+                        codi_postal=cp_clean,
+                        carrec_contacte=decisor_carrec_clean,
+                        fonts_investigades=",".join(avaluacio.fonts_investigades),
+                        fita_recent=avaluacio.fita_recent,
+                        punt_dolor_detectat=avaluacio.punt_dolor,
+                        angle_atac=(avaluacio.angle_atac or "ANGLE_A_VISIBILITAT_TELEGRAM")[:50],
+                        score_qualificacio=avaluacio.score,
+                        justificacio_ia=avaluacio.motiu_detallat_ia,
+                        mx_validat=mx_valid,
+                        tasca_prospeccio_id=tasca_id,
+                        created_at=ara,
+                        updated_at=ara,
+                    )
+                    db.add(nou_lead)
+                    await db.flush()
+
+                    nova_op = SaasOportunitat(
+                        id=uuid.uuid4(),
+                        lead_id=lead_creat_id,
+                        titol=f"Llicència {vertical_clean[:50]} - {nom[:120]}"[:200],
+                        etapa="PROSPECCIO",
+                        valor_mensual_estimat=float(avaluacio.operaris_estimats * 18.0),
+                        valor_ia_setup=150.0,
+                        probabilitat_percent=30,
+                        created_at=ara,
+                        updated_at=ara,
+                    )
+                    db.add(nova_op)
+
+                    if avaluacio.campanya_3_emails:
+                        await programar_campanya_3_emails(
+                            lead_id=lead_creat_id,
+                            campanya=avaluacio.campanya_3_emails,
+                            db=db,
+                            data_base=ara,
+                        )
+                else:
+                    tot_desc += 1
+
+                candidat_registre = SaasProspeccioCandidat(
+                    id=cand_id,
+                    tasca_id=tasca_id,
+                    nom_empresa=nom,
+                    cif=cif_norm,
+                    web_url=web or f"https://{dom or 'descartat.invalid'}"[:255],
+                    domini_normalitzat=dom or "descartat.invalid",
+                    adreca_fisica=adr,
+                    adreca_normalitzada=adr_norm,
+                    codi_postal=cp_clean,
+                    vertical=vertical_clean,
+                    fonts_investigades=",".join(avaluacio.fonts_investigades),
+                    email_detectat=email_det,
+                    telefon_detectat=telefon_det,
+                    mx_validat=mx_valid,
+                    operaris_estimats=avaluacio.operaris_estimats,
+                    decisor_nom=decisor_nom_clean,
+                    decisor_carrec=decisor_carrec_clean,
+                    fita_recent=avaluacio.fita_recent,
+                    punt_dolor=avaluacio.punt_dolor,
+                    angle_atac=(avaluacio.angle_atac or "ANGLE_A_VISIBILITAT_TELEGRAM")[:50],
+                    score=avaluacio.score,
+                    estat_decisio=avaluacio.estat_decisio[:30],
+                    vector_duplicitat=None,
+                    motiu_detallat_ia=avaluacio.motiu_detallat_ia,
+                    lead_id=lead_creat_id,
+                    created_at=ara,
+                    updated_at=ara,
+                )
+                db.add(candidat_registre)
+
+        except Exception as exc:
+            logger.error("Error aïllat processant candidat '%s' (%s): %s", nom, web, exc)
             tot_desc += 1
-            cand_err = SaasProspeccioCandidat(
-                id=cand_id,
-                tasca_id=tasca_id,
-                nom_empresa=nom[:150],
-                cif=cif_norm[:20] if cif_norm else None,
-                web_url=(web or f"https://{dom or 'empresa.local'}")[:255],
-                domini_normalitzat=(dom or "sense-domini.local")[:150],
-                adreca_fisica=adr[:255] if adr else None,
-                adreca_normalitzada=adr_norm[:255] if adr_norm else None,
-                codi_postal=payload.codi_postal.strip()[:10],
-                vertical=payload.vertical.strip()[:150],
-                fonts_investigades="error",
-                email_detectat=email_det[:150] if email_det else None,
-                telefon_detectat=telefon_det[:30] if telefon_det else None,
-                mx_validat=False,
-                operaris_estimats=0,
-                score=0,
-                estat_decisio="ERROR_EXTRACCIO",
-                vector_duplicitat=None,
-                motiu_detallat_ia=f"Error durant l'avaluació: {str(cand_exc)[:400]}",
-                lead_id=None,
-                created_at=ara,
-                updated_at=ara,
-            )
-            db.add(cand_err)
+            async with db.begin_nested():
+                candidat_error = SaasProspeccioCandidat(
+                    id=cand_id,
+                    tasca_id=tasca_id,
+                    nom_empresa=nom,
+                    cif=cif_norm,
+                    web_url=web or "https://error-extraccio.invalid",
+                    domini_normalitzat=dom or "error-extraccio.invalid",
+                    adreca_fisica=adr,
+                    adreca_normalitzada=adr_norm,
+                    codi_postal=cp_clean,
+                    vertical=vertical_clean,
+                    fonts_investigades="",
+                    email_detectat=email_det,
+                    telefon_detectat=telefon_det,
+                    mx_validat=False,
+                    operaris_estimats=0,
+                    score=0,
+                    estat_decisio="ERROR_EXTRACCIO",
+                    vector_duplicitat=None,
+                    motiu_detallat_ia=f"Error d'extracció aïllat durant el processament del candidat: {str(exc)[:400]}",
+                    lead_id=None,
+                    created_at=ara,
+                    updated_at=ara,
+                )
+                db.add(candidat_error)
 
     tasca.total_seleccionats = tot_sel
     tasca.total_descartats = tot_desc
@@ -1737,10 +1799,17 @@ async def corregir_criteri_candidat(
         if tasca_mare:
             if nova == "SELECCIONAT":
                 tasca_mare.total_seleccionats += 1
-                tasca_mare.total_descartats = max(0, tasca_mare.total_descartats - 1)
+                if decisio_anterior in ("DESCARTAT", "ERROR_EXTRACCIO"):
+                    tasca_mare.total_descartats = max(0, tasca_mare.total_descartats - 1)
+                elif decisio_anterior == "DUPLICAT":
+                    tasca_mare.total_duplicats = max(0, tasca_mare.total_duplicats - 1)
             elif nova == "DESCARTAT":
-                tasca_mare.total_descartats += 1
-                tasca_mare.total_seleccionats = max(0, tasca_mare.total_seleccionats - 1)
+                if decisio_anterior == "SELECCIONAT":
+                    tasca_mare.total_descartats += 1
+                    tasca_mare.total_seleccionats = max(0, tasca_mare.total_seleccionats - 1)
+                elif decisio_anterior == "DUPLICAT":
+                    tasca_mare.total_descartats += 1
+                    tasca_mare.total_duplicats = max(0, tasca_mare.total_duplicats - 1)
 
     # Si canvia a SELECCIONAT i no tenia lead, es crea amb la seva oportunitat i campanya de 3 correus
     if nova == "SELECCIONAT" and not candidat.lead_id:
@@ -1899,7 +1968,7 @@ async def eliminar_candidat_cp(
         tasca.total_trobats = max(0, tasca.total_trobats - 1)
         if decisio == "SELECCIONAT":
             tasca.total_seleccionats = max(0, tasca.total_seleccionats - 1)
-        elif decisio == "DESCARTAT":
+        elif decisio in ("DESCARTAT", "ERROR_EXTRACCIO"):
             tasca.total_descartats = max(0, tasca.total_descartats - 1)
         elif decisio == "DUPLICAT":
             tasca.total_duplicats = max(0, tasca.total_duplicats - 1)

@@ -133,7 +133,7 @@ interface CandidatCP {
   punt_dolor?: string | null;
   angle_atac?: string | null;
   score: number;
-  estat_decisio: "SELECCIONAT" | "DESCARTAT" | "DUPLICAT";
+  estat_decisio: "SELECCIONAT" | "DESCARTAT" | "DUPLICAT" | "ERROR_EXTRACCIO";
   vector_duplicitat?: "CIF" | "DOMINI_WEB" | "ADRECA_FISICA" | null;
   motiu_detallat_ia?: string | null;
   corregit_huma: boolean;
@@ -287,7 +287,9 @@ export default function SuperadminCrmPage() {
   const [tascaSeleccionadaId, setTascaSeleccionadaId] = useState<string | null>(null);
   const [tascaSeleccionada, setTascaSeleccionada] = useState<TascaCP | null>(null);
   const [candidatsCP, setCandidatsCP] = useState<CandidatCP[]>([]);
-  const [filtreDecisio, setFiltreDecisio] = useState<"TOTS" | "SELECCIONAT" | "DESCARTAT" | "DUPLICAT">("TOTS");
+  const [filtreDecisio, setFiltreDecisio] = useState<
+    "TOTS" | "SELECCIONAT" | "DESCARTAT" | "DUPLICAT" | "ERROR_EXTRACCIO"
+  >("TOTS");
   const [executantCerca, setExecutantCerca] = useState(false);
   const [preparacioSeguentCpMsg, setPreparacioSeguentCpMsg] = useState<string | null>(null);
   const [consoleLogs, setConsoleLogs] = useState<Array<{ time: string; text: string; type: "info" | "success" | "warn" | "error" }>>([
@@ -1641,7 +1643,7 @@ export default function SuperadminCrmPage() {
 
               {/* Filtres per Estat de Decisió */}
               <div className="flex items-center gap-1.5 text-xs bg-slate-100 dark:bg-slate-800/80 p-1 rounded-xl">
-                {(["TOTS", "SELECCIONAT", "DESCARTAT", "DUPLICAT"] as const).map((tab) => (
+                {(["TOTS", "SELECCIONAT", "DESCARTAT", "DUPLICAT", "ERROR_EXTRACCIO"] as const).map((tab) => (
                   <button
                     key={tab}
                     onClick={() => setFiltreDecisio(tab)}
@@ -1657,7 +1659,9 @@ export default function SuperadminCrmPage() {
                       ? "Seleccionades"
                       : tab === "DESCARTAT"
                       ? "Descartades"
-                      : "Duplicades (3 Vectors)"}
+                      : tab === "DUPLICAT"
+                      ? "Duplicades (3 Vectors)"
+                      : "Errors Extracció"}
                   </button>
                 ))}
               </div>
@@ -1807,6 +1811,8 @@ export default function SuperadminCrmPage() {
                                   ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300"
                                   : cand.estat_decisio === "DUPLICAT"
                                   ? "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300"
+                                  : cand.estat_decisio === "ERROR_EXTRACCIO"
+                                  ? "bg-orange-100 text-orange-800 dark:bg-orange-950 dark:text-orange-300"
                                   : "bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-300"
                               }`}
                             >

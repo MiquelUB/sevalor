@@ -819,3 +819,207 @@ async def test_editar_i_eliminar_lead_deal_i_candidat_crm(
             headers=superadmin_headers,
         )
         assert res_404.status_code == 404
+
+        # 6. Eliminar candidat amb estat ERROR_EXTRACCIO i comprovar decrement de total_descartats
+        tasca_id = uuid.uuid4()
+        candidat_err_id = uuid.uuid4()
+        ara_t = datetime.now(timezone.utc)
+        tasca_test = SaasProspeccioTasca(
+            id=tasca_id,
+            codi_postal="25001",
+            vertical="ElectricPro",
+            operaris_minims=5,
+            estat="COMPLETAT",
+            total_trobats=1,
+            total_seleccionats=0,
+            total_descartats=1,
+            total_duplicats=0,
+            created_at=ara_t,
+        )
+        candidat_err = SaasProspeccioCandidat(
+            id=candidat_err_id,
+            tasca_id=tasca_id,
+            nom_empresa=f"Error Extraccio {suffix} SL",
+            web_url="https://error.invalid",
+            domini_normalitzat="error.invalid",
+            codi_postal="25001",
+            vertical="ElectricPro",
+            fonts_investigades="",
+            mx_validat=False,
+            operaris_estimats=0,
+            score=0,
+            estat_decisio="ERROR_EXTRACCIO",
+            motiu_detallat_ia="Error de prova",
+            created_at=ara_t,
+            updated_at=ara_t,
+        )
+        db_session.add(tasca_test)
+        await db_session.flush()
+        db_session.add(candidat_err)
+        await db_session.commit()
+
+        res_del_cand = await ac.delete(
+            f"/api/v1/superadmin/crm/prospeccio/candidats/{candidat_err_id}",
+            headers=superadmin_headers,
+        )
+        assert res_del_cand.status_code == 200, res_del_cand.text
+
+        # Comprovar que la tasca ha restat el descartat i el trobat
+        res_t_check = await db_session.execute(select(SaasProspeccioTasca).where(SaasProspeccioTasca.id == tasca_id))
+        tasca_actualitzada = res_t_check.scalars().first()
+        assert tasca_actualitzada is not None
+        assert tasca_actualitzada.total_trobats == 0
+        assert tasca_actualitzada.total_descartats == 0
+
+
+@pytest.mark.asyncio
+async def test_t011_savepoint_error_extraccio_truncament_varchar_i_contacte_operatiu(
+    superadmin_headers: dict[str, str],
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Valida:
+    1. Aïllament SAVEPOINT (db.begin_nested): una fallada en un candidat genera ERROR_EXTRACCIO sense avortar el lot.
+    2. Admissió condicional per contacte operatiu quan no hi ha nom humà de Gatekeeper però sí telèfon i operaris.
+    3. Blindatge VARCHAR en nom_contacte (<=100) i titol d'oportunitat (<=200) amb noms d'empresa llargs.
+    4. Decrement correcte de comptadors en eliminar un candidat amb estat ERROR_EXTRACCIO.
+    """
+    from app.services.firecrawl_service import firecrawl_service
+
+    suffix = uuid.uuid4().hex[:6]
+    dom_operatiu = f"instal-operatiu-{suffix}.cat"
+    dom_error = f"fallada-xarxa-{suffix}.cat"
+
+    # Nom d'empresa i vertical llargs per estressar els límits VARCHAR(100) i VARCHAR(200)
+    nom_llarg = (
+        f" Grup d'Enginyeria i Manteniment Integral d'Instal·lacions Fotovoltaiques "
+        f"i Climatització Industrial de Ponent {suffix} SL "
+    ).strip()
+    vertical_llarga = (
+        f"Instal·lació i Manteniment Preventiu de Sistemes de Climatització, "
+        f"Baixa Tensió REBT i Bombeig Solar {suffix}"
+    )
+
+    orig_investigar = firecrawl_service.investigar_empresa_completa
+
+    async def _mock_investigar_amb_fallada_aillada(
+        nom_empresa: str,
+        web_url: str,
+        codi_postal: str,
+        vertical: str,
+        dades_inicials: dict | None = None,
+    ):
+        if dom_error in web_url:
+            raise RuntimeError("Timeout simulat raspant subpàgina d'avís legal")
+        return await orig_investigar(
+            nom_empresa=nom_empresa,
+            web_url=web_url,
+            codi_postal=codi_postal,
+            vertical=vertical,
+            dades_inicials=dades_inicials,
+        )
+
+    monkeypatch.setattr(
+        firecrawl_service,
+        "investigar_empresa_completa",
+        _mock_investigar_amb_fallada_aillada,
+    )
+
+    candidats_lot = [
+        {
+            # Candidat 1: Sense Gatekeeper nominal (porta un càrrec genèric), però amb telèfon operatiu,
+            # ubicació al municipi de Lleida (Polígon sense els 5 dígits explícits) i >6 operaris.
+            "nom_empresa": nom_llarg,
+            "web_url": f"https://{dom_operatiu}",
+            "adreca_fisica": f"Polígon Industrial El Segre, Carrer del Metall, Nau 18, Lleida ({suffix})",
+            "cif": f"B25{suffix.upper()[:6]}",
+            "email": f"info@{dom_operatiu}",
+            "telefon": "+34973248899",
+            "decisor_nom": "Responsable d'Operacions i Manteniment",  # Genèric -> es netejarà a None
+            "decisor_carrec": "Direcció Tècnica",
+            "web_markdown": (
+                "Empresa instal·ladora al Polígon Industrial El Segre de Lleida amb flota de 14 furgonetes "
+                "i equip de 18 tècnics d'obra en climatització i electricitat industrial."
+            ),
+        },
+        {
+            # Candidat 2: Provocarà una excepció en temps d'execució que ha de quedar aïllada al seu SAVEPOINT
+            "nom_empresa": f"Empresa Amb Fallada Xarxa {suffix} SL",
+            "web_url": f"https://{dom_error}",
+            "adreca_fisica": "Carrer Major, 10, 25001 Lleida",
+            "cif": f"B25{uuid.uuid4().hex[:6].upper()}",
+            "email": f"contacte@{dom_error}",
+            "telefon": "+34973000000",
+        },
+    ]
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        # 1. Executar el lot atòmic per al CP 25001 (Lleida)
+        res = await ac.post(
+            "/api/v1/superadmin/crm/prospeccio/tasques-cp",
+            json={
+                "codi_postal": "25001",
+                "vertical": vertical_llarga,
+                "operaris_minims": 6,
+                "candidats_descoberts": candidats_lot,
+            },
+            headers=superadmin_headers,
+        )
+        assert res.status_code == 201, res.text
+        data = res.json()
+        tasca_id = data["tasca_id"]
+        assert data["total_trobats"] == 2
+        assert data["total_seleccionats"] == 1
+        assert data["total_descartats"] == 1
+
+        # 2. Verificar el detall dels candidats registrats al lot
+        det_res = await ac.get(
+            f"/api/v1/superadmin/crm/prospeccio/tasques-cp/{tasca_id}",
+            headers=superadmin_headers,
+        )
+        assert det_res.status_code == 200, det_res.text
+        candidats = det_res.json()["candidats"]
+        assert len(candidats) == 2
+
+        cand_sel = next(c for c in candidats if c["estat_decisio"] == "SELECCIONAT")
+        cand_err = next(c for c in candidats if c["estat_decisio"] == "ERROR_EXTRACCIO")
+
+        # 2a. Verificació de l'admissió condicional sense Gatekeeper nominal
+        assert cand_sel["decisor_nom"] is None
+        assert 65 <= cand_sel["score"] <= 78
+        assert "AVÍS: Decisor nominal pendent d'identificar" in (cand_sel["motiu_detallat_ia"] or "")
+        assert cand_sel["lead_id"] is not None
+
+        # 2b. Verificació del blindatge VARCHAR a SaasLead i SaasOportunitat
+        lead_res = await ac.get(
+            f"/api/v1/superadmin/crm/prospeccio/leads/{cand_sel['lead_id']}",
+            headers=superadmin_headers,
+        )
+        assert lead_res.status_code == 200
+        lead_data = lead_res.json()
+        assert len(lead_data["nom_contacte"]) <= 100
+        assert lead_data["nom_contacte"].startswith("Direcció Tècnica (")
+        assert len(lead_data["oportunitats"]) == 1
+        assert len(lead_data["oportunitats"][0]["titol"]) <= 200
+
+        # 2c. Verificació del candidat aïllat amb ERROR_EXTRACCIO
+        assert cand_err["score"] == 0
+        assert cand_err["lead_id"] is None
+        assert "Timeout simulat" in (cand_err["motiu_detallat_ia"] or "")
+
+        # 3. Eliminar el candidat en estat ERROR_EXTRACCIO i comprovar que els comptadors es decrementen
+        del_res = await ac.delete(
+            f"/api/v1/superadmin/crm/prospeccio/candidats/{cand_err['id']}",
+            headers=superadmin_headers,
+        )
+        assert del_res.status_code == 200, del_res.text
+
+        det_post_del = await ac.get(
+            f"/api/v1/superadmin/crm/prospeccio/tasques-cp/{tasca_id}",
+            headers=superadmin_headers,
+        )
+        assert det_post_del.status_code == 200
+        tasca_actualitzada = det_post_del.json()
+        assert tasca_actualitzada["total_trobats"] == 1
+        assert tasca_actualitzada["total_seleccionats"] == 1
+        assert tasca_actualitzada["total_descartats"] == 0
