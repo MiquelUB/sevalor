@@ -1463,6 +1463,9 @@ async def crear_executar_tasca_cp(
             avaluacio.estat_decisio = "DESCARTAT"
             avaluacio.score = min(avaluacio.score, 20)
             avaluacio.campanya_3_emails = []
+            avaluacio.motiu_detallat_ia = (
+                "Descartat automàticament (Regla d'Enllaços Comprovables): No disposa d'un enllaç web directe i verificable."
+            )
 
         lead_creat_id: Optional[uuid.UUID] = None
 
