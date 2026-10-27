@@ -260,6 +260,35 @@ def validar_cp_en_adreca_fisica(adreca: Optional[str], codi_postal: str) -> bool
     return True
 
 
+def validar_cp_o_municipi_en_adreca(
+    adreca: Optional[str],
+    codi_postal: str,
+    municipi: Optional[str] = None,
+) -> bool:
+    """Valida l'adreça física per Codi Postal exacte, prefix comarcal (3 dígits + municipi) o nom de municipi."""
+    if validar_cp_en_adreca_fisica(adreca, codi_postal):
+        return True
+    if not adreca or len(adreca.strip()) < 10:
+        return False
+
+    adr_norm = unicodedata.normalize("NFKD", adreca).encode("ASCII", "ignore").decode("utf-8").lower()
+    # Si no té CP de 5 dígits explícit però conté el municipi i un indicador de via/polígon real:
+    if municipi and len(municipi.strip()) >= 3:
+        muni_norm = unicodedata.normalize("NFKD", municipi.strip()).encode("ASCII", "ignore").decode("utf-8").lower()
+        te_via = any(
+            k in adr_norm
+            for k in ("carrer", "calle", "c/", "av", "pol", "nau", "nave", "ctra", "carretera", "pl", "cami", "km")
+        )
+        # Acceptar si pertany al mateix municipi (encara que el polígon tingui un CP adjacent de la mateixa província)
+        prefix_prov = codi_postal.strip()[:2]
+        cps_detectats = re.findall(r"\b(?:0[1-9]|[1-4]\d|5[0-2])\d{3}\b", adreca)
+        cp_compatible = not cps_detectats or any(c.startswith(prefix_prov) for c in cps_detectats)
+        if muni_norm in adr_norm and te_via and cp_compatible:
+            return True
+
+    return False
+
+
 def es_nom_persona_real(nom: Optional[str]) -> bool:
     """Valida que `nom` correspon al nom i cognom real d'una persona física (Gatekeeper).
 
@@ -628,9 +657,21 @@ async def obtenir_municipi_de_codi_postal(codi_postal: str) -> Optional[Dict[str
     return None
 
 
+def _desencriptar_cfemail(cf_hex: str) -> Optional[str]:
+    """Desencripta correus ofuscats per Cloudflare Email Protection (data-cfemail)."""
+    try:
+        r = int(cf_hex[:2], 16)
+        email = "".join(chr(int(cf_hex[i : i + 2], 16) ^ r) for i in range(2, len(cf_hex), 2))
+        return email.strip().lower() if "@" in email else None
+    except Exception:
+        return None
+
+
 def _extreure_metadades_html_brut(raw_html: str) -> Dict[str, Any]:
     """Extreu dades estructurades d'un HTML brut abans d'eliminar les etiquetes:
-    - Enllaços `mailto:` i `tel:`
+    - Enllaços `mailto:` i Cloudflare `data-cfemail`
+    - Enllaços `tel:`, `callto:` i mòbils directes a `wa.me` / `whatsapp.com/send?phone=`
+    - Raó Social Mercantil (SL, SLU, SA, SCCL) del text/HTML legal
     - Etiquetes `<address>`
     - Blocs Schema.org JSON-LD (`PostalAddress`, `LocalBusiness`, `Organization`, `Person`)
     - Atributs `aria-label`, `title`, `data-address` d'iframes (Google Maps) i elements visuals
@@ -643,20 +684,40 @@ def _extreure_metadades_html_brut(raw_html: str) -> Dict[str, Any]:
         "gatekeeper_nom": None,
         "gatekeeper_carrec": None,
         "cif_jsonld": None,
+        "rao_social_detectada": None,
     }
     if not raw_html:
         return info
 
-    # 1. Extreure mailto: i tel:
+    # 1. Mailto clàssic + Cloudflare data-cfemail
     for m_mail in re.finditer(r'href=["\']mailto:([^"\'?&\s]+)', raw_html, flags=re.IGNORECASE):
         em = urllib.parse.unquote(html.unescape(m_mail.group(1))).strip().lower()
         if "@" in em and em not in info["mailtos"]:
             info["mailtos"].append(em)
 
-    for m_tel in re.finditer(r'href=["\']tel:([^"\'?&\s]+)', raw_html, flags=re.IGNORECASE):
+    for m_cf in re.finditer(r'data-cfemail=["\']([0-9a-fA-F]+)["\']', raw_html):
+        em_cf = _desencriptar_cfemail(m_cf.group(1))
+        if em_cf and em_cf not in info["mailtos"]:
+            info["mailtos"].append(em_cf)
+
+    # 2. Enllaços tel:, callto: i mòbils directes a api.whatsapp / wa.me
+    for m_tel in re.finditer(r'href=["\'](?:tel|callto):([^"\'?&\s]+)', raw_html, flags=re.IGNORECASE):
         t_raw = urllib.parse.unquote(html.unescape(m_tel.group(1))).strip()
         if t_raw and t_raw not in info["tels"]:
             info["tels"].append(t_raw)
+
+    for m_wa in re.finditer(r'(?:wa\.me/|whatsapp\.com/send\?phone=)\+?(\d{9,12})', raw_html, flags=re.IGNORECASE):
+        t_wa = m_wa.group(1).strip()
+        if t_wa not in info["tels"]:
+            info["tels"].append(t_wa)
+
+    # 3. Extreure Raó Social Mercantil (SL, SLU, SA, SCCL) del text/HTML legal
+    m_soc = re.search(
+        r"\b([A-ZÀ-Ý][A-ZÀ-Ýa-zà-ÿ0-9\s.,&'\-·]{2,55}?\s+(?:S\.?L\.?U\.?|S\.?L\.?|S\.?A\.?|S\.?C\.?C\.?L\.?))\b",
+        raw_html,
+    )
+    if m_soc:
+        info["rao_social_detectada"] = re.sub(r"\s+", " ", m_soc.group(1)).strip()
 
     # 2. Extreure blocs <address>...</address>
     for m_adr in re.finditer(r"<address[^>]*>(.*?)</address>", raw_html, flags=re.DOTALL | re.IGNORECASE):
@@ -806,8 +867,9 @@ def _extreure_adreca_amb_cp_de_text(
     text: str,
     codi_postal: str,
     adreces_estructurades: Optional[List[str]] = None,
+    municipi: Optional[str] = None,
 ) -> Optional[str]:
-    """Busca una adreça física real dins del lloc web o metadades que contingui el Codi Postal indicat."""
+    """Busca una adreça física real dins del lloc web o metadades que contingui el Codi Postal o municipi indicat."""
     if not codi_postal:
         return None
     cp = codi_postal.strip()
@@ -854,6 +916,12 @@ def _extreure_adreca_amb_cp_de_text(
         ):
             if validar_cp_en_adreca_fisica(frag, cp):
                 return frag[:180]
+
+    # 5. Comprovar flexibilització geogràfica (nom de municipi en adreces estructurades)
+    if municipi and len(municipi.strip()) >= 3:
+        for adr_est in (adreces_estructurades or []):
+            if validar_cp_o_municipi_en_adreca(adr_est, cp, municipi=municipi):
+                return adr_est[:180]
 
     return None
 
@@ -1049,47 +1117,46 @@ def _extreure_gatekeeper_real_de_text(
     nom_jsonld: Optional[str] = None,
     carrec_jsonld: Optional[str] = None,
 ) -> Tuple[Optional[str], Optional[str]]:
-    """Busca un nom i cognom real de persona física vinculat a un càrrec directiu."""
+    """Busca un nom i cognom real preservant Case-Sensitivity per als Noms Propis."""
     if nom_jsonld and es_nom_persona_real(nom_jsonld):
         return nom_jsonld.strip(), (carrec_jsonld or "Gerent / Direcció").strip()
 
     if not text:
         return None, None
 
+    # Càrrecs case-insensitive amb (?i:...), però Nom Propi ESTRICTAMENT amb Majúscula inicial
     carrecs_regex = (
-        r"Gerent|Director\s+T[èe]cnic|Directora\s+T[èe]cnica|Director\s+General|Directora\s+General|"
-        r"Director\s+d'Operacions|Director\s+Comercial|Director|Directora|"
-        r"Administrador(?:\s+[ÚU]nic|\s+Solidari)?|Administradora(?:\s+[ÚU]nica|\s+Solid[àa]ria)?|"
-        r"CEO|Fundador|Fundadora|Soci\s+Director|Propietari|Propiet[àa]ria|Cap\s+d'Obra|Enginyer\s+en\s+Cap"
+        r"(?i:Gerent|Director\s+T[èe]cnic|Directora\s+T[èe]cnica|Director\s+General|Directora\s+General|"
+        r"Director\s+d'Operacions|Director\s+Comercial|Administrador(?:\s+[ÚU]nic|\s+Solidari)?|"
+        r"Administradora(?:\s+[ÚU]nica|\s+Solid[àa]ria)?|CEO|Fundador|Fundadora|Soci\s+Director|"
+        r"Propietari|Propiet[àa]ria|Apoderat|Apoderada|Cap\s+d'Obra|Enginyer\s+en\s+Cap)"
     )
     nom_persona_regex = (
-        r"(?:(?:Sr\.|Sra\.|D\.|Dña\.|En|Na)\s+)?"
+        r"(?:(?i:Sr\.|Sra\.|D\.|Dña\.|En|Na)\s+)?"
         r"([A-ZÀ-Ý][a-zà-ÿ]{2,20}(?:\s+(?:de|del|la|i|y))?\s+[A-ZÀ-Ý][a-zà-ÿ]{2,25}(?:\s+[A-ZÀ-Ý][a-zà-ÿ]{2,25})?)"
     )
 
     patrons = [
-        # Patró 1: Càrrec -> Nom (ex: "Gerent: Joan Marcet Vila", "gerent de Damia Solar, Damià Ros", "Director Tècnic | Pere Soler")
-        rf"\b({carrecs_regex})\s*(?:[:\-–|,]|de\s+l'empresa|societari|de\s+[A-ZÀ-Ýa-zà-ÿ0-9\s.,'·\-]{{2,35}}?,)?\s*{nom_persona_regex}",
-        # Patró 2: Nom -> Càrrec (ex: "Joan Marcet Vila - Gerent", "Damià Ros, gerent de Damia Solar", "Joan Marcet | Director Tècnic")
-        rf"{nom_persona_regex}\s*(?:[-–|•,]\s*|\s+és\s+el\s+|\s+com\s+a\s+|\s+como?\s+)\b({carrecs_regex})\b",
-        # Patró 3: Mencions legals LSSI / Mercantil (ex: "representada per Joan Marcet Vila", "dirigida per Pere Soler", "fundada per Damià Ros")
-        rf"(?:representada\s+per|dirigida\s+per|fundada\s+per|creada\s+per|ger[èe]ncia\s+a\s+c[àa]rrec\s+de)\s+{nom_persona_regex}",
+        rf"\b({carrecs_regex})\s*(?:[:\-–|,]|(?i:de\s+l'empresa|societari))?\s*{nom_persona_regex}",
+        rf"{nom_persona_regex}\s*(?:[-–|•,]\s*|\s+(?i:és\s+el|com\s+a|como?)\s+)\b({carrecs_regex})\b",
+        rf"(?i:representada\s+per|dirigida\s+per|fundada\s+per|administrador\s+[úu]nic:?|ger[èe]ncia\s+a\s+c[àa]rrec\s+de)\s+{nom_persona_regex}",
     ]
 
-    for m in re.finditer(patrons[0], text, flags=re.IGNORECASE):
+    # IMPORTANT: Sense flags=re.IGNORECASE global perquè nom_persona_regex exigeixi majúscules reals
+    for m in re.finditer(patrons[0], text):
         carrec_raw, nom_cand = m.group(1).strip(), m.group(2).strip()
         if es_nom_persona_real(nom_cand):
             return nom_cand, carrec_raw.capitalize()
 
-    for m in re.finditer(patrons[1], text, flags=re.IGNORECASE):
+    for m in re.finditer(patrons[1], text):
         nom_cand, carrec_raw = m.group(1).strip(), m.group(2).strip()
         if es_nom_persona_real(nom_cand):
             return nom_cand, carrec_raw.capitalize()
 
-    for m in re.finditer(patrons[2], text, flags=re.IGNORECASE):
+    for m in re.finditer(patrons[2], text):
         nom_cand = m.group(1).strip()
         if es_nom_persona_real(nom_cand):
-            return nom_cand, "Gerent / Fundador"
+            return nom_cand, "Administrador / Gerent"
 
     return None, None
 
@@ -1310,6 +1377,52 @@ class FirecrawlMultiChannelService:
 
         return resultats[:limit]
 
+    async def obtenir_municipi_de_codi_postal(self, codi_postal: str) -> Optional[Dict[str, str]]:
+        """Resol el municipi i província d'un Codi Postal delegant a la funció de suport."""
+        return await obtenir_municipi_de_codi_postal(codi_postal)
+
+    async def descobrir_gatekeeper_osint_mercantil(
+        self,
+        nom_empresa: str,
+        rao_social: Optional[str] = None,
+        cif: Optional[str] = None,
+        municipi: Optional[str] = None,
+    ) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+        """Resol el nom real de l'Administrador Únic / Gerent consultant fonts BORME i LinkedIn."""
+        termes_societat = [t for t in (cif, rao_social, nom_empresa) if t and len(t.strip()) >= 3]
+        if not termes_societat:
+            return None, None, None
+
+        queries = []
+        if cif:
+            queries.append(f'"{cif}" ("Administrador" OR "Apoderado" OR "Gerente" OR "Socio")')
+        if rao_social:
+            queries.append(f'"{rao_social}" ("Administrador Único" OR "Administrador Solidario" OR "Gerente")')
+        queries.append(
+            f'site:linkedin.com/in "{nom_empresa}" {municipi or ""} (Gerent OR Gerente OR Director OR CEO OR Fundador)'
+        )
+
+        for q in queries[:3]:
+            resultats = await self._cercar_web_multimotor(q, limit=5)
+            for it in resultats:
+                titol = it.get("title", "")
+                desc = it.get("description", "")
+                url = it.get("url", "")
+
+                # Cas 1: Perfil directe de LinkedIn ("Joan Marcet Vila - Gerent a Instal·lacions X | LinkedIn")
+                if "linkedin.com/in/" in url.lower():
+                    cand_li = re.split(r"[-–|·]", titol)[0].strip()
+                    if es_nom_persona_real(cand_li):
+                        return cand_li, "Gerent / Direcció (LinkedIn)", url
+
+                # Cas 2: Menció a BORME / Directoris Mercantils (Empresia, LibreBOR, InfoCIF, Einforma)
+                text_comb = f"{titol} | {desc}"
+                nom_gk, carrec_gk = _extreure_gatekeeper_real_de_text(text_comb)
+                if nom_gk and es_nom_persona_real(nom_gk):
+                    return nom_gk, f"{carrec_gk} (BORME/Mercantil)", url
+
+        return None, None, None
+
     async def raspar_web_markdown(self, url: str, codi_postal: Optional[str] = None) -> Dict[str, Any]:
         """Extreu el contingut real i enllaços comprovables des de la web corporativa.
 
@@ -1331,6 +1444,7 @@ class FirecrawlMultiChannelService:
                     "gatekeeper_nom": None,
                     "gatekeeper_carrec": None,
                     "cif_jsonld": None,
+                    "rao_social_detectada": None,
                 },
             }
 
@@ -1382,6 +1496,7 @@ class FirecrawlMultiChannelService:
             "gatekeeper_nom": None,
             "gatekeeper_carrec": None,
             "cif_jsonld": None,
+            "rao_social_detectada": None,
         }
 
         def _fusionar_meta(m_nova: Dict[str, Any]) -> None:
@@ -1394,6 +1509,8 @@ class FirecrawlMultiChannelService:
                 meta_acumulada["gatekeeper_carrec"] = m_nova.get("gatekeeper_carrec")
             if not meta_acumulada["cif_jsonld"] and m_nova.get("cif_jsonld"):
                 meta_acumulada["cif_jsonld"] = m_nova["cif_jsonld"]
+            if not meta_acumulada.get("rao_social_detectada") and m_nova.get("rao_social_detectada"):
+                meta_acumulada["rao_social_detectada"] = m_nova["rao_social_detectada"]
 
         try:
             async with httpx.AsyncClient(timeout=10.0, follow_redirects=True, headers=_HEADERS_NAVEGADOR) as client:
@@ -1906,7 +2023,32 @@ class FirecrawlMultiChannelService:
             elif "carrec" not in gatekeeper_hints:
                 gatekeeper_hints["carrec"] = "Gerent / Direcció"
 
+        geo_muni = await self.obtenir_municipi_de_codi_postal(codi_postal)
+        muni_nom: Optional[str] = geo_muni.get("municipi") if geo_muni else None
+
         nom_decisor_final: Optional[str] = gatekeeper_hints.get("nom")
+        if not es_nom_persona_real(nom_decisor_final):
+            rao_soc = meta_html.get("rao_social_detectada")
+            cif_cand = dades_ini.get("cif") or meta_html.get("cif_jsonld")
+            gk_osint_nom, gk_osint_carrec, gk_osint_url = await self.descobrir_gatekeeper_osint_mercantil(
+                nom_empresa=nom_empresa,
+                rao_social=rao_soc,
+                cif=cif_cand,
+                municipi=muni_nom,
+            )
+            if gk_osint_nom and es_nom_persona_real(gk_osint_nom):
+                nom_decisor_final = gk_osint_nom
+                gatekeeper_hints["nom"] = gk_osint_nom
+                gatekeeper_hints["context"] = gk_osint_nom
+                gatekeeper_hints["carrec"] = gk_osint_carrec or "Gerent / Direcció"
+                if gk_osint_url:
+                    if "linkedin.com" in gk_osint_url.lower():
+                        cerca_ext.setdefault("fonts_urls", {})["linkedin"] = gk_osint_url
+                        if "linkedin" not in cerca_ext.get("fonts_investigades", []):
+                            cerca_ext.setdefault("fonts_investigades", []).append("linkedin")
+                    elif "borme" not in cerca_ext.get("fonts_investigades", []):
+                        cerca_ext.setdefault("fonts_investigades", []).append("borme")
+                        cerca_ext.setdefault("fonts_urls", {})["borme"] = gk_osint_url
 
         # Enriquir adreça física, CIF, emails (empresa + gatekeeper) i telèfon si no venien a dades_inicials
         adreca_det: Optional[str] = (
@@ -1916,6 +2058,7 @@ class FirecrawlMultiChannelService:
                 text_web,
                 codi_postal,
                 adreces_estructurades=meta_html.get("adreces_estructurades"),
+                municipi=muni_nom,
             )
         )
         cif_det: Optional[str] = (

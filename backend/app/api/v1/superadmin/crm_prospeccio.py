@@ -44,7 +44,8 @@ from app.services.firecrawl_service import (
     normalitzar_adreca,
     normalitzar_cif,
     normalitzar_domini,
-    validar_cp_en_adreca_fisica,
+    obtenir_municipi_de_codi_postal,
+    validar_cp_o_municipi_en_adreca,
     validar_url_verificable,
     verificar_duplicitat_multivector,
 )
@@ -1331,6 +1332,9 @@ async def crear_executar_tasca_cp(
     tot_desc = 0
     tot_dup = 0
 
+    geo_muni = await obtenir_municipi_de_codi_postal(payload.codi_postal.strip())
+    municipi_esperat = geo_muni.get("municipi") if geo_muni else None
+
     for item in candidats_raw:
         cand_id = uuid.uuid4()
         nom = item.get("nom_empresa", "Empresa Sense Nom").strip()
@@ -1404,6 +1408,7 @@ async def crear_executar_tasca_cp(
 
         # 4. Validació MX Shield sobre l'email verificat
         mx_valid, _ = await validar_email_mx(email_det, db=db)
+        te_contacte_operatiu = bool((email_det and mx_valid) or telefon_det)
 
         # 5. Avaluació i Lead Scoring amb OpenRouter (DeepSeek) + validació estricta post-IA
         avaluacio = await qualificar_candidat_amb_openrouter(
@@ -1418,55 +1423,61 @@ async def crear_executar_tasca_cp(
             gatekeeper_hints=investigacio.get("gatekeeper_hints", {}),
             db=db,
             adreca_fisica=adr or "",
+            municipi=municipi_esperat,
+            te_contacte_operatiu=te_contacte_operatiu,
         )
 
-        # 6. TALLAFOCS INNEGOCIABLE DE LES 3 PREMISSES DE QUALITAT:
-        # Premissa A: L'adreça física HA de contenir el Codi Postal sol·licitat (mai comentaris de xarxes)
-        if not validar_cp_en_adreca_fisica(adr, payload.codi_postal.strip()):
+        # 6. TALLAFOCS PONDERAT DE LES 3 PREMISSES DE QUALITAT:
+        # Premissa A: Adreça verificada al CP exacte o al mateix municipi/polígon industrial
+        if not validar_cp_o_municipi_en_adreca(adr, payload.codi_postal.strip(), municipi=municipi_esperat):
             avaluacio.estat_decisio = "DESCARTAT"
             avaluacio.score = min(avaluacio.score, 30)
             avaluacio.campanya_3_emails = []
             avaluacio.motiu_detallat_ia = (
-                f"Descartat automàticament (Regla de Codi Postal en Adreça Física): L'adreça física verificada "
-                f"('{adr or 'No disponible'}') no conté el Codi Postal sol·licitat ({payload.codi_postal.strip()}). "
-                f"No s'accepten mencions de CP en comentaris o publicacions de xarxes socials."
+                f"Descartat (Ubicació Física): L'adreça ('{adr or 'No disponible'}') "
+                f"no correspon al CP {payload.codi_postal.strip()} ni al municipi ({municipi_esperat or 'N/A'})."
             )
 
-        # Premissa B: El Gatekeeper HA de tenir Nom i Cognom real (MAI càrrecs o noms genèrics)
+        # Premissa B: Gatekeeper Nominal vs Lead Corporatiu amb Contacte Directe Verificat
         if not es_nom_persona_real(avaluacio.decisor_nom):
             avaluacio.decisor_nom = None
             if avaluacio.estat_decisio == "SELECCIONAT":
-                avaluacio.estat_decisio = "DESCARTAT"
-                avaluacio.score = min(avaluacio.score, 40)
-                avaluacio.campanya_3_emails = []
-                avaluacio.motiu_detallat_ia = (
-                    "Descartat automàticament (Regla de Gatekeeper Real): No s'ha pogut verificar el nom i cognom real "
-                    "d'una persona física decisora (Gerent / Director Tècnic). Està prohibit utilitzar càrrecs genèrics "
-                    "com a nom de contacte."
-                )
+                if te_contacte_operatiu and avaluacio.operaris_estimats >= payload.operaris_minims:
+                    # NO descartem un lead potent amb operaris i contacte real: penalitzem score i marquem per revisió
+                    avaluacio.score = max(65, min(avaluacio.score - 12, 78))
+                    avaluacio.decisor_carrec = avaluacio.decisor_carrec or "Direcció / Gerència (Pendent nom)"
+                    avaluacio.motiu_detallat_ia = (
+                        f"[AVÍS: Decisor nominal pendent d'identificar] {avaluacio.motiu_detallat_ia} "
+                        f"S'admet pels seus indicadors operatius ({avaluacio.operaris_estimats} operaris) i contacte verificat."
+                    )
+                else:
+                    avaluacio.estat_decisio = "DESCARTAT"
+                    avaluacio.score = min(avaluacio.score, 40)
+                    avaluacio.campanya_3_emails = []
+                    avaluacio.motiu_detallat_ia = (
+                        "Descartat: Sense Gatekeeper nominal identificat ni dades de contacte/operaris suficients."
+                    )
 
         # Premissa C: Enllaç web directe comprovable
         if not validar_url_verificable(web):
             avaluacio.estat_decisio = "DESCARTAT"
             avaluacio.score = min(avaluacio.score, 20)
             avaluacio.campanya_3_emails = []
-            avaluacio.motiu_detallat_ia = (
-                "Descartat automàticament (Regla d'Enllaços Comprobables): No disposa d'un enllaç web directe "
-                "i verificable."
-            )
 
         lead_creat_id: Optional[uuid.UUID] = None
 
-        if avaluacio.estat_decisio == "SELECCIONAT" and avaluacio.decisor_nom:
+        # Permetre la creació del Lead si ha estat SELECCIONAT (amb nom real o amb contacte operatiu verificat)
+        if avaluacio.estat_decisio == "SELECCIONAT" and (avaluacio.decisor_nom or te_contacte_operatiu):
             tot_sel += 1
             lead_creat_id = uuid.uuid4()
+            nom_contacte_final = avaluacio.decisor_nom or f"Direcció Tècnica ({nom})"
             nota_emails = ""
             if email_empresa_det and email_gk_det and email_empresa_det != email_gk_det:
                 nota_emails = f" [Email empresa: {email_empresa_det} | Email Gatekeeper: {email_gk_det}]"
             nou_lead = SaasLead(
                 id=lead_creat_id,
                 nom_empresa=nom,
-                nom_contacte=avaluacio.decisor_nom,
+                nom_contacte=nom_contacte_final,
                 email=email_det or f"contacte@{dom}",
                 telefon=telefon_det,
                 vertical=payload.vertical.strip(),

@@ -237,6 +237,65 @@ async def test_t011_tallafocs_cp_adreca_fisica_i_gatekeeper_real(superadmin_head
         assert cand_generic["decisor_nom"] is None
 
 
+@pytest.mark.asyncio
+async def test_t011_admissio_gradual_contacte_operatiu_sense_nom_gatekeeper(
+    superadmin_headers: dict[str, str],
+    db_session: AsyncSession,
+):
+    """Verifica que el tallafocs ponderat admet condicionalment (SELECCIONAT) amb score penalitzat (65-78)
+    a una empresa real amb quadrilla d'operaris i telèfon/email verificat, encara que no tingui nom de Gatekeeper."""
+    suffix = uuid.uuid4().hex[:6]
+    candidat_corporatiu = [
+        {
+            "nom_empresa": f"Clima i Manteniment Pallars {suffix} SL",
+            "web_url": f"https://pallars-clima-{suffix}.cat",
+            "adreca_fisica": f"Carrer Industrial, 8, 25560 Sort ({suffix})",
+            "cif": f"B25{uuid.uuid4().hex[:6].upper()}",
+            "telefon": "+34973620123",
+            "email": f"info@pallars-clima-{suffix}.cat",
+            "decisor_nom": None,
+            "web_markdown": "Empresa d'instal·lacions i manteniment tècnic amb equip de 8 operaris a Sort (25560).",
+        }
+    ]
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        res = await ac.post(
+            "/api/v1/superadmin/crm/prospeccio/tasques-cp",
+            json={
+                "codi_postal": "25560",
+                "vertical": "manteniment",
+                "operaris_minims": 5,
+                "candidats_descoberts": candidat_corporatiu,
+            },
+            headers=superadmin_headers,
+        )
+        assert res.status_code == 201, res.text
+        data = res.json()
+        assert data["total_trobats"] == 1
+        assert data["total_seleccionats"] == 1
+        assert data["total_descartats"] == 0
+
+        det_res = await ac.get(
+            f"/api/v1/superadmin/crm/prospeccio/tasques-cp/{data['tasca_id']}",
+            headers=superadmin_headers,
+        )
+        assert det_res.status_code == 200
+        cand = det_res.json()["candidats"][0]
+        assert cand["estat_decisio"] == "SELECCIONAT"
+        assert 65 <= cand["score"] <= 78
+        assert cand["decisor_nom"] is None
+        assert "Pendent nom" in (cand["decisor_carrec"] or "")
+
+        # Verificar que el SaasLead s'ha creat correctament amb nom de contacte de Direcció Tècnica
+        res_lead = await db_session.execute(
+            select(SaasLead).where(SaasLead.nom_empresa == f"Clima i Manteniment Pallars {suffix} SL")
+        )
+        lead = res_lead.scalar_one_or_none()
+        assert lead is not None
+        assert lead.nom_contacte == f"Direcció Tècnica (Clima i Manteniment Pallars {suffix} SL)"
+        assert lead.telefon == "+34973620123"
+
+
 # ==============================================================================
 # TESTS T012: DOBLE BUCLE D'APRENENTATGE (CORREGIR CRITERI I REGISTRAR ÈXIT)
 # ==============================================================================

@@ -33,6 +33,7 @@ from app.models.models import (
     SaasLead,
 )
 from app.services.firecrawl_service import (
+    _desencriptar_cfemail,
     _extreure_adreca_amb_cp_de_text,
     _extreure_emails_empresa_i_gatekeeper_de_text,
     _extreure_gatekeeper_real_de_text,
@@ -47,6 +48,7 @@ from app.services.firecrawl_service import (
     normalitzar_cif,
     normalitzar_domini,
     validar_cp_en_adreca_fisica,
+    validar_cp_o_municipi_en_adreca,
     verificar_duplicitat_multivector,
 )
 from app.services.mx_shield_service import (
@@ -58,6 +60,7 @@ from app.services.mx_shield_service import (
 from app.services.openrouter_prospecting_service import (
     EmailStepSchema,
     LeadEvaluationSchema,
+    _extreure_context_prioritari_ia,
     carregar_context_doble_bucle,
     qualificar_candidat_amb_openrouter,
 )
@@ -219,11 +222,14 @@ async def test_t005_firecrawl_investigacio_multicanal():
 
 def test_t005_validacions_cp_adreca_gatekeeper_real_i_urls():
     """Verifica les 3 regles crítiques: CP en adreça física, Gatekeeper real (no genèric) i URLs directes."""
-    # Regla 1: Codi Postal en adreça física real (rebutjant comentaris d'Instagram o placeholders)
+    # Regla 1: Codi Postal en adreça física real i flexibilització per municipi
     assert validar_cp_en_adreca_fisica("Avinguda Comtes de Pallars, 12, 25560 Sort", "25560") is True
     assert validar_cp_en_adreca_fisica("Pol. Ind. El Segre, Nau 4, 25001 Lleida", "25560") is False
     assert validar_cp_en_adreca_fisica("LinkedIn/Instagram: Nova instal·lació a la zona 25560", "25560") is False
     assert validar_cp_en_adreca_fisica("Zona Codi Postal 25560", "25560") is False
+    assert validar_cp_o_municipi_en_adreca("Carrer Major, 10, 25560 Sort", "25560", municipi="Sort") is True
+    assert validar_cp_o_municipi_en_adreca("Polígon Industrial El Segre, Nau 2, Lleida", "25001", municipi="Lleida") is True
+    assert validar_cp_o_municipi_en_adreca("Avinguda Diagonal, 100, Barcelona", "25001", municipi="Lleida") is False
 
     # Regla 2: Nom i Cognom real de Gatekeeper (rebutjant tots els càrrecs i noms genèrics)
     assert es_nom_persona_real("Joan Marcet Vila") is True
@@ -247,6 +253,39 @@ def test_t005_validacions_cp_adreca_gatekeeper_real_i_urls():
     assert mapa["web"] == "https://climasegre.cat"
     assert mapa["linkedin"] == "https://www.linkedin.com/company/climasegre"
     assert mapa["instagram"] == "https://www.instagram.com/climasegre/"
+
+
+def test_t005_cloudflare_desencriptacio_mobils_i_context_ia():
+    """Verifica la desencriptació Cloudflare cfemail, extracció de wa.me, raó social i context prioritari IA."""
+    key = 0x1F
+    plain_email = "gerencia@electroclima.cat"
+    cf_hex = f"{key:02x}" + "".join(f"{(ord(c) ^ key):02x}" for c in plain_email)
+
+    assert _desencriptar_cfemail(cf_hex) == plain_email
+    assert _desencriptar_cfemail("invalid_hex_string") is None
+
+    html_raw = f"""
+    <html>
+      <body>
+        <h1>Instal·lacions del Pirineu SLU</h1>
+        <p>Contacte: <a data-cfemail="{cf_hex}">[email&#160;protected]</a></p>
+        <p>WhatsApp: <a href="https://wa.me/34655443322">Xat directe</a></p>
+        <p>Centraleta: <a href="callto:+34973556677">Trucar</a></p>
+      </body>
+    </html>
+    """
+    meta = _extreure_metadades_html_brut(html_raw)
+    assert plain_email in meta["mailtos"]
+    assert "34655443322" in meta["tels"]
+    assert "+34973556677" in meta["tels"]
+    assert "Instal·lacions del Pirineu SLU" in (meta.get("rao_social_detectada") or "")
+
+    # Context prioritari per a IA (DeepSeek 6000 caràcters)
+    md_gran = "Capçalera Corporativa. " * 200 + " Administrador Únic: Pere Soler, CIF: B25888888, Nau 5 Polígon. " + " Peu de pàgina Legal. " * 300
+    ctx = _extreure_context_prioritari_ia(md_gran, max_len=6000)
+    assert len(ctx) <= 6000
+    assert "administrador" in ctx.lower()
+    assert "b25888888" in ctx.lower()
 
 
 def test_t005_scraper_extraccio_adreca_email_gatekeeper_telefon_real():
@@ -753,5 +792,6 @@ async def test_t008_inbound_baixa_optout_rgpd(db_session: AsyncSession):
     stmt_lead = select(SaasLead).where(SaasLead.id == lead_id)
     res_lead = await db_session.execute(stmt_lead)
     lead_actualitzat = res_lead.scalars().first()
+    assert lead_actualitzat is not None
     assert lead_actualitzat.estat_qualificacio == "DESCARTAT"
 

@@ -29,7 +29,7 @@ from app.core.config import settings
 from app.models.models import SaasCriteriFeedback
 from app.services.firecrawl_service import (
     es_nom_persona_real,
-    validar_cp_en_adreca_fisica,
+    validar_cp_o_municipi_en_adreca,
 )
 
 logger = logging.getLogger("sevalor.crm.openrouter")
@@ -42,6 +42,31 @@ def _sanititzar_entrada_ia(text: Optional[str], max_len: int = 2500) -> str:
     # Eliminar caràcters de control excepte salts de línia i tabuladors
     clean = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", "", text)
     return clean.strip()[:max_len]
+
+
+def _extreure_context_prioritari_ia(web_markdown: str, max_len: int = 6000) -> str:
+    """Selecciona l'inici, el peu de pàgina i els blocs amb CIF/Contacte/Equip perquè no es perdin en truncar."""
+    if not web_markdown:
+        return ""
+    net = _sanititzar_entrada_ia(web_markdown, max_len=40000)
+    if len(net) <= max_len:
+        return net
+
+    capcalera = net[:2000]
+    peu_i_subpagines = net[-3000:]
+    # Cercar blocs intermedis que continguin paraules clau de decisors o dades fiscals
+    blocs_clau = []
+    for m in re.finditer(
+        r".{0,250}\b(?:gerent|director|fundador|administrador|equip|cif|nif|s\.l\.|pol[íi]gon)\b.{0,250}",
+        net[2000:-3000],
+        flags=re.IGNORECASE,
+    ):
+        blocs_clau.append(m.group(0).strip())
+        if sum(len(b) for b in blocs_clau) >= 1000:
+            break
+
+    combinat = f"{capcalera}\n...\n" + "\n".join(blocs_clau) + f"\n...\n{peu_i_subpagines}"
+    return combinat[:max_len]
 
 
 # ==============================================================================
@@ -219,33 +244,40 @@ def _aplicar_regles_estrictes_post_avaluacio(
     codi_postal: str,
     adreca_fisica: Optional[str],
     fonts_verificades: List[str],
+    municipi: Optional[str] = None,
+    te_contacte_operatiu: bool = False,
+    operaris_minims: int = 5,
 ) -> LeadEvaluationSchema:
-    """Garanteix que cap candidat sigui SELECCIONAT si incompleix les regles de CP físic o Gatekeeper real."""
+    """Valida CP/municipi i permet seleccionar leads amb contacte operatiu encara que falti el nom del Gatekeeper."""
     avaluacio.fonts_investigades = fonts_verificades
 
-    # 1. Validació estricta del nom de persona real del Gatekeeper (MAI un càrrec genèric)
     if not es_nom_persona_real(avaluacio.decisor_nom):
         avaluacio.decisor_nom = None
         if avaluacio.estat_decisio == "SELECCIONAT":
-            avaluacio.estat_decisio = "DESCARTAT"
-            avaluacio.score = min(avaluacio.score, 40)
-            avaluacio.campanya_3_emails = []
-            avaluacio.motiu_detallat_ia = (
-                "Descartat automàticament (Regla de Gatekeeper Real): No s'ha pogut verificar el nom i cognom real "
-                "d'una persona física decisora (Gerent / Director Tècnic). Està prohibit utilitzar càrrecs genèrics "
-                "com a nom de contacte."
-            )
+            if not (te_contacte_operatiu and avaluacio.operaris_estimats >= operaris_minims):
+                avaluacio.estat_decisio = "DESCARTAT"
+                avaluacio.score = min(avaluacio.score, 40)
+                avaluacio.campanya_3_emails = []
+                avaluacio.motiu_detallat_ia = (
+                    "Descartat automàticament: No s'ha pogut verificar el Gatekeeper ni contacte operatiu suficient."
+                )
+            else:
+                # NO descartem un lead potent amb operaris i contacte real: penalitzem score i marquem per revisió
+                avaluacio.score = max(65, min(avaluacio.score - 12, 78))
+                avaluacio.decisor_carrec = avaluacio.decisor_carrec or "Direcció / Gerència (Pendent nom)"
+                avaluacio.motiu_detallat_ia = (
+                    f"[AVÍS: Decisor nominal pendent d'identificar] {avaluacio.motiu_detallat_ia} "
+                    f"S'admet pels seus indicadors operatius ({avaluacio.operaris_estimats} operaris) i contacte verificat."
+                )
 
-    # 2. Validació estricta del Codi Postal dins l'adreça física (quan es proporciona adreça en el flux de CP)
-    if adreca_fisica is not None and not validar_cp_en_adreca_fisica(adreca_fisica, codi_postal):
+    if adreca_fisica is not None and not validar_cp_o_municipi_en_adreca(adreca_fisica, codi_postal, municipi=municipi):
         if avaluacio.estat_decisio == "SELECCIONAT":
             avaluacio.estat_decisio = "DESCARTAT"
             avaluacio.score = min(avaluacio.score, 30)
             avaluacio.campanya_3_emails = []
             avaluacio.motiu_detallat_ia = (
-                f"Descartat automàticament (Regla de Codi Postal en Adreça Física): L'adreça física verificada "
-                f"('{adreca_fisica or 'No disponible'}') no conté el Codi Postal sol·licitat ({codi_postal.strip()}). "
-                f"No s'admeten referències de text en comentaris de xarxes socials com a ubicació física."
+                f"Descartat (Ubicació Física): L'adreça ('{adreca_fisica or 'No disponible'}') "
+                f"no correspon al CP {codi_postal.strip()} ni al municipi ({municipi or 'N/A'})."
             )
 
     return avaluacio
@@ -267,6 +299,8 @@ async def qualificar_candidat_amb_openrouter(
     gatekeeper_hints: Dict[str, str],
     db: AsyncSession,
     adreca_fisica: Optional[str] = None,
+    municipi: Optional[str] = None,
+    te_contacte_operatiu: bool = False,
 ) -> LeadEvaluationSchema:
     """Avalua el candidat mitjançant OpenRouter (DeepSeek) aplicant validació estricta post-IA.
 
@@ -282,6 +316,8 @@ async def qualificar_candidat_amb_openrouter(
         gatekeeper_hints: Pistes verificades del decisor (`nom`, `carrec`, `context`).
         db: Sessió asíncrona per consultar el Doble Bucle d'Aprenentatge.
         adreca_fisica: Adreça física extreta per validar-hi el Codi Postal.
+        municipi: Municipi esperat del codi postal per a validació geogràfica flexible.
+        te_contacte_operatiu: True si es disposa d'email amb MX vàlid o telèfon directe verificat.
 
     Returns:
         Instància validada de `LeadEvaluationSchema`.
@@ -295,12 +331,17 @@ async def qualificar_candidat_amb_openrouter(
     adr_sani = _sanititzar_entrada_ia(adreca_fisica, 250) if adreca_fisica else "No especificada"
     vertical_sani = _sanititzar_entrada_ia(vertical, 150)
     fita_sani = _sanititzar_entrada_ia(fita_recent, 500)
-    md_sani = _sanititzar_entrada_ia(web_markdown, 2500)
+    md_sani = _extreure_context_prioritari_ia(web_markdown, 6000)
 
     nom_gk_hint = gatekeeper_hints.get("nom") or gatekeeper_hints.get("context") or ""
     carrec_gk_hint = gatekeeper_hints.get("carrec") or ""
     if es_nom_persona_real(nom_gk_hint):
         decisor_hint_str = f"Decisor persona física verificat: {nom_gk_hint} (Càrrec: {carrec_gk_hint or 'Direcció'})"
+    elif te_contacte_operatiu:
+        decisor_hint_str = (
+            "Decisor persona física: Pendent d'identificar nominalment a la web "
+            f"(contacte corporatiu directe verificat, mínim {operaris_minims} operaris)"
+        )
     else:
         decisor_hint_str = "Decisor persona física verificat: CAP NOM REAL TROBAT (descartar obligatòriament)"
 
@@ -359,6 +400,9 @@ Resum del lloc web corporatiu:
                         codi_postal=codi_postal,
                         adreca_fisica=adreca_fisica,
                         fonts_verificades=fonts_investigades,
+                        municipi=municipi,
+                        te_contacte_operatiu=te_contacte_operatiu,
+                        operaris_minims=operaris_minims,
                     )
                 logger.warning("OpenRouter API ha retornat codi %s: %s", res.status_code, res.text)
         except Exception as exc:
@@ -376,12 +420,17 @@ Resum del lloc web corporatiu:
         gatekeeper_hints=gatekeeper_hints,
         context_aprenentatge=context_aprenentatge,
         adreca_fisica=adreca_fisica,
+        municipi=municipi,
+        te_contacte_operatiu=te_contacte_operatiu,
     )
     return _aplicar_regles_estrictes_post_avaluacio(
         avaluacio=avaluacio_det,
         codi_postal=codi_postal,
         adreca_fisica=adreca_fisica,
         fonts_verificades=fonts_investigades,
+        municipi=municipi,
+        te_contacte_operatiu=te_contacte_operatiu,
+        operaris_minims=operaris_minims,
     )
 
 
@@ -396,6 +445,8 @@ def _generar_avaluacio_fallback_determinista(
     gatekeeper_hints: Dict[str, str],
     context_aprenentatge: Dict[str, Any],
     adreca_fisica: Optional[str] = None,
+    municipi: Optional[str] = None,
+    te_contacte_operatiu: bool = False,
 ) -> LeadEvaluationSchema:
     """Avaluador determinista basat en regles estrictes (CP físic + Gatekeeper real + Sector)."""
     # 1. Comprovar si és un comerç al detall sense operaris de camp o coincideix amb descart humà
@@ -421,8 +472,8 @@ def _generar_avaluacio_fallback_determinista(
             campanya_3_emails=[],
         )
 
-    # 2. Comprovar adreça física amb el Codi Postal demanat (si s'ha passat adreca_fisica)
-    if adreca_fisica is not None and not validar_cp_en_adreca_fisica(adreca_fisica, codi_postal):
+    # 2. Comprovar adreça física amb el Codi Postal demanat o municipi compatible (si s'ha passat adreca_fisica)
+    if adreca_fisica is not None and not validar_cp_o_municipi_en_adreca(adreca_fisica, codi_postal, municipi=municipi):
         return LeadEvaluationSchema(
             operaris_estimats=0,
             decisor_nom=None,
@@ -435,7 +486,8 @@ def _generar_avaluacio_fallback_determinista(
             estat_decisio="DESCARTAT",
             motiu_detallat_ia=(
                 f"Descartat automàticament (Regla de Codi Postal en Adreça Física): L'adreça física verificada "
-                f"('{adreca_fisica or 'No disponible'}') no conté el Codi Postal sol·licitat ({codi_postal.strip()})."
+                f"('{adreca_fisica or 'No disponible'}') no conté el Codi Postal sol·licitat ({codi_postal.strip()}) "
+                f"ni el municipi ({municipi or 'N/A'})."
             ),
             campanya_3_emails=[],
         )
@@ -443,22 +495,86 @@ def _generar_avaluacio_fallback_determinista(
     # 3. Comprovar que existeix un nom i cognom REAL per al Gatekeeper (MAI genèric)
     cand_nom = (gatekeeper_hints.get("nom") or gatekeeper_hints.get("context") or "").strip()
     if not es_nom_persona_real(cand_nom):
-        return LeadEvaluationSchema(
-            operaris_estimats=max(operaris_minims, 5),
-            decisor_nom=None,
-            decisor_carrec=gatekeeper_hints.get("carrec"),
-            fonts_investigades=fonts_investigades,
-            fita_recent=fita_recent,
-            punt_dolor="Manca d'identificació nominal del decisor/Gatekeeper per a outreach personalitzat",
-            angle_atac="ANGLE_A_VISIBILITAT_TELEGRAM",
-            score=35,
-            estat_decisio="DESCARTAT",
-            motiu_detallat_ia=(
-                "Descartat automàticament (Regla de Gatekeeper Real): No s'ha pogut verificar el nom i cognom real "
-                "d'una persona física decisora. Està prohibit utilitzar càrrecs genèrics."
-            ),
-            campanya_3_emails=[],
-        )
+        if te_contacte_operatiu:
+            decisor_nom = None
+            decisor_carrec = gatekeeper_hints.get("carrec") or "Direcció / Gerència (Pendent nom)"
+            score_base = 72
+            operaris = max(operaris_minims + 2, 7)
+            fita = fita_recent or f"Presència corporativa verificada a {web_url} al Codi Postal {codi_postal}"
+            campanya = [
+                EmailStepSchema(
+                    pas=1,
+                    tempo_offset_dies=0,
+                    assumpte=f"Optimització de partes de treball per a {nom_empresa}",
+                    cos_text=(
+                        f"Hola equip de Direcció de {nom_empresa},\n\n"
+                        f"En empreses de {vertical} amb quadrilles al terreny, el coll d'ampolla habitual "
+                        f"és el descontrol dels partes d'obra i la informació dispersa entre les furgonetes i l'oficina.\n\n"
+                        f"A Sevalor Suite connectem els vostres operaris des de la PWA mòbil amb la gestió central, "
+                        f"i notifiquem el client final mitjançant el nostre Bot Oficial de Telegram per signar les entregues al moment.\n\n"
+                        f"Us faria servei veure una demostració de 10 minuts adaptada al vostre flux?\n\n"
+                        f"Salutacions cordials,\nEquip Tècnic Sevalor\ntecnic@sevalor.net"
+                    ),
+                ),
+                EmailStepSchema(
+                    pas=2,
+                    tempo_offset_dies=4,
+                    assumpte=f"Com empreses de {vertical} han eliminat el descontrol de furgonetes",
+                    cos_text=(
+                        f"Hola equip de {nom_empresa},\n\n"
+                        f"Fa uns dies us comentàvem el repte dels partes d'obra. Una empresa similar del sector de {vertical} "
+                        f"va reduir un 80% el temps de facturació automatitzant el tancament de l'albarà des del terreny "
+                        f"amb la PWA de Sevalor i la confirmació immediata per Telegram.\n\n"
+                        f"Us podem preparar un entorn de proves amb dades del vostre sector per comprovar-ho en viu.\n\n"
+                        f"Cordialment,\ntecnic@sevalor.net"
+                    ),
+                ),
+                EmailStepSchema(
+                    pas=3,
+                    tempo_offset_dies=8,
+                    assumpte=f"Activació de Demo Real de 7 dies per a {nom_empresa}",
+                    cos_text=(
+                        f"Hola equip de {nom_empresa},\n\n"
+                        f"Per no insistir més per aquesta via: si voleu provar sense cap compromís la plataforma, "
+                        f"us podem habilitar una instància Demo de 7 dies totalment operativa per a {nom_empresa}.\n\n"
+                        f"Podeu respondre aquest correu i us enviem l'accés immediat.\n\n"
+                        f"Una salutació,\ntecnic@sevalor.net"
+                    ),
+                ),
+            ]
+            return LeadEvaluationSchema(
+                operaris_estimats=operaris,
+                decisor_nom=None,
+                decisor_carrec=decisor_carrec,
+                fonts_investigades=fonts_investigades,
+                fita_recent=fita,
+                punt_dolor="Manca d'identificació nominal del decisor a la web (admesa per contacte operatiu directe)",
+                angle_atac="ANGLE_A_VISIBILITAT_TELEGRAM",
+                score=score_base,
+                estat_decisio="SELECCIONAT",
+                motiu_detallat_ia=(
+                    f"[AVÍS: Decisor nominal pendent d'identificar] Empresa admesa pels seus indicadors operatius "
+                    f"({operaris} operaris) i contacte directe verificat a la vertical '{vertical}'."
+                ),
+                campanya_3_emails=campanya,
+            )
+        else:
+            return LeadEvaluationSchema(
+                operaris_estimats=max(operaris_minims, 5),
+                decisor_nom=None,
+                decisor_carrec=gatekeeper_hints.get("carrec"),
+                fonts_investigades=fonts_investigades,
+                fita_recent=fita_recent,
+                punt_dolor="Manca d'identificació nominal del decisor/Gatekeeper per a outreach personalitzat",
+                angle_atac="ANGLE_A_VISIBILITAT_TELEGRAM",
+                score=35,
+                estat_decisio="DESCARTAT",
+                motiu_detallat_ia=(
+                    "Descartat automàticament (Regla de Gatekeeper Real): No s'ha pogut verificar el nom i cognom real "
+                    "d'una persona física decisora. Està prohibit utilitzar càrrecs genèrics."
+                ),
+                campanya_3_emails=[],
+            )
 
     decisor_nom = cand_nom
     decisor_carrec = gatekeeper_hints.get("carrec") or "Gerent"
