@@ -210,8 +210,8 @@ PRODUCTE SEVALOR SUITE:
 - NORMA ESTRICTA I SUPREMA: ESTÀ TOTALMENT PROHIBIT ESMENTAR 'WHATSAPP'. Únicament s'utilitza la PWA i el Bot Oficial de Telegram de Sevalor.
 
 REGLES INNEGOCIABLES DE VALIDACIÓ (TOLERÀNCIA ZERO):
-1. CODI POSTAL EN ADREÇA FÍSICA REAL: L'adreça física verificada de l'empresa (`Adreça Física`) HA DE CONTENIR el Codi Postal sol·licitat. MAI acceptis una empresa només perquè el número de CP apareix en un comentari o post d'Instagram/LinkedIn si la seva adreça física no pertany al Codi Postal demanat. Si l'adreça física no conté el CP demanat -> `estat_decisio = "DESCARTAT"`.
-2. NOM I COGNOM REAL DE GATEKEEPER (PROHIBIT NOMS GENÈRICS): El camp `decisor_nom` HA DE SER OBLIGATÒRIAMENT el Nom i Cognom real d'una persona física (ex. "Joan Marcet Vila", "Antoni Vidal"). ESTÀ TOTALMENT PROHIBIT posar càrrecs o textos genèrics com "Responsable d'Operacions", "Director Tècnic", "Gerent", "Administració" o "Equip". Si no hi ha cap nom i cognom de persona física real verificat a les dades d'entrada -> retorna `decisor_nom = null` i `estat_decisio = "DESCARTAT"`.
+1. UBICACIÓ FÍSICA REAL: L'adreça física verificada ha de correspondre al Codi Postal sol·licitat o al mateix municipi/polígon industrial. Si pertany a una altra localitat allunyada -> `estat_decisio = "DESCARTAT"`.
+2. GATEKEEPER REAL O CONTACTE OPERATIU: Prioritza extreure el Nom i Cognom real d'una persona física del text web (`decisor_nom`). PROHIBIT posar càrrecs genèrics a `decisor_nom` (si no hi ha nom humà, retorna `decisor_nom = null`). Si `decisor_nom` és `null` però l'empresa té contacte operatiu verificat i compleix el mínim d'operaris de camp, classifica-la igualment com a `estat_decisio = "SELECCIONAT"` i genera la campanya de 3 correus adreçada a la direcció tècnica de l'empresa.
 3. DADES I FONTS COMPROBABLES: Només utilitza fites i canals verificables amb URL directa present a les dades d'entrada.
 
 {descarts_str}
@@ -333,11 +333,11 @@ async def qualificar_candidat_amb_openrouter(
         decisor_hint_str = f"Decisor persona física verificat: {nom_gk_hint} (Càrrec: {carrec_gk_hint or 'Direcció'})"
     elif te_contacte_operatiu:
         decisor_hint_str = (
-            "Decisor persona física: Pendent d'identificar nominalment a la web "
-            f"(contacte corporatiu directe verificat, mínim {operaris_minims} operaris)"
+            "Decisor persona física: Pendent d'extreure del text web. "
+            "Disposa de contacte operatiu verificat (admetre com a SELECCIONAT si compleix operaris i ubicació)."
         )
     else:
-        decisor_hint_str = "Decisor persona física verificat: CAP NOM REAL TROBAT (descartar obligatòriament)"
+        decisor_hint_str = "Decisor persona física verificat: CAP NOM REAL NI CONTACTE OPERATIU (descartar obligatòriament)"
 
     user_prompt = f"""Avalua el següent candidat de prospecció:
 - Empresa: {nom_sani}
@@ -466,7 +466,7 @@ def _generar_avaluacio_fallback_determinista(
             campanya_3_emails=[],
         )
 
-    # 2. Comprovar adreça física amb el Codi Postal demanat o municipi compatible (si s'ha passat adreca_fisica)
+    # 2. Comprovar adreça física amb CP o municipi
     if adreca_fisica is not None and not validar_cp_o_municipi_en_adreca(adreca_fisica, codi_postal, municipi=municipi):
         return LeadEvaluationSchema(
             operaris_estimats=0,
@@ -479,99 +479,33 @@ def _generar_avaluacio_fallback_determinista(
             score=20,
             estat_decisio="DESCARTAT",
             motiu_detallat_ia=(
-                f"Descartat automàticament (Regla de Codi Postal en Adreça Física): L'adreça física verificada "
-                f"('{adreca_fisica or 'No disponible'}') no conté el Codi Postal sol·licitat ({codi_postal.strip()}) "
-                f"ni el municipi ({municipi or 'N/A'})."
+                f"Descartat (Ubicació Física): L'adreça ('{adreca_fisica or 'No disponible'}') "
+                f"no correspon al CP {codi_postal.strip()} ni al municipi ({municipi or 'N/A'})."
             ),
             campanya_3_emails=[],
         )
 
-    # 3. Comprovar que existeix un nom i cognom REAL per al Gatekeeper (MAI genèric)
+    # 3. Comprovar Gatekeeper real o admissió per contacte operatiu
     cand_nom = (gatekeeper_hints.get("nom") or gatekeeper_hints.get("context") or "").strip()
-    if not es_nom_persona_real(cand_nom):
-        if te_contacte_operatiu:
-            decisor_nom = None
-            decisor_carrec = gatekeeper_hints.get("carrec") or "Direcció / Gerència (Pendent nom)"
-            score_base = 72
-            operaris = max(operaris_minims + 2, 7)
-            fita = fita_recent or f"Presència corporativa verificada a {web_url} al Codi Postal {codi_postal}"
-            campanya = [
-                EmailStepSchema(
-                    pas=1,
-                    tempo_offset_dies=0,
-                    assumpte=f"Optimització de partes de treball per a {nom_empresa}",
-                    cos_text=(
-                        f"Hola equip de Direcció de {nom_empresa},\n\n"
-                        f"En empreses de {vertical} amb quadrilles al terreny, el coll d'ampolla habitual "
-                        f"és el descontrol dels partes d'obra i la informació dispersa entre les furgonetes i l'oficina.\n\n"
-                        f"A Sevalor Suite connectem els vostres operaris des de la PWA mòbil amb la gestió central, "
-                        f"i notifiquem el client final mitjançant el nostre Bot Oficial de Telegram per signar les entregues al moment.\n\n"
-                        f"Us faria servei veure una demostració de 10 minuts adaptada al vostre flux?\n\n"
-                        f"Salutacions cordials,\nEquip Tècnic Sevalor\ntecnic@sevalor.net"
-                    ),
-                ),
-                EmailStepSchema(
-                    pas=2,
-                    tempo_offset_dies=4,
-                    assumpte=f"Com empreses de {vertical} han eliminat el descontrol de furgonetes",
-                    cos_text=(
-                        f"Hola equip de {nom_empresa},\n\n"
-                        f"Fa uns dies us comentàvem el repte dels partes d'obra. Una empresa similar del sector de {vertical} "
-                        f"va reduir un 80% el temps de facturació automatitzant el tancament de l'albarà des del terreny "
-                        f"amb la PWA de Sevalor i la confirmació immediata per Telegram.\n\n"
-                        f"Us podem preparar un entorn de proves amb dades del vostre sector per comprovar-ho en viu.\n\n"
-                        f"Cordialment,\ntecnic@sevalor.net"
-                    ),
-                ),
-                EmailStepSchema(
-                    pas=3,
-                    tempo_offset_dies=8,
-                    assumpte=f"Activació de Demo Real de 7 dies per a {nom_empresa}",
-                    cos_text=(
-                        f"Hola equip de {nom_empresa},\n\n"
-                        f"Per no insistir més per aquesta via: si voleu provar sense cap compromís la plataforma, "
-                        f"us podem habilitar una instància Demo de 7 dies totalment operativa per a {nom_empresa}.\n\n"
-                        f"Podeu respondre aquest correu i us enviem l'accés immediat.\n\n"
-                        f"Una salutació,\ntecnic@sevalor.net"
-                    ),
-                ),
-            ]
-            return LeadEvaluationSchema(
-                operaris_estimats=operaris,
-                decisor_nom=None,
-                decisor_carrec=decisor_carrec,
-                fonts_investigades=fonts_investigades,
-                fita_recent=fita,
-                punt_dolor="Manca d'identificació nominal del decisor a la web (admesa per contacte operatiu directe)",
-                angle_atac="ANGLE_A_VISIBILITAT_TELEGRAM",
-                score=score_base,
-                estat_decisio="SELECCIONAT",
-                motiu_detallat_ia=(
-                    f"[AVÍS: Decisor nominal pendent d'identificar] Empresa admesa pels seus indicadors operatius "
-                    f"({operaris} operaris) i contacte directe verificat a la vertical '{vertical}'."
-                ),
-                campanya_3_emails=campanya,
-            )
-        else:
-            return LeadEvaluationSchema(
-                operaris_estimats=max(operaris_minims, 5),
-                decisor_nom=None,
-                decisor_carrec=gatekeeper_hints.get("carrec"),
-                fonts_investigades=fonts_investigades,
-                fita_recent=fita_recent,
-                punt_dolor="Manca d'identificació nominal del decisor/Gatekeeper per a outreach personalitzat",
-                angle_atac="ANGLE_A_VISIBILITAT_TELEGRAM",
-                score=35,
-                estat_decisio="DESCARTAT",
-                motiu_detallat_ia=(
-                    "Descartat automàticament (Regla de Gatekeeper Real): No s'ha pogut verificar el nom i cognom real "
-                    "d'una persona física decisora. Està prohibit utilitzar càrrecs genèrics."
-                ),
-                campanya_3_emails=[],
-            )
+    te_nom_real = es_nom_persona_real(cand_nom)
+    if not te_nom_real and not te_contacte_operatiu:
+        return LeadEvaluationSchema(
+            operaris_estimats=max(operaris_minims, 5),
+            decisor_nom=None,
+            decisor_carrec=gatekeeper_hints.get("carrec"),
+            fonts_investigades=fonts_investigades,
+            fita_recent=fita_recent,
+            punt_dolor="Manca d'identificació nominal del decisor i sense contacte operatiu verificat",
+            angle_atac="ANGLE_A_VISIBILITAT_TELEGRAM",
+            score=35,
+            estat_decisio="DESCARTAT",
+            motiu_detallat_ia="Descartat automàticament: Sense Gatekeeper nominal ni contacte operatiu verificat.",
+            campanya_3_emails=[],
+        )
 
-    decisor_nom = cand_nom
-    decisor_carrec = gatekeeper_hints.get("carrec") or "Gerent"
+    decisor_nom = cand_nom if te_nom_real else None
+    salutacio_nom = decisor_nom or f"equip directiu de {nom_empresa}"
+    decisor_carrec = gatekeeper_hints.get("carrec") or ("Gerent" if te_nom_real else "Direcció / Gerència (Pendent nom)")
 
     # Lookalike boost si tenim patrons d'èxit del mateix sector
     te_cas_exit = any(
@@ -579,19 +513,25 @@ def _generar_avaluacio_fallback_determinista(
         for c in context_aprenentatge.get("casos_exit_replicables", [])
     )
     score_base = 88 if te_cas_exit else 82
-    operaris = max(operaris_minims + 3, 8)
+    if not te_nom_real and te_contacte_operatiu:
+        score_base = 72
+    operaris = max(operaris_minims + 3, 8) if te_nom_real else max(operaris_minims + 2, 7)
 
     fita = fita_recent or f"Presència corporativa verificada a {web_url} al Codi Postal {codi_postal}"
-    punt_dolor = "Pèrdua d'hores entre albarans en paper fets a la furgoneta i posterior picatge a oficina"
+    punt_dolor = (
+        "Pèrdua d'hores entre albarans en paper fets a la furgoneta i posterior picatge a oficina"
+        if te_nom_real
+        else "Manca d'identificació nominal del decisor a la web (admesa per contacte operatiu directe)"
+    )
 
-    # Campanya de 3 emails amb tempo adreçada al nom REAL del Gatekeeper
+    # Campanya de 3 emails amb tempo adreçada al nom REAL del Gatekeeper o salutació corporativa
     campanya = [
         EmailStepSchema(
             pas=1,
             tempo_offset_dies=0,
             assumpte=f"Optimització de partes de treball per a {nom_empresa}",
             cos_text=(
-                f"Hola {decisor_nom},\n\n"
+                f"Hola {salutacio_nom},\n\n"
                 f"Hem seguit la trajectòria de {nom_empresa} ({fita}). "
                 f"En empreses de {vertical} amb quadrilles com la vostra, el coll d'ampolla habitual "
                 f"és el descontrol dels partes d'obra i la informació dispersa entre les furgonetes i l'oficina.\n\n"
@@ -606,7 +546,7 @@ def _generar_avaluacio_fallback_determinista(
             tempo_offset_dies=4,
             assumpte=f"Com empreses de {vertical} han eliminat el descontrol de furgonetes",
             cos_text=(
-                f"Hola {decisor_nom},\n\n"
+                f"Hola {salutacio_nom},\n\n"
                 f"Fa uns dies us comentàvem el repte dels partes d'obra. Una empresa similar del sector de {vertical} "
                 f"va reduir un 80% el temps de facturació automatitzant el tancament de l'albarà des del terreny "
                 f"amb la PWA de Sevalor i la confirmació immediata per Telegram.\n\n"
@@ -619,7 +559,7 @@ def _generar_avaluacio_fallback_determinista(
             tempo_offset_dies=8,
             assumpte=f"Activació de Demo Real de 7 dies per a {nom_empresa}",
             cos_text=(
-                f"Hola {decisor_nom},\n\n"
+                f"Hola {salutacio_nom},\n\n"
                 f"Per no insistir més per aquesta via: si voleu provar sense cap compromís la plataforma, "
                 f"us podem habilitar una instància Demo de 7 dies totalment operativa per a {nom_empresa}.\n\n"
                 f"Podeu respondre aquest correu i us enviem l'accés immediat.\n\n"
@@ -628,6 +568,7 @@ def _generar_avaluacio_fallback_determinista(
         ),
     ]
 
+    nom_descripcio = decisor_nom if te_nom_real else "admesa per contacte operatiu"
     return LeadEvaluationSchema(
         operaris_estimats=operaris,
         decisor_nom=decisor_nom,
@@ -639,7 +580,7 @@ def _generar_avaluacio_fallback_determinista(
         score=score_base,
         estat_decisio="SELECCIONAT",
         motiu_detallat_ia=(
-            f"Empresa amb adreça física verificada al CP {codi_postal}, decisor identificat ({decisor_nom}) "
+            f"Empresa amb adreça física verificada al CP {codi_postal}, decisor ({nom_descripcio}) "
             f"i quadrilla estimada de {operaris} operaris a la vertical '{vertical}'. "
             f"{'Lookalike coincident amb patrons d\'èxit replicables. ' if te_cas_exit else ''}"
             f"Fita verificada: {fita}."
