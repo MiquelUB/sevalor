@@ -17,13 +17,16 @@ Normativa estricta:
 - Generadors aleatoris amb UUID per a unicitat.
 """
 
+import json
 import uuid
 from datetime import datetime, timedelta, timezone
 
+import httpx
 import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.models.models import (
     Empresa,
     SaasActivitatLead,
@@ -794,4 +797,121 @@ async def test_t008_inbound_baixa_optout_rgpd(db_session: AsyncSession):
     lead_actualitzat = res_lead.scalars().first()
     assert lead_actualitzat is not None
     assert lead_actualitzat.estat_qualificacio == "DESCARTAT"
+
+
+@pytest.mark.asyncio
+async def test_t007_resiliencia_schema_llm_i_openrouter_payload():
+    """Verifica que LeadEvaluationSchema normalitza toleradament respostes de l'LLM amb camps absents o alternatius."""
+    # Cas 1: Payload de l'error real de CampoPro amb camps 'empresa' i 'campanya_emails' sense operaris_estimats ni motiu_detallat_ia
+    payload_error_campopro = {
+        "empresa": "CampoPro",
+        "campanya_emails": [],
+    }
+    schema_campopro = LeadEvaluationSchema.model_validate(payload_error_campopro)
+    assert schema_campopro.operaris_estimats >= 0
+    assert len(schema_campopro.motiu_detallat_ia) >= 10
+    assert "CampoPro" in schema_campopro.motiu_detallat_ia
+    assert schema_campopro.campanya_3_emails == []
+
+    # Cas 2: Payload amb camps alternatius ('operaris', 'justificacio', 'campanya_emails', 'subject', 'body')
+    payload_alternatiu = {
+        "empresa": "CampoPro Instal·lacions SL",
+        "operaris": "14",
+        "justificacio": "Empresa agrícola i de reg amb quadrilles actives al terreny",
+        "estat": "SELECCIONAT",
+        "score": 82,
+        "campanya_emails": [
+            {
+                "subject": "Optimització de reg per a CampoPro",
+                "body": "Hola equip directiu,\n\nUs contactem des de Sevalor Suite per connectar furgonetes i oficina via Telegram.",
+            }
+        ],
+    }
+    schema_alt = LeadEvaluationSchema.model_validate(payload_alternatiu)
+    assert schema_alt.operaris_estimats == 14
+    assert schema_alt.estat_decisio == "SELECCIONAT"
+    assert schema_alt.score == 82
+    assert "reg" in schema_alt.motiu_detallat_ia
+    assert len(schema_alt.campanya_3_emails) == 1
+    assert schema_alt.campanya_3_emails[0].pas == 1
+    assert schema_alt.campanya_3_emails[0].tempo_offset_dies == 0
+    assert schema_alt.campanya_3_emails[0].assumpte == "Optimització de reg per a CampoPro"
+    assert "Sevalor Suite" in schema_alt.campanya_3_emails[0].cos_text
+
+
+@pytest.mark.asyncio
+async def test_t007_openrouter_reintent_429_i_recuperacio(db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch):
+    """Verifica que si OpenRouter retorna 429 pel proveïdor preferent, es reintenta automàticament sense restricció de proveïdor."""
+    comptador = 0
+
+    async def mock_post(self, url, **kwargs):  # type: ignore[no-untyped-def]
+        nonlocal comptador
+        comptador += 1
+        if comptador == 1:
+            # Simulació del codi 429 d'upstream Baidu
+            return httpx.Response(
+                status_code=429,
+                json={
+                    "error": {
+                        "message": "Provider returned error",
+                        "code": 429,
+                        "metadata": {"raw": "deepseek/deepseek-v4.1-flash is temporarily rate-limited upstream", "provider_name": "Baidu"},
+                    }
+                },
+            )
+        else:
+            # Reintent reeixit amb deepseek-chat i payload normalitzat
+            return httpx.Response(
+                status_code=200,
+                json={
+                    "choices": [
+                        {
+                            "message": {
+                                "content": json.dumps({
+                                    "empresa": "CampoPro",
+                                    "decisor_nom": "Miquel Utgé",
+                                    "decisor_carrec": "Gerent",
+                                    "operaris": 12,
+                                    "justificacio": "Empresa agrícola idònia per a Sevalor Suite",
+                                    "estat": "SELECCIONAT",
+                                    "score": 85,
+                                    "campanya_emails": [
+                                        {
+                                            "pas": 1,
+                                            "tempo_offset_dies": 0,
+                                            "assumpte": "Optimització agrícola",
+                                            "cos_text": "Hola equip directiu,\n\nUs contactem des de Sevalor Suite via Telegram.",
+                                        }
+                                    ],
+                                })
+                            }
+                        }
+                    ]
+                },
+            )
+
+    monkeypatch.setattr(settings, "OPENROUTER_API_KEY", "sk-or-real-key-for-test")
+    monkeypatch.setattr(httpx.AsyncClient, "post", mock_post)
+
+    resultat = await qualificar_candidat_amb_openrouter(
+        nom_empresa="CampoPro",
+        web_url="https://campopro.cat",
+        codi_postal="25001",
+        vertical="Agricultura i Reg",
+        operaris_minims=5,
+        web_markdown="Empresa agrícola i de reg amb quadrilles al terreny.",
+        fonts_investigades=["web"],
+        fita_recent=None,
+        gatekeeper_hints={"nom": "Miquel Utgé", "carrec": "Gerent"},
+        db=db_session,
+    )
+
+    assert comptador == 2, "Hauria d'haver fet 2 intents: primer fallada 429 i segon reintent sense restricció"
+    assert isinstance(resultat, LeadEvaluationSchema)
+    assert resultat.estat_decisio == "SELECCIONAT"
+    assert resultat.operaris_estimats == 12
+    assert resultat.score == 85
+    assert len(resultat.campanya_3_emails) == 1
+
+
 

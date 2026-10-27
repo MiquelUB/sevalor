@@ -15,13 +15,14 @@ Funcionalitats:
    - Pas 3 (Dia +8): Diagnòstic ràpid i activació de la Demo Real de 7 Dies.
 """
 
+import asyncio
 import json
 import logging
 import re
 from typing import Any, Dict, List, Optional
 
 import httpx
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -81,6 +82,57 @@ class EmailStepSchema(BaseModel):
     assumpte: str = Field(..., min_length=5, max_length=255, description="Assumpte personalitzat")
     cos_text: str = Field(..., min_length=20, description="Cos del correu en text net")
 
+    @model_validator(mode="before")
+    @classmethod
+    def normalitzar_email_step(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+
+        # Pas (1, 2 o 3)
+        if "pas" not in data or data["pas"] is None:
+            data["pas"] = 1
+        else:
+            try:
+                data["pas"] = max(1, min(3, int(data["pas"])))
+            except Exception:
+                data["pas"] = 1
+
+        # Tempo offset dies (0, 4, 8)
+        if "tempo_offset_dies" not in data or data["tempo_offset_dies"] is None:
+            offsets = {1: 0, 2: 4, 3: 8}
+            data["tempo_offset_dies"] = offsets.get(data["pas"], 0)
+        else:
+            try:
+                data["tempo_offset_dies"] = max(0, int(data["tempo_offset_dies"]))
+            except Exception:
+                offsets = {1: 0, 2: 4, 3: 8}
+                data["tempo_offset_dies"] = offsets.get(data["pas"], 0)
+
+        # Assumpte (mínim 5 caràcters)
+        assumpte = data.get("assumpte") or data.get("subject") or data.get("titol") or ""
+        if len(str(assumpte).strip()) < 5:
+            assumpte = "Optimització de procesos tècnics amb Sevalor Suite"
+        data["assumpte"] = str(assumpte).strip()
+
+        # Cos text (mínim 20 caràcters)
+        cos = (
+            data.get("cos_text")
+            or data.get("body")
+            or data.get("text")
+            or data.get("cos")
+            or data.get("contingut")
+            or data.get("missatge")
+            or ""
+        )
+        if len(str(cos).strip()) < 20:
+            cos = (
+                "Hola equip directiu,\n\n"
+                "Us contactem des de Sevalor Suite per a optimitzar la vostra operativa de camp i quadrilles."
+            )
+        data["cos_text"] = str(cos).strip()
+
+        return data
+
     @field_validator("assumpte", "cos_text")
     @classmethod
     def prohibir_mencio_whatsapp(cls, v: str) -> str:
@@ -110,6 +162,118 @@ class LeadEvaluationSchema(BaseModel):
         default_factory=list,
         description="Seqüència de 3 correus amb tempo (0, 4, 8 dies) si és SELECCIONAT",
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalitzar_dades_llm(cls, data: Any) -> Any:
+        """Normalitza toleradament claus retornades per l'LLM (DeepSeek) abans de validar l'esquema."""
+        if not isinstance(data, dict):
+            return data
+
+        # 1. Normalitzar estat_decisio i score
+        estat_raw = str(data.get("estat_decisio") or data.get("estat") or data.get("decisio") or "").strip().upper()
+        if "SEL" in estat_raw:
+            estat = "SELECCIONAT"
+        elif "DESC" in estat_raw:
+            estat = "DESCARTAT"
+        else:
+            estat = "DESCARTAT"
+        data["estat_decisio"] = estat
+
+        if data.get("score") is None:
+            p = data.get("puntuacio") or data.get("puntuacio_qualificacio")
+            try:
+                data["score"] = int(p) if p is not None else (75 if estat == "SELECCIONAT" else 30)
+            except Exception:
+                data["score"] = 75 if estat == "SELECCIONAT" else 30
+        else:
+            try:
+                data["score"] = max(0, min(100, int(data["score"])))
+            except Exception:
+                data["score"] = 75 if estat == "SELECCIONAT" else 30
+
+        # 2. Normalitzar operaris_estimats
+        if data.get("operaris_estimats") is None:
+            candidats_operaris = [
+                data.get("operaris"),
+                data.get("treballadors"),
+                data.get("empleats"),
+                data.get("plantilla"),
+                data.get("operaris_totals"),
+                data.get("num_operaris"),
+            ]
+            trobat_operaris = None
+            for cand in candidats_operaris:
+                if cand is not None:
+                    try:
+                        trobat_operaris = int(cand)
+                        break
+                    except (ValueError, TypeError):
+                        pass
+            if trobat_operaris is not None:
+                data["operaris_estimats"] = max(0, trobat_operaris)
+            else:
+                data["operaris_estimats"] = 5 if estat == "SELECCIONAT" else 0
+        else:
+            try:
+                data["operaris_estimats"] = max(0, int(data["operaris_estimats"]))
+            except Exception:
+                data["operaris_estimats"] = 5 if estat == "SELECCIONAT" else 0
+
+        # 3. Normalitzar motiu_detallat_ia
+        motiu = data.get("motiu_detallat_ia")
+        if not motiu or not isinstance(motiu, str) or len(motiu.strip()) < 10:
+            candidats_motiu = [
+                data.get("motiu"),
+                data.get("justificacio"),
+                data.get("explicacio"),
+                data.get("raonament"),
+                data.get("notes"),
+                data.get("detall"),
+                data.get("resum"),
+            ]
+            trobat_motiu = None
+            for cand_m in candidats_motiu:
+                if cand_m and isinstance(cand_m, str) and len(cand_m.strip()) >= 10:
+                    trobat_motiu = cand_m.strip()
+                    break
+            if trobat_motiu:
+                data["motiu_detallat_ia"] = trobat_motiu
+            else:
+                nom = data.get("empresa") or data.get("nom_empresa") or "l'empresa"
+                data["motiu_detallat_ia"] = (
+                    f"Avaluació de {nom}: lead amb estat {estat} segons els criteris de qualificació establerts."
+                )
+
+        # 4. Normalitzar campanya_3_emails (acceptar 'campanya_emails', 'emails', etc.)
+        if not data.get("campanya_3_emails"):
+            emails_alt = (
+                data.get("campanya_emails")
+                or data.get("campanya")
+                or data.get("emails")
+                or data.get("emails_campanya")
+                or []
+            )
+            if isinstance(emails_alt, list):
+                data["campanya_3_emails"] = emails_alt
+
+        # 5. Normalitzar decisor_nom i decisor_carrec
+        if not data.get("decisor_nom"):
+            data["decisor_nom"] = data.get("nom_decisor") or data.get("gatekeeper_nom") or data.get("nom_contacte")
+        if not data.get("decisor_carrec"):
+            data["decisor_carrec"] = data.get("carrec_decisor") or data.get("gatekeeper_carrec") or data.get("carrec")
+
+        # 6. Normalitzar angle_atac
+        angles_valids = {
+            "ANGLE_A_VISIBILITAT_TELEGRAM",
+            "ANGLE_B_ESTOC_FURGONETES",
+            "ANGLE_C_CAMP_FACTURA",
+            "ANGLE_D_CONEIXEMENT_IA",
+        }
+        if data.get("angle_atac") not in angles_valids:
+            data["angle_atac"] = "ANGLE_A_VISIBILITAT_TELEGRAM"
+
+        return data
 
 
 # ==============================================================================
@@ -234,7 +398,43 @@ ESTRUCTURA DE LA CAMPANYA DE 3 EMAILS AMB TEMPO (SI ÉS SELECCIONAT):
 - Pas 3 (Offset: 8 dies - Diagnòstic i Demo 7 Dies):
   Últim impacte directe proposant activar l'entorn de Demo autònom de 7 dies de Sevalor Suite sense compromís.
 
-Retorna exclusivament un objecte JSON que compleixi estrictament l'esquema de LeadEvaluationSchema.
+FORMAT DE RETORN JSON OBLIGATORI (COMPLEIX ESTRICTAMENT AQUESTES CLAUS EXACTES):
+```json
+{{
+  "operaris_estimats": 10,
+  "decisor_nom": "Nom i Cognom real d'una persona física o null",
+  "decisor_carrec": "Gerent o null",
+  "fonts_investigades": ["web|https://..."],
+  "fita_recent": "Fita trobada o null",
+  "punt_dolor": "Punt de dolor detectat o null",
+  "angle_atac": "ANGLE_A_VISIBILITAT_TELEGRAM",
+  "score": 85,
+  "estat_decisio": "SELECCIONAT",
+  "motiu_detallat_ia": "Justificació transparent i detallada de la decisió...",
+  "campanya_3_emails": [
+    {{
+      "pas": 1,
+      "tempo_offset_dies": 0,
+      "assumpte": "Assumpte correu 1",
+      "cos_text": "Cos correu 1..."
+    }},
+    {{
+      "pas": 2,
+      "tempo_offset_dies": 4,
+      "assumpte": "Assumpte correu 2",
+      "cos_text": "Cos correu 2..."
+    }},
+    {{
+      "pas": 3,
+      "tempo_offset_dies": 8,
+      "assumpte": "Assumpte correu 3",
+      "cos_text": "Cos correu 3..."
+    }}
+  ]
+}}
+```
+ATENCIÓ: Utilitza OBLIGATÒRIAMENT les claus `operaris_estimats`, `motiu_detallat_ia` i `campanya_3_emails` (està prohibit canviar els noms de les claus).
+Retorna exclusivament aquest objecte JSON vàlid sense cap text addicional.
 """
     return prompt
 
@@ -372,6 +572,7 @@ Resum del lloc web corporatiu:
         }
         body: Dict[str, Any] = {
             "model": model,
+            "models": [model, "deepseek/deepseek-chat"],
             "messages": [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
@@ -385,9 +586,26 @@ Resum del lloc web corporatiu:
         try:
             async with httpx.AsyncClient(timeout=45.0) as client:
                 res = await client.post(endpoint, headers=headers, json=body)
+                # Si el proveïdor preferent (ex. Baidu) retorna 429 Rate Limit o 5xx, reintentem immediatament
+                # sense la restricció 'provider' per permetre a OpenRouter utilitzar la resta de proveïdors o deepseek-chat
+                if res.status_code == 429 or res.status_code in (502, 503, 504):
+                    logger.warning(
+                        "OpenRouter API ha retornat codi %s amb proveïdor preferent. Reintentant sense restricció de proveïdor...",
+                        res.status_code,
+                    )
+                    body_retry = dict(body)
+                    body_retry.pop("provider", None)
+                    body_retry["models"] = [model, "deepseek/deepseek-chat"]
+                    await asyncio.sleep(1.0)
+                    res = await client.post(endpoint, headers=headers, json=body_retry)
+
                 if res.status_code == 200:
                     raw_content = res.json()["choices"][0]["message"]["content"]
-                    data = json.loads(raw_content)
+                    clean_json = raw_content.strip()
+                    if clean_json.startswith("```"):
+                        clean_json = re.sub(r"^```(?:json)?\s*", "", clean_json)
+                        clean_json = re.sub(r"\s*```$", "", clean_json)
+                    data = json.loads(clean_json)
                     avaluacio_ia = LeadEvaluationSchema.model_validate(data)
                     return _aplicar_regles_estrictes_post_avaluacio(
                         avaluacio=avaluacio_ia,
