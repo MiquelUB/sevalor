@@ -133,7 +133,12 @@ interface CandidatCP {
   punt_dolor?: string | null;
   angle_atac?: string | null;
   score: number;
-  estat_decisio: "SELECCIONAT" | "DESCARTAT" | "DUPLICAT" | "ERROR_EXTRACCIO";
+  estat_decisio: "SELECCIONAT" | "SELECCIONAT_SENSE_GATEKEEPER" | "DESCARTAT" | "DUPLICAT" | "ERROR_EXTRACCIO";
+  cp_geocode_retornat?: string | null;
+  cp_geocode_coincideix?: boolean | null;
+  gatekeeper_font_url?: string | null;
+  gatekeeper_cita?: string | null;
+  gatekeeper_confianca?: string | null;
   vector_duplicitat?: "CIF" | "DOMINI_WEB" | "ADRECA_FISICA" | null;
   motiu_detallat_ia?: string | null;
   corregit_huma: boolean;
@@ -288,7 +293,7 @@ export default function SuperadminCrmPage() {
   const [tascaSeleccionada, setTascaSeleccionada] = useState<TascaCP | null>(null);
   const [candidatsCP, setCandidatsCP] = useState<CandidatCP[]>([]);
   const [filtreDecisio, setFiltreDecisio] = useState<
-    "TOTS" | "SELECCIONAT" | "DESCARTAT" | "DUPLICAT" | "ERROR_EXTRACCIO"
+    "TOTS" | "SELECCIONAT" | "SELECCIONAT_SENSE_GATEKEEPER" | "DESCARTAT" | "DUPLICAT" | "ERROR_EXTRACCIO"
   >("TOTS");
   const [executantCerca, setExecutantCerca] = useState(false);
   const [preparacioSeguentCpMsg, setPreparacioSeguentCpMsg] = useState<string | null>(null);
@@ -899,6 +904,7 @@ export default function SuperadminCrmPage() {
           codi_postal: codiPostalInput.trim(),
           vertical: verticalInput.trim(),
           operaris_minims: Number(operarisMinims),
+          limit: 5,
         }),
       });
 
@@ -1643,7 +1649,7 @@ export default function SuperadminCrmPage() {
 
               {/* Filtres per Estat de Decisió */}
               <div className="flex items-center gap-1.5 text-xs bg-slate-100 dark:bg-slate-800/80 p-1 rounded-xl">
-                {(["TOTS", "SELECCIONAT", "DESCARTAT", "DUPLICAT", "ERROR_EXTRACCIO"] as const).map((tab) => (
+                {(["TOTS", "SELECCIONAT", "SELECCIONAT_SENSE_GATEKEEPER", "DESCARTAT", "DUPLICAT", "ERROR_EXTRACCIO"] as const).map((tab) => (
                   <button
                     key={tab}
                     onClick={() => setFiltreDecisio(tab)}
@@ -1657,6 +1663,8 @@ export default function SuperadminCrmPage() {
                       ? "Tots"
                       : tab === "SELECCIONAT"
                       ? "Seleccionades"
+                      : tab === "SELECCIONAT_SENSE_GATEKEEPER"
+                      ? "Sense GK (Telèfon)"
                       : tab === "DESCARTAT"
                       ? "Descartades"
                       : tab === "DUPLICAT"
@@ -1718,6 +1726,14 @@ export default function SuperadminCrmPage() {
                               Sense adreça física verificada al CP {cand.codi_postal}
                             </div>
                           )}
+                          {cand.cp_geocode_coincideix === false && (
+                            <div
+                              className="text-[9px] font-mono font-bold text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-950/40 px-1.5 py-0.5 rounded border border-amber-200 dark:border-amber-800 mt-0.5 inline-block"
+                              title={`Nominatim geocodifica com a CP ${cand.cp_geocode_retornat || "desconegut"}`}
+                            >
+                              ⚠️ Geocode discrepant: CP {cand.cp_geocode_retornat || "N/A"}
+                            </div>
+                          )}
                         </td>
 
                         <td className="py-3 px-4">
@@ -1731,6 +1747,21 @@ export default function SuperadminCrmPage() {
                             </div>
                           )}
                           <div className="text-[11px] text-slate-400">{cand.decisor_carrec || "Sense càrrec"}</div>
+                          {cand.gatekeeper_font_url && (
+                            <div className="mt-0.5">
+                              <a
+                                href={cand.gatekeeper_font_url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="inline-flex items-center gap-1 text-[9px] font-semibold text-emerald-700 dark:text-emerald-300 hover:underline"
+                                title={cand.gatekeeper_cita || "Font gatekeeper verificada"}
+                              >
+                                <CheckCircle2 className="w-2.5 h-2.5" />
+                                <span>GK verificat ({cand.gatekeeper_confianca || "alta"})</span>
+                                <ExternalLink className="w-2 h-2" />
+                              </a>
+                            </div>
+                          )}
                           {cand.email_detectat && (
                             <div className="text-[11px] font-mono text-indigo-600 dark:text-indigo-400">
                               {cand.email_detectat}
@@ -1809,6 +1840,8 @@ export default function SuperadminCrmPage() {
                               className={`px-2 py-0.5 rounded-full font-mono font-bold text-[10px] ${
                                 cand.estat_decisio === "SELECCIONAT"
                                   ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300"
+                                  : cand.estat_decisio === "SELECCIONAT_SENSE_GATEKEEPER"
+                                  ? "bg-sky-100 text-sky-800 dark:bg-sky-950 dark:text-sky-300 border border-sky-300 dark:border-sky-800"
                                   : cand.estat_decisio === "DUPLICAT"
                                   ? "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300"
                                   : cand.estat_decisio === "ERROR_EXTRACCIO"
@@ -1816,7 +1849,9 @@ export default function SuperadminCrmPage() {
                                   : "bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-300"
                               }`}
                             >
-                              {cand.estat_decisio}
+                              {cand.estat_decisio === "SELECCIONAT_SENSE_GATEKEEPER"
+                                ? "SEL. SENSE GK"
+                                : cand.estat_decisio}
                             </span>
                             <span className="font-mono text-xs font-bold text-slate-700 dark:text-slate-300">
                               {cand.score}/100
@@ -1851,7 +1886,9 @@ export default function SuperadminCrmPage() {
                                 setModalCorregir({
                                   open: true,
                                   candidat: cand,
-                                  novaDecisio: cand.estat_decisio === "SELECCIONAT" ? "DESCARTAT" : "SELECCIONAT",
+                                  novaDecisio: cand.estat_decisio.startsWith("SELECCIONAT")
+                                    ? "DESCARTAT"
+                                    : "SELECCIONAT",
                                   motiu: "",
                                 })
                               }

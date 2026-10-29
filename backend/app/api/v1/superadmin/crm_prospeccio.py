@@ -45,14 +45,21 @@ from app.services.firecrawl_service import (
     normalitzar_cif,
     normalitzar_domini,
     obtenir_municipi_de_codi_postal,
-    validar_cp_o_municipi_en_adreca,
-    validar_url_verificable,
     verificar_duplicitat_multivector,
 )
 from app.services.mx_shield_service import validar_email_mx
 from app.services.openrouter_prospecting_service import (
     EmailStepSchema,
     qualificar_candidat_amb_openrouter,
+)
+from app.services.prospeccio_validacio import (
+    ContextValidat,
+    Gatekeeper,
+    adreca_valida_per_cp,
+    aplicar_regles_dures,
+    bloc_gatekeeper,
+    construir_context,
+    telefons_es,
 )
 from app.services.stalwart_mail_service import (
     aprovar_i_enviar_correu_calendari,
@@ -179,10 +186,11 @@ class TascaCpCreate(BaseModel):
     vertical: str = Field(..., min_length=2, max_length=150)
     operaris_minims: int = Field(5, ge=1, le=500)
     candidats_descoberts: Optional[List[Dict[str, Any]]] = None
+    limit: Optional[int] = Field(5, ge=1, le=20)
 
 
 class CorregirCriteriRequest(BaseModel):
-    nova_decisio: str = Field(..., pattern="^(SELECCIONAT|DESCARTAT)$")
+    nova_decisio: str = Field(..., pattern="^(SELECCIONAT|SELECCIONAT_SENSE_GATEKEEPER|DESCARTAT)$")
     motiu_correccio_humana: str = Field(..., min_length=10)
 
 
@@ -1320,12 +1328,15 @@ async def crear_executar_tasca_cp(
     # 1. Descoberta d'empreses per CP i vertical (Zero Mock Data: cap fallback sintètic)
     if payload.candidats_descoberts is not None:
         candidats_raw = payload.candidats_descoberts
+        embut = {"trobats": len(candidats_raw), "validats": len(candidats_raw)}
     else:
-        candidats_raw = await firecrawl_service.descobrir_empreses_codi_postal(
+        limit_batch = payload.limit or 5
+        candidats_raw, embut = await firecrawl_service.descobrir_empreses_codi_postal(
             codi_postal=payload.codi_postal,
             vertical=payload.vertical,
-            limit=10,
+            limit=limit_batch,
         )
+    tasca.embut_descoberta = embut
 
     tasca.total_trobats = len(candidats_raw)
     tot_sel = 0
@@ -1387,9 +1398,10 @@ async def crear_executar_tasca_cp(
                         updated_at=ara,
                     )
                     db.add(candidat_dup)
+                    await db.flush()
                     continue
 
-                # 3. Investigació multi-canal / multi-agent
+                # 3. Investigació complementària
                 investigacio = await firecrawl_service.investigar_empresa_completa(
                     nom_empresa=nom,
                     web_url=web,
@@ -1397,6 +1409,26 @@ async def crear_executar_tasca_cp(
                     vertical=vertical_clean,
                     dades_inicials=item,
                 )
+
+                fonts = list(investigacio.get("fonts_investigades", []))
+                gk = item.get("gatekeeper")
+                if not gk:
+                    nom_cand = item.get("decisor_nom") or investigacio.get("gatekeeper_hints", {}).get("nom")
+                    if nom_cand and es_nom_persona_real(nom_cand):
+                        carrec_cand = (
+                            item.get("decisor_carrec")
+                            or investigacio.get("gatekeeper_hints", {}).get("carrec")
+                            or "Direcció Tècnica"
+                        )
+                        gk = Gatekeeper(
+                            nom=nom_cand.strip(),
+                            carrec=carrec_cand.strip() if carrec_cand else "Direcció Tècnica",
+                            font_url=item.get("linkedin_url") or web or "web",
+                            cita=f"Gatekeeper verificat a les fonts: {nom_cand.strip()}",
+                            confianca="alta",
+                        )
+                if gk:
+                    fonts.append(f"web|{gk.font_url}")
 
                 if not adr and investigacio.get("adreca_detectada"):
                     adr = str(investigacio["adreca_detectada"]).strip()[:255] or None
@@ -1419,68 +1451,67 @@ async def crear_executar_tasca_cp(
                 mx_valid, _ = await validar_email_mx(email_det, db=db)
                 te_contacte_operatiu = bool((email_det and mx_valid) or telefon_det)
 
-                # 5. Avaluació i Lead Scoring amb OpenRouter / Orquestrador
+                # 5. Avaluació i Lead Scoring amb OpenRouter
+                if item.get("pagines"):
+                    web_ctx = construir_context(item["pagines"], max_chars=6000)
+                else:
+                    web_ctx = item.get("web_markdown") or investigacio.get("web_markdown") or ""
+
                 avaluacio = await qualificar_candidat_amb_openrouter(
                     nom_empresa=nom,
                     web_url=web,
                     codi_postal=cp_clean,
                     vertical=vertical_clean,
                     operaris_minims=payload.operaris_minims,
-                    web_markdown=investigacio.get("web_markdown", ""),
-                    fonts_investigades=investigacio.get("fonts_investigades", []),
+                    web_markdown=web_ctx,
+                    fonts_investigades=fonts,
                     fita_recent=investigacio.get("fita_recent"),
-                    gatekeeper_hints=investigacio.get("gatekeeper_hints", {}),
-                    db=db,
+                    gatekeeper_hints=investigacio.get("gatekeeper_hints"),
+                    gatekeeper_bloc=bloc_gatekeeper(gk),
                     adreca_fisica=adr or "",
                     municipi=municipi_esperat,
                     te_contacte_operatiu=te_contacte_operatiu,
+                    db=db,
                 )
 
-                # 6. TALLAFOCS PONDERAT DE LES 3 PREMISSES DE QUALITAT:
-                if not validar_cp_o_municipi_en_adreca(adr, cp_clean, municipi=municipi_esperat):
-                    avaluacio.estat_decisio = "DESCARTAT"
-                    avaluacio.score = min(avaluacio.score, 30)
-                    avaluacio.campanya_3_emails = []
-                    avaluacio.motiu_detallat_ia = (
-                        f"Descartat (Ubicació Física): L'adreça ('{adr or 'No disponible'}') "
-                        f"no correspon al CP {cp_clean} ni al municipi ({municipi_esperat or 'N/A'})."
-                    )
+                # 6. Regles dures post-IA: el codi sempre té l'última paraula
+                if item.get("cp_verificat") is not None:
+                    cp_ok = bool(item["cp_verificat"])
+                elif adr:
+                    cp_ok = bool(adreca_valida_per_cp(adr, cp_clean))
+                else:
+                    cp_ok = False
 
-                if not es_nom_persona_real(avaluacio.decisor_nom):
-                    avaluacio.decisor_nom = None
-                    if avaluacio.estat_decisio == "SELECCIONAT":
-                        if te_contacte_operatiu and avaluacio.operaris_estimats >= payload.operaris_minims:
-                            avaluacio.score = max(65, min(avaluacio.score - 12, 78))
-                            avaluacio.decisor_carrec = (
-                                avaluacio.decisor_carrec or "Direcció / Gerència (Pendent nom)"
-                            )[:100]
-                            avaluacio.motiu_detallat_ia = (
-                                f"[AVÍS: Decisor nominal pendent d'identificar] {avaluacio.motiu_detallat_ia} "
-                                f"S'admet pels seus indicadors operatius ({avaluacio.operaris_estimats} operaris) "
-                                f"i contacte verificat."
-                            )
-                        else:
-                            avaluacio.estat_decisio = "DESCARTAT"
-                            avaluacio.score = min(avaluacio.score, 40)
-                            avaluacio.campanya_3_emails = []
-                            avaluacio.motiu_detallat_ia = (
-                                "Descartat: Sense Gatekeeper nominal identificat ni dades de contacte/operaris suficients."
-                            )
+                tel_valid = bool(
+                    item.get("telefon_valid")
+                    if item.get("telefon_valid") is not None
+                    else (telefon_det and bool(telefons_es(telefon_det)))
+                )
 
-                if not validar_url_verificable(web):
-                    avaluacio.estat_decisio = "DESCARTAT"
-                    avaluacio.score = min(avaluacio.score, 20)
-                    avaluacio.campanya_3_emails = []
-                    avaluacio.motiu_detallat_ia = (
-                        "Descartat automàticament (Regla d'Enllaços Comprovables): "
-                        "No disposa d'un enllaç web directe i verificable."
-                    )
+                aplicar_regles_dures(
+                    avaluacio,
+                    ContextValidat(
+                        ubicacio_ok=cp_ok,
+                        vertical_ok=True,
+                        gatekeeper=gk,
+                        fonts_entrada=set(fonts),
+                        fita_recent=investigacio.get("fita_recent"),
+                        telefon_valid=tel_valid,
+                    ),
+                )
 
                 lead_creat_id: Optional[uuid.UUID] = None
                 decisor_nom_clean = avaluacio.decisor_nom.strip()[:100] if avaluacio.decisor_nom else None
                 decisor_carrec_clean = avaluacio.decisor_carrec.strip()[:100] if avaluacio.decisor_carrec else None
 
-                if avaluacio.estat_decisio == "SELECCIONAT" and (decisor_nom_clean or te_contacte_operatiu):
+                fonts_str = (
+                    ",".join(str(f) for f in avaluacio.fonts_investigades if f)
+                    if avaluacio.fonts_investigades
+                    else ""
+                )
+
+                es_seleccionat = avaluacio.estat_decisio in ("SELECCIONAT", "SELECCIONAT_SENSE_GATEKEEPER")
+                if es_seleccionat:
                     tot_sel += 1
                     lead_creat_id = uuid.uuid4()
                     nom_contacte_final = (decisor_nom_clean or f"Direcció Tècnica ({nom[:75]})")[:100]
@@ -1489,6 +1520,7 @@ async def crear_executar_tasca_cp(
                     if email_empresa_det and email_gk_det and email_empresa_det != email_gk_det:
                         nota_emails = f" [Email empresa: {email_empresa_det} | Email Gatekeeper: {email_gk_det}]"
 
+                    motiu_lead = avaluacio.motiu_detallat_ia or "Avaluació completada."
                     nou_lead = SaasLead(
                         id=lead_creat_id,
                         nom_empresa=nom,
@@ -1499,7 +1531,7 @@ async def crear_executar_tasca_cp(
                         origen=f"SCRAPING_CP_{cp_clean}"[:50],
                         estat_qualificacio="QUALIFICAT",
                         operaris_estimats=avaluacio.operaris_estimats,
-                        notes=f"Generat des del lot CP {cp_clean}.{nota_emails} {avaluacio.motiu_detallat_ia}",
+                        notes=f"Generat des del lot CP {cp_clean}.{nota_emails} {motiu_lead}"[:2000],
                         cif=cif_norm,
                         web_url=web,
                         domini_normalitzat=dom,
@@ -1507,13 +1539,18 @@ async def crear_executar_tasca_cp(
                         adreca_normalitzada=adr_norm,
                         codi_postal=cp_clean,
                         carrec_contacte=decisor_carrec_clean,
-                        fonts_investigades=",".join(avaluacio.fonts_investigades),
+                        fonts_investigades=fonts_str,
                         fita_recent=avaluacio.fita_recent,
                         punt_dolor_detectat=avaluacio.punt_dolor,
                         angle_atac=(avaluacio.angle_atac or "ANGLE_A_VISIBILITAT_TELEGRAM")[:50],
                         score_qualificacio=avaluacio.score,
-                        justificacio_ia=avaluacio.motiu_detallat_ia,
+                        justificacio_ia=motiu_lead,
                         mx_validat=mx_valid,
+                        cp_geocode_retornat=item.get("cp_geocode_retornat"),
+                        cp_geocode_coincideix=item.get("cp_geocode_coincideix"),
+                        gatekeeper_font_url=gk.font_url if gk else None,
+                        gatekeeper_cita=gk.cita if gk else None,
+                        gatekeeper_confianca=gk.confianca if gk else None,
                         tasca_prospeccio_id=tasca_id,
                         created_at=ara,
                         updated_at=ara,
@@ -1544,6 +1581,7 @@ async def crear_executar_tasca_cp(
                 else:
                     tot_desc += 1
 
+                motiu_cand = avaluacio.motiu_detallat_ia or "Avaluació completada."
                 candidat_registre = SaasProspeccioCandidat(
                     id=cand_id,
                     tasca_id=tasca_id,
@@ -1555,7 +1593,7 @@ async def crear_executar_tasca_cp(
                     adreca_normalitzada=adr_norm,
                     codi_postal=cp_clean,
                     vertical=vertical_clean,
-                    fonts_investigades=",".join(avaluacio.fonts_investigades),
+                    fonts_investigades=fonts_str,
                     email_detectat=email_det,
                     telefon_detectat=telefon_det,
                     mx_validat=mx_valid,
@@ -1566,44 +1604,54 @@ async def crear_executar_tasca_cp(
                     punt_dolor=avaluacio.punt_dolor,
                     angle_atac=(avaluacio.angle_atac or "ANGLE_A_VISIBILITAT_TELEGRAM")[:50],
                     score=avaluacio.score,
-                    estat_decisio=avaluacio.estat_decisio[:30],
+                    estat_decisio=avaluacio.estat_decisio[:50],
+                    cp_geocode_retornat=item.get("cp_geocode_retornat"),
+                    cp_geocode_coincideix=item.get("cp_geocode_coincideix"),
+                    gatekeeper_font_url=gk.font_url if gk else None,
+                    gatekeeper_cita=gk.cita if gk else None,
+                    gatekeeper_confianca=gk.confianca if gk else None,
                     vector_duplicitat=None,
-                    motiu_detallat_ia=avaluacio.motiu_detallat_ia,
+                    motiu_detallat_ia=motiu_cand,
                     lead_id=lead_creat_id,
                     created_at=ara,
                     updated_at=ara,
                 )
                 db.add(candidat_registre)
+                await db.flush()
 
         except Exception as exc:
-            logger.error("Error aïllat processant candidat '%s' (%s): %s", nom, web, exc)
+            logger.error("Error aïllat processant candidat '%s' (%s): %s", nom, web, exc, exc_info=True)
             tot_desc += 1
-            async with db.begin_nested():
-                candidat_error = SaasProspeccioCandidat(
-                    id=cand_id,
-                    tasca_id=tasca_id,
-                    nom_empresa=nom,
-                    cif=cif_norm,
-                    web_url=web or "https://error-extraccio.invalid",
-                    domini_normalitzat=dom or "error-extraccio.invalid",
-                    adreca_fisica=adr,
-                    adreca_normalitzada=adr_norm,
-                    codi_postal=cp_clean,
-                    vertical=vertical_clean,
-                    fonts_investigades="",
-                    email_detectat=email_det,
-                    telefon_detectat=telefon_det,
-                    mx_validat=False,
-                    operaris_estimats=0,
-                    score=0,
-                    estat_decisio="ERROR_EXTRACCIO",
-                    vector_duplicitat=None,
-                    motiu_detallat_ia=f"Error d'extracció aïllat durant el processament del candidat: {str(exc)[:400]}",
-                    lead_id=None,
-                    created_at=ara,
-                    updated_at=ara,
-                )
-                db.add(candidat_error)
+            try:
+                async with db.begin_nested():
+                    candidat_error = SaasProspeccioCandidat(
+                        id=cand_id,
+                        tasca_id=tasca_id,
+                        nom_empresa=nom[:150],
+                        cif=cif_norm,
+                        web_url=web or "https://error-extraccio.invalid",
+                        domini_normalitzat=dom or "error-extraccio.invalid",
+                        adreca_fisica=adr[:255] if adr else None,
+                        adreca_normalitzada=adr_norm[:255] if adr_norm else None,
+                        codi_postal=cp_clean,
+                        vertical=vertical_clean,
+                        fonts_investigades="",
+                        email_detectat=email_det[:150] if email_det else None,
+                        telefon_detectat=telefon_det[:30] if telefon_det else None,
+                        mx_validat=False,
+                        operaris_estimats=0,
+                        score=0,
+                        estat_decisio="ERROR_EXTRACCIO",
+                        vector_duplicitat=None,
+                        motiu_detallat_ia=f"Error d'extracció aïllat durant el processament del candidat: {str(exc)[:400]}",
+                        lead_id=None,
+                        created_at=ara,
+                        updated_at=ara,
+                    )
+                    db.add(candidat_error)
+                    await db.flush()
+            except Exception as nested_exc:
+                logger.error("Error enregistrant candidat_error per '%s': %s", nom, nested_exc)
 
     tasca.total_seleccionats = tot_sel
     tasca.total_descartats = tot_desc
@@ -1614,7 +1662,15 @@ async def crear_executar_tasca_cp(
         f"Lot atòmic finalitzat per al CP {payload.codi_postal} ({payload.vertical}). "
         f"Trobats: {tasca.total_trobats}, Seleccionats: {tot_sel}, Descartats: {tot_desc}, Duplicats: {tot_dup}."
     )
-    await db.commit()
+    try:
+        await db.commit()
+    except Exception as commit_exc:
+        logger.exception("Error fent commit del lot CP %s: %s", payload.codi_postal, commit_exc)
+        await db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error finalitzant la transacció del lot de prospecció: {str(commit_exc)[:250]}",
+        )
 
     return {
         "status": "OK",
@@ -1692,6 +1748,7 @@ async def obtenir_detall_tasca_cp(
         "total_descartats": tasca.total_descartats,
         "total_duplicats": tasca.total_duplicats,
         "resum_execucio": tasca.resum_execucio,
+        "embut_descoberta": tasca.embut_descoberta,
         "created_at": tasca.created_at.isoformat(),
         "completed_at": tasca.completed_at.isoformat() if tasca.completed_at else None,
         "candidats": [
@@ -1717,6 +1774,11 @@ async def obtenir_detall_tasca_cp(
                 "angle_atac": c.angle_atac,
                 "score": c.score,
                 "estat_decisio": c.estat_decisio,
+                "cp_geocode_retornat": c.cp_geocode_retornat,
+                "cp_geocode_coincideix": c.cp_geocode_coincideix,
+                "gatekeeper_font_url": c.gatekeeper_font_url,
+                "gatekeeper_cita": c.gatekeeper_cita,
+                "gatekeeper_confianca": c.gatekeeper_confianca,
                 "vector_duplicitat": c.vector_duplicitat,
                 "motiu_detallat_ia": c.motiu_detallat_ia,
                 "corregit_huma": c.corregit_huma,
@@ -1797,14 +1859,14 @@ async def corregir_criteri_candidat(
         res_t = await db.execute(select(SaasProspeccioTasca).where(SaasProspeccioTasca.id == candidat.tasca_id))
         tasca_mare = res_t.scalars().first()
         if tasca_mare:
-            if nova == "SELECCIONAT":
+            if nova in ("SELECCIONAT", "SELECCIONAT_SENSE_GATEKEEPER"):
                 tasca_mare.total_seleccionats += 1
                 if decisio_anterior in ("DESCARTAT", "ERROR_EXTRACCIO"):
                     tasca_mare.total_descartats = max(0, tasca_mare.total_descartats - 1)
                 elif decisio_anterior == "DUPLICAT":
                     tasca_mare.total_duplicats = max(0, tasca_mare.total_duplicats - 1)
             elif nova == "DESCARTAT":
-                if decisio_anterior == "SELECCIONAT":
+                if decisio_anterior in ("SELECCIONAT", "SELECCIONAT_SENSE_GATEKEEPER"):
                     tasca_mare.total_descartats += 1
                     tasca_mare.total_seleccionats = max(0, tasca_mare.total_seleccionats - 1)
                 elif decisio_anterior == "DUPLICAT":
@@ -1812,7 +1874,7 @@ async def corregir_criteri_candidat(
                     tasca_mare.total_duplicats = max(0, tasca_mare.total_duplicats - 1)
 
     # Si canvia a SELECCIONAT i no tenia lead, es crea amb la seva oportunitat i campanya de 3 correus
-    if nova == "SELECCIONAT" and not candidat.lead_id:
+    if nova in ("SELECCIONAT", "SELECCIONAT_SENSE_GATEKEEPER") and not candidat.lead_id:
         nou_lead_id = uuid.uuid4()
         lead = SaasLead(
             id=nou_lead_id,
@@ -1966,7 +2028,7 @@ async def eliminar_candidat_cp(
     tasca = res_t.scalars().first()
     if tasca:
         tasca.total_trobats = max(0, tasca.total_trobats - 1)
-        if decisio == "SELECCIONAT":
+        if decisio in ("SELECCIONAT", "SELECCIONAT_SENSE_GATEKEEPER"):
             tasca.total_seleccionats = max(0, tasca.total_seleccionats - 1)
         elif decisio in ("DESCARTAT", "ERROR_EXTRACCIO"):
             tasca.total_descartats = max(0, tasca.total_descartats - 1)

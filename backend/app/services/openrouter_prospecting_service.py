@@ -28,10 +28,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.models.models import SaasCriteriFeedback
-from app.services.firecrawl_service import (
-    es_nom_persona_real,
-    validar_cp_o_municipi_en_adreca,
-)
+from app.services.firecrawl_service import es_nom_persona_real
+from app.services.prospeccio_validacio import adreca_valida_per_cp
 
 logger = logging.getLogger("sevalor.crm.openrouter")
 
@@ -156,7 +154,7 @@ class LeadEvaluationSchema(BaseModel):
         pattern="^(ANGLE_A_VISIBILITAT_TELEGRAM|ANGLE_B_ESTOC_FURGONETES|ANGLE_C_CAMP_FACTURA|ANGLE_D_CONEIXEMENT_IA)$",
     )
     score: int = Field(..., ge=0, le=100, description="Puntuació de qualificació de 0 a 100")
-    estat_decisio: str = Field(..., pattern="^(SELECCIONAT|DESCARTAT)$")
+    estat_decisio: str = Field(..., pattern="^(SELECCIONAT|SELECCIONAT_SENSE_GATEKEEPER|DESCARTAT)$")
     motiu_detallat_ia: str = Field(..., min_length=10, description="Justificació transparent de la decisió")
     campanya_3_emails: List[EmailStepSchema] = Field(
         default_factory=list,
@@ -172,7 +170,9 @@ class LeadEvaluationSchema(BaseModel):
 
         # 1. Normalitzar estat_decisio i score
         estat_raw = str(data.get("estat_decisio") or data.get("estat") or data.get("decisio") or "").strip().upper()
-        if "SEL" in estat_raw:
+        if "SENSE_GATEKEEPER" in estat_raw:
+            estat = "SELECCIONAT_SENSE_GATEKEEPER"
+        elif "SEL" in estat_raw:
             estat = "SELECCIONAT"
         elif "DESC" in estat_raw:
             estat = "DESCARTAT"
@@ -374,17 +374,19 @@ PRODUCTE SEVALOR SUITE:
 - NORMA ESTRICTA I SUPREMA: ESTÀ TOTALMENT PROHIBIT ESMENTAR 'WHATSAPP'. Únicament s'utilitza la PWA i el Bot Oficial de Telegram de Sevalor.
 
 REGLES INNEGOCIABLES DE VALIDACIÓ (TOLERÀNCIA ZERO):
-1. UBICACIÓ FÍSICA REAL: L'adreça física verificada ha de correspondre al Codi Postal sol·licitat o al mateix municipi/polígon industrial. Si pertany a una altra localitat allunyada -> `estat_decisio = "DESCARTAT"`.
-2. GATEKEEPER REAL O CONTACTE OPERATIU: Prioritza extreure el Nom i Cognom real d'una persona física del text web (`decisor_nom`). PROHIBIT posar càrrecs genèrics a `decisor_nom` (si no hi ha nom humà, retorna `decisor_nom = null`). Si `decisor_nom` és `null` però l'empresa té contacte operatiu verificat i compleix el mínim d'operaris de camp, classifica-la igualment com a `estat_decisio = "SELECCIONAT"` i genera la campanya de 3 correus adreçada a la direcció tècnica de l'empresa.
+1. UBICACIÓ I VERTICAL: el sistema ja ha verificat per codi que l'empresa té una adreça amb el Codi Postal sol·licitat i activitat de la vertical. No les reavaluïs ni les contradiguis.
+2. GATEKEEPER: l'única font vàlida és el bloc «GATEKEEPER VERIFICAT PEL SISTEMA». Si hi ha nom, copia'l a `decisor_nom` i `decisor_carrec` i saluda per aquest nom. Si diu «cap», retorna `decisor_nom = null` i `decisor_carrec = null`, comença cada correu amb «Bon dia,» i adreça'l a la direcció tècnica. PROHIBIT deduir, completar o inventar noms de persona.
 3. DADES I FONTS COMPROBABLES: Només utilitza fites i canals verificables amb URL directa present a les dades d'entrada.
 
 {descarts_str}
 {exit_str}
 
 CRITERIS DE PUNTUACIÓ (SCORE 0-100):
-- Si l'empresa pertany a una altra localitat allunyada fora del CP/municipi demanat, o no té ni Gatekeeper ni contacte operatiu verificat, o és una botiga de venda al detall sense operaris de camp: DESCARTAR (`estat_decisio = "DESCARTAT"`, Score < 50).
-- Si l'empresa opera o té seu al CP o municipi demanat, disposa de quadrilla d'operaris de camp (>= mínim exigit), i té un Gatekeeper amb nom i cognom real O bé disposa de contacte operatiu verificat: SELECCIONAR (`estat_decisio = "SELECCIONAT"`, Score >= 70).
+- Sense gatekeeper verificat, el score màxim és 79 (inclòs el LOOKALIKE BOOST).
+- Si no hi ha quadrilla d'operaris al terreny: DESCARTAT (Score < 50).
+- Si l'empresa opera al CP sol·licitat, disposa de quadrilla d'operaris de camp (>= mínim exigit), i té Gatekeeper verificat: SELECCIONAR (`estat_decisio = "SELECCIONAT"`, Score >= 80).
 - Si a més s'assembla a un patró d'èxit replicable: LOOKALIKE BOOST (Score >= 85).
+- Si té quadrilla i contacte però no té Gatekeeper verificat: SELECCIONAT_SENSE_GATEKEEPER (`estat_decisio = "SELECCIONAT_SENSE_GATEKEEPER"`, Score màx. 79).
 
 ESTRUCTURA DE LA CAMPANYA DE 3 EMAILS AMB TEMPO (SI ÉS SELECCIONAT):
 - Pas 1 (Offset: 0 dies - Contacte Inicial en 5 passos):
@@ -451,22 +453,31 @@ def _aplicar_regles_estrictes_post_avaluacio(
     """Valida CP/municipi i permet seleccionar leads amb contacte operatiu encara que falti el nom del Gatekeeper."""
     avaluacio.fonts_investigades = fonts_verificades
 
-    # 1. Validació de l'adreça física al CP exacte o al mateix municipi/polígon industrial
-    if adreca_fisica is not None and not validar_cp_o_municipi_en_adreca(adreca_fisica, codi_postal, municipi=municipi):
-        if avaluacio.estat_decisio == "SELECCIONAT":
+    # 1. Validació de l'adreça física al CP exacte amb carrer i número (Spec 007)
+    if adreca_fisica is not None and not adreca_valida_per_cp(adreca_fisica, codi_postal):
+        if avaluacio.estat_decisio in ("SELECCIONAT", "SELECCIONAT_SENSE_GATEKEEPER"):
             avaluacio.estat_decisio = "DESCARTAT"
             avaluacio.score = min(avaluacio.score, 30)
             avaluacio.campanya_3_emails = []
             avaluacio.motiu_detallat_ia = (
                 f"Descartat (Ubicació Física): L'adreça ('{adreca_fisica or 'No disponible'}') "
-                f"no correspon al CP {codi_postal.strip()} ni al municipi ({municipi or 'N/A'})."
+                f"no conté el CP {codi_postal.strip()} amb carrer i número."
             )
 
     # 2. Gatekeeper Nominal vs Lead Corporatiu amb Contacte Directe Verificat
     if not es_nom_persona_real(avaluacio.decisor_nom):
         avaluacio.decisor_nom = None
-        if avaluacio.estat_decisio == "SELECCIONAT":
-            if not (te_contacte_operatiu and avaluacio.operaris_estimats >= operaris_minims):
+        avaluacio.decisor_carrec = None
+        if avaluacio.estat_decisio in ("SELECCIONAT", "SELECCIONAT_SENSE_GATEKEEPER"):
+            if te_contacte_operatiu and avaluacio.operaris_estimats >= operaris_minims:
+                avaluacio.estat_decisio = "SELECCIONAT_SENSE_GATEKEEPER"
+                avaluacio.score = min(avaluacio.score, 79)
+                if "[AVÍS: Sense Gatekeeper verificat]" not in avaluacio.motiu_detallat_ia:
+                    avaluacio.motiu_detallat_ia = (
+                        f"{avaluacio.motiu_detallat_ia} | [AVÍS: Sense Gatekeeper verificat. "
+                        f"Admesa provisionalment per quadrilla ({avaluacio.operaris_estimats} operaris) i telèfon operatiu]."
+                    )
+            else:
                 avaluacio.estat_decisio = "DESCARTAT"
                 avaluacio.score = min(avaluacio.score, 40)
                 avaluacio.campanya_3_emails = []
@@ -489,12 +500,13 @@ async def qualificar_candidat_amb_openrouter(
     operaris_minims: int,
     web_markdown: str,
     fonts_investigades: List[str],
-    fita_recent: Optional[str],
-    gatekeeper_hints: Dict[str, str],
-    db: AsyncSession,
+    fita_recent: Optional[str] = None,
+    gatekeeper_hints: Optional[Dict[str, str]] = None,
+    db: Optional[AsyncSession] = None,
     adreca_fisica: Optional[str] = None,
     municipi: Optional[str] = None,
     te_contacte_operatiu: bool = False,
+    gatekeeper_bloc: Optional[str] = None,
 ) -> LeadEvaluationSchema:
     """Avalua el candidat mitjançant OpenRouter (DeepSeek) aplicant validació estricta post-IA.
 
@@ -507,16 +519,26 @@ async def qualificar_candidat_amb_openrouter(
         web_markdown: Contingut raspat de la web.
         fonts_investigades: Canals auditats amb URL (web|url, linkedin|url, etc.).
         fita_recent: Fita detectada durant la recerca multi-canal.
-        gatekeeper_hints: Pistes verificades del decisor (`nom`, `carrec`, `context`).
+        gatekeeper_hints: Pistes del decisor (`nom`, `carrec`, `context`).
         db: Sessió asíncrona per consultar el Doble Bucle d'Aprenentatge.
         adreca_fisica: Adreça física extreta per validar-hi el Codi Postal.
         municipi: Municipi esperat del codi postal per a validació geogràfica flexible.
         te_contacte_operatiu: True si es disposa d'email amb MX vàlid o telèfon directe verificat.
+        gatekeeper_bloc: Text de gatekeeper verificat pel sistema (Spec 007).
 
     Returns:
         Instància validada de `LeadEvaluationSchema`.
     """
-    context_aprenentatge = await carregar_context_doble_bucle(vertical, db)
+    hints = dict(gatekeeper_hints or {})
+    if gatekeeper_bloc and not hints:
+        m_nom = re.search(r"Nom:\s*([^|]+)", gatekeeper_bloc)
+        if m_nom and m_nom.group(1).strip() != "cap":
+            hints["nom"] = m_nom.group(1).strip()
+        m_carrec = re.search(r"Càrrec:\s*([^|]+)", gatekeeper_bloc)
+        if m_carrec:
+            hints["carrec"] = m_carrec.group(1).strip()
+
+    context_aprenentatge = await carregar_context_doble_bucle(vertical, db) if db else {}
     system_prompt = construir_system_prompt(context_aprenentatge)
 
     nom_sani = _sanititzar_entrada_ia(nom_empresa, 150)
@@ -527,28 +549,22 @@ async def qualificar_candidat_amb_openrouter(
     fita_sani = _sanititzar_entrada_ia(fita_recent, 500)
     md_sani = _extreure_context_prioritari_ia(web_markdown, 6000)
 
-    nom_gk_hint = gatekeeper_hints.get("nom") or gatekeeper_hints.get("context") or ""
-    carrec_gk_hint = gatekeeper_hints.get("carrec") or ""
-    if es_nom_persona_real(nom_gk_hint):
-        decisor_hint_str = f"Decisor persona física verificat: {nom_gk_hint} (Càrrec: {carrec_gk_hint or 'Direcció'})"
-    elif te_contacte_operatiu:
-        decisor_hint_str = (
-            "Decisor persona física: Pendent d'extreure del text web. "
-            "Disposa de contacte operatiu verificat (admetre com a SELECCIONAT si compleix operaris i ubicació)."
-        )
-    else:
-        decisor_hint_str = "Decisor persona física verificat: CAP NOM REAL NI CONTACTE OPERATIU (descartar obligatòriament)"
+    gk_text = gatekeeper_bloc if gatekeeper_bloc else (
+        f"Nom: {hints['nom']} | Càrrec: {hints.get('carrec', 'Gerència')}"
+        if hints.get("nom") and es_nom_persona_real(hints["nom"])
+        else "cap"
+    )
 
     user_prompt = f"""Avalua el següent candidat de prospecció:
 - Empresa: {nom_sani}
 - Web verificable: {web_sani}
-- Adreça Física detectada: {adr_sani}
+- UBICACIÓ VERIFICADA PEL SISTEMA: sí (adreça: {adr_sani})
 - Codi Postal sol·licitat: {cp_sani}
 - Sector / Vertical (escrit per l'humà): {vertical_sani}
 - Mínim d'operaris sol·licitat: {operaris_minims}
 - Fonts amb enllaç directe: {', '.join(fonts_investigades)}
 - Fita recent multi-canal: {fita_sani or 'No detectada a xarxes'}
-- {decisor_hint_str}
+- GATEKEEPER VERIFICAT PEL SISTEMA: {gk_text}
 
 Resum del lloc web corporatiu:
 {md_sani}
@@ -629,7 +645,7 @@ Resum del lloc web corporatiu:
         operaris_minims=operaris_minims,
         fonts_investigades=fonts_investigades,
         fita_recent=fita_recent,
-        gatekeeper_hints=gatekeeper_hints,
+        gatekeeper_hints=hints,
         context_aprenentatge=context_aprenentatge,
         adreca_fisica=adreca_fisica,
         municipi=municipi,
@@ -654,17 +670,19 @@ def _generar_avaluacio_fallback_determinista(
     operaris_minims: int,
     fonts_investigades: List[str],
     fita_recent: Optional[str],
-    gatekeeper_hints: Dict[str, str],
-    context_aprenentatge: Dict[str, Any],
+    gatekeeper_hints: Optional[Dict[str, str]] = None,
+    context_aprenentatge: Optional[Dict[str, Any]] = None,
     adreca_fisica: Optional[str] = None,
     municipi: Optional[str] = None,
     te_contacte_operatiu: bool = False,
 ) -> LeadEvaluationSchema:
     """Avaluador determinista basat en regles estrictes (CP físic + Gatekeeper real + Sector)."""
+    gk_hints = dict(gatekeeper_hints or {})
+    ctx_aprenentatge = dict(context_aprenentatge or {})
     # 1. Comprovar si és un comerç al detall sense operaris de camp o coincideix amb descart humà
     nom_lower = nom_empresa.lower()
     if any(w in nom_lower for w in ["botiga", "tienda", "venda", "detall", "subministraments", "mostrador"]):
-        regles_descart = context_aprenentatge.get("regles_descart", [])
+        regles_descart = ctx_aprenentatge.get("regles_descart", [])
         motiu_regla = (
             regles_descart[0].get("motiu_descart_huma", "Sense operaris al carrer")
             if regles_descart
@@ -684,8 +702,8 @@ def _generar_avaluacio_fallback_determinista(
             campanya_3_emails=[],
         )
 
-    # 2. Comprovar adreça física amb CP o municipi
-    if adreca_fisica is not None and not validar_cp_o_municipi_en_adreca(adreca_fisica, codi_postal, municipi=municipi):
+    # 2. Comprovar adreça física amb CP exacte amb carrer i número (Spec 007)
+    if adreca_fisica is not None and not adreca_valida_per_cp(adreca_fisica, codi_postal):
         return LeadEvaluationSchema(
             operaris_estimats=0,
             decisor_nom=None,
@@ -698,19 +716,19 @@ def _generar_avaluacio_fallback_determinista(
             estat_decisio="DESCARTAT",
             motiu_detallat_ia=(
                 f"Descartat (Ubicació Física): L'adreça ('{adreca_fisica or 'No disponible'}') "
-                f"no correspon al CP {codi_postal.strip()} ni al municipi ({municipi or 'N/A'})."
+                f"no conté el CP {codi_postal.strip()} amb carrer i número."
             ),
             campanya_3_emails=[],
         )
 
     # 3. Comprovar Gatekeeper real o admissió per contacte operatiu
-    cand_nom = (gatekeeper_hints.get("nom") or gatekeeper_hints.get("context") or "").strip()
+    cand_nom = (gk_hints.get("nom") or gk_hints.get("context") or "").strip()
     te_nom_real = es_nom_persona_real(cand_nom)
     if not te_nom_real and not te_contacte_operatiu:
         return LeadEvaluationSchema(
             operaris_estimats=max(operaris_minims, 5),
             decisor_nom=None,
-            decisor_carrec=gatekeeper_hints.get("carrec"),
+            decisor_carrec=gk_hints.get("carrec"),
             fonts_investigades=fonts_investigades,
             fita_recent=fita_recent,
             punt_dolor="Manca d'identificació nominal del decisor i sense contacte operatiu verificat",
@@ -723,16 +741,19 @@ def _generar_avaluacio_fallback_determinista(
 
     decisor_nom = cand_nom if te_nom_real else None
     salutacio_nom = decisor_nom or f"equip directiu de {nom_empresa}"
-    decisor_carrec = gatekeeper_hints.get("carrec") or ("Gerent" if te_nom_real else "Direcció / Gerència (Pendent nom)")
+    decisor_carrec = gk_hints.get("carrec") if te_nom_real else None
+    estat_decisio_final = "SELECCIONAT" if te_nom_real else "SELECCIONAT_SENSE_GATEKEEPER"
 
     # Lookalike boost si tenim patrons d'èxit del mateix sector
     te_cas_exit = any(
         c.get("vertical", "").lower() in vertical.lower() or vertical.lower() in c.get("vertical", "").lower()
-        for c in context_aprenentatge.get("casos_exit_replicables", [])
+        for c in ctx_aprenentatge.get("casos_exit_replicables", [])
     )
     score_base = 88 if te_cas_exit else 82
-    if not te_nom_real and te_contacte_operatiu:
-        score_base = 72
+    if not te_nom_real:
+        score_base = min(score_base, 78)
+        if score_base < 65:
+            score_base = 72
     operaris = max(operaris_minims + 3, 8) if te_nom_real else max(operaris_minims + 2, 7)
 
     fita = fita_recent or f"Presència corporativa verificada a {web_url} al Codi Postal {codi_postal}"
@@ -787,6 +808,7 @@ def _generar_avaluacio_fallback_determinista(
     ]
 
     nom_descripcio = decisor_nom if te_nom_real else "admesa per contacte operatiu"
+    avis_gk = " | AVÍS: Decisor nominal pendent d'identificar" if not te_nom_real else ""
     return LeadEvaluationSchema(
         operaris_estimats=operaris,
         decisor_nom=decisor_nom,
@@ -796,12 +818,12 @@ def _generar_avaluacio_fallback_determinista(
         punt_dolor=punt_dolor,
         angle_atac="ANGLE_A_VISIBILITAT_TELEGRAM",
         score=score_base,
-        estat_decisio="SELECCIONAT",
+        estat_decisio=estat_decisio_final,
         motiu_detallat_ia=(
             f"Empresa amb adreça física verificada al CP {codi_postal}, decisor ({nom_descripcio}) "
             f"i quadrilla estimada de {operaris} operaris a la vertical '{vertical}'. "
             f"{'Lookalike coincident amb patrons d\'èxit replicables. ' if te_cas_exit else ''}"
-            f"Fita verificada: {fita}."
+            f"Fita verificada: {fita}.{avis_gk}"
         ),
         campanya_3_emails=campanya,
     )

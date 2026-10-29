@@ -231,7 +231,8 @@ def test_t005_validacions_cp_adreca_gatekeeper_real_i_urls():
     assert validar_cp_en_adreca_fisica("LinkedIn/Instagram: Nova instal·lació a la zona 25560", "25560") is False
     assert validar_cp_en_adreca_fisica("Zona Codi Postal 25560", "25560") is False
     assert validar_cp_o_municipi_en_adreca("Carrer Major, 10, 25560 Sort", "25560", municipi="Sort") is True
-    assert validar_cp_o_municipi_en_adreca("Polígon Industrial El Segre, Nau 2, Lleida", "25001", municipi="Lleida") is True
+    # Spec 007: Mai es dóna per bo només el municipi sense el CP exacte a l'adreça
+    assert validar_cp_o_municipi_en_adreca("Polígon Industrial El Segre, Nau 2, Lleida", "25001", municipi="Lleida") is False
     assert validar_cp_o_municipi_en_adreca("Avinguda Diagonal, 100, Barcelona", "25001", municipi="Lleida") is False
 
     # Regla 2: Nom i Cognom real de Gatekeeper (rebutjant tots els càrrecs i noms genèrics)

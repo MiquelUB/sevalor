@@ -11,6 +11,7 @@ Implementa:
   mitjançant Firecrawl i scraping HTTP directe (Zero Mock Data).
 """
 
+import asyncio
 import base64
 import html
 import json
@@ -18,6 +19,7 @@ import logging
 import re
 import unicodedata
 import urllib.parse
+from collections import Counter
 from typing import Any, Dict, List, Optional, Tuple
 from uuid import UUID
 
@@ -27,6 +29,21 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.models.models import Empresa, SaasExclusioRgpd, SaasLead
+from app.services.prospeccio_validacio import (
+    GEOCODE_MODE,
+    USER_AGENT,
+    Gatekeeper,
+    adreca_valida_per_cp,
+    coincideix_vertical,
+    cp_geocodificat,
+    es_domini_espanyol,
+    ids_fiscals_valids,
+    ordenar_per_prioritat,
+    sembla_directori,
+    telefons_es,
+    trobar_gatekeeper,
+)
+from app.services.scraper_domini import adreca_jsonld, descarregar_pagines, osm_per_cp
 
 logger = logging.getLogger("sevalor.crm.firecrawl")
 
@@ -293,35 +310,10 @@ def validar_cp_o_municipi_en_adreca(
     codi_postal: str,
     municipi: Optional[str] = None,
 ) -> bool:
-    """Valida l'adreça física per Codi Postal exacte, prefix comarcal (3 dígits + municipi) o nom de municipi."""
-    if validar_cp_en_adreca_fisica(adreca, codi_postal):
-        return True
-    if not adreca or len(adreca.strip()) < 8:
+    """Valida l'adreça física exigint obligatòriament el Codi Postal exacte (Spec 007)."""
+    if not adreca or len(adreca.strip()) < 5:
         return False
-
-    adr_norm = unicodedata.normalize("NFKD", adreca).encode("ASCII", "ignore").decode("utf-8").lower()
-    # Rebutjar falses adreces de xarxes socials
-    if any(p in adr_norm for p in ("zona codi postal", "instagram", "linkedin", "facebook", "twitter", "tiktok", "hashtag")):
-        return False
-
-    # Si conté el municipi i un indicador de via/polígon/seu o un CP de la mateixa província:
-    if municipi and len(municipi.strip()) >= 3:
-        muni_norm = unicodedata.normalize("NFKD", municipi.strip()).encode("ASCII", "ignore").decode("utf-8").lower()
-        te_via_o_seu = any(
-            k in adr_norm
-            for k in (
-                "carrer", "calle", "c/", "av", "pol", "nau", "nave", "ctra",
-                "carretera", "pl", "cami", "km", "partida", "passatge", "ronda",
-                "seu", "ubicacio", "poligon",
-            )
-        )
-        prefix_prov = codi_postal.strip()[:2]
-        cps_detectats = re.findall(r"(?<![A-Za-z0-9])\b(?:0[1-9]|[1-4]\d|5[0-2])\d{3}\b(?![\-[A-Za-z0-9])", adreca)
-        cp_compatible = not cps_detectats or any(c.startswith(prefix_prov) for c in cps_detectats)
-        if muni_norm in adr_norm and (te_via_o_seu or bool(cps_detectats)) and cp_compatible:
-            return True
-
-    return False
+    return bool(adreca_valida_per_cp(adreca, codi_postal) or validar_cp_en_adreca_fisica(adreca, codi_postal))
 
 
 def es_nom_persona_real(nom: Optional[str]) -> bool:
@@ -911,6 +903,11 @@ def _extreure_adreca_amb_cp_de_text(
         return None
     cp = codi_postal.strip()
 
+    # 0. Validació pura de l'adreça al CP exacte amb via i número (Spec 007)
+    adr_pura = adreca_valida_per_cp(text or "", cp)
+    if adr_pura:
+        return adr_pura[:180]
+
     # 1. Comprovar primer les adreces estructurades (<address> i Schema.org PostalAddress)
     for adr_est in (adreces_estructurades or []):
         if validar_cp_en_adreca_fisica(adr_est, cp):
@@ -953,42 +950,6 @@ def _extreure_adreca_amb_cp_de_text(
         ):
             if validar_cp_en_adreca_fisica(frag, cp):
                 return frag[:180]
-
-    # 5. Comprovar flexibilització geogràfica (nom de municipi o CP adjacent del mateix municipi al text i metadades)
-    if municipi and len(municipi.strip()) >= 3:
-        muni_clean = municipi.strip()
-        prefix_prov = cp[:2]
-        for adr_est in (adreces_estructurades or []):
-            if validar_cp_o_municipi_en_adreca(adr_est, cp, municipi=muni_clean):
-                return adr_est[:180]
-
-        # 5.1 Cercar al text una via/polígon que contingui el municipi o un CP de la mateixa província + municipi
-        patro_via_muni = re.compile(
-            rf"((?:C/|C\.|Carrer|Calle|Av\.|Avda\.|Avinguda|Avenida|Pol\.?\s*Ind\.?|Pol[íi]gon(?:o)?\s+Industrial|"
-            rf"Crta\.|Ctra\.|Carretera|Passeig|Paseo|Pla[çc]a|Plaza|Cam[íi]|Camino|Partida|Travessera|Ronda|Nau|Nave)"
-            rf"[^\n;|<>]{{3,120}}?\b{re.escape(muni_clean)}\b)",
-            flags=re.IGNORECASE,
-        )
-        for m_vm in patro_via_muni.finditer(text):
-            cand_vm = re.sub(r"\s+", " ", m_vm.group(1)).strip(" ,.-;|")
-            if validar_cp_o_municipi_en_adreca(cand_vm, cp, municipi=muni_clean):
-                return cand_vm[:180]
-
-        # 5.2 Cercar als blocs separats per '|' o '\n' que continguin el municipi i indicador de via o CP provincial
-        for bloc_m in re.split(r"[\n|;]", text):
-            bloc_m_net = re.sub(r"\s+", " ", bloc_m).strip(" ,.-")
-            if len(bloc_m_net) <= 180 and re.search(rf"\b{re.escape(muni_clean)}\b", bloc_m_net, flags=re.IGNORECASE):
-                if validar_cp_o_municipi_en_adreca(bloc_m_net, cp, municipi=muni_clean):
-                    return bloc_m_net
-
-        # 5.3 Si la web confirma explícitament el municipi o el CP al seu contingut corporatiu (encara que ometi el carrer)
-        muni_norm = unicodedata.normalize("NFKD", muni_clean).encode("ASCII", "ignore").decode("utf-8").lower()
-        text_norm = unicodedata.normalize("NFKD", text).encode("ASCII", "ignore").decode("utf-8").lower()
-        if re.search(rf"\b{re.escape(muni_norm)}\b", text_norm):
-            # Verificar que no hi hagi explícitament un altre CP d'una altra província com a única adreça
-            tots_cps_text = re.findall(r"(?<![A-Za-z0-9])\b(?:0[1-9]|[1-4]\d|5[0-2])\d{3}\b(?![\-[A-Za-z0-9])", text)
-            if not tots_cps_text or any(c.startswith(prefix_prov) for c in tots_cps_text):
-                return f"Seu operativa a {muni_clean} (CP {cp})"
 
     return None
 
@@ -1307,6 +1268,15 @@ _XARXES_I_DIRECTORIS_GENERICS_IGNORAR = (
     ".gob.es",
     "ign.es",
     "magicospirineos.com",
+    "wallapop.",
+    "milanuncios.",
+    "paginasamarillas.",
+    "habitissimo.",
+    "adac.",
+    "cronoshare.",
+    "zaask.",
+    "prontopro.",
+    "vibbo.",
 )
 
 
@@ -1374,7 +1344,8 @@ class FirecrawlMultiChannelService:
     async def _cercar_web_bing(self, query: str, limit: int = 10) -> List[Dict[str, str]]:
         """Executa cerca a Bing decodificant les URLs de destinació sense bloquejos de CAPTCHA."""
         try:
-            url = f"https://www.bing.com/search?q={urllib.parse.quote_plus(query)}"
+            q_norm = query.replace("·", "")
+            url = f"https://www.bing.com/search?q={urllib.parse.quote_plus(q_norm)}&cc=ES&setlang=es"
             headers_bing = dict(_HEADERS_NAVEGADOR)
             headers_bing["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0"
             async with httpx.AsyncClient(timeout=8.0, follow_redirects=True, headers=headers_bing) as client:
@@ -1873,277 +1844,151 @@ class FirecrawlMultiChannelService:
         }
 
     async def descobrir_empreses_codi_postal(
-        self,
-        codi_postal: str,
-        vertical: str,
-        limit: int = 10,
-    ) -> List[Dict[str, Any]]:
-        """Descobreix empreses candidates reals per a un Codi Postal i una vertical.
-
-        Executa una descoberta en 5 etapes sistemàtiques:
-        1. Resolució del Codi Postal a municipi i província (Nominatim + catàleg intern).
-        2. Descoberta a Google Maps / OpenStreetMap Places per a la vertical a la localitat.
-        3. Cerca multi-motor (Bing, Firecrawl, DuckDuckGo) combinant mapes, termes sectorials i gremis.
-        4. Contrast i resolució contra directoris sectorials i gremis (mai descartar empreses vàlides;
-           resoldre cap al seu lloc web corporatiu oficial, p.ex. 'portalsolar' -> 'damiasolar.com').
-        5. Raspat profund de la web oficial extreient adreça física real en el CP, CIF, email, telèfon,
-           Gatekeeper i enllaços directes reals.
+        self, codi_postal: str, vertical: str, limit: int = 10, max_candidats: int = 60,
+    ) -> Tuple[List[Dict[str, Any]], Dict[str, int]]:
+        """Retorna (candidats_validats, embut). Cap candidat surt d'aquí sense:
+        CP exacte (carrer+número), domini/telèfon d'Espanya, no-directori i vertical.
         """
-        cp_clean = codi_postal.strip()
-        vertical_clean = vertical.strip()
+        cp = codi_postal.strip()
+        if not re.fullmatch(r"\d{5}", cp):
+            raise ValueError(f"Codi postal invàlid: {codi_postal!r}")
+        vertical = vertical.strip()
+        embut: Counter = Counter()
 
-        # Etapa 1: Resolució de municipi
-        geo_info = await obtenir_municipi_de_codi_postal(cp_clean)
-        municipi_nom = geo_info.get("municipi") if geo_info else None
-        provincia_nom = geo_info.get("provincia") if geo_info else None
-        logger.info("Descoberta CP %s -> Municipi: %s, Província: %s", cp_clean, municipi_nom, provincia_nom)
+        geo = await obtenir_municipi_de_codi_postal(cp)
+        municipi = geo.get("municipi") if geo else None
 
-        items_bruts: List[Dict[str, Any]] = []
-        dominis_vistos: set[str] = set()
+        validats: list[dict] = []
+        async with httpx.AsyncClient(follow_redirects=True,
+                                     headers={"User-Agent": USER_AGENT}) as client:
+            brut = (await self._recollir_candidats(client, cp, municipi, vertical))[:max_candidats]
+            embut["trobats"] = len(brut)
+            sem = asyncio.Semaphore(4)
 
-        # Etapa 4: Contrast contra portals sectorials i gremis -> Resolució a Web Oficial Corporativa
-        candidats_preparats: List[Dict[str, Any]] = []
-        dominis_corporatius_vistos: set[str] = set()
+            async def un(item):
+                async with sem:
+                    return await self._validar_candidat(client, item, cp, vertical, embut)
 
-        # Etapa 2: Google Maps / OpenStreetMap Places (cerca de comerços i instal·ladors locals)
-        if municipi_nom:
-            places_loc = await self._cercar_places_nominatim(vertical_clean, municipi_nom, limit=5)
-            for pl in places_loc:
-                nom_pl = pl.get("nom", "").strip()
-                if nom_pl:
-                    # Cercar el lloc web corporatiu d'aquesta empresa local identificada als mapes
-                    cands_maps = await self._cercar_web_multimotor(f"{nom_pl} {municipi_nom}", limit=3)
-                    for cm in cands_maps:
-                        u_cm = cm.get("url", "")
-                        d_cm = normalitzar_domini(u_cm)
-                        if (
-                            d_cm
-                            and d_cm not in dominis_corporatius_vistos
-                            and not any(p in d_cm for p in _PORTALS_SECTORIALS_I_GREMIS)
-                            and not any(x in d_cm for x in _XARXES_I_DIRECTORIS_GENERICS_IGNORAR)
-                        ):
-                            dominis_corporatius_vistos.add(d_cm)
-                            candidats_preparats.append(cm)
+            for i in range(0, len(brut), 8):          # lots de 8: ens aturem quan n'hi ha prou
+                if len(validats) >= limit:
+                    break
+                lot = await asyncio.gather(*(un(it) for it in brut[i:i + 8]), return_exceptions=True)
+                for r in lot:
+                    if isinstance(r, Exception):
+                        logger.warning("candidat fallit: %r", r)
+                        embut["error"] += 1
+                    elif r:
+                        validats.append(r)
 
-        # Etapa 3: Generació de consultes multi-angle (amb traducció semàntica de verticals de marca a termes B2B reals)
-        consultes: List[str] = []
-        termes_cerca = _expandir_termes_cerca_vertical(vertical_clean)
+        logger.info("embut descoberta cp=%s vertical=%s %s", cp, vertical, dict(embut))
+        return validats[:limit], dict(embut)
 
-        # 1. Cerca directa a la localitat i codi postal amb els termes B2B reals del sector
-        for terme in termes_cerca[:3]:
-            if municipi_nom:
-                consultes.append(f'{terme} "{municipi_nom}"')
-                consultes.append(f'{terme} "{cp_clean}" OR "{municipi_nom}"')
-            else:
-                consultes.append(f'{terme} "{cp_clean}"')
+    async def _recollir_candidats(self, client: httpx.AsyncClient, cp: str, municipi: str | None, vertical: str) -> list[dict]:
+        vistos: set[str] = set()
+        out: list[dict] = []
 
-        # 2. Cerca per codi postal i societat/instal·lacions locals
-        if municipi_nom:
-            consultes.append(f'"{municipi_nom}" ({termes_cerca[0]})')
-        consultes.append(f'{termes_cerca[0]} {cp_clean}')
-
-        # 3. Sinònims d'energia solar / renovables
-        if any(k in vertical_clean.lower() for k in ("placa", "solar", "fotovolt", "renovable")):
-            if municipi_nom:
-                consultes.append(f"solar {municipi_nom}")
-            consultes.append(f"solar {cp_clean}")
-            consultes.append(f"portalsolar {municipi_nom or cp_clean}")
-
-        # 4. Gremis sectorials i portals locals
-        if municipi_nom:
-            consultes.append(f"empresas {termes_cerca[0]} {municipi_nom}")
-
-        for q in consultes:
-            if len(items_bruts) >= limit * 4:
-                break
-            res_q = await self._cercar_web_multimotor(q, limit=8)
-            for it in res_q:
-                u_it = it.get("url", "")
-                d_it = normalitzar_domini(u_it)
-                if d_it and d_it not in dominis_vistos:
-                    dominis_vistos.add(d_it)
-                    items_bruts.append(it)
-
-        # Processar items bruts i resoldre portals sectorials cap a webs oficials
-        paraules_prohibides_nom = (
-            "las 10",
-            "los mejores",
-            "empresas de",
-            "directorio",
-            "instalador",
-            "instaladores",
-            "instal·lador",
-            "instal·ladors",
-            "instalaciones",
-            "instal·lacions",
-            "instala",
-            "electricistas",
-            "fontaneros",
-            "guia",
-            "portal",
-            "descargar",
-            "paneles",
-            "placas",
-            "reformas",
-            "precios",
-            "presupuesto",
-        )
-
-        for item in items_bruts:
-            url = (item.get("url") or "").strip()
-            if not validar_url_verificable(url):
-                continue
-            url_low = url.lower()
-            if any(bad_p in url_low for bad_p in ("/producto/", "/descargas/", "/programa/", "/login", "/mapa-web")):
-                continue
-            domini = normalitzar_domini(url)
-            if not domini or any(x in domini for x in _XARXES_I_DIRECTORIS_GENERICS_IGNORAR):
-                continue
-            titol_item_low = (item.get("title") or "").lower()
-            if any(
-                inst in domini or inst in titol_item_low
-                for inst in ("ajuntament", "ayuntamiento", "diputacio", "diputacion", "seuelectronica", "sede-electronica", "consellcomarcal")
+        def afegir(it: dict):
+            d = normalitzar_domini(it.get("url", ""))
+            if (
+                d
+                and d not in vistos
+                and not any(x in d for x in _XARXES_I_DIRECTORIS_GENERICS_IGNORAR)
             ):
-                continue
-            if municipi_nom:
-                muni_slug = re.sub(r"[^a-z0-9]", "", unicodedata.normalize("NFKD", municipi_nom).encode("ASCII", "ignore").decode("utf-8").lower())
-                dom_stem = domini.split(".")[0].replace("-", "")
-                if muni_slug and dom_stem == muni_slug:
-                    continue
+                vistos.add(d)
+                out.append(it)
 
-            # Si el domini pertany a un portal sectorial o gremi, resoldre el nom d'empresa i trobar la seva web oficial
-            if any(portal in domini for portal in _PORTALS_SECTORIALS_I_GREMIS):
-                titol_portal = (item.get("title") or "").strip()
-                desc_portal = (item.get("description") or "").strip()
-                noms_a_resoldre: List[str] = []
+        # 1) OSM/Overpass amb CP exacte (font estructurada)
+        try:
+            for it in await osm_per_cp(client, cp, vertical):
+                afegir(it)
+        except Exception as e:
+            logger.warning("overpass ha fallat: %r", e)
 
-                # Extreure nom de l'empresa (ex: 'Damia Solar - Energia Solar en La Pobla de Segur - Portalsolar' -> 'Damia Solar')
-                part_nom = re.split(r"[-–|·:;•]", titol_portal)[0].strip()
-                part_nom = re.sub(r"^[^\w\s]+", "", part_nom).strip()
-                if (
-                    part_nom
-                    and len(part_nom) >= 3
-                    and not any(k in part_nom.lower() for k in paraules_prohibides_nom)
-                ):
-                    noms_a_resoldre.append(part_nom)
-                else:
-                    # Si és una pàgina de llistat del directori local, extreure noms d'empreses (SL, SA, o títols de fitxa)
-                    for m_soc in re.finditer(
-                        r"\b([A-ZÀ-Ý][A-Za-zÀ-ÿ0-9&\s.\-]{2,40}?\s+(?:S\.?L\.?U?\.?|S\.?A\.?|S\.?C\.?P\.?))\b",
-                        f"{titol_portal} | {desc_portal}",
-                    ):
-                        cand_soc = m_soc.group(1).strip()
-                        if cand_soc not in noms_a_resoldre:
-                            noms_a_resoldre.append(cand_soc)
+        # 2) Cerca web: CP entre cometes, SENSE 'OR' i SENSE cerques només per municipi
+        for terme in _expandir_termes_cerca_vertical(vertical)[:3]:
+            consultes = [f'{terme} "{cp}"']
+            if municipi:
+                consultes.append(f"{terme} {cp} {municipi}")
+            for q in consultes:
+                for it in await self._cercar_web_multimotor(q, limit=10):
+                    afegir(it)
+        return out
 
-                for nom_res in noms_a_resoldre[:3]:
-                    query_oficial = f'"{nom_res}" {municipi_nom or cp_clean}'
-                    web_cands = await self._cercar_web_multimotor(query_oficial, limit=3)
-                    for cand in web_cands:
-                        u_cand = cand.get("url", "")
-                        d_cand = normalitzar_domini(u_cand)
-                        if (
-                            d_cand
-                            and d_cand not in dominis_corporatius_vistos
-                            and not any(p in d_cand for p in _PORTALS_SECTORIALS_I_GREMIS)
-                            and not any(x in d_cand for x in _XARXES_I_DIRECTORIS_GENERICS_IGNORAR)
-                        ):
-                            dominis_corporatius_vistos.add(d_cand)
-                            candidats_preparats.insert(0, cand)
-                            break
-                continue
+    async def _pagines(self, client: httpx.AsyncClient, url: str):
+        # fallback_js: connecta aquí el scrape de Firecrawl que ja tens (retorna markdown o None)
+        async def _fallback(u: str) -> str | None:
+            res = await self.raspar_web_markdown(u)
+            return res.get("markdown") if res else None
 
-            if domini not in dominis_corporatius_vistos:
-                dominis_corporatius_vistos.add(domini)
-                candidats_preparats.append(item)
+        return await descarregar_pagines(client, url, max_pagines=6, fallback_js=_fallback)
 
-        # Etapa 5: Raspat exhaustiu de cada web corporativa candidata
-        candidats_finals: List[Dict[str, Any]] = []
+    async def _validar_candidat(self, client: httpx.AsyncClient, item: dict, cp: str, vertical: str, embut: Counter):
+        url = item.get("url", "")
+        if not url:
+            return None
+        pagines = await self._pagines(client, url)
+        if not pagines:
+            embut["descarrega_ko"] += 1
+            return None
+        text = "\n".join(p.text for p in pagines)
 
-        for item in candidats_preparats[: limit * 2]:
-            url = (item.get("url") or "").strip()
-            domini = normalitzar_domini(url)
-            titol = (item.get("title") or "").strip()
-            desc = (item.get("description") or "").strip()
+        if sembla_directori(text):
+            embut["directori"] += 1
+            return None
+        if not es_domini_espanyol(url, text):
+            embut["no_espanya"] += 1
+            return None
 
-            web_data = await self.raspar_web_markdown(url, codi_postal=cp_clean)
-            meta_html = web_data.get("metadades_html") or {}
-            text_complet = f"{titol}\n{desc}\n{web_data.get('descripcio', '')}\n{web_data.get('markdown', '')}"
+        adreca = adreca_valida_per_cp(text, cp) or adreca_jsonld(pagines, cp)
+        if not adreca:
+            embut["cp_no_coincideix"] += 1
+            return None
 
-            adreca_real = _extreure_adreca_amb_cp_de_text(
-                text_complet,
-                cp_clean,
-                adreces_estructurades=meta_html.get("adreces_estructurades"),
-                municipi=municipi_nom,
-            )
+        cp_geo = await cp_geocodificat(client, adreca)       # CP segons Nominatim (None = no ho sap)
+        cp_geo_coincideix = None if cp_geo is None else (cp_geo == cp)   # tri-estat: True / False / None
+        if cp_geo_coincideix is False:
+            embut["cp_geocode_difereix"] += 1
+            if GEOCODE_MODE == "descartar":
+                return None
+        elif cp_geo_coincideix is None:
+            embut["cp_geocode_desconegut"] += 1             # no penalitza, però es compta
 
-            # Si l'adreça no s'ha trobat al text de la portada, intentar buscar per municipi
-            if not adreca_real and municipi_nom and municipi_nom.lower() in text_complet.lower():
-                for adr_cand in meta_html.get("adreces_estructurades", []):
-                    if municipi_nom.lower() in adr_cand.lower():
-                        adreca_real = adr_cand[:180]
-                        break
+        if not coincideix_vertical(text, vertical):
+            embut["vertical"] += 1
+            return None
 
-            cif_real = _extreure_cif_de_text(text_complet, cif_jsonld=meta_html.get("cif_jsonld"))
-            nom_decisor, carrec_decisor = _extreure_gatekeeper_real_de_text(
-                text_complet,
-                nom_jsonld=meta_html.get("gatekeeper_nom"),
-                carrec_jsonld=meta_html.get("gatekeeper_carrec"),
-            )
-            emails_dict = _extreure_emails_empresa_i_gatekeeper_de_text(
-                text_complet,
-                domini_preferit=domini,
-                decisor_nom=nom_decisor,
-                mailtos_html=meta_html.get("mailtos"),
-            )
-            email_real = emails_dict["email_principal"]
-            telefon_real = _extreure_telefon_de_text(text_complet, tels_html=meta_html.get("tels"))
+        ordre = ordenar_per_prioritat(pagines)
+        gk: Gatekeeper | None = trobar_gatekeeper([(p.url, p.text) for p in ordre])
+        emails = _extreure_emails_empresa_i_gatekeeper_de_text(
+            text, domini_preferit=normalitzar_domini(url))
+        ids = ids_fiscals_valids(text)
+        tels = sorted(telefons_es(text))
 
-            nom_empresa_net = _deduir_nom_empresa_de_titol_i_domini(titol, domini)
+        if gk is None:
+            embut["admesos_sense_gatekeeper"] += 1          # Candidats amb CP i vertical admesos provisionalment sense gatekeeper
+            embut["sense_gatekeeper"] += 1                  # Mètrica d'auditoria per avaluar PERMET_SENSE_GATEKEEPER
+            if not tels:
+                embut["sense_gatekeeper_sense_telefon"] += 1
 
-            social_urls = dict(web_data.get("social_urls", {}))
-            reg_clau = nom_empresa_net.strip().lower()
-            dom_clau = domini.replace(".com", "").replace(".es", "").replace(".cat", "").strip().lower()
-            reg_entry = _REGISTRE_MERCANTIL_GERENTS.get(reg_clau) or _REGISTRE_MERCANTIL_GERENTS.get(dom_clau)
-            if reg_entry:
-                if not nom_decisor and reg_entry.get("nom"):
-                    nom_decisor = reg_entry["nom"]
-                    carrec_decisor = reg_entry.get("carrec", "Gerent i Fundador")
-                if not cif_real and reg_entry.get("cif"):
-                    cif_real = reg_entry["cif"]
-                if reg_entry.get("maps_url") and ("maps" not in social_urls or "search/?api=1" in social_urls.get("maps", "")):
-                    social_urls["maps"] = reg_entry["maps_url"]
-
-            if "maps" not in social_urls:
-                terme_maps = f"{nom_empresa_net} {cp_clean}".strip()
-                social_urls["maps"] = f"https://www.google.com/maps/search/?api=1&query={urllib.parse.quote_plus(terme_maps)}"
-
-            candidats_finals.append({
-                "nom_empresa": nom_empresa_net,
-                "web_url": url,
-                "adreca_fisica": adreca_real,
-                "cif": cif_real,
-                "email": email_real,
-                "email_empresa": emails_dict["email_empresa"],
-                "email_gatekeeper": emails_dict["email_gatekeeper"],
-                "telefon": telefon_real,
-                "decisor_nom": nom_decisor,
-                "decisor_carrec": carrec_decisor,
-                "social_urls": social_urls,
-                "web_markdown": web_data.get("markdown", ""),
-                "metadades_html": meta_html,
-                "resum_cerca": desc,
-            })
-
-        # Prioritzar empreses amb adreça física confirmada al Codi Postal demanat
-        candidats_finals.sort(
-            key=lambda c: (
-                1 if c.get("adreca_fisica") and validar_cp_en_adreca_fisica(c.get("adreca_fisica"), cp_clean) else 0
-            ),
-            reverse=True,
-        )
-
-        return candidats_finals[:limit]
+        embut["validats"] += 1
+        return {
+            "nom_empresa": _deduir_nom_empresa_de_titol_i_domini(item.get("title", ""), url),
+            "web_url": url,
+            "adreca_fisica": adreca,
+            "cp_verificat": True,
+            "cp_geocode_retornat": cp_geo,                  # CP segons Nominatim (None si no ho sap)
+            "cp_geocode_coincideix": cp_geo_coincideix,     # True / False / None
+            "cif": ids[0] if ids else None,
+            "email": emails.get("email_principal"),
+            "email_empresa": emails.get("email_empresa"),
+            "email_gatekeeper": emails.get("email_gatekeeper"),
+            "telefon": tels[0] if tels else None,
+            "telefon_valid": bool(tels),
+            "gatekeeper": gk,                       # Gatekeeper | None (amb font i cita)
+            "pagines": pagines,                     # per construir_context() i per auditar
+            "pagines_urls": [p.url for p in pagines],
+            "web_markdown": text,
+        }
 
     async def investigar_empresa_completa(
         self,

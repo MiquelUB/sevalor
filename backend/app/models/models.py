@@ -2162,6 +2162,7 @@ class SaasProspeccioTasca(Base):
     total_descartats: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
     total_duplicats: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
     resum_execucio: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    embut_descoberta: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
     autor_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -2215,6 +2216,11 @@ class SaasLead(Base):
     score_qualificacio: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
     justificacio_ia: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     mx_validat: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
+    cp_geocode_retornat: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
+    cp_geocode_coincideix: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
+    gatekeeper_font_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    gatekeeper_cita: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    gatekeeper_confianca: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
     esborrany_email_assumpte: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     esborrany_email_cos: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     rao_tancament_exit: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
@@ -2338,8 +2344,13 @@ class SaasProspeccioCandidat(Base):
     angle_atac: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     score: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
     estat_decisio: Mapped[str] = mapped_column(
-        String(30), nullable=False, index=True
-    )  # SELECCIONAT, DESCARTAT, DUPLICAT, ERROR_EXTRACCIO
+        String(50), nullable=False, index=True
+    )  # SELECCIONAT, SELECCIONAT_SENSE_GATEKEEPER, DESCARTAT, DUPLICAT, ERROR_EXTRACCIO
+    cp_geocode_retornat: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
+    cp_geocode_coincideix: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
+    gatekeeper_font_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    gatekeeper_cita: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    gatekeeper_confianca: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
     vector_duplicitat: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     motiu_detallat_ia: Mapped[str] = mapped_column(Text, nullable=False)
     corregit_huma: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))

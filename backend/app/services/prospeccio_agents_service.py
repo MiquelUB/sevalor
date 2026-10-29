@@ -53,7 +53,6 @@ from app.services.firecrawl_service import (
     normalitzar_adreca,
     normalitzar_cif,
     normalitzar_domini,
-    validar_cp_o_municipi_en_adreca,
     validar_url_verificable,
 )
 from app.services.mx_shield_service import validar_email_mx
@@ -63,6 +62,7 @@ from app.services.openrouter_prospecting_service import (
     carregar_context_doble_bucle,
     qualificar_candidat_amb_openrouter,
 )
+from app.services.prospeccio_validacio import adreca_valida_per_cp
 
 logger = logging.getLogger("sevalor.crm.agents")
 
@@ -341,11 +341,11 @@ class Agent1IdentityExtractor:
             motiu_gate1 = (
                 "Descartat (Quality Gate 1 - Regla d'Enllaços Comprovables): No disposa d'un enllaç web directe i verificable."
             )
-        elif not validar_cp_o_municipi_en_adreca(adr, cp_clean, municipi=municipi_esperat):
+        elif not adreca_valida_per_cp(adr or "", cp_clean):
             passa_gate1 = False
             motiu_gate1 = (
                 f"Descartat (Quality Gate 1 - Ubicació Física): L'adreça ('{adr or 'No disponible'}') "
-                f"no correspon al CP {cp_clean} ni al municipi ({municipi_esperat or 'N/A'})."
+                f"no conté el CP {cp_clean} amb carrer i número."
             )
 
         return Agent1IdentityData(
@@ -752,7 +752,7 @@ class ProspeccioAgentOrchestrator:
         social: Agent3SocialData,
     ) -> LeadEvaluationSchema:
         """Assegura que els 3 correus dels leads SELECCIONATS tinguin personalització real multi-canal i zero WhatsApp."""
-        if avaluacio.estat_decisio != "SELECCIONAT":
+        if avaluacio.estat_decisio not in ("SELECCIONAT", "SELECCIONAT_SENSE_GATEKEEPER"):
             avaluacio.campanya_3_emails = []
             return avaluacio
 
@@ -1152,18 +1152,17 @@ class ProspeccioAgentOrchestrator:
         )
 
         # Tallafocs Ponderat de les 3 Premisses de Qualitat supervisat per l'Orquestrador:
-        # Premissa A: Adreça verificada al CP exacte o al mateix municipi/polígon industrial
-        if not validar_cp_o_municipi_en_adreca(
-            dades_agent1.adreca_fisica,
+        # Premissa A: Adreça verificada al CP exacte amb carrer i número (Spec 007)
+        if not adreca_valida_per_cp(
+            dades_agent1.adreca_fisica or "",
             dades_agent1.codi_postal,
-            municipi=municipi_esperat,
         ):
             avaluacio.estat_decisio = "DESCARTAT"
             avaluacio.score = min(avaluacio.score, 30)
             avaluacio.campanya_3_emails = []
             avaluacio.motiu_detallat_ia = (
                 f"Descartat (Ubicació Física): L'adreça ('{dades_agent1.adreca_fisica or 'No disponible'}') "
-                f"no correspon al CP {dades_agent1.codi_postal} ni al municipi ({municipi_esperat or 'N/A'})."
+                f"no conté el CP {dades_agent1.codi_postal} amb carrer i número."
             )
 
         # Premissa B: Gatekeeper Nominal vs Lead Corporatiu amb Contacte Directe Verificat
@@ -1174,10 +1173,11 @@ class ProspeccioAgentOrchestrator:
                 avaluacio.decisor_carrec = avaluacio.decisor_carrec or gk_carrec_consolidat or "Gerent"
             else:
                 avaluacio.decisor_nom = None
-                if avaluacio.estat_decisio == "SELECCIONAT":
+                avaluacio.decisor_carrec = None
+                if avaluacio.estat_decisio in ("SELECCIONAT", "SELECCIONAT_SENSE_GATEKEEPER"):
                     if dades_agent1.te_contacte_operatiu and avaluacio.operaris_estimats >= operaris_minims:
-                        avaluacio.score = max(65, min(avaluacio.score - 12, 78))
-                        avaluacio.decisor_carrec = avaluacio.decisor_carrec or "Direcció / Gerència (Pendent nom)"
+                        avaluacio.estat_decisio = "SELECCIONAT_SENSE_GATEKEEPER"
+                        avaluacio.score = max(65, min(avaluacio.score - 12, 79))
                         if "[AVÍS: Decisor nominal pendent d'identificar]" not in avaluacio.motiu_detallat_ia:
                             avaluacio.motiu_detallat_ia = (
                                 f"[AVÍS: Decisor nominal pendent d'identificar] {avaluacio.motiu_detallat_ia} "
