@@ -1,6 +1,5 @@
 """Router CRM Prospecció, Leads, Pipeline Kanban de 7 dies i Demo autònoma."""
 
-import asyncio
 import json
 import logging
 import re
@@ -16,7 +15,7 @@ from sqlalchemy import desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.core.db import AsyncSessionLocal, get_db_with_tenant_context, set_tenant_context
+from app.core.db import get_db_with_tenant_context
 from app.core.security import require_roles
 from app.models.models import (
     Article,
@@ -188,10 +187,6 @@ class TascaCpCreate(BaseModel):
     operaris_minims: int = Field(5, ge=1, le=500)
     candidats_descoberts: Optional[List[Dict[str, Any]]] = None
     limit: Optional[int] = Field(5, ge=1, le=20)
-    executar_en_segon_pla: Optional[bool] = None
-
-
-_background_tasks: set[asyncio.Task] = set()
 
 
 class CorregirCriteriRequest(BaseModel):
@@ -1299,30 +1294,46 @@ async def activar_demo_lead(
 # ENDPOINTS TASQUES ATÒMIQUES PER CP (T011)
 # ==========================================
 
-async def executar_proces_lot_cp(
-    db: AsyncSession,
-    tasca_id: uuid.UUID,
-    codi_postal: str,
-    vertical: str,
-    operaris_minims: int,
-    limit_batch: int = 5,
-    candidats_descoberts: Optional[List[Dict[str, Any]]] = None,
+@router.post("/tasques-cp", response_model=Dict[str, Any], status_code=status.HTTP_201_CREATED)
+async def crear_executar_tasca_cp(
+    payload: TascaCpCreate,
+    db: AsyncSession = Depends(get_db_with_tenant_context),
 ) -> Dict[str, Any]:
-    """Processa el lot atòmic per a un Codi Postal determinat (descoberta, enriquiment, scoring i leads)."""
+    """Inicia i executa un lot atòmic per Codi Postal i Vertical escrita lliurement per l'humà.
+
+    FR-001, FR-002, FR-003, FR-004, FR-006:
+    - No encadena mai el CP següent automàticament (FR-003).
+    - Executa deduplicació multi-validació per 3 vectors (Domini, Adreça, CIF).
+    - Registra transparentment TOTS els candidats (Seleccionats, Descartats, Duplicats).
+    - Genera la campanya de 3 correus amb tempo per als seleccionats.
+    """
     ara = datetime.now(timezone.utc)
-    res_t = await db.execute(select(SaasProspeccioTasca).where(SaasProspeccioTasca.id == tasca_id))
-    tasca = res_t.scalars().first()
-    if not tasca:
-        raise ValueError(f"Tasca {tasca_id} no trobada a la base de dades.")
+    tasca_id = uuid.uuid4()
+
+    tasca = SaasProspeccioTasca(
+        id=tasca_id,
+        codi_postal=payload.codi_postal.strip()[:10],
+        vertical=payload.vertical.strip()[:150],
+        operaris_minims=payload.operaris_minims,
+        estat="EXECUTANT",
+        total_trobats=0,
+        total_seleccionats=0,
+        total_descartats=0,
+        total_duplicats=0,
+        created_at=ara,
+    )
+    db.add(tasca)
+    await db.flush()
 
     # 1. Descoberta d'empreses per CP i vertical (Zero Mock Data: cap fallback sintètic)
-    if candidats_descoberts is not None:
-        candidats_raw = candidats_descoberts
+    if payload.candidats_descoberts is not None:
+        candidats_raw = payload.candidats_descoberts
         embut = {"trobats": len(candidats_raw), "validats": len(candidats_raw)}
     else:
+        limit_batch = payload.limit or 5
         candidats_raw, embut = await firecrawl_service.descobrir_empreses_codi_postal(
-            codi_postal=codi_postal,
-            vertical=vertical,
+            codi_postal=payload.codi_postal,
+            vertical=payload.vertical,
             limit=limit_batch,
         )
     tasca.embut_descoberta = embut
@@ -1332,11 +1343,11 @@ async def executar_proces_lot_cp(
     tot_desc = 0
     tot_dup = 0
 
-    geo_muni = await obtenir_municipi_de_codi_postal(codi_postal.strip())
+    geo_muni = await obtenir_municipi_de_codi_postal(payload.codi_postal.strip())
     municipi_esperat = geo_muni.get("municipi") if geo_muni else None
 
-    cp_clean = codi_postal.strip()[:10]
-    vertical_clean = vertical.strip()[:150]
+    cp_clean = payload.codi_postal.strip()[:10]
+    vertical_clean = payload.vertical.strip()[:150]
 
     for item in candidats_raw:
         cand_id = uuid.uuid4()
@@ -1451,7 +1462,7 @@ async def executar_proces_lot_cp(
                     web_url=web,
                     codi_postal=cp_clean,
                     vertical=vertical_clean,
-                    operaris_minims=operaris_minims,
+                    operaris_minims=payload.operaris_minims,
                     web_markdown=web_ctx,
                     fonts_investigades=fonts,
                     fita_recent=investigacio.get("fita_recent"),
@@ -1642,25 +1653,19 @@ async def executar_proces_lot_cp(
             except Exception as nested_exc:
                 logger.error("Error enregistrant candidat_error per '%s': %s", nom, nested_exc)
 
-        # Actualització periòdica dels totals per alimentar l'SSE stream
-        tasca.total_seleccionats = tot_sel
-        tasca.total_descartats = tot_desc
-        tasca.total_duplicats = tot_dup
-        await db.commit()
-
     tasca.total_seleccionats = tot_sel
     tasca.total_descartats = tot_desc
     tasca.total_duplicats = tot_dup
     tasca.estat = "COMPLETAT"
     tasca.completed_at = datetime.now(timezone.utc)
     tasca.resum_execucio = (
-        f"Lot atòmic finalitzat per al CP {codi_postal} ({vertical}). "
+        f"Lot atòmic finalitzat per al CP {payload.codi_postal} ({payload.vertical}). "
         f"Trobats: {tasca.total_trobats}, Seleccionats: {tot_sel}, Descartats: {tot_desc}, Duplicats: {tot_dup}."
     )
     try:
         await db.commit()
     except Exception as commit_exc:
-        logger.exception("Error fent commit del lot CP %s: %s", codi_postal, commit_exc)
+        logger.exception("Error fent commit del lot CP %s: %s", payload.codi_postal, commit_exc)
         await db.rollback()
         raise HTTPException(
             status_code=500,
@@ -1670,134 +1675,14 @@ async def executar_proces_lot_cp(
     return {
         "status": "OK",
         "tasca_id": str(tasca_id),
-        "codi_postal": codi_postal.strip(),
-        "vertical": vertical.strip(),
+        "codi_postal": payload.codi_postal.strip(),
+        "vertical": payload.vertical.strip(),
         "total_trobats": tasca.total_trobats,
         "total_seleccionats": tot_sel,
         "total_descartats": tot_desc,
         "total_duplicats": tot_dup,
         "missatge": tasca.resum_execucio,
     }
-
-
-async def executar_tasca_cp_background(
-    tasca_id: uuid.UUID,
-    codi_postal: str,
-    vertical: str,
-    operaris_minims: int,
-    limit_batch: int = 5,
-    candidats_descoberts: Optional[List[Dict[str, Any]]] = None,
-) -> None:
-    """Executa el lot atòmic de prospecció en una sessió aïllada en segon pla (Opció B)."""
-    try:
-        async with AsyncSessionLocal() as session:
-            await set_tenant_context(session, None, is_superadmin=True, role="SUPERADMIN")
-            await executar_proces_lot_cp(
-                db=session,
-                tasca_id=tasca_id,
-                codi_postal=codi_postal,
-                vertical=vertical,
-                operaris_minims=operaris_minims,
-                limit_batch=limit_batch,
-                candidats_descoberts=candidats_descoberts,
-            )
-    except Exception as exc:
-        logger.exception("Error aïllat en segon pla per a la tasca CP %s (%s): %s", tasca_id, codi_postal, exc)
-        try:
-            async with AsyncSessionLocal() as session_err:
-                await set_tenant_context(session_err, None, is_superadmin=True, role="SUPERADMIN")
-                res = await session_err.execute(select(SaasProspeccioTasca).where(SaasProspeccioTasca.id == tasca_id))
-                t = res.scalars().first()
-                if t:
-                    t.estat = "ERROR"
-                    t.resum_execucio = f"Error d'execució en segon pla: {str(exc)[:300]}"
-                    t.completed_at = datetime.now(timezone.utc)
-                    await session_err.commit()
-        except Exception as e_save:
-            logger.error("No s'ha pogut desar l'estat d'error per a la tasca %s: %s", tasca_id, e_save)
-
-
-@router.post("/tasques-cp", response_model=Dict[str, Any], status_code=status.HTTP_201_CREATED)
-async def crear_executar_tasca_cp(
-    payload: TascaCpCreate,
-    db: AsyncSession = Depends(get_db_with_tenant_context),
-) -> Dict[str, Any]:
-    """Inicia i executa un lot atòmic per Codi Postal i Vertical escrita lliurement per l'humà.
-
-    FR-001, FR-002, FR-003, FR-004, FR-006:
-    - No encadena mai el CP següent automàticament (FR-003).
-    - Executa deduplicació multi-validació per 3 vectors (Domini, Adreça, CIF).
-    - Registra transparentment TOTS els candidats (Seleccionats, Descartats, Duplicats).
-    - Genera la campanya de 3 correus amb tempo per als seleccionats.
-    - Suporta execució asíncrona en segon pla desacoblada (Opció B) per evitar talls de proxy/timeout.
-    """
-    ara = datetime.now(timezone.utc)
-    tasca_id = uuid.uuid4()
-
-    tasca = SaasProspeccioTasca(
-        id=tasca_id,
-        codi_postal=payload.codi_postal.strip()[:10],
-        vertical=payload.vertical.strip()[:150],
-        operaris_minims=payload.operaris_minims,
-        estat="EXECUTANT",
-        total_trobats=0,
-        total_seleccionats=0,
-        total_descartats=0,
-        total_duplicats=0,
-        created_at=ara,
-    )
-    db.add(tasca)
-    await db.commit()
-
-    # Si s'ha demanat expressament en segon pla o si no s'aporten candidats mock (cerca real web/RASIC):
-    en_segon_pla = (
-        payload.executar_en_segon_pla
-        if payload.executar_en_segon_pla is not None
-        else (payload.candidats_descoberts is None)
-    )
-
-    limit_batch = payload.limit or 5
-
-    if en_segon_pla:
-        t = asyncio.create_task(
-            executar_tasca_cp_background(
-                tasca_id=tasca_id,
-                codi_postal=payload.codi_postal,
-                vertical=payload.vertical,
-                operaris_minims=payload.operaris_minims,
-                limit_batch=limit_batch,
-                candidats_descoberts=payload.candidats_descoberts,
-            )
-        )
-        _background_tasks.add(t)
-        t.add_done_callback(_background_tasks.discard)
-
-        return {
-            "status": "EXECUTANT",
-            "tasca_id": str(tasca_id),
-            "codi_postal": payload.codi_postal.strip(),
-            "vertical": payload.vertical.strip(),
-            "total_trobats": 0,
-            "total_seleccionats": 0,
-            "total_descartats": 0,
-            "total_duplicats": 0,
-            "missatge": (
-                f"Lot atòmic iniciat en segon pla per al CP {payload.codi_postal} ({payload.vertical}). "
-                "Connectant amb l'SSE stream en temps real..."
-            ),
-        }
-    else:
-        # Execució síncrona directa (apta per a tests)
-        res_sync = await executar_proces_lot_cp(
-            db=db,
-            tasca_id=tasca_id,
-            codi_postal=payload.codi_postal,
-            vertical=payload.vertical,
-            operaris_minims=payload.operaris_minims,
-            limit_batch=limit_batch,
-            candidats_descoberts=payload.candidats_descoberts,
-        )
-        return res_sync
 
 
 @router.get("/tasques-cp", response_model=List[Dict[str, Any]])
@@ -1926,49 +1811,7 @@ async def stream_progres_tasca_cp(
             return
 
         yield f"event: status\ndata: {json.dumps({'pas': 'INICI', 'tasca_id': str(tasca.id), 'estat': tasca.estat, 'codi_postal': tasca.codi_postal})}\n\n"
-
-        if tasca.estat in ("COMPLETAT", "ERROR"):
-            yield f"event: progres\ndata: {json.dumps({'pas': 'COMPLETAT', 'total_trobats': tasca.total_trobats, 'total_seleccionats': tasca.total_seleccionats, 'total_descartats': tasca.total_descartats, 'total_duplicats': tasca.total_duplicats, 'resum': tasca.resum_execucio})}\n\n"
-            yield f"event: close\ndata: {json.dumps({'missatge': 'Stream finalitzat'})}\n\n"
-            return
-
-        intents = 0
-        max_intents = 300  # Màxim 5 minuts (300 segons)
-        ultim_trobats = tasca.total_trobats
-        ultim_seleccionats = tasca.total_seleccionats
-        ultim_descartats = tasca.total_descartats
-
-        while intents < max_intents:
-            await asyncio.sleep(1.0)
-            intents += 1
-
-            async with AsyncSessionLocal() as session_stream:
-                await set_tenant_context(session_stream, None, is_superadmin=True, role="SUPERADMIN")
-                res_upd = await session_stream.execute(
-                    select(SaasProspeccioTasca).where(SaasProspeccioTasca.id == tid)
-                )
-                tasca_upd = res_upd.scalars().first()
-                if not tasca_upd:
-                    break
-
-                if tasca_upd.estat == "COMPLETAT":
-                    yield f"event: progres\ndata: {json.dumps({'pas': 'COMPLETAT', 'total_trobats': tasca_upd.total_trobats, 'total_seleccionats': tasca_upd.total_seleccionats, 'total_descartats': tasca_upd.total_descartats, 'total_duplicats': tasca_upd.total_duplicats, 'resum': tasca_upd.resum_execucio})}\n\n"
-                    break
-                elif tasca_upd.estat == "ERROR":
-                    yield f"event: progres\ndata: {json.dumps({'pas': 'ERROR', 'error': tasca_upd.resum_execucio or 'Error executant tasca'})}\n\n"
-                    break
-
-                ha_canviat = (
-                    tasca_upd.total_trobats != ultim_trobats
-                    or tasca_upd.total_seleccionats != ultim_seleccionats
-                    or tasca_upd.total_descartats != ultim_descartats
-                )
-                if ha_canviat or intents % 5 == 0:
-                    ultim_trobats = tasca_upd.total_trobats
-                    ultim_seleccionats = tasca_upd.total_seleccionats
-                    ultim_descartats = tasca_upd.total_descartats
-                    yield f"event: progres\ndata: {json.dumps({'pas': 'PROGRES', 'total_trobats': tasca_upd.total_trobats, 'total_seleccionats': tasca_upd.total_seleccionats, 'total_descartats': tasca_upd.total_descartats, 'total_duplicats': tasca_upd.total_duplicats})}\n\n"
-
+        yield f"event: progres\ndata: {json.dumps({'pas': 'COMPLETAT', 'total_trobats': tasca.total_trobats, 'total_seleccionats': tasca.total_seleccionats, 'total_descartats': tasca.total_descartats, 'total_duplicats': tasca.total_duplicats})}\n\n"
         yield f"event: close\ndata: {json.dumps({'missatge': 'Stream finalitzat'})}\n\n"
 
     return StreamingResponse(_sse_generator(), media_type="text/event-stream")

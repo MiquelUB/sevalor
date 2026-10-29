@@ -847,16 +847,6 @@ export default function SuperadminCrmPage() {
                   { time: hora, text: `[INICI] Lot CP ${data.codi_postal} connectat via SSE stream.`, type: "info" },
                   ...prev,
                 ]);
-              } else if (data.pas === "PROGRES") {
-                setConsoleLogs((prev) => [
-                  {
-                    time: hora,
-                    text: `[PROGRÉS] Analitzant candidats... Trobats: ${data.total_trobats || 0} | Seleccionats: ${data.total_seleccionats || 0} | Descartats: ${data.total_descartats || 0} | Duplicats: ${data.total_duplicats || 0}`,
-                    type: "info",
-                  },
-                  ...prev,
-                ]);
-                carregarTasquesCP();
               } else if (data.pas === "COMPLETAT") {
                 setConsoleLogs((prev) => [
                   {
@@ -866,22 +856,6 @@ export default function SuperadminCrmPage() {
                   },
                   ...prev,
                 ]);
-                await carregarTasquesCP();
-                await carregarDetallTascaCP(tascaId);
-                await carregarDades();
-                await carregarCalendari();
-                setExecutantCerca(false);
-              } else if (data.pas === "ERROR") {
-                setConsoleLogs((prev) => [
-                  {
-                    time: hora,
-                    text: `[ERROR] Error en l'execució del lot: ${data.error || "Error desconegut"}`,
-                    type: "error",
-                  },
-                  ...prev,
-                ]);
-                await carregarTasquesCP();
-                setExecutantCerca(false);
               }
             } catch {
               // Parse error ignorat
@@ -891,8 +865,6 @@ export default function SuperadminCrmPage() {
       }
     } catch (err) {
       console.warn("SSE stream completat o no disponible:", err);
-    } finally {
-      setExecutantCerca(false);
     }
   };
 
@@ -933,47 +905,41 @@ export default function SuperadminCrmPage() {
           vertical: verticalInput.trim(),
           operaris_minims: Number(operarisMinims),
           limit: 5,
-          executar_en_segon_pla: true,
         }),
       });
 
-      const horaInici = new Date().toLocaleTimeString("ca-ES");
-      if (res.status === "EXECUTANT") {
-        setConsoleLogs((prev) => [
-          {
-            time: horaInici,
-            text: `[INICIAT] Lot atòmic registrat (ID: ${res.tasca_id}). Prospecció en segon pla iniciada. Connectant amb la consola SSE...`,
-            type: "info",
-          },
-          ...prev,
-        ]);
-        setTascaSeleccionadaId(res.tasca_id);
-        await carregarTasquesCP();
-        iniciarStreamSSE(res.tasca_id);
-      } else {
-        setConsoleLogs((prev) => [
-          {
-            time: horaInici,
-            text: `[ÈXIT] Cerca finalitzada per al CP ${res.codi_postal}. Trobats: ${res.total_trobats}, Seleccionats: ${res.total_seleccionats}, Descartats: ${res.total_descartats}, Duplicats: ${res.total_duplicats}.`,
-            type: "success",
-          },
-          ...prev,
-        ]);
+      const horaFi = new Date().toLocaleTimeString("ca-ES");
+      setConsoleLogs((prev) => [
+        {
+          time: horaFi,
+          text: `[ÈXIT] Cerca finalitzada per al CP ${res.codi_postal}. Trobats: ${res.total_trobats}, Seleccionats: ${res.total_seleccionats}, Descartats: ${res.total_descartats}, Duplicats: ${res.total_duplicats}.`,
+          type: "success",
+        },
+        ...prev,
+      ]);
 
-        setTascaSeleccionadaId(res.tasca_id);
-        await carregarTasquesCP();
-        await carregarDetallTascaCP(res.tasca_id);
-        await carregarDades();
-        await carregarCalendari();
-        setExecutantCerca(false);
-      }
+      setTascaSeleccionadaId(res.tasca_id);
+      await carregarTasquesCP();
+      await carregarDetallTascaCP(res.tasca_id);
+      await carregarDades();
+      await carregarCalendari();
+      iniciarStreamSSE(res.tasca_id);
     } catch (err: any) {
       const horaErr = new Date().toLocaleTimeString("ca-ES");
       setConsoleLogs((prev) => [
         { time: horaErr, text: `[ERROR] Fallada executant cerca: ${err.message || err}`, type: "error" },
         ...prev,
       ]);
+      // Recarregar les dades de PostgreSQL perquè el backend pot haver completat el lot
+      try {
+        await carregarTasquesCP();
+        await carregarDades();
+        await carregarCalendari();
+      } catch {
+        // Ignorar si falla la recàrrega
+      }
       alert("Error executant cerca: " + (err.message || err));
+    } finally {
       setExecutantCerca(false);
     }
   };
