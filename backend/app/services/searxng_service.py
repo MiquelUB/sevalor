@@ -45,14 +45,13 @@ class SearxngService:
     def __init__(self, base_url: Optional[str] = None) -> None:
         self.base_url = (base_url or getattr(settings, "SEARXNG_URL", "http://localhost:8888")).rstrip("/")
 
-    @retry(stop=stop_after_attempt(2), wait=wait_exponential(multiplier=0.5, min=0.5, max=2.0), reraise=False)
     async def cercar(
         self,
         query: str,
         language: str = "ca",
         engines: str = "google,duckduckgo,qwant",
         max_results: int = 20,
-        timeout: float = 8.0,
+        timeout: float = 3.0,
     ) -> List[Dict[str, Any]]:
         """Executa una cerca contra SearXNG i retorna resultats deduplicats i filtrats."""
         if not query or not query.strip():
@@ -69,11 +68,11 @@ class SearxngService:
             async with httpx.AsyncClient(timeout=timeout) as client:
                 resp = await client.get(f"{self.base_url}/search", params=params)
                 if resp.status_code != 200:
-                    logger.warning("SearXNG ha retornat codi HTTP %s per a query %r", resp.status_code, query)
+                    logger.debug("SearXNG ha retornat codi HTTP %s per a query %r", resp.status_code, query)
                     return []
                 data = resp.json()
         except Exception as e:
-            logger.debug("Error connectant a SearXNG (%s): %s", self.base_url, e)
+            logger.debug("SearXNG no disponible a %s: %s", self.base_url, e)
             return []
 
         bruts = data.get("results", [])
@@ -107,14 +106,7 @@ class SearxngService:
     async def cercar_web_empresa(self, rao_social: str, municipi: str) -> Optional[str]:
         """Cerca específica per trobar la pàgina web oficial d'una empresa censada."""
         q = f'"{rao_social}" {municipi} web'
-        resultats = await self.cercar(q, max_results=3)
+        resultats = await self.cercar(q, max_results=2, timeout=2.5)
         if resultats:
             return resultats[0]["url"]
-
-        # Cerca secundària sense cometes
-        q2 = f"{rao_social} {municipi}"
-        resultats2 = await self.cercar(q2, max_results=3)
-        if resultats2:
-            return resultats2[0]["url"]
-
         return None

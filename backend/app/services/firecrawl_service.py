@@ -1911,13 +1911,21 @@ class FirecrawlMultiChannelService:
                     codi_postal=cp, municipi=municipi, vertical=vertical, limit=15
                 )
                 searx_svc = SearxngService()
-                for inst in instal_ladors:
-                    web = await searx_svc.cercar_web_empresa(
-                        inst["nom_empresa"], inst.get("municipi") or municipi or ""
-                    )
-                    if web:
-                        inst["url"] = web
-                    afegir(inst)
+                sem_web = asyncio.Semaphore(4)
+
+                async def _cercar_web(inst: dict):
+                    async with sem_web:
+                        try:
+                            web = await searx_svc.cercar_web_empresa(
+                                inst["nom_empresa"], inst.get("municipi") or municipi or ""
+                            )
+                            if web:
+                                inst["url"] = web
+                        except Exception:
+                            pass
+                        afegir(inst)
+
+                await asyncio.gather(*(_cercar_web(it) for it in instal_ladors), return_exceptions=True)
             except Exception as e:
                 logger.warning("Cens RASIC no disponible o fallit: %r", e)
 
