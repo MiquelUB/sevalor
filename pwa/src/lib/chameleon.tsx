@@ -1,7 +1,7 @@
 "use client";
 
 import React, { createContext, useContext, useEffect, useState } from "react";
-import { apiFetch } from "@/lib/api";
+import { apiFetch, getAuthToken } from "@/lib/api";
 
 export interface ChameleonBrand {
   tenant_id?: string;
@@ -72,18 +72,22 @@ export function ChameleonProvider({ children }: { children: React.ReactNode }) {
         return;
       }
       try {
-        const tokenRaw = localStorage.getItem("sevalor_auth_token");
-        if (tokenRaw) {
-          const parsed = JSON.parse(tokenRaw);
-          const jwtToken = parsed?.token;
-          if (jwtToken && typeof jwtToken === "string") {
-            const parts = jwtToken.split(".");
-            if (parts.length === 3) {
-              const payload = JSON.parse(atob(parts[1]));
-              if (payload?.is_superadmin || payload?.rol === "SUPERADMIN") {
-                setLoading(false);
-                return;
-              }
+        const userRaw = localStorage.getItem("sevalor_user");
+        if (userRaw) {
+          const userObj = JSON.parse(userRaw);
+          if (userObj?.rol === "SUPERADMIN" || userObj?.is_superadmin) {
+            setLoading(false);
+            return;
+          }
+        }
+        const jwtToken = getAuthToken();
+        if (jwtToken && typeof jwtToken === "string") {
+          const parts = jwtToken.split(".");
+          if (parts.length === 3) {
+            const payload = JSON.parse(atob(parts[1]));
+            if (payload?.is_superadmin || payload?.rol === "SUPERADMIN") {
+              setLoading(false);
+              return;
             }
           }
         }
@@ -138,8 +142,18 @@ export function ChameleonProvider({ children }: { children: React.ReactNode }) {
           applyChameleonCSS(data);
         }
       } catch (err: any) {
-        if (!err?.message?.includes("401") && !err?.message?.includes("403") && !err?.message?.includes("404")) {
-          console.warn("[Chameleon] No s'ha pogut carregar la marca:", err.message);
+        const isExpectedSegregation =
+          err?.status === 401 ||
+          err?.status === 403 ||
+          err?.status === 404 ||
+          err?.message?.includes("401") ||
+          err?.message?.includes("403") ||
+          err?.message?.includes("404") ||
+          err?.message?.includes("Zero-Trust") ||
+          err?.message?.includes("SUPERADMIN");
+
+        if (!isExpectedSegregation) {
+          console.warn("[Chameleon] No s'ha pogut carregar la marca:", err?.message || err);
         }
         setError("Marca no disponible");
       } finally {

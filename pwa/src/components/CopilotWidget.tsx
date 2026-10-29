@@ -12,6 +12,7 @@ export default function CopilotWidget({ isMobile = false }: { isMobile?: boolean
   ]);
   const [carregant, setCarregant] = useState(false);
   const [imatgeB64, setImatgeB64] = useState<string | null>(null);
+  const [executantAccio, setExecutantAccio] = useState(false);
 
   React.useEffect(() => {
     apiFetch<any>("/auth/me")
@@ -25,8 +26,6 @@ export default function CopilotWidget({ isMobile = false }: { isMobile?: boolean
       .catch(() => setHasCopilotIa(true));
   }, []);
 
-  if (hasCopilotIa === false) return null;
-
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
@@ -38,9 +37,6 @@ export default function CopilotWidget({ isMobile = false }: { isMobile?: boolean
     }
   };
 
-
-  
-  const [executantAccio, setExecutantAccio] = useState(false);
   const confirmarAccio = async (actionContext: any, mIdx: number) => {
     setExecutantAccio(true);
     try {
@@ -106,6 +102,8 @@ export default function CopilotWidget({ isMobile = false }: { isMobile?: boolean
       setCarregant(false);
     }
   };
+
+  if (hasCopilotIa === false) return null;
 
   return (
     <>

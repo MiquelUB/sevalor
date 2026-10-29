@@ -44,6 +44,26 @@ export default function GestioComptabilitatPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  const carregarFactures = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const data = await apiFetch<Factura[]>("/gestio/comptabilitat/factures");
+      setFactures(data || []);
+    } catch (err: any) {
+      setError(err.message || "Error al carregar les factures");
+      setFactures([]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (rolActiu !== "ENGINYER") {
+      carregarFactures();
+    }
+  }, [rolActiu]);
+
   // VETO D'ENGINYER (Spec 001 RF-03 / Spec 007 RF-05)
   if (rolActiu === "ENGINYER") {
     return (
@@ -66,24 +86,6 @@ export default function GestioComptabilitatPage() {
       </div>
     );
   }
-
-  const carregarFactures = async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const data = await apiFetch<Factura[]>("/gestio/comptabilitat/factures");
-      setFactures(data || []);
-    } catch (err: any) {
-      setError(err.message || "Error al carregar les factures");
-      setFactures([]);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    carregarFactures();
-  }, []);
 
   const totalFacturat = factures.reduce((acc, f) => acc + (f.liquid_exigible || 0), 0);
 

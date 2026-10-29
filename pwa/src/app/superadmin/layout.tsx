@@ -47,10 +47,6 @@ export default function SuperadminLayout({
     setMobileOpen(false);
   }, [pathname]);
 
-  if (pathname?.startsWith("/superadmin/login")) {
-    return <div className="min-h-screen bg-slate-50 dark:bg-slate-950">{children}</div>;
-  }
-
   useEffect(() => {
     const saved = localStorage.getItem("sevalor_theme");
     if (saved === "light") {
@@ -61,6 +57,10 @@ export default function SuperadminLayout({
       document.documentElement.classList.add("dark");
     }
   }, []);
+
+  if (pathname?.startsWith("/superadmin/login")) {
+    return <div className="min-h-screen bg-slate-50 dark:bg-slate-950">{children}</div>;
+  }
 
   const toggleTheme = () => {
     if (isDark) {
