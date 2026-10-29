@@ -9,6 +9,7 @@ import app.services.prospeccio_validacio as v
 from app.services.prospeccio_validacio import (
     ContextValidat,
     adreca_valida_per_cp,
+    adreca_valida_per_municipi,
     aplicar_regles_dures,
     coincideix_vertical,
     email_sembla_del_nom,
@@ -178,7 +179,10 @@ def test_wallapop_i_milanuncios_no_arriben_a_candidats_a_validar():
     """Comprova que dominis de compravenda/anuncis (Wallapop, Milanuncios, Habitissimo)
     queden bloquejats a la llista negra del servei i mai arriben al procés de validació.
     """
-    from app.services.firecrawl_service import _XARXES_I_DIRECTORIS_GENERICS_IGNORAR, normalitzar_domini
+    from app.services.firecrawl_service import (
+        _XARXES_I_DIRECTORIS_GENERICS_IGNORAR,
+        normalitzar_domini,
+    )
 
     urls_prohibides = [
         "https://es.wallapop.com/item/instalador-lleida-12345",
@@ -198,3 +202,67 @@ def test_directori_amb_patrons_de_marketplace_es_rebutja():
         "CP 25001, CP 25002, CP 25003, CP 25004, CP 25005, CP 25006, CP 25007."
     )
     assert sembla_directori(text_classificats)
+
+
+# ───────────── Proves de flexibilitat d'adreces (Fase 3) ─────────────
+def test_adreca_multilinia_i_via_implicita_prat_instalacions():
+    """Verifica que adreces reals en format multi-línia i espai dur (ex: Prat Instal·lacions) s'accepten."""
+    text_prat = "PRAT INSTAL·LACIONS\nAgustí Duran i Sanpere 10\n25001\xa0 Lleida\nLatitud: 41.61"
+    r = adreca_valida_per_cp(text_prat, "25001")
+    assert r is not None
+    assert "Agustí Duran i Sanpere" in r
+    assert "25001" in r
+    assert "Lleida" in r
+
+
+def test_adreca_valida_per_municipi_poligon_segre():
+    """Verifica que empreses ubicades a naus en polígons limítrofs de Lleida (CP 25191) s'admeten per terme municipal."""
+    text_poligon = "Seu central: Polígon Industrial El Segre, parcel·la 4, 25191 Lleida. Tel +34 973 20 00 11."
+    res = adreca_valida_per_municipi(text_poligon, "Lleida", cps_permesos=["25001", "25002", "25191"])
+    assert res is not None
+    adreca, cp = res
+    assert "Polígon Industrial El Segre" in adreca
+    assert cp == "25191"
+
+
+def test_adreca_valida_per_municipi_sense_cp_escrit():
+    """Verifica que una empresa que citi el carrer i Lleida sense escriure el CP de 5 dígits s'admet pel terme municipal."""
+    text_sense_cp = "Instal·lacions tèrmiques i elèctriques. Carrer Juneda, 71, Lleida. Contacte directori."
+    res = adreca_valida_per_municipi(text_sense_cp, "Lleida")
+    assert res is not None
+    adreca, _ = res
+    assert "Carrer Juneda" in adreca
+    assert "Lleida" in adreca
+
+
+# ───────────── Proves de RASIC i SearXNG (Fases 1 i 2) ─────────────
+def test_rasic_filtra_per_vertical_correctament():
+    """Verifica el mapeig reglamentari de verticals sobre registres RASIC."""
+    from app.services.gencat_rasic_service import _encaixa_amb_vertical
+
+    reg_electric = {"bt_installacions": "Sí", "gas": "No"}
+    reg_clima = {"bt_installacions": "No", "ite_installacions_termiques": "Sí"}
+    reg_gas = {"gas": "Sí", "bt_installacions": "No"}
+
+    assert _encaixa_amb_vertical(reg_electric, "electricista")
+    assert _encaixa_amb_vertical(reg_electric, "baixa tensió")
+    assert not _encaixa_amb_vertical(reg_electric, "gas")
+
+    assert _encaixa_amb_vertical(reg_clima, "climatització")
+    assert _encaixa_amb_vertical(reg_clima, "fred industrial")
+    assert not _encaixa_amb_vertical(reg_clima, "electric")
+
+    assert _encaixa_amb_vertical(reg_gas, "gas")
+
+
+def test_searxng_filtra_dominis_ignorables():
+    """Verifica que SearxngService descarta directoris nacionals, xarxes socials i portals d'anuncis."""
+    from app.services.searxng_service import _es_domini_ignorable
+
+    assert _es_domini_ignorable("https://es.wallapop.com/item/123")
+    assert _es_domini_ignorable("https://www.habitissimo.es/pro/electric")
+    assert _es_domini_ignorable("https://www.milanuncios.com/reformas")
+    assert _es_domini_ignorable("https://www.paginasamarillas.es/b/lleida")
+    assert _es_domini_ignorable("https://es.linkedin.com/in/pep")
+    assert not _es_domini_ignorable("https://www.pratinstalacions.com/")
+    assert not _es_domini_ignorable("https://fontaneriaacosta.es/")

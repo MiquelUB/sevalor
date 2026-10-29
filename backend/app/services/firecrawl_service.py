@@ -29,11 +29,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.models.models import Empresa, SaasExclusioRgpd, SaasLead
+from app.services.gencat_rasic_service import GencatRasicService
 from app.services.prospeccio_validacio import (
     GEOCODE_MODE,
     USER_AGENT,
     Gatekeeper,
     adreca_valida_per_cp,
+    adreca_valida_per_municipi,
     coincideix_vertical,
     cp_geocodificat,
     es_domini_espanyol,
@@ -44,6 +46,7 @@ from app.services.prospeccio_validacio import (
     trobar_gatekeeper,
 )
 from app.services.scraper_domini import adreca_jsonld, descarregar_pagines, osm_per_cp
+from app.services.searxng_service import SearxngService
 
 logger = logging.getLogger("sevalor.crm.firecrawl")
 
@@ -1847,7 +1850,8 @@ class FirecrawlMultiChannelService:
         self, codi_postal: str, vertical: str, limit: int = 10, max_candidats: int = 60,
     ) -> Tuple[List[Dict[str, Any]], Dict[str, int]]:
         """Retorna (candidats_validats, embut). Cap candidat surt d'aquí sense:
-        CP exacte (carrer+número), domini/telèfon d'Espanya, no-directori i vertical.
+        CP o municipi vàlid (carrer+número), domini/telèfon d'Espanya, no-directori i vertical.
+        Processament asíncron en paquets de 5 en 5.
         """
         cp = codi_postal.strip()
         if not re.fullmatch(r"\d{5}", cp):
@@ -1863,16 +1867,17 @@ class FirecrawlMultiChannelService:
                                      headers={"User-Agent": USER_AGENT}) as client:
             brut = (await self._recollir_candidats(client, cp, municipi, vertical))[:max_candidats]
             embut["trobats"] = len(brut)
-            sem = asyncio.Semaphore(4)
+            sem = asyncio.Semaphore(5)
 
             async def un(item):
                 async with sem:
-                    return await self._validar_candidat(client, item, cp, vertical, embut)
+                    return await self._validar_candidat(client, item, cp, municipi, vertical, embut)
 
-            for i in range(0, len(brut), 8):          # lots de 8: ens aturem quan n'hi ha prou
+            # Processament en chunks de 5 per no saturar
+            for i in range(0, len(brut), 5):
                 if len(validats) >= limit:
                     break
-                lot = await asyncio.gather(*(un(it) for it in brut[i:i + 8]), return_exceptions=True)
+                lot = await asyncio.gather(*(un(it) for it in brut[i:i + 5]), return_exceptions=True)
                 for r in lot:
                     if isinstance(r, Exception):
                         logger.warning("candidat fallit: %r", r)
@@ -1888,7 +1893,8 @@ class FirecrawlMultiChannelService:
         out: list[dict] = []
 
         def afegir(it: dict):
-            d = normalitzar_domini(it.get("url", ""))
+            u = it.get("url", "")
+            d = normalitzar_domini(u) if u else (it.get("nom_empresa") or "")
             if (
                 d
                 and d not in vistos
@@ -1897,39 +1903,121 @@ class FirecrawlMultiChannelService:
                 vistos.add(d)
                 out.append(it)
 
-        # 1) OSM/Overpass amb CP exacte (font estructurada)
-        try:
-            for it in await osm_per_cp(client, cp, vertical):
-                afegir(it)
-        except Exception as e:
-            logger.warning("overpass ha fallat: %r", e)
+        # 1) Cens Oficial RASIC (Dades Obertes Gencat) per a Catalunya (08, 17, 25, 43)
+        if cp.startswith(("08", "17", "25", "43")):
+            try:
+                rasic_svc = GencatRasicService(client=client)
+                instal_ladors = await rasic_svc.consultar_instal_ladors(
+                    codi_postal=cp, municipi=municipi, vertical=vertical, limit=15
+                )
+                searx_svc = SearxngService()
+                for inst in instal_ladors:
+                    web = await searx_svc.cercar_web_empresa(
+                        inst["nom_empresa"], inst.get("municipi") or municipi or ""
+                    )
+                    if web:
+                        inst["url"] = web
+                    afegir(inst)
+            except Exception as e:
+                logger.warning("Cens RASIC no disponible o fallit: %r", e)
 
-        # 2) Cerca web: CP entre cometes, SENSE 'OR' i SENSE cerques només per municipi
-        for terme in _expandir_termes_cerca_vertical(vertical)[:3]:
-            consultes = [f'{terme} "{cp}"']
-            if municipi:
-                consultes.append(f"{terme} {cp} {municipi}")
-            for q in consultes:
-                for it in await self._cercar_web_multimotor(q, limit=10):
+        # 2) Cerca web mitjançant SearXNG Privat (Google Web + Maps)
+        try:
+            searx_svc = SearxngService()
+            for terme in _expandir_termes_cerca_vertical(vertical)[:3]:
+                consultes = [f'{terme} "{cp}"']
+                if municipi:
+                    consultes.append(f"{terme} {cp} {municipi}")
+                for q in consultes:
+                    for it in await searx_svc.cercar(q, language="ca", max_results=8):
+                        afegir(it)
+        except Exception as e:
+            logger.debug("SearXNG cerca fallida: %r", e)
+
+        # 3) Fallback Overpass/OSM si el pool encara és curt (< 5)
+        if len(out) < 5:
+            try:
+                for it in await osm_per_cp(client, cp, vertical):
                     afegir(it)
+            except Exception as e:
+                logger.debug("Overpass ha fallat: %r", e)
+
+        # 4) Fallback Multi-motor històric si cal
+        if len(out) < 5:
+            for terme in _expandir_termes_cerca_vertical(vertical)[:2]:
+                q = f'{terme} "{cp}"'
+                for it in await self._cercar_web_multimotor(q, limit=5):
+                    afegir(it)
+
         return out
 
     async def _pagines(self, client: httpx.AsyncClient, url: str):
-        # fallback_js: connecta aquí el scrape de Firecrawl que ja tens (retorna markdown o None)
         async def _fallback(u: str) -> str | None:
             res = await self.raspar_web_markdown(u)
             return res.get("markdown") if res else None
 
         return await descarregar_pagines(client, url, max_pagines=6, fallback_js=_fallback)
 
-    async def _validar_candidat(self, client: httpx.AsyncClient, item: dict, cp: str, vertical: str, embut: Counter):
+    async def _validar_candidat(
+        self,
+        client: httpx.AsyncClient,
+        item: dict,
+        cp: str,
+        municipi: str | None,
+        vertical: str,
+        embut: Counter,
+    ):
         url = item.get("url", "")
+        # Si és un registre oficial del RASIC sense web, s'admet directament amb adreça i CIF oficials
         if not url:
+            if item.get("origen") == "rasic" and item.get("adreca_fisica"):
+                embut["validats_rasic_sense_web"] += 1
+                return {
+                    "nom_empresa": item.get("nom_empresa", ""),
+                    "web_url": None,
+                    "adreca_fisica": item.get("adreca_fisica"),
+                    "cp_verificat": True,
+                    "cp_geocode_retornat": item.get("codi_postal") or cp,
+                    "cp_geocode_coincideix": True,
+                    "cif": item.get("cif"),
+                    "email": None,
+                    "email_empresa": None,
+                    "email_gatekeeper": None,
+                    "telefon": item.get("telefon"),
+                    "telefon_valid": bool(item.get("telefon")),
+                    "gatekeeper": None,
+                    "pagines": [],
+                    "pagines_urls": [],
+                    "web_markdown": f"Empresa censada oficialment al RASIC ({item.get('n_rasic', '')}).",
+                }
             return None
+
         pagines = await self._pagines(client, url)
         if not pagines:
+            # Si ve de RASIC i la web falla, conservem la fitxa oficial
+            if item.get("origen") == "rasic" and item.get("adreca_fisica"):
+                embut["validats_rasic_web_ko"] += 1
+                return {
+                    "nom_empresa": item.get("nom_empresa", ""),
+                    "web_url": url,
+                    "adreca_fisica": item.get("adreca_fisica"),
+                    "cp_verificat": True,
+                    "cp_geocode_retornat": item.get("codi_postal") or cp,
+                    "cp_geocode_coincideix": True,
+                    "cif": item.get("cif"),
+                    "email": None,
+                    "email_empresa": None,
+                    "email_gatekeeper": None,
+                    "telefon": item.get("telefon"),
+                    "telefon_valid": bool(item.get("telefon")),
+                    "gatekeeper": None,
+                    "pagines": [],
+                    "pagines_urls": [url],
+                    "web_markdown": f"Empresa censada al RASIC ({item.get('n_rasic', '')}). Web no disponible.",
+                }
             embut["descarrega_ko"] += 1
             return None
+
         text = "\n".join(p.text for p in pagines)
 
         if sembla_directori(text):
@@ -1939,21 +2027,28 @@ class FirecrawlMultiChannelService:
             embut["no_espanya"] += 1
             return None
 
-        adreca = adreca_valida_per_cp(text, cp) or adreca_jsonld(pagines, cp)
+        # 1. Validació geogràfica (Prioritat 1: CP exacte; Prioritat 2: Municipi / Polígons limítrofs)
+        adreca = item.get("adreca_fisica") or adreca_valida_per_cp(text, cp) or adreca_jsonld(pagines, cp)
+        cp_detectat = item.get("codi_postal") or cp
+        if not adreca and municipi:
+            mun_res = adreca_valida_per_municipi(text, municipi)
+            if mun_res:
+                adreca, cp_detectat = mun_res
+
         if not adreca:
             embut["cp_no_coincideix"] += 1
             return None
 
-        cp_geo = await cp_geocodificat(client, adreca)       # CP segons Nominatim (None = no ho sap)
-        cp_geo_coincideix = None if cp_geo is None else (cp_geo == cp)   # tri-estat: True / False / None
+        cp_geo = await cp_geocodificat(client, adreca)
+        cp_geo_coincideix = None if cp_geo is None else (cp_geo == cp or cp_geo == cp_detectat)
         if cp_geo_coincideix is False:
             embut["cp_geocode_difereix"] += 1
             if GEOCODE_MODE == "descartar":
                 return None
         elif cp_geo_coincideix is None:
-            embut["cp_geocode_desconegut"] += 1             # no penalitza, però es compta
+            embut["cp_geocode_desconegut"] += 1
 
-        if not coincideix_vertical(text, vertical):
+        if not item.get("origen") == "rasic" and not coincideix_vertical(text, vertical):
             embut["vertical"] += 1
             return None
 
@@ -1964,28 +2059,31 @@ class FirecrawlMultiChannelService:
         ids = ids_fiscals_valids(text)
         tels = sorted(telefons_es(text))
 
+        cif_final = item.get("cif") or (ids[0] if ids else None)
+        tel_final = item.get("telefon") or (tels[0] if tels else None)
+
         if gk is None:
-            embut["admesos_sense_gatekeeper"] += 1          # Candidats amb CP i vertical admesos provisionalment sense gatekeeper
-            embut["sense_gatekeeper"] += 1                  # Mètrica d'auditoria per avaluar PERMET_SENSE_GATEKEEPER
-            if not tels:
+            embut["admesos_sense_gatekeeper"] += 1
+            embut["sense_gatekeeper"] += 1
+            if not tel_final:
                 embut["sense_gatekeeper_sense_telefon"] += 1
 
         embut["validats"] += 1
         return {
-            "nom_empresa": _deduir_nom_empresa_de_titol_i_domini(item.get("title", ""), url),
+            "nom_empresa": item.get("nom_empresa") or _deduir_nom_empresa_de_titol_i_domini(item.get("title", ""), url),
             "web_url": url,
             "adreca_fisica": adreca,
             "cp_verificat": True,
-            "cp_geocode_retornat": cp_geo,                  # CP segons Nominatim (None si no ho sap)
-            "cp_geocode_coincideix": cp_geo_coincideix,     # True / False / None
-            "cif": ids[0] if ids else None,
+            "cp_geocode_retornat": cp_geo or cp_detectat,
+            "cp_geocode_coincideix": cp_geo_coincideix,
+            "cif": cif_final,
             "email": emails.get("email_principal"),
             "email_empresa": emails.get("email_empresa"),
             "email_gatekeeper": emails.get("email_gatekeeper"),
-            "telefon": tels[0] if tels else None,
-            "telefon_valid": bool(tels),
-            "gatekeeper": gk,                       # Gatekeeper | None (amb font i cita)
-            "pagines": pagines,                     # per construir_context() i per auditar
+            "telefon": tel_final,
+            "telefon_valid": bool(tel_final),
+            "gatekeeper": gk,
+            "pagines": pagines,
             "pagines_urls": [p.url for p in pagines],
             "web_markdown": text,
         }

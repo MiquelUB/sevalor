@@ -182,6 +182,23 @@ services:
     security_opt:
       - no-new-privileges:true
 
+  # 10. Metabuscador Sobirà Privat: SearXNG (Google Web + Maps en format JSON, 0 €)
+  searxng:
+    image: searxng/searxng:latest
+    container_name: sevalor_searxng
+    restart: always
+    environment:
+      - SEARXNG_BASE_URL=http://searxng:8080/
+      - SEARXNG_SECRET=${SEARXNG_SECRET:-sevalor-searxng-internal-secret-token-change-in-prod}
+    volumes:
+      - ./infra/searxng:/etc/searxng:ro
+    ports:
+      - "127.0.0.1:8888:8080"
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp
+
 volumes:
   sevalor_pgdata:
   sevalor_stalwart_data:

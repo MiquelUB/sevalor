@@ -48,24 +48,89 @@ RE_VIA = re.compile(
     re.I,
 )
 
+RE_IMPLICIT_LINE = re.compile(
+    r"(?:^|[\r\n]+)\s*([A-ZÀ-ÖØ-Ý][^\r\n]{2,70}?\s+(?:\d{1,4}[a-zA-Z]?|s/n))\s*(?:$|[\r\n]+)",
+    re.I,
+)
+
+RE_NO_STREET_WORDS = re.compile(
+    r"\b(?:sl|sa|s\.l|s\.a|cif|nif|copyright|©|\(c\)|todos|tots|derechos|drets)\b",
+    re.I,
+)
+
 
 def adreca_valida_per_cp(text: str, cp: str) -> str | None:
     """
     Retorna l'adreça només si hi ha via + número (o s/n) + CP EXACTE.
     Mai fa fallback al municipi: '25001 Lleida' tot sol NO és una adreça.
+    Suporta vies explícites (carrer, avda, etc.) i línies d'adreça implícites (ex: Prat Instal·lacions).
     """
     for m in re.finditer(rf"(?<!\d){re.escape(cp)}(?!\d)", text or ""):
-        ini = max(0, m.start() - 120)
+        ini = max(0, m.start() - 140)
         prefix = text[ini:m.start()]
+        via_start = None
+
+        # 1. Cerca via explícita (ex: Carrer Major 12)
         via = None
         for via in RE_VIA.finditer(prefix):
             pass  # ens quedem amb l'última via abans del CP
         if via and re.search(r"\d|s/n", prefix[via.end():], re.I):
-            # després del CP, només el municipi (fins a 3 paraules amb majúscula, a la mateixa línia)
-            resta = re.match(r"[ \t]+[A-ZÀ-ÖØ-Ý][^\s,;|.]*(?:[ \t]+[A-ZÀ-ÖØ-Ý][^\s,;|.]*){0,2}",
-                             text[m.end():])
+            via_start = via.start()
+        else:
+            # 2. Cerca via implícita en format multi-línia (ex: Agustí Duran i Sanpere 10\n25001)
+            for im in RE_IMPLICIT_LINE.finditer(prefix):
+                sub = im.group(1).strip()
+                if not RE_NO_STREET_WORDS.search(sub) and re.search(r"\d|s/n", sub, re.I):
+                    via_start = im.start(1)
+
+        if via_start is not None:
+            # després del CP, només el municipi (fins a 3 paraules amb majúscula, a la mateixa línia o amb espai dur)
+            resta = re.match(
+                r"[ \t\xa0]+[A-ZÀ-ÖØ-Ý][^\s,;|.]*(?:[ \t\xa0]+[A-ZÀ-ÖØ-Ý][^\s,;|.]*){0,2}",
+                text[m.end():],
+            )
             fi = m.end() + (resta.end() if resta else 0)
-            return " ".join(text[ini + via.start(): fi].split())
+            return " ".join(text[ini + via_start: fi].split())
+    return None
+
+
+def adreca_valida_per_municipi(
+    text: str,
+    municipi: str,
+    cps_permesos: list[str] | None = None,
+) -> tuple[str, str] | None:
+    """
+    Cerca una adreça física vàlida (via + número) dins del terme municipal sol·licitat.
+    Admet:
+      - Qualsevol CP del municipi pertanyent a cps_permesos (ex: naus a polígons 25191 de Lleida).
+      - O via + número seguida del nom del municipi.
+    Retorna (adreca_completa, cp_detectat) o None.
+    """
+    if not text or not municipi:
+        return None
+
+    # 1. Si tenim llista de CPs del municipi, provar cadascun
+    if cps_permesos:
+        for c in cps_permesos:
+            res = adreca_valida_per_cp(text, c)
+            if res:
+                return (res, c)
+
+    # 2. Cerca de via + número + nom del municipi explícit al text
+    mun_pattern = re.escape(municipi.strip())
+    for m in re.finditer(rf"\b{mun_pattern}\b", text, re.I):
+        ini = max(0, m.start() - 140)
+        prefix = text[ini:m.start()]
+        via = None
+        for via in RE_VIA.finditer(prefix):
+            pass
+        if via and re.search(r"\d|s/n", prefix[via.end():], re.I):
+            fi = m.end()
+            cp_match = re.search(r"\b\d{5}\b", text[ini + via.start(): fi + 10])
+            cp_trobat = cp_match.group(0) if cp_match else ""
+            adreca = " ".join(text[ini + via.start(): fi].split())
+            return (adreca, cp_trobat)
+
     return None
 
 

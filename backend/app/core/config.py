@@ -71,8 +71,9 @@ class Settings(BaseSettings):
     # Bot de Telegram
     TELEGRAM_BOT_TOKEN: str | None = None
 
-    # Motor de Prospecció, Firecrawl i OpenRouter (DeepSeek)
+    # Motor de Prospecció, Firecrawl, SearXNG i OpenRouter (DeepSeek)
     FIRECRAWL_API_URL: str = "http://localhost:3002"
+    SEARXNG_URL: str = "http://localhost:8888"
     OPENROUTER_API_KEY: str | None = None
     OPENROUTER_MODEL: str = "deepseek/deepseek-v4.1-flash"
     OPENROUTER_PROVIDER_ONLY: List[str] = ["baidu/fp8"]

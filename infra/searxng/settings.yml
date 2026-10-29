@@ -1,0 +1,46 @@
+# Configurat per a Sevalor Suite (motor de cerca intern privat)
+use_default_settings: true
+
+general:
+  debug: false
+  instance_name: "Sevalor Search"
+  donation_url: false
+  contact_url: false
+
+server:
+  port: 8080
+  bind_address: "0.0.0.0"
+  secret_key: "sevalor-searxng-internal-secret-token-change-in-prod"
+  base_url: false
+  image_proxy: false
+  http_protocol_version: "1.1"
+
+search:
+  safe_search: 0
+  autocomplete: ""
+  default_lang: "ca"
+  languages:
+    - all
+    - ca
+    - es
+  formats:
+    - html
+    - json
+
+engines:
+  - name: google
+    engine: google
+    shortcut: g
+    use_mobile_ui: false
+  - name: google maps
+    engine: google_maps
+    shortcut: gm
+  - name: duckduckgo
+    engine: duckduckgo
+    shortcut: ddg
+  - name: qwant
+    engine: qwant
+    shortcut: qw
+  - name: bing
+    engine: bing
+    disabled: true

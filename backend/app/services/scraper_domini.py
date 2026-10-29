@@ -75,9 +75,13 @@ def _pagina(url: str, html: str) -> Pagina:
 
 # ───────────────────────── HTTP robust ─────────────────────────
 async def _get(client: httpx.AsyncClient, url: str, intents: int = 3) -> str | None:
+    headers_extra = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Accept-Language": "ca,es;q=0.9,en;q=0.8",
+    }
     for n in range(intents):
         try:
-            r = await client.get(url, timeout=15)
+            r = await client.get(url, timeout=15, headers=headers_extra)
             if r.status_code in (429, 500, 502, 503, 504):
                 await asyncio.sleep(2 ** n)
                 continue
@@ -158,6 +162,15 @@ async def descarregar_pagines(
             return []
         pagines = [_pagina(base + "/", home)]
         urls = [u for u in pagines_utils(home, base)[: max_pagines - 1] if await _comprovar_robots_txt(client, base, u)]
+        if len(urls) < 3:
+            canonica_candidats = [
+                f"{base}/contacte", f"{base}/contacto", f"{base}/contact",
+                f"{base}/avis-legal", f"{base}/aviso-legal", f"{base}/legal"
+            ]
+            for c_url in canonica_candidats:
+                if c_url not in urls and len(urls) < max_pagines - 1:
+                    if await _comprovar_robots_txt(client, base, c_url):
+                        urls.append(c_url)
         htmls = await asyncio.gather(*(_get(client, u) for u in urls))
         pagines += [_pagina(u, h) for u, h in zip(urls, htmls) if h]
 
