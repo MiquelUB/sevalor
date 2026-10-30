@@ -12,6 +12,7 @@ from app.core.db import get_db
 from app.models.models import Empresa
 
 router = APIRouter(prefix="/public/tenant", tags=["Tenant Públic"])
+compat_public_router = APIRouter(prefix="/public", tags=["Tenant Públic Compat"])
 
 
 class PublicTenantResponse(BaseModel):
@@ -35,6 +36,8 @@ class PublicTenantResponse(BaseModel):
 
 @router.get("/resolve", response_model=PublicTenantResponse)
 @router.get("/tenant-config", response_model=PublicTenantResponse)
+@compat_public_router.get("/tenant-config", response_model=PublicTenantResponse)
+@compat_public_router.get("/tenant/resolve", response_model=PublicTenantResponse)
 async def resoldre_tenant_per_domini(
     request: Request,
     host: Optional[str] = Query(None, description="Domini explícit a resoldre (opcional)"),

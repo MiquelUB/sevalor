@@ -17,6 +17,20 @@ const nextConfig = {
       }
     ];
   },
+  async redirects() {
+    return [
+      {
+        source: '/operaris',
+        destination: '/operari',
+        permanent: true,
+      },
+      {
+        source: '/operaris/:path*',
+        destination: '/operari/:path*',
+        permanent: true,
+      },
+    ];
+  },
   async headers() {
     return [
       {
