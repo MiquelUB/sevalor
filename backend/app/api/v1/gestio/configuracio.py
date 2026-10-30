@@ -260,15 +260,17 @@ def validar_permisos_gestio(
 ):
     """Aplica la matriu de permisos de Spec 011."""
     rol = claims.get("rol", "").upper()
+    is_impersonation = bool(claims.get("is_impersonation", False))
 
-    # Blindatge total davant de Superadmin (RF-22)
-    if rol == "SUPERADMIN":
+    # Blindatge total davant de Superadmin directe sense impersonació (RF-22)
+    if rol == "SUPERADMIN" and not is_impersonation:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="HTTP 403 Forbidden: El Superadmin té blindat l'accés a les dades corporatives de l'empresa",
+            detail="HTTP 403 Forbidden: El Superadmin té blindat l'accés a les dades corporatives de l'empresa sense sessió d'impersonació",
         )
 
-    if nomes_boss and rol != "BOSS":
+    # Si està en sessió d'impersonació autoritzada del tenant, actua amb delegació de gestió
+    if nomes_boss and rol != "BOSS" and not (rol == "SUPERADMIN" and is_impersonation):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="HTTP 403 Forbidden: Aquesta acció està reservada exclusivament al rol Boss",

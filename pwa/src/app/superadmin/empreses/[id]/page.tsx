@@ -39,6 +39,9 @@ import {
   Palette,
   RefreshCw,
   Lock,
+  KeyRound,
+  Copy,
+  X,
 } from "lucide-react";
 import { apiFetch, getAuthToken, setAuthToken } from "@/lib/api";
 
@@ -728,6 +731,55 @@ export default function EmpresaDetailPage({ params }: { params: { id: string } }
     }
   };
 
+  // Gestió de Credencials i Enllaç d'Activació del BOSS
+  const [modalBossOpen, setModalBossOpen] = useState(false);
+  const [bossData, setBossData] = useState<any>(null);
+  const [loadingBoss, setLoadingBoss] = useState(false);
+  const [newBossPassword, setNewBossPassword] = useState("");
+  const [settingPassword, setSettingPassword] = useState(false);
+  const [bossMsg, setBossMsg] = useState<string | null>(null);
+
+  const handleOpenBossModal = async () => {
+    setLoadingBoss(true);
+    setBossMsg(null);
+    setModalBossOpen(true);
+    try {
+      const res = await apiFetch<any>(`/superadmin/tenants/${params.id}/activacio-boss`, {
+        method: "POST",
+      });
+      setBossData(res);
+    } catch (e: any) {
+      setBossMsg("Error obtenint dades del Boss: " + (e.message || "Desconegut"));
+    } finally {
+      setLoadingBoss(false);
+    }
+  };
+
+  const handleSetBossPassword = async () => {
+    if (!newBossPassword || newBossPassword.length < 8) {
+      alert("La contrasenya ha de tenir mínim 8 caràcters");
+      return;
+    }
+    setSettingPassword(true);
+    setBossMsg(null);
+    try {
+      const res = await apiFetch<any>(`/superadmin/tenants/${params.id}/set-boss-password`, {
+        method: "POST",
+        body: JSON.stringify({ password: newBossPassword }),
+      });
+      setBossMsg(res.missatge || "Contrasenya establerta correctament!");
+      setNewBossPassword("");
+      const refresh = await apiFetch<any>(`/superadmin/tenants/${params.id}/activacio-boss`, {
+        method: "POST",
+      });
+      setBossData(refresh);
+    } catch (e: any) {
+      setBossMsg("Error establint contrasenya: " + (e.message || "Desconegut"));
+    } finally {
+      setSettingPassword(false);
+    }
+  };
+
   const handleImpersonate = async () => {
     if (!confirm("Vols iniciar sessió com a administrador tècnic per a aquest tenant? (Màx 2 hores, només lectura sobre finances)")) {
       return;
@@ -748,6 +800,9 @@ export default function EmpresaDetailPage({ params }: { params: { id: string } }
           })
         );
         localStorage.setItem("sevalor_tenant_id", params.id);
+        if (typeof sessionStorage !== "undefined") {
+          sessionStorage.setItem("sevalor_tenant_id", params.id);
+        }
         window.location.href = "/gestio";
       }
     } catch (e: any) {
@@ -861,6 +916,15 @@ export default function EmpresaDetailPage({ params }: { params: { id: string } }
           >
             <ArchiveRestore className="w-3.5 h-3.5" />
             <span>Recuperar Dades (.zip)</span>
+          </button>
+
+          <button
+            onClick={handleOpenBossModal}
+            className="px-3 py-2 rounded-xl bg-amber-50 hover:bg-amber-100 dark:bg-amber-950/60 dark:hover:bg-amber-900/60 text-amber-800 dark:text-amber-200 text-xs font-mono font-bold flex items-center gap-1.5 border border-amber-200 dark:border-amber-800 transition-colors shadow-sm"
+            title="Veure enllaç d'activació i credencials del BOSS"
+          >
+            <KeyRound className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400" />
+            <span>Credencials Boss</span>
           </button>
 
           <button
@@ -2308,6 +2372,131 @@ export default function EmpresaDetailPage({ params }: { params: { id: string } }
           </div>
         </div>
       </div>
+
+      {/* MODAL DE CREDENCIALS I ACTIVACIÓ DEL BOSS */}
+      {modalBossOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-in fade-in">
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl max-w-lg w-full p-6 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-200 dark:border-slate-800">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-lg bg-amber-500/10 text-amber-500 flex items-center justify-center font-bold">
+                  <KeyRound className="w-4 h-4" />
+                </div>
+                <h3 className="text-sm font-bold text-slate-800 dark:text-slate-100">
+                  Credencials i Activació del Gerent (BOSS)
+                </h3>
+              </div>
+              <button
+                onClick={() => setModalBossOpen(false)}
+                className="p-1 rounded-lg text-slate-400 hover:text-slate-200 transition-colors"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {loadingBoss ? (
+              <div className="py-8 text-center text-xs text-slate-400 font-mono">
+                Carregant dades del Boss...
+              </div>
+            ) : bossData?.boss ? (
+              <div className="space-y-4 text-xs font-mono">
+                {bossMsg && (
+                  <div className="p-3 rounded-lg bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-300 dark:border-emerald-800 text-emerald-800 dark:text-emerald-200">
+                    {bossMsg}
+                  </div>
+                )}
+
+                <div className="bg-slate-50 dark:bg-slate-800/60 p-3.5 rounded-xl border border-slate-200 dark:border-slate-700/60 space-y-2">
+                  <div className="flex justify-between">
+                    <span className="text-slate-500">Nom:</span>
+                    <span className="font-bold text-slate-800 dark:text-slate-200">
+                      {bossData.boss.nom} {bossData.boss.cognoms}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-500">Email de Login:</span>
+                    <span className="font-bold text-slate-800 dark:text-slate-200">
+                      {bossData.boss.email}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-500">NIF:</span>
+                    <span className="font-bold text-slate-800 dark:text-slate-200">
+                      {bossData.boss.nif}
+                    </span>
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <span className="text-slate-500">Estat Login:</span>
+                    <span
+                      className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                        bossData.boss.te_password
+                          ? "bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30"
+                          : "bg-amber-100 dark:bg-amber-950 text-amber-700 dark:text-amber-300 border border-amber-500/30"
+                      }`}
+                    >
+                      {bossData.boss.te_password ? "Contrasenya Activa" : "Pendent d'Activació"}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="text-[11px] font-bold text-slate-600 dark:text-slate-300">
+                    Enllaç d'Activació 2FA (vàlid per 24 hores):
+                  </label>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="text"
+                      readOnly
+                      value={bossData.enllac_activacio || ""}
+                      className="flex-1 bg-slate-100 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg p-2 text-[11px] font-mono text-slate-800 dark:text-slate-200 truncate select-all"
+                    />
+                    <button
+                      onClick={() => {
+                        navigator.clipboard.writeText(bossData.enllac_activacio);
+                        setBossMsg("Enllaç d'activació copiat!");
+                      }}
+                      className="px-3 py-2 bg-slate-700 hover:bg-slate-600 text-white rounded-lg text-xs font-bold shrink-0 flex items-center gap-1"
+                      title="Copiar Enllaç"
+                    >
+                      <Copy className="w-3.5 h-3.5" />
+                      <span>Copiar</span>
+                    </button>
+                  </div>
+                  <p className="text-[10px] text-slate-400">
+                    El gerent obre aquest enllaç per definir la seva contrasenya i activar el 2FA.
+                  </p>
+                </div>
+
+                <div className="pt-3 border-t border-slate-200 dark:border-slate-800 space-y-2">
+                  <label className="text-[11px] font-bold text-slate-600 dark:text-slate-300">
+                    O assignar directament una contrasenya nova des d'aquí:
+                  </label>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="password"
+                      placeholder="Mínim 8 caràcters..."
+                      value={newBossPassword}
+                      onChange={(e) => setNewBossPassword(e.target.value)}
+                      className="flex-1 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg p-2 text-xs text-slate-800 dark:text-slate-200"
+                    />
+                    <button
+                      onClick={handleSetBossPassword}
+                      disabled={settingPassword || newBossPassword.length < 8}
+                      className="px-3 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white rounded-lg text-xs font-bold shrink-0"
+                    >
+                      {settingPassword ? "Desant..." : "Assignar"}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div className="py-4 text-center text-xs text-rose-400 font-mono">
+                {bossMsg || "No s'han pogut carregar les dades del Boss."}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

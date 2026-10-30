@@ -12,7 +12,9 @@ import zipfile
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
+import bcrypt
 import httpx
+import jwt
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field, model_validator
@@ -1583,6 +1585,98 @@ async def impersonate_tenant(
         "rol": "SUPERADMIN",
         "empresa_id": str(empresa.id),
         "is_impersonation": True,
+    }
+
+
+class SetBossPasswordRequest(BaseModel):
+    password: str = Field(..., min_length=8)
+
+
+@router.api_route("/{empresa_id}/activacio-boss", methods=["GET", "POST"], response_model=Dict[str, Any])
+async def regenerar_activacio_boss(
+    empresa_id: str,
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+    claims: Dict[str, Any] = Depends(require_roles(["SUPERADMIN"])),
+) -> Dict[str, Any]:
+    """Genera o recupera un enllaç d'activació 2FA per al compte BOSS del tenant."""
+    try:
+        emp_uuid = uuid.UUID(empresa_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="UUID invàlid")
+
+    emp_res = await db.execute(select(Empresa).where(Empresa.id == emp_uuid))
+    emp = emp_res.scalars().first()
+    if not emp:
+        raise HTTPException(status_code=404, detail="Empresa no trobada")
+
+    boss_res = await db.execute(
+        select(Usuari).where(
+            Usuari.empresa_id == emp_uuid,
+            Usuari.rol == "BOSS",
+        ).order_by(Usuari.created_at.asc())
+    )
+    boss = boss_res.scalars().first()
+    if not boss:
+        raise HTTPException(status_code=404, detail="No s'ha trobat cap usuari BOSS per a aquesta empresa")
+
+    expire = datetime.now(timezone.utc) + timedelta(hours=24)
+    payload_jwt = {
+        "sub": str(boss.id),
+        "action": "activate",
+        "exp": expire,
+    }
+    jwt_token = jwt.encode(payload_jwt, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
+    domini_base = emp.domini_custom or (f"{emp.subdomini}.projectexinoxano.cat" if emp.subdomini else "sevalor.app")
+    enllac = f"https://{domini_base}/activacio?token={jwt_token}"
+
+    return {
+        "status": "OK",
+        "boss": {
+            "id": str(boss.id),
+            "nom": boss.nom,
+            "cognoms": boss.cognoms,
+            "email": boss.email,
+            "nif": boss.nif,
+            "totp_activat": bool(boss.totp_activat),
+            "te_password": bool(boss.password_hash),
+        },
+        "enllac_activacio": enllac,
+        "token": jwt_token,
+        "caducitat": expire.isoformat(),
+    }
+
+
+@router.post("/{empresa_id}/set-boss-password", response_model=Dict[str, Any])
+async def establir_password_boss(
+    empresa_id: str,
+    payload: SetBossPasswordRequest,
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+    claims: Dict[str, Any] = Depends(require_roles(["SUPERADMIN"])),
+) -> Dict[str, Any]:
+    """Estableix directament la contrasenya del BOSS per si no es fa servir l'enllaç d'activació."""
+    try:
+        emp_uuid = uuid.UUID(empresa_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="UUID invàlid")
+
+    boss_res = await db.execute(
+        select(Usuari).where(
+            Usuari.empresa_id == emp_uuid,
+            Usuari.rol == "BOSS",
+        ).order_by(Usuari.created_at.asc())
+    )
+    boss = boss_res.scalars().first()
+    if not boss:
+        raise HTTPException(status_code=404, detail="No s'ha trobat cap usuari BOSS per a aquesta empresa")
+
+    hashed = bcrypt.hashpw(payload.password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+    boss.password_hash = hashed
+    await db.commit()
+
+    return {
+        "status": "OK",
+        "missatge": f"Contrasenya actualitzada correctament per a {boss.email}",
+        "email": boss.email,
     }
 
 

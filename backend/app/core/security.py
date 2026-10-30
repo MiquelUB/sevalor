@@ -66,11 +66,15 @@ def require_roles(allowed_roles: List[str]) -> Callable:
     def role_checker(claims: Dict[str, Any] = Depends(get_current_user_claims)) -> Dict[str, Any]:
         user_role = claims.get("rol", "").upper()
 
-        # El rol SUPERADMIN no té accés a dades de gestió, excepte per rutes específiques
+        # Si és una sessió d'impersonació autoritzada del Superadmin per a un tenant (Spec 022)
+        if user_role == "SUPERADMIN" and claims.get("is_impersonation"):
+            return claims
+
+        # El rol SUPERADMIN directe (sense impersonació) no té accés a dades de gestió, excepte per rutes específiques
         if user_role == "SUPERADMIN" and "SUPERADMIN" not in [r.upper() for r in allowed_roles]:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="El SUPERADMIN no pot accedir a les dades de gestió del tenant.",
+                detail="El SUPERADMIN no pot accedir a les dades de gestió del tenant sense sessió d'impersonació.",
             )
 
         if user_role not in [r.upper() for r in allowed_roles]:
