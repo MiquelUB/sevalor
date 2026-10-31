@@ -9,6 +9,7 @@ import {
   useGestio,
 } from "@/lib/gestio-context";
 import { clearAuthToken, setAuthToken, apiFetch } from "@/lib/api";
+import { IMPERSONATION_RETURN_KEY } from "@/lib/impersonation";
 import {
   Shield,
   Search,
@@ -278,6 +279,14 @@ function GestioLayoutContent({ children }: { children: React.ReactNode }) {
                   <span>Impersonació: {empresa?.nom || (usuari as any)?.empresa_nom || "Tenant Actiu"}</span>
                   <button
                     onClick={() => {
+                      // Impersonació al domini propi de l'empresa: netejar aquí i tornar al host d'admin
+                      const returnUrl = localStorage.getItem(IMPERSONATION_RETURN_KEY);
+                      if (returnUrl && /^https:\/\/[^/]+\/superadmin\//.test(returnUrl)) {
+                        clearAuthToken();
+                        localStorage.removeItem(IMPERSONATION_RETURN_KEY);
+                        window.location.href = returnUrl;
+                        return;
+                      }
                       const superToken = localStorage.getItem("sevalor_superadmin_token");
                       if (superToken) {
                         setAuthToken(superToken);

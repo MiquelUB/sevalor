@@ -44,7 +44,8 @@ import {
   Copy,
   X,
 } from "lucide-react";
-import { apiFetch, getAuthToken, setAuthToken } from "@/lib/api";
+import { apiFetch, getAuthToken } from "@/lib/api";
+import { iniciarImpersonacio } from "@/lib/impersonation";
 
 interface EquipIaItem {
   nom: string;
@@ -787,33 +788,8 @@ export default function EmpresaDetailPage({ params }: { params: { id: string } }
       return;
     }
     try {
-      const currentToken = getAuthToken();
-      if (currentToken) {
-        localStorage.setItem("sevalor_superadmin_token", currentToken);
-      }
-      const data = await apiFetch<any>(`/superadmin/tenants/${params.id}/impersonate`, {
-        method: "POST",
-      });
-      if (data?.access_token) {
-        const actualEmpresaId = data.empresa_id || params.id;
-        const tenantNom = tenant?.nom || tenant?.rao_social || nomEmpresa || "";
-        setAuthToken(data.access_token);
-        localStorage.setItem(
-          "sevalor_user",
-          JSON.stringify({
-            ...data,
-            is_impersonation: true,
-            empresa_id: actualEmpresaId,
-            empresa_nom: tenantNom,
-            rol: "SUPERADMIN",
-          })
-        );
-        localStorage.setItem("sevalor_tenant_id", actualEmpresaId);
-        if (typeof sessionStorage !== "undefined") {
-          sessionStorage.setItem("sevalor_tenant_id", actualEmpresaId);
-        }
-        window.location.href = "/gestio";
-      }
+      const tenantNom = tenant?.nom || tenant?.rao_social || nomEmpresa || "";
+      await iniciarImpersonacio(tenant?.id || params.id, tenantNom);
     } catch (e: any) {
       alert("Error d'impersonació: " + (e.message || "Desconegut"));
     }

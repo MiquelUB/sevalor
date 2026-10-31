@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 import bcrypt
 import jwt
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, Field
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 from sqlalchemy import func, or_, select, text
@@ -400,3 +400,83 @@ async def completar_activacio(
         "message": "El vostre compte de gerència ha estat activat satisfactòriament. Ja podeu iniciar sessió.",
         "redirect": "/gestio/login",
     }
+
+
+class IntercanviImpersonacioRequest(BaseModel):
+    code: str = Field(..., min_length=20, max_length=128, pattern=r"^[A-Za-z0-9_-]+$")
+
+
+class IntercanviImpersonacioResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    rol: str = "SUPERADMIN"
+    empresa_id: str
+    empresa_nom: str = ""
+    is_impersonation: bool = True
+    return_url: str = ""
+
+
+@router.post("/impersonacio/intercanvi", response_model=IntercanviImpersonacioResponse)
+@limiter_login.limit("10/minute")
+async def intercanviar_codi_impersonacio(
+    request: Request, payload_in: IntercanviImpersonacioRequest
+) -> IntercanviImpersonacioResponse:
+    """Consumeix un codi d'un sol ús generat pel Superadmin i retorna el JWT d'impersonació.
+
+    - El codi és opac (256 bits), viu 60 s a Redis i es consumeix atòmicament (GETDEL).
+    - Només es pot bescanviar des del host de l'empresa impersonada.
+    """
+    import json
+
+    from app.api.v1.superadmin.tenants import IMPERSONATION_HANDOFF_PREFIX
+    from app.core.redis import get_redis_client
+    from app.middleware.tenant import resoldre_empresa_id_per_host
+
+    no_valid = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Codi d'impersonació invàlid o caducat.",
+    )
+
+    client = await get_redis_client()
+    if not client:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Servei de sessions no disponible temporalment.",
+        )
+
+    raw = await client.getdel(f"{IMPERSONATION_HANDOFF_PREFIX}{payload_in.code}")
+    if not raw:
+        raise no_valid
+
+    try:
+        dades = json.loads(raw)
+        token = str(dades["token"])
+        empresa_id = str(dades["empresa_id"])
+    except (ValueError, KeyError, TypeError):
+        raise no_valid
+
+    # El token ha de ser un JWT d'impersonació vàlid i coherent amb el codi
+    try:
+        claims = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+    except jwt.PyJWTError:
+        raise no_valid
+    if not claims.get("is_impersonation") or str(claims.get("empresa_id")) != empresa_id:
+        raise no_valid
+
+    # Vinculació al host: el codi només es pot bescanviar al domini de l'empresa impersonada
+    host = str(getattr(request.state, "tenant_host", "") or "")
+    if host not in ("localhost", "127.0.0.1", "testserver", "test", ""):
+        host_empresa_id = await resoldre_empresa_id_per_host(host)
+        if str(host_empresa_id or "") != empresa_id:
+            logger.warning("Intent de bescanvi d'impersonació des d'un host no coincident: %s", host)
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Aquest codi d'impersonació no és vàlid per a aquest domini.",
+            )
+
+    return IntercanviImpersonacioResponse(
+        access_token=token,
+        empresa_id=empresa_id,
+        empresa_nom=str(dades.get("empresa_nom") or ""),
+        return_url=str(dades.get("return_url") or ""),
+    )

@@ -26,7 +26,8 @@ import {
   HardHat,
   Target,
 } from "lucide-react";
-import { clearAuthToken, getAuthToken, setAuthToken, apiFetch } from "@/lib/api";
+import { clearAuthToken, apiFetch } from "@/lib/api";
+import { iniciarImpersonacio } from "@/lib/impersonation";
 
 export default function SuperadminLayout({
   children,
@@ -99,45 +100,18 @@ export default function SuperadminLayout({
         return;
       }
 
-      let selectedTenant = tenants.find(
+      const selectedTenant = tenants.find(
         (t) => t.id === targetTenantId || t.subdomini === targetTenantId
       );
 
       if (!selectedTenant) {
-        selectedTenant = tenants[0];
+        alert("Selecciona primer una empresa a /superadmin/empreses per iniciar la impersonació.");
+        router.push("/superadmin/empreses");
+        return;
       }
 
-      const finalTenantId = String(selectedTenant.id);
       targetTenantName = selectedTenant.nom || selectedTenant.rao_social || selectedTenant.subdomini;
-
-      // Desar token del Superadmin per poder restaurar sessió al sortir
-      const currentToken = getAuthToken();
-      if (currentToken) {
-        localStorage.setItem("sevalor_superadmin_token", currentToken);
-      }
-
-      const data = await apiFetch<any>(`/superadmin/tenants/${finalTenantId}/impersonate`, {
-        method: "POST",
-      });
-
-      if (data?.access_token) {
-        setAuthToken(data.access_token);
-        localStorage.setItem(
-          "sevalor_user",
-          JSON.stringify({
-            ...data,
-            is_impersonation: true,
-            empresa_id: finalTenantId,
-            empresa_nom: targetTenantName,
-            rol: "SUPERADMIN",
-          })
-        );
-        localStorage.setItem("sevalor_tenant_id", finalTenantId);
-        if (typeof sessionStorage !== "undefined") {
-          sessionStorage.setItem("sevalor_tenant_id", finalTenantId);
-        }
-        window.location.href = targetPath;
-      }
+      await iniciarImpersonacio(String(selectedTenant.id), targetTenantName, targetPath);
     } catch (e: any) {
       alert("Error en l'accés d'impersonació: " + (e.message || "Error desconegut"));
     }

@@ -1562,13 +1562,71 @@ async def impersonate_tenant(
 
     token = jwt.encode(payload, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
 
+    handoff_url = await _crear_handoff_impersonacio(empresa, token)
+
     return {
         "access_token": token,
         "token_type": "bearer",
         "rol": "SUPERADMIN",
         "empresa_id": str(empresa.id),
         "is_impersonation": True,
+        "handoff_url": handoff_url,
     }
+
+
+IMPERSONATION_HANDOFF_TTL_SECONDS = 60
+IMPERSONATION_HANDOFF_PREFIX = "impersonation_handoff:"
+
+
+def _host_tenant_empresa(empresa: Empresa) -> Optional[str]:
+    """Retorna el host públic propi de l'empresa (domini_custom) o None si no en té."""
+    domini = (empresa.domini_custom or "").strip().lower()
+    if not domini or not re.fullmatch(r"[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?", domini):
+        return None
+    if domini == (settings.PLATFORM_ADMIN_HOST or "").strip().lower():
+        return None
+    return domini
+
+
+async def _crear_handoff_impersonacio(empresa: Empresa, token: str) -> Optional[str]:
+    """Crea un codi d'un sol ús (Redis, TTL 60 s) per traspassar la sessió al domini de l'empresa.
+
+    El JWT mai viatja per URL: només el codi opac, i en el fragment (#) perquè no arribi
+    a logs de servidor ni a capçaleres Referer. Retorna None si no hi ha domini propi
+    o Redis no està disponible (el frontend manté el flux al host d'administració).
+    """
+    import secrets
+
+    from app.core.redis import get_redis_client
+
+    host = _host_tenant_empresa(empresa)
+    if not host:
+        return None
+
+    client = await get_redis_client()
+    if not client:
+        logger.warning("Redis no disponible: impersonació sense traspàs de domini.")
+        return None
+
+    code = secrets.token_urlsafe(32)
+    admin_host = (settings.PLATFORM_ADMIN_HOST or "").strip().lower()
+    dades = {
+        "token": token,
+        "empresa_id": str(empresa.id),
+        "empresa_nom": empresa.nom or "",
+        "return_url": f"https://{admin_host}/superadmin/empreses/{empresa.id}" if admin_host else "",
+    }
+    try:
+        await client.set(
+            f"{IMPERSONATION_HANDOFF_PREFIX}{code}",
+            json.dumps(dades),
+            ex=IMPERSONATION_HANDOFF_TTL_SECONDS,
+        )
+    except Exception as exc:
+        logger.warning("No s'ha pogut desar el codi de traspàs d'impersonació: %s", exc)
+        return None
+
+    return f"https://{host}/impersonacio#code={code}"
 
 
 class SetBossPasswordRequest(BaseModel):
