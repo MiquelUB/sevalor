@@ -64,6 +64,10 @@ async def test_crear_usuari_equip_uses_real_bcrypt(admin_session: AsyncSession):
         assert res.status_code == 200, res.text
         data = res.json()
         temp_pwd = data["contrasenya_temporal_12_caracters"]
+        assert data["contrasenya_generada"] == temp_pwd
+        assert data["email"] == "maria@hashtest.com"
+        assert data["login_url"] == "/gestio/login"
+        assert data["rol"] == "SECRETARIA"
 
         # Consultar usuari creat a la BD i verificar el password_hash
         stmt = select(Usuari).where(Usuari.email == "maria@hashtest.com")
@@ -73,6 +77,20 @@ async def test_crear_usuari_equip_uses_real_bcrypt(admin_session: AsyncSession):
         assert not nou_usuari.password_hash.startswith("bcrypt_simulated_"), "El password_hash encara és simulat!"
         assert nou_usuari.password_hash.startswith("$2b$") or nou_usuari.password_hash.startswith("$2a$"), "No és un hash bcrypt vàlid"
         assert bcrypt.checkpw(temp_pwd.encode(), nou_usuari.password_hash.encode()), "El password temporal no coincideix amb el hash bcrypt!"
+
+        # Provar restablir contrasenya de l'usuari (reset-password)
+        reset_res = await client.post(f"/gestio/configuracio/usuaris/{nou_usuari.id}/reset-password", headers=headers)
+        assert reset_res.status_code == 200, reset_res.text
+        reset_data = reset_res.json()
+        assert reset_data["status"] == "OK"
+        assert reset_data["email"] == "maria@hashtest.com"
+        new_pwd = reset_data["contrasenya_generada"]
+        assert len(new_pwd) >= 12
+        assert new_pwd != temp_pwd
+
+        # Verificar nou hash a la base de dades
+        await admin_session.refresh(nou_usuari)
+        assert bcrypt.checkpw(new_pwd.encode(), nou_usuari.password_hash.encode()), "El nou password no coincideix amb el nou hash!"
 
 
 @pytest.mark.asyncio

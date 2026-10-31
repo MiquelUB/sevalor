@@ -700,16 +700,28 @@ async def crear_usuari_administratiu(
 
     db.add(nou_usuari)
     await db.commit()
+    await db.refresh(nou_usuari)
 
     return {
         "status": "OK",
         "id": str(nou_usuari.id),
+        "nom": nou_usuari.nom,
+        "cognoms": nou_usuari.cognoms,
         "nom_complet": f"{nou_usuari.nom} {nou_usuari.cognoms}".strip(),
+        "nif": nou_usuari.nif,
+        "email": nou_usuari.email,
+        "telefon": nou_usuari.telefon,
         "rol": nou_usuari.rol,
+        "estat": nou_usuari.estat,
+        "totp_activat": nou_usuari.totp_activat,
+        "slot_jornada_id": str(nou_usuari.slot_jornada_id) if nou_usuari.slot_jornada_id else None,
+        "created_at": nou_usuari.created_at.isoformat() if nou_usuari.created_at else None,
+        "contrasenya_generada": contrasenya_generada,
         "contrasenya_temporal_12_caracters": contrasenya_generada,
         "requereix_enrolament_2fa": True,
         "secret_2fa": secret_2fa_provisional,
         "otpauth_url": f"otpauth://totp/SEVALOR:{nou_usuari.email}?secret={secret_2fa_provisional}&issuer=SEVALOR",
+        "login_url": "/gestio/login",
     }
 
 
@@ -817,6 +829,50 @@ async def eliminar_usuari_administratiu(
     await db.commit()
 
     return {"status": "OK", "missatge": "Usuari eliminat correctament"}
+
+
+@router.post("/usuaris/{usuari_id}/reset-password")
+async def restablir_contrasenya_usuari(
+    usuari_id: uuid.UUID,
+    claims: Dict[str, Any] = Depends(get_current_user_claims),
+    db: AsyncSession = Depends(get_db),
+):
+    """Genera una nova contrasenya temporal de 12 caràcters per a l'usuari administratiu (Boss o Secretaria)."""
+    validar_permisos_gestio(claims, requereix_escriptura=True)
+    empresa_id = claims.get("empresa_id")
+
+    if empresa_id:
+        await set_tenant_context(db, empresa_id)
+
+    res = await db.execute(
+        select(Usuari).where(
+            Usuari.id == usuari_id,
+            Usuari.empresa_id == uuid.UUID(empresa_id),
+        )
+    )
+    usuari = res.scalar_one_or_none()
+    if not usuari:
+        raise HTTPException(status_code=404, detail="Usuari no trobat")
+
+    nova_contrasenya = generar_contrasenya_forta(12)
+    usuari.password_hash = bcrypt.hashpw(
+        nova_contrasenya.encode("utf-8"), bcrypt.gensalt()
+    ).decode("utf-8")
+
+    await db.commit()
+    await db.refresh(usuari)
+
+    return {
+        "status": "OK",
+        "id": str(usuari.id),
+        "nom_complet": f"{usuari.nom} {usuari.cognoms}".strip(),
+        "email": usuari.email,
+        "rol": usuari.rol,
+        "contrasenya_generada": nova_contrasenya,
+        "contrasenya_temporal_12_caracters": nova_contrasenya,
+        "login_url": "/gestio/login",
+        "missatge": f"Contrasenya restablerta correctament per a {usuari.email}",
+    }
 
 
 # ---------------------------------------------------------------------------

@@ -30,6 +30,9 @@ import {
   ExternalLink,
   Cpu,
   Server,
+  KeyRound,
+  Copy,
+  Mail,
 } from "lucide-react";
 
 // Tipus de pestanyes
@@ -48,6 +51,17 @@ interface UsuariAdmin {
   totp_activat: boolean;
   data_ultim_acces?: string;
   slot_jornada_id?: string;
+}
+
+interface CredencialsModalState {
+  obert: boolean;
+  titol: string;
+  nom_complet: string;
+  email: string;
+  contrasenya: string;
+  rol: string;
+  secret_2fa?: string;
+  login_url: string;
 }
 
 interface SlotJornadaItem {
@@ -128,6 +142,8 @@ export default function ConfiguracioPage() {
   const [nouUsuariEmail, setNouUsuariEmail] = useState("");
   const [nouUsuariRol, setNouUsuariRol] = useState<"BOSS" | "SECRETARIA" | "ENGINYER" | "COMPTABILITAT">("SECRETARIA");
   const [contrasenyaGenerada, setContrasenyaGenerada] = useState<string | null>(null);
+  const [credencialsModal, setCredencialsModal] = useState<CredencialsModalState | null>(null);
+  const [copiatCamp, setCopiatCamp] = useState<string | null>(null);
 
   const [modalQr2fa, setModalQr2fa] = useState<{ obert: boolean; usuariNom: string; secret: string } | null>(null);
 
@@ -263,7 +279,28 @@ export default function ConfiguracioPage() {
     reader.readAsDataURL(fitxer);
   };
 
-  // Creació d'Usuari Administratiu
+  // Funció per copiar al portapapers amb fallback segur
+  const copiarAlPortapapers = async (text: string, camp: string) => {
+    try {
+      if (navigator?.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+      } else {
+        const textArea = document.createElement("textarea");
+        textArea.value = text;
+        document.body.appendChild(textArea);
+        textArea.select();
+        document.execCommand("copy");
+        document.body.removeChild(textArea);
+      }
+      setCopiatCamp(camp);
+      setTimeout(() => setCopiatCamp(null), 2500);
+      mostrarFeedback("EXIT", "Dades copiades al portapapers.");
+    } catch {
+      mostrarFeedback("ERROR", "No s'ha pogut copiar automàticament.");
+    }
+  };
+
+  // Creació d'Usuari Administratiu (amb generació de credencials i visualització completa)
   const handleCrearUsuari = async (e: React.FormEvent) => {
     e.preventDefault();
     if (esEnginyer) {
@@ -272,25 +309,88 @@ export default function ConfiguracioPage() {
     }
 
     const payload = {
-      nom: nouUsuariNom,
-      cognoms: nouUsuariCognoms,
-      nif: nouUsuariNif.toUpperCase(),
-      email: nouUsuariEmail.toLowerCase(),
+      nom: nouUsuariNom.trim(),
+      cognoms: nouUsuariCognoms.trim(),
+      nif: nouUsuariNif.trim().toUpperCase(),
+      email: nouUsuariEmail.trim().toLowerCase(),
       rol: nouUsuariRol,
     };
 
     try {
-      const nou = await apiFetch<UsuariAdmin>("/gestio/configuracio/usuaris", {
+      const resp = await apiFetch<any>("/gestio/configuracio/usuaris", {
         method: "POST",
         body: JSON.stringify(payload),
       });
-      setUsuaris([...usuaris, nou]);
-      if ((nou as any).contrasenya_generada) {
-        setContrasenyaGenerada((nou as any).contrasenya_generada);
-      }
-      mostrarFeedback("EXIT", "Usuari creat correctament. Contrasenya temporal generada.");
+
+      const nouUsuari: UsuariAdmin = {
+        id: resp.id,
+        nom: resp.nom || payload.nom,
+        cognoms: resp.cognoms || payload.cognoms,
+        nom_complet: resp.nom_complet || `${payload.nom} ${payload.cognoms}`.trim(),
+        nif: resp.nif || payload.nif,
+        email: resp.email || payload.email,
+        telefon: resp.telefon || undefined,
+        rol: resp.rol || payload.rol,
+        estat: resp.estat || "ACTIU",
+        totp_activat: !!resp.totp_activat,
+        slot_jornada_id: resp.slot_jornada_id,
+        data_ultim_acces: "Mai",
+      };
+
+      setUsuaris((prev) => [...prev, nouUsuari]);
+      setModalNouUsuari(false);
+      setNouUsuariNom("");
+      setNouUsuariCognoms("");
+      setNouUsuariNif("");
+      setNouUsuariEmail("");
+
+      const contrasenya = resp.contrasenya_generada || resp.contrasenya_temporal_12_caracters;
+      setContrasenyaGenerada(contrasenya);
+      setCredencialsModal({
+        obert: true,
+        titol: "Alta d'Empleat Completada — Credencials d'Accés",
+        nom_complet: nouUsuari.nom_complet,
+        email: nouUsuari.email,
+        contrasenya: contrasenya,
+        rol: nouUsuari.rol,
+        secret_2fa: resp.secret_2fa,
+        login_url: resp.login_url || "/gestio/login",
+      });
+
+      mostrarFeedback("EXIT", "Usuari creat correctament. Credencials d'accés generades.");
     } catch {
       mostrarFeedback("ERROR", "No s'ha pogut crear l'usuari. Verifiqueu la connexió amb el backend.");
+    }
+  };
+
+  // Restablir Contrasenya d'Usuari Administratiu
+  const handleRestablirContrasenya = async (u: UsuariAdmin) => {
+    if (esEnginyer) {
+      mostrarFeedback("ERROR", "Veto d'Enginyer (HTTP 403): Acció no permesa.");
+      return;
+    }
+    if (!window.confirm(`Voleu generar una nova contrasenya d'accés per a ${u.nom_complet}? L'anterior quedarà invalidada immediatament.`)) {
+      return;
+    }
+
+    try {
+      const resp = await apiFetch<any>(`/gestio/configuracio/usuaris/${u.id}/reset-password`, {
+        method: "POST",
+      });
+      const contrasenya = resp.contrasenya_generada || resp.contrasenya_temporal_12_caracters;
+      setContrasenyaGenerada(contrasenya);
+      setCredencialsModal({
+        obert: true,
+        titol: "Nova Contrasenya d'Accés Generada",
+        nom_complet: u.nom_complet,
+        email: u.email,
+        contrasenya: contrasenya,
+        rol: u.rol,
+        login_url: resp.login_url || "/gestio/login",
+      });
+      mostrarFeedback("EXIT", `Nova contrasenya generada per a ${u.nom_complet}.`);
+    } catch {
+      mostrarFeedback("ERROR", "No s'ha pogut restablir la contrasenya de l'usuari.");
     }
   };
 
@@ -982,6 +1082,17 @@ export default function ConfiguracioPage() {
                       </td>
                       <td className="px-4 py-3 text-right">
                         <div className="flex items-center justify-end gap-1.5">
+                          {/* Botó Restablir Contrasenya */}
+                          <button
+                            type="button"
+                            disabled={esEnginyer}
+                            onClick={() => handleRestablirContrasenya(u)}
+                            className="p-1.5 rounded-lg text-slate-500 hover:text-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 transition-colors disabled:opacity-40"
+                            title="Generar nova contrasenya temporal"
+                          >
+                            <KeyRound className="w-3.5 h-3.5" />
+                          </button>
+
                           {/* Botó Reiniciar 2FA (només BOSS) */}
                           <button
                             type="button"
@@ -1381,102 +1492,270 @@ export default function ConfiguracioPage() {
               <h3 className="text-sm font-bold text-slate-900 dark:text-white">
                 Alta d'Usuari Administratiu (Dashboard Web)
               </h3>
-              <button onClick={() => { setModalNouUsuari(false); setContrasenyaGenerada(null); }} className="text-slate-400 hover:text-slate-600">
+              <button onClick={() => { setModalNouUsuari(false); }} className="text-slate-400 hover:text-slate-600">
                 <X className="w-4 h-4" />
               </button>
             </div>
 
-            {contrasenyaGenerada ? (
-              <div className="space-y-4">
-                <div className="p-4 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 space-y-2">
-                  <p className="text-xs font-bold text-emerald-800 dark:text-emerald-300">
-                    Usuari creat amb èxit! Contrasenya generada:
+            <form onSubmit={handleCrearUsuari} className="space-y-3 text-xs">
+              <div>
+                <label className="font-bold text-slate-700 dark:text-slate-300 block mb-1">Nom</label>
+                <input
+                  required
+                  type="text"
+                  placeholder="Ex: Joan"
+                  value={nouUsuariNom}
+                  onChange={(e) => setNouUsuariNom(e.target.value)}
+                  className="w-full px-3 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white"
+                />
+              </div>
+              <div>
+                <label className="font-bold text-slate-700 dark:text-slate-300 block mb-1">Cognoms</label>
+                <input
+                  type="text"
+                  placeholder="Ex: Garcia Font"
+                  value={nouUsuariCognoms}
+                  onChange={(e) => setNouUsuariCognoms(e.target.value)}
+                  className="w-full px-3 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white"
+                />
+              </div>
+              <div>
+                <label className="font-bold text-slate-700 dark:text-slate-300 block mb-1">NIF</label>
+                <input
+                  required
+                  type="text"
+                  placeholder="Ex: 12345678Z"
+                  value={nouUsuariNif}
+                  onChange={(e) => setNouUsuariNif(e.target.value)}
+                  className="w-full px-3 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white font-mono"
+                />
+              </div>
+              <div>
+                <label className="font-bold text-slate-700 dark:text-slate-300 block mb-1">Email Corporatiu (Login)</label>
+                <input
+                  required
+                  type="email"
+                  placeholder="Ex: joan@instal-lacions.cat"
+                  value={nouUsuariEmail}
+                  onChange={(e) => setNouUsuariEmail(e.target.value)}
+                  className="w-full px-3 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white font-mono"
+                />
+              </div>
+              <div>
+                <label className="font-bold text-slate-700 dark:text-slate-300 block mb-1">Rol Corporatiu</label>
+                <select
+                  value={nouUsuariRol}
+                  onChange={(e) => setNouUsuariRol(e.target.value as any)}
+                  className="w-full px-3 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white"
+                >
+                  <option value="SECRETARIA">Secretaria / Atenció al Client</option>
+                  <option value="ENGINYER">Enginyer Tècnic</option>
+                  <option value="COMPTABILITAT">Comptabilitat & Facturació</option>
+                  <option value="BOSS">Boss / Gerent</option>
+                </select>
+              </div>
+              <div className="flex justify-end gap-2 pt-3 border-t border-slate-200 dark:border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => setModalNouUsuari(false)}
+                  className="px-3 py-1.5 rounded-lg text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"
+                >
+                  Cancel·lar
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-1.5 rounded-lg font-bold bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm"
+                >
+                  Donar d'Alta i Generar Credencials
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL CRE仮想/REINICI CREDENCIALS D'ACCÉS (EMAIL + CONTRASENYA TEMPORAL) */}
+      {credencialsModal && (
+        <div className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl max-w-lg w-full p-6 shadow-2xl space-y-4">
+            <div className="flex items-start justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
+              <div className="flex items-center gap-2.5">
+                <div className="w-10 h-10 rounded-xl bg-emerald-100 dark:bg-emerald-950/80 text-emerald-600 dark:text-emerald-400 flex items-center justify-center shadow-sm">
+                  <KeyRound className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-slate-900 dark:text-white">
+                    {credencialsModal.titol}
+                  </h3>
+                  <p className="text-xs text-slate-500 dark:text-slate-400">
+                    {credencialsModal.nom_complet} • <span className="font-bold text-emerald-600">{credencialsModal.rol}</span>
                   </p>
-                  <p className="font-mono text-sm font-black text-emerald-900 dark:text-emerald-200 tracking-wider bg-white dark:bg-slate-800 p-2 rounded border border-emerald-300">
-                    {contrasenyaGenerada}
-                  </p>
-                  <p className="text-[10px] text-emerald-700 dark:text-emerald-400">
-                    Aquesta contrasenya temporal de 12 caràcters s'ha de facilitar a l'empleat. En el primer inici de sessió se li exigirà configurar el 2FA TOTP.
+                </div>
+              </div>
+              <button
+                onClick={() => setCredencialsModal(null)}
+                className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-1 rounded-lg transition-colors"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-3.5 rounded-xl bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800/60 text-xs text-amber-800 dark:text-amber-300 flex items-start gap-2.5">
+              <ShieldAlert className="w-4 h-4 shrink-0 mt-0.5" />
+              <p>
+                <strong>Dades d'inici de sessió confidencials:</strong> Copieu aquestes credencials per fer-les arribar al treballador. La contrasenya temporal només es mostra en aquesta finestra.
+              </p>
+            </div>
+
+            <div className="space-y-3 text-xs">
+              {/* Email / Login */}
+              <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-800 flex items-center justify-between">
+                <div className="space-y-0.5">
+                  <span className="text-[10px] font-mono uppercase text-slate-400 font-bold flex items-center gap-1">
+                    <Mail className="w-3 h-3 text-slate-500" />
+                    Correu d'Accés (Email de Login)
+                  </span>
+                  <p className="text-sm font-mono font-bold text-slate-900 dark:text-white select-all">
+                    {credencialsModal.email}
                   </p>
                 </div>
                 <button
-                  onClick={() => { setModalNouUsuari(false); setContrasenyaGenerada(null); }}
-                  className="w-full py-2 rounded-xl text-xs font-bold bg-slate-900 text-white hover:bg-slate-800"
+                  type="button"
+                  onClick={() => copiarAlPortapapers(credencialsModal.email, "email")}
+                  className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-white dark:bg-slate-700 hover:bg-slate-100 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-600 shadow-sm transition-colors"
                 >
-                  Tancar Finestra
+                  {copiatCamp === "email" ? (
+                    <>
+                      <Check className="w-3.5 h-3.5 text-emerald-600" />
+                      <span className="text-emerald-600">Copiat</span>
+                    </>
+                  ) : (
+                    <>
+                      <Copy className="w-3.5 h-3.5" />
+                      <span>Copiar</span>
+                    </>
+                  )}
                 </button>
               </div>
-            ) : (
-              <form onSubmit={handleCrearUsuari} className="space-y-3 text-xs">
-                <div>
-                  <label className="font-bold text-slate-700 dark:text-slate-300 block mb-1">Nom</label>
-                  <input
-                    required
-                    type="text"
-                    value={nouUsuariNom}
-                    onChange={(e) => setNouUsuariNom(e.target.value)}
-                    className="w-full px-3 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white"
-                  />
+
+              {/* Contrasenya temporal */}
+              <div className="p-3.5 rounded-xl bg-emerald-50/70 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800 flex items-center justify-between">
+                <div className="space-y-0.5">
+                  <span className="text-[10px] font-mono uppercase text-emerald-700 dark:text-emerald-300 font-bold flex items-center gap-1">
+                    <Lock className="w-3 h-3" />
+                    Codi / Contrasenya Temporal (12 caràcters)
+                  </span>
+                  <p className="text-base font-mono font-black text-emerald-900 dark:text-emerald-200 tracking-wider select-all">
+                    {credencialsModal.contrasenya}
+                  </p>
                 </div>
-                <div>
-                  <label className="font-bold text-slate-700 dark:text-slate-300 block mb-1">Cognoms</label>
-                  <input
-                    type="text"
-                    value={nouUsuariCognoms}
-                    onChange={(e) => setNouUsuariCognoms(e.target.value)}
-                    className="w-full px-3 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white"
-                  />
+                <button
+                  type="button"
+                  onClick={() => copiarAlPortapapers(credencialsModal.contrasenya, "pwd")}
+                  className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm transition-colors"
+                >
+                  {copiatCamp === "pwd" ? (
+                    <>
+                      <Check className="w-3.5 h-3.5" />
+                      <span>Copiat</span>
+                    </>
+                  ) : (
+                    <>
+                      <Copy className="w-3.5 h-3.5" />
+                      <span>Copiar</span>
+                    </>
+                  )}
+                </button>
+              </div>
+
+              {/* URL d'accés */}
+              <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-800 flex items-center justify-between">
+                <div className="space-y-0.5">
+                  <span className="text-[10px] font-mono uppercase text-slate-400 font-bold">
+                    Punt d'Accés al Dashboard
+                  </span>
+                  <p className="font-mono text-slate-700 dark:text-slate-300 text-[11px]">
+                    {typeof window !== "undefined" ? `${window.location.origin}/gestio/login` : credencialsModal.login_url}
+                  </p>
                 </div>
-                <div>
-                  <label className="font-bold text-slate-700 dark:text-slate-300 block mb-1">NIF</label>
-                  <input
-                    required
-                    type="text"
-                    value={nouUsuariNif}
-                    onChange={(e) => setNouUsuariNif(e.target.value)}
-                    className="w-full px-3 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white font-mono"
-                  />
-                </div>
-                <div>
-                  <label className="font-bold text-slate-700 dark:text-slate-300 block mb-1">Email Corporatiu</label>
-                  <input
-                    required
-                    type="email"
-                    value={nouUsuariEmail}
-                    onChange={(e) => setNouUsuariEmail(e.target.value)}
-                    className="w-full px-3 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white"
-                  />
-                </div>
-                <div>
-                  <label className="font-bold text-slate-700 dark:text-slate-300 block mb-1">Rol Corporatiu</label>
-                  <select
-                    value={nouUsuariRol}
-                    onChange={(e) => setNouUsuariRol(e.target.value as any)}
-                    className="w-full px-3 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white"
-                  >
-                    <option value="SECRETARIA">Secretaria / Atenció al Client</option>
-                    <option value="ENGINYER">Enginyer Tècnic</option>
-                    <option value="COMPTABILITAT">Comptabilitat & Facturació</option>
-                    <option value="BOSS">Boss / Gerent</option>
-                  </select>
-                </div>
-                <div className="flex justify-end gap-2 pt-3 border-t border-slate-200 dark:border-slate-800">
+                <a
+                  href={credencialsModal.login_url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="p-1.5 rounded-lg text-slate-500 hover:text-emerald-600 transition-colors"
+                  title="Obrir pantalla de login"
+                >
+                  <ExternalLink className="w-4 h-4" />
+                </a>
+              </div>
+
+              {/* Secret 2FA provisional */}
+              {credencialsModal.secret_2fa && (
+                <div className="p-2.5 rounded-xl bg-purple-50 dark:bg-purple-950/30 border border-purple-200 dark:border-purple-800/60 flex items-center justify-between">
+                  <div className="space-y-0.5">
+                    <span className="text-[10px] font-mono uppercase text-purple-700 dark:text-purple-300 font-bold">
+                      Clau Secreta 2FA TOTP (Provisional)
+                    </span>
+                    <p className="font-mono text-[11px] text-purple-900 dark:text-purple-200 select-all">
+                      {credencialsModal.secret_2fa}
+                    </p>
+                  </div>
                   <button
                     type="button"
-                    onClick={() => setModalNouUsuari(false)}
-                    className="px-3 py-1.5 rounded-lg text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"
+                    onClick={() => copiarAlPortapapers(credencialsModal.secret_2fa || "", "2fa")}
+                    className="text-purple-700 dark:text-purple-300 hover:underline text-[11px] font-semibold flex items-center gap-1"
                   >
-                    Cancel·lar
-                  </button>
-                  <button
-                    type="submit"
-                    className="px-4 py-1.5 rounded-lg font-bold bg-emerald-600 hover:bg-emerald-700 text-white"
-                  >
-                    Generar Usuari & Contrasenya
+                    {copiatCamp === "2fa" ? <Check className="w-3 h-3 text-emerald-600" /> : <Copy className="w-3 h-3" />}
+                    <span>{copiatCamp === "2fa" ? "Copiat" : "Copiar"}</span>
                   </button>
                 </div>
-              </form>
-            )}
+              )}
+            </div>
+
+            <div className="pt-2 border-t border-slate-100 dark:border-slate-800 flex flex-col sm:flex-row gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  const urlLogin = typeof window !== "undefined" ? `${window.location.origin}/gestio/login` : "/gestio/login";
+                  const textACopiar = [
+                    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+                    "SEVALOR Suite — Credencials d'Accés del Treballador",
+                    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+                    `Nom del treballador: ${credencialsModal.nom_complet}`,
+                    `Rol corporatiu: ${credencialsModal.rol}`,
+                    `Email d'accés (Login): ${credencialsModal.email}`,
+                    `Contrasenya temporal: ${credencialsModal.contrasenya}`,
+                    `Enllaç al Dashboard: ${urlLogin}`,
+                    credencialsModal.secret_2fa ? `Clau manual 2FA TOTP: ${credencialsModal.secret_2fa}` : "",
+                    "",
+                    "* En el primer inici de sessió caldrà configurar l'aplicació d'autenticació 2FA (Google Authenticator / Aegis).",
+                    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+                  ].filter(Boolean).join("\n");
+                  copiarAlPortapapers(textACopiar, "tot");
+                }}
+                className="flex-1 flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm transition-colors"
+              >
+                {copiatCamp === "tot" ? (
+                  <>
+                    <Check className="w-4 h-4" />
+                    <span>Credencials Copiades al Portapapers!</span>
+                  </>
+                ) : (
+                  <>
+                    <Copy className="w-4 h-4" />
+                    <span>Copiar Totes les Credencials d'Accés</span>
+                  </>
+                )}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setCredencialsModal(null)}
+                className="py-2.5 px-4 rounded-xl text-xs font-bold text-slate-700 dark:text-slate-300 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors"
+              >
+                Tancar Finestra
+              </button>
+            </div>
           </div>
         </div>
       )}
