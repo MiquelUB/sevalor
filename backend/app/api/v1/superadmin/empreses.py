@@ -1,5 +1,6 @@
 import logging
 import os
+import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
@@ -122,6 +123,50 @@ class UpdateCamaleoConfigRequest(BaseModel):
     domini_custom: Optional[str] = Field(None, max_length=100)
 
 
+async def _verificar_autoritzacio_boss(
+    db: AsyncSession, claims: Dict[str, Any], empresa_id: str, accio: str = "modificar la configuració de"
+) -> Optional[Empresa]:
+    """Valida que si l'usuari és BOSS només pugui accedir a la seva pròpia empresa.
+
+    Retorna l'objecte Empresa si ja s'ha obtingut, o None si és SUPERADMIN.
+    Si és BOSS i no és la seva pròpia empresa, llança 403 Forbidden abans de comprovar l'existència.
+    """
+    rol = claims.get("rol", "")
+    token_emp_id = str(claims.get("empresa_id") or "")
+    if rol == "BOSS":
+        # 1. Comprovar si coincideix directament amb el seu UUID
+        if token_emp_id and empresa_id.lower() == token_emp_id.lower():
+            try:
+                emp_uuid = uuid.UUID(token_emp_id)
+                res = await db.execute(select(Empresa).where(Empresa.id == emp_uuid))
+                emp = res.scalars().first()
+                if emp:
+                    return emp
+            except (ValueError, TypeError):
+                pass
+
+        # 2. Comprovar si coincideix amb el subdomini o domini propi
+        if token_emp_id:
+            try:
+                emp_uuid = uuid.UUID(token_emp_id)
+                res = await db.execute(select(Empresa).where(Empresa.id == emp_uuid))
+                my_emp = res.scalars().first()
+                if my_emp and (
+                    empresa_id.lower() == (my_emp.subdomini or "").lower()
+                    or empresa_id.lower() == (my_emp.domini_custom or "").lower()
+                ):
+                    return my_emp
+            except (ValueError, TypeError):
+                pass
+
+        # Si és BOSS i no coincideix ni amb el seu UUID ni amb el seu subdomini/domini propi:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Un BOSS només pot {accio} la seva pròpia empresa.",
+        )
+    return None
+
+
 @router.put("/{empresa_id}/camaleo", response_model=Dict[str, Any])
 async def update_camaleo_config(
     empresa_id: str,
@@ -129,19 +174,11 @@ async def update_camaleo_config(
     db: AsyncSession = Depends(get_db_with_tenant_context),
     claims: Dict[str, Any] = Depends(require_roles(["SUPERADMIN", "BOSS"])),
 ) -> Dict[str, Any]:
-    empresa = await _resolve_empresa(db, empresa_id)
+    empresa = await _verificar_autoritzacio_boss(db, claims, empresa_id, "modificar la configuració de")
+    if not empresa:
+        empresa = await _resolve_empresa(db, empresa_id)
     if not empresa:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Empresa no trobada.")
-    emp_uuid = empresa.id
-
-    # BOSS role validation: make sure BOSS is modifying their own company
-    rol = claims.get("rol", "")
-    token_emp_id = claims.get("empresa_id")
-    if rol == "BOSS" and str(token_emp_id) != str(emp_uuid):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Un BOSS només pot modificar la configuració de la seva pròpia empresa.",
-        )
 
     if payload.nom is not None and payload.nom.strip():
         empresa.nom = payload.nom.strip()
@@ -191,18 +228,11 @@ async def pujar_logotip_empresa(
     claims: Dict[str, Any] = Depends(require_roles(["SUPERADMIN", "BOSS"])),
 ) -> Dict[str, Any]:
     """Pujada i registre del logotip oficial de l'empresa al disc sobirà Hetzner."""
-    empresa = await _resolve_empresa(db, empresa_id)
+    empresa = await _verificar_autoritzacio_boss(db, claims, empresa_id, "carregar el logotip de")
+    if not empresa:
+        empresa = await _resolve_empresa(db, empresa_id)
     if not empresa:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Empresa no trobada.")
-    emp_uuid = empresa.id
-
-    rol = claims.get("rol", "")
-    token_emp_id = claims.get("empresa_id")
-    if rol == "BOSS" and str(token_emp_id) != str(emp_uuid):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Un BOSS només pot carregar el logotip de la seva pròpia empresa.",
-        )
 
     content = await fitxer.read()
     if len(content) > 10 * 1024 * 1024:
@@ -294,7 +324,9 @@ async def esborrar_logotip_empresa(
     claims: Dict[str, Any] = Depends(require_roles(["SUPERADMIN", "BOSS"])),
 ) -> Dict[str, Any]:
     """Restableix el logotip a la identitat vectorial dinàmica per defecte."""
-    empresa = await _resolve_empresa(db, empresa_id)
+    empresa = await _verificar_autoritzacio_boss(db, claims, empresa_id, "restablir el logotip de")
+    if not empresa:
+        empresa = await _resolve_empresa(db, empresa_id)
     if not empresa:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Empresa no trobada.")
     emp_uuid = empresa.id
