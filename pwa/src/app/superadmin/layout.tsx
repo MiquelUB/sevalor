@@ -26,7 +26,7 @@ import {
   HardHat,
   Target,
 } from "lucide-react";
-import { clearAuthToken, setAuthToken, apiFetch } from "@/lib/api";
+import { clearAuthToken, getAuthToken, setAuthToken, apiFetch } from "@/lib/api";
 
 export default function SuperadminLayout({
   children,
@@ -76,15 +76,50 @@ export default function SuperadminLayout({
 
   const handleQuickImpersonate = async (targetPath: string = "/gestio") => {
     try {
+      let targetTenantId: string | null = null;
+      let targetTenantName: string = "";
+
+      // 1. Detectar si estem a la fitxa d'una empresa (/superadmin/empreses/[id])
+      const matchEmpresa = pathname?.match(/\/superadmin\/empreses\/([^/?#]+)/);
+      if (matchEmpresa && matchEmpresa[1] && matchEmpresa[1] !== "onboarding") {
+        targetTenantId = matchEmpresa[1];
+      }
+
+      // 2. Si no, recuperar de sessionStorage o localStorage
+      if (!targetTenantId && typeof sessionStorage !== "undefined") {
+        targetTenantId = sessionStorage.getItem("sevalor_tenant_id");
+      }
+      if (!targetTenantId && typeof localStorage !== "undefined") {
+        targetTenantId = localStorage.getItem("sevalor_tenant_id");
+      }
+
       const tenants = await apiFetch<any[]>("/superadmin/tenants");
       if (!tenants || tenants.length === 0) {
         alert("No hi ha cap empresa tenant registrada.");
         return;
       }
-      const tenant = tenants[0];
-      const data = await apiFetch<any>(`/superadmin/tenants/${tenant.id}/impersonate`, {
+
+      let selectedTenant = tenants.find(
+        (t) => t.id === targetTenantId || t.subdomini === targetTenantId
+      );
+
+      if (!selectedTenant) {
+        selectedTenant = tenants[0];
+      }
+
+      const finalTenantId = String(selectedTenant.id);
+      targetTenantName = selectedTenant.nom || selectedTenant.rao_social || selectedTenant.subdomini;
+
+      // Desar token del Superadmin per poder restaurar sessió al sortir
+      const currentToken = getAuthToken();
+      if (currentToken) {
+        localStorage.setItem("sevalor_superadmin_token", currentToken);
+      }
+
+      const data = await apiFetch<any>(`/superadmin/tenants/${finalTenantId}/impersonate`, {
         method: "POST",
       });
+
       if (data?.access_token) {
         setAuthToken(data.access_token);
         localStorage.setItem(
@@ -92,15 +127,19 @@ export default function SuperadminLayout({
           JSON.stringify({
             ...data,
             is_impersonation: true,
-            empresa_id: tenant.id,
+            empresa_id: finalTenantId,
+            empresa_nom: targetTenantName,
             rol: "SUPERADMIN",
           })
         );
-        localStorage.setItem("sevalor_tenant_id", tenant.id);
+        localStorage.setItem("sevalor_tenant_id", finalTenantId);
+        if (typeof sessionStorage !== "undefined") {
+          sessionStorage.setItem("sevalor_tenant_id", finalTenantId);
+        }
         window.location.href = targetPath;
       }
     } catch (e: any) {
-      alert("Error en l'accés ràpid: " + (e.message || "Error desconegut"));
+      alert("Error en l'accés d'impersonació: " + (e.message || "Error desconegut"));
     }
   };
 

@@ -29,7 +29,7 @@ async def resoldre_empresa_id_per_host(clean_host: str) -> Optional[str]:
             if cached == "NONE":
                 return None
             if cached:
-                return cached
+                return cached.decode("utf-8") if isinstance(cached, bytes) else str(cached)
         except Exception:
             pass
 
@@ -129,7 +129,7 @@ class TenantMiddleware(BaseHTTPMiddleware):
 
                 if user_role == "SUPERADMIN":
                     is_impersonation = bool(payload.get("is_impersonation", False))
-                    if not is_impersonation:
+                    if not is_impersonation or path.startswith("/api/v1/superadmin"):
                         is_superadmin = True
 
                 extret_id = payload.get("empresa_id")
@@ -164,7 +164,8 @@ class TenantMiddleware(BaseHTTPMiddleware):
 
         # 3. Protecció Cross-Tenant (Zero-Trust):
         # Si un usuari autenticat d'un tenant intenta consumir l'API des del subdomini d'un altre tenant:
-        if jwt_empresa_id and not is_superadmin and host_empresa_id:
+        # Les sessions d'impersonació autoritzada de Superadmin estan expressament exemptes del bloqueig cross-tenant
+        if jwt_empresa_id and not is_superadmin and not is_impersonation and host_empresa_id:
             if str(jwt_empresa_id) != str(host_empresa_id):
                 return JSONResponse(
                     status_code=403,

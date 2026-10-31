@@ -75,7 +75,7 @@ export function ChameleonProvider({ children }: { children: React.ReactNode }) {
         const userRaw = localStorage.getItem("sevalor_user");
         if (userRaw) {
           const userObj = JSON.parse(userRaw);
-          if (userObj?.rol === "SUPERADMIN" || userObj?.is_superadmin) {
+          if ((userObj?.rol === "SUPERADMIN" || userObj?.is_superadmin) && !userObj?.is_impersonation) {
             setLoading(false);
             return;
           }
@@ -85,7 +85,7 @@ export function ChameleonProvider({ children }: { children: React.ReactNode }) {
           const parts = jwtToken.split(".");
           if (parts.length === 3) {
             const payload = JSON.parse(atob(parts[1]));
-            if (payload?.is_superadmin || payload?.rol === "SUPERADMIN") {
+            if ((payload?.is_superadmin || payload?.rol === "SUPERADMIN") && !payload?.is_impersonation) {
               setLoading(false);
               return;
             }

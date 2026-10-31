@@ -8,7 +8,7 @@ import {
   GestioProvider,
   useGestio,
 } from "@/lib/gestio-context";
-import { clearAuthToken, apiFetch } from "@/lib/api";
+import { clearAuthToken, setAuthToken, apiFetch } from "@/lib/api";
 import {
   Shield,
   Search,
@@ -275,13 +275,25 @@ function GestioLayoutContent({ children }: { children: React.ReactNode }) {
               {usuari?.is_impersonation && (
                 <div className="bg-secondary-container text-on-secondary-container px-3 py-1 rounded-full text-xs font-bold flex items-center gap-2 shadow-sm">
                   <Shield className="w-3.5 h-3.5 shrink-0" />
-                  <span>Impersonació: {empresa?.nom || "Actiu"}</span>
+                  <span>Impersonació: {empresa?.nom || (usuari as any)?.empresa_nom || "Tenant Actiu"}</span>
                   <button
                     onClick={() => {
-                      clearAuthToken();
-                      window.location.href = "/superadmin/login";
+                      const superToken = localStorage.getItem("sevalor_superadmin_token");
+                      if (superToken) {
+                        setAuthToken(superToken);
+                        localStorage.removeItem("sevalor_superadmin_token");
+                        localStorage.setItem(
+                          "sevalor_user",
+                          JSON.stringify({ rol: "SUPERADMIN" })
+                        );
+                        window.location.href = "/superadmin/empreses";
+                      } else {
+                        clearAuthToken();
+                        window.location.href = "/superadmin/login";
+                      }
                     }}
                     className="ml-1 px-2 py-0.5 bg-primary text-white rounded-full text-[10px] hover:opacity-90"
+                    title="Tancar sessió d'impersonació i tornar al panell Superadmin"
                   >
                     Sortir
                   </button>

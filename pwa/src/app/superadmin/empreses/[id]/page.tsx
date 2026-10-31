@@ -23,6 +23,7 @@ import {
   Globe,
   Cpu,
   Receipt,
+  ExternalLink,
   Plus,
   Trash2,
   ArchiveRestore,
@@ -263,14 +264,17 @@ export default function EmpresaDetailPage({ params }: { params: { id: string } }
     setLoading(true);
     setErrorMessage(null);
     try {
-      const [data, factData, tiqData] = await Promise.all([
-        apiFetch<any>(`/superadmin/tenants/${params.id}`),
-        apiFetch<any[]>(`/superadmin/crm/factures?empresa_id=${params.id}`),
-        apiFetch<any[]>(`/superadmin/crm/tiquets?empresa_id=${params.id}`),
-      ]);
+      const data = await apiFetch<any>(`/superadmin/tenants/${params.id}`);
 
       if (data) {
+        const actualId = data.id || params.id;
+        const [factData, tiqData] = await Promise.all([
+          apiFetch<any[]>(`/superadmin/crm/factures?empresa_id=${actualId}`).catch(() => []),
+          apiFetch<any[]>(`/superadmin/crm/tiquets?empresa_id=${actualId}`).catch(() => []),
+        ]);
         setTenant(data);
+        setFactures(factData || []);
+        setTiquets(tiqData || []);
         setNomEmpresa(data.nom || data.rao_social || "");
         setNifEmpresa(data.nif || "");
         setAdrecaEmpresa(data.adreca || "");
@@ -318,8 +322,6 @@ export default function EmpresaDetailPage({ params }: { params: { id: string } }
           setIncloureOperaris(tOp > 0);
         }
       }
-      setFactures(Array.isArray(factData) ? factData : []);
-      setTiquets(Array.isArray(tiqData) ? tiqData : []);
     } catch (err: any) {
       setErrorMessage(err.message || "Error al carregar el tenant.");
     } finally {
@@ -785,23 +787,30 @@ export default function EmpresaDetailPage({ params }: { params: { id: string } }
       return;
     }
     try {
+      const currentToken = getAuthToken();
+      if (currentToken) {
+        localStorage.setItem("sevalor_superadmin_token", currentToken);
+      }
       const data = await apiFetch<any>(`/superadmin/tenants/${params.id}/impersonate`, {
         method: "POST",
       });
       if (data?.access_token) {
+        const actualEmpresaId = data.empresa_id || params.id;
+        const tenantNom = tenant?.nom || tenant?.rao_social || nomEmpresa || "";
         setAuthToken(data.access_token);
         localStorage.setItem(
           "sevalor_user",
           JSON.stringify({
             ...data,
             is_impersonation: true,
-            empresa_id: params.id,
+            empresa_id: actualEmpresaId,
+            empresa_nom: tenantNom,
             rol: "SUPERADMIN",
           })
         );
-        localStorage.setItem("sevalor_tenant_id", params.id);
+        localStorage.setItem("sevalor_tenant_id", actualEmpresaId);
         if (typeof sessionStorage !== "undefined") {
-          sessionStorage.setItem("sevalor_tenant_id", params.id);
+          sessionStorage.setItem("sevalor_tenant_id", actualEmpresaId);
         }
         window.location.href = "/gestio";
       }
@@ -888,7 +897,16 @@ export default function EmpresaDetailPage({ params }: { params: { id: string } }
                 {nomEmpresa || tenant?.nom || tenant?.rao_social}
               </h1>
               <span className="text-xs px-2.5 py-1 rounded-lg font-mono bg-emerald-50 dark:bg-emerald-950/70 text-emerald-700 dark:text-emerald-400 font-bold border border-emerald-300 dark:border-emerald-800 flex items-center gap-1.5">
-                <span>{tenant?.domini_custom || `${tenant?.subdomini}.sevalor.cat`}</span>
+                <a
+                  href={`https://${tenant?.domini_custom || `${tenant?.subdomini}.projectexinoxano.cat`}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="hover:underline flex items-center gap-1"
+                  title="Obrir plataforma en el domini de l'empresa"
+                >
+                  <span>{tenant?.domini_custom || `${tenant?.subdomini}.projectexinoxano.cat`}</span>
+                  <ExternalLink className="w-3 h-3" />
+                </a>
                 {tenant?.domini_custom && (
                   <span
                     className={`px-1.5 py-0.2 rounded text-[9px] uppercase font-bold ${

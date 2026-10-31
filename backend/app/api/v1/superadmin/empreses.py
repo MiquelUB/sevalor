@@ -1,6 +1,5 @@
 import logging
 import os
-import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
@@ -10,6 +9,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.v1.superadmin.tenants import _resolve_empresa
 from app.core.config import settings
 from app.core.db import get_db_with_tenant_context, set_tenant_context
 from app.core.security import require_roles
@@ -129,24 +129,19 @@ async def update_camaleo_config(
     db: AsyncSession = Depends(get_db_with_tenant_context),
     claims: Dict[str, Any] = Depends(require_roles(["SUPERADMIN", "BOSS"])),
 ) -> Dict[str, Any]:
-    try:
-        emp_uuid = uuid.UUID(empresa_id)
-    except ValueError:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="UUID invàlid.")
+    empresa = await _resolve_empresa(db, empresa_id)
+    if not empresa:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Empresa no trobada.")
+    emp_uuid = empresa.id
 
     # BOSS role validation: make sure BOSS is modifying their own company
     rol = claims.get("rol", "")
     token_emp_id = claims.get("empresa_id")
-    if rol == "BOSS" and str(token_emp_id) != str(empresa_id):
+    if rol == "BOSS" and str(token_emp_id) != str(emp_uuid):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Un BOSS només pot modificar la configuració de la seva pròpia empresa.",
         )
-
-    emp_res = await db.execute(select(Empresa).where(Empresa.id == emp_uuid))
-    empresa = emp_res.scalars().first()
-    if not empresa:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Empresa no trobada.")
 
     if payload.nom is not None and payload.nom.strip():
         empresa.nom = payload.nom.strip()
@@ -196,23 +191,18 @@ async def pujar_logotip_empresa(
     claims: Dict[str, Any] = Depends(require_roles(["SUPERADMIN", "BOSS"])),
 ) -> Dict[str, Any]:
     """Pujada i registre del logotip oficial de l'empresa al disc sobirà Hetzner."""
-    try:
-        emp_uuid = uuid.UUID(empresa_id)
-    except ValueError:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="UUID invàlid.")
+    empresa = await _resolve_empresa(db, empresa_id)
+    if not empresa:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Empresa no trobada.")
+    emp_uuid = empresa.id
 
     rol = claims.get("rol", "")
     token_emp_id = claims.get("empresa_id")
-    if rol == "BOSS" and str(token_emp_id) != str(empresa_id):
+    if rol == "BOSS" and str(token_emp_id) != str(emp_uuid):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Un BOSS només pot carregar el logotip de la seva pròpia empresa.",
         )
-
-    emp_res = await db.execute(select(Empresa).where(Empresa.id == emp_uuid))
-    empresa = emp_res.scalars().first()
-    if not empresa:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Empresa no trobada.")
 
     content = await fitxer.read()
     if len(content) > 10 * 1024 * 1024:
@@ -250,17 +240,12 @@ async def obtenir_logotip_empresa(
     Si no n'hi ha cap de pujat o no es troba el fitxer a disc, genera un SVG vectorial dinàmic
     amb el monograma de l'empresa i el seu color primari corporatiu.
     """
-    try:
-        emp_uuid = uuid.UUID(empresa_id)
-    except ValueError:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="UUID invàlid.")
-
-    await set_tenant_context(db, str(emp_uuid), is_superadmin=True)
-
-    emp_res = await db.execute(select(Empresa).where(Empresa.id == emp_uuid))
-    empresa = emp_res.scalars().first()
+    empresa = await _resolve_empresa(db, empresa_id)
     if not empresa:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Empresa no trobada.")
+    emp_uuid = empresa.id
+
+    await set_tenant_context(db, str(emp_uuid), is_superadmin=True)
 
     local_path = resoldre_fitxer_logotip_local(empresa.logotip_path, str(empresa.id))
     if local_path and os.path.exists(local_path):
@@ -309,17 +294,12 @@ async def esborrar_logotip_empresa(
     claims: Dict[str, Any] = Depends(require_roles(["SUPERADMIN", "BOSS"])),
 ) -> Dict[str, Any]:
     """Restableix el logotip a la identitat vectorial dinàmica per defecte."""
-    try:
-        emp_uuid = uuid.UUID(empresa_id)
-    except ValueError:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="UUID invàlid.")
-
-    await set_tenant_context(db, str(emp_uuid), is_superadmin=True)
-
-    emp_res = await db.execute(select(Empresa).where(Empresa.id == emp_uuid))
-    empresa = emp_res.scalars().first()
+    empresa = await _resolve_empresa(db, empresa_id)
     if not empresa:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Empresa no trobada.")
+    emp_uuid = empresa.id
+
+    await set_tenant_context(db, str(emp_uuid), is_superadmin=True)
 
     empresa.logotip_path = None
     empresa.favicon_path = None
@@ -349,17 +329,12 @@ async def activar_custom_domain(
     claims: Dict[str, Any] = Depends(require_roles(["SUPERADMIN"])),
 ) -> Dict[str, Any]:
     """Verifica el registre DNS i activa el certificat SSL a EasyPanel per al domini de l'empresa."""
-    try:
-        emp_uuid = uuid.UUID(empresa_id)
-    except ValueError:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="UUID invàlid.")
-
-    await set_tenant_context(db, str(emp_uuid), is_superadmin=True)
-
-    emp_res = await db.execute(select(Empresa).where(Empresa.id == emp_uuid))
-    empresa = emp_res.scalars().first()
+    empresa = await _resolve_empresa(db, empresa_id)
     if not empresa:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Empresa no trobada.")
+    emp_uuid = empresa.id
+
+    await set_tenant_context(db, str(emp_uuid), is_superadmin=True)
 
     target_domain = (
         payload.domini_custom.strip().lower()

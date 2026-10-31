@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.v1.superadmin.tenants import _resolve_empresa
 from app.core.db import get_db_with_tenant_context
 from app.core.security import require_roles
 from app.models.models import (
@@ -245,11 +246,11 @@ async def llistar_factures_b2b(
     """Llista totes les pre-factures i factures B2B Veri*factu (fins i tot d'empreses donades de baixa)."""
     stmt = select(SaasFacturaB2B).order_by(SaasFacturaB2B.created_at.desc())
     if empresa_id:
-        try:
-            emp_uuid = uuid.UUID(empresa_id)
-            stmt = stmt.where(SaasFacturaB2B.empresa_id == emp_uuid)
-        except ValueError:
-            raise HTTPException(status_code=400, detail="UUID d'empresa invàlid.")
+        emp = await _resolve_empresa(db, empresa_id)
+        if emp:
+            stmt = stmt.where(SaasFacturaB2B.empresa_id == emp.id)
+        else:
+            raise HTTPException(status_code=404, detail="Empresa no trobada.")
 
     res = await db.execute(stmt)
     factures = res.scalars().all()
@@ -749,11 +750,11 @@ async def llistar_tiquets_suport(
     """Llista tots els tiquets d'incidència tècnica conservats al CRM."""
     stmt = select(SaasTiquetSuport).order_by(SaasTiquetSuport.created_at.desc())
     if empresa_id:
-        try:
-            emp_uuid = uuid.UUID(empresa_id)
-            stmt = stmt.where(SaasTiquetSuport.empresa_id == emp_uuid)
-        except ValueError:
-            raise HTTPException(status_code=400, detail="UUID d'empresa invàlid.")
+        emp = await _resolve_empresa(db, empresa_id)
+        if emp:
+            stmt = stmt.where(SaasTiquetSuport.empresa_id == emp.id)
+        else:
+            raise HTTPException(status_code=404, detail="Empresa no trobada.")
 
     res = await db.execute(stmt)
     return [_serialitzar_tiquet(t) for t in res.scalars().all()]

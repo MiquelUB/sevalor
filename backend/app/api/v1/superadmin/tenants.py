@@ -18,7 +18,7 @@ import jwt
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field, model_validator
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -75,6 +75,31 @@ def _calcular_buffer_diari_bytes(empresa_id: str, fallback_bytes: int = 0) -> in
                     except OSError:
                         pass
     return total if total > 0 else fallback_bytes
+
+
+async def _resolve_empresa(db: AsyncSession, empresa_id_or_slug: str) -> Optional[Empresa]:
+    """Cerca i resol una Empresa per UUID o bé per subdomini / domini personalitzat."""
+    clean = (empresa_id_or_slug or "").strip().lower()
+    if not clean:
+        return None
+    try:
+        emp_uuid = uuid.UUID(clean)
+        res = await db.execute(select(Empresa).where(Empresa.id == emp_uuid))
+        emp = res.scalars().first()
+        if emp:
+            return emp
+    except ValueError:
+        pass
+
+    res = await db.execute(
+        select(Empresa).where(
+            or_(
+                func.lower(Empresa.subdomini) == clean,
+                func.lower(Empresa.domini_custom) == clean,
+            )
+        )
+    )
+    return res.scalars().first()
 
 
 class EquipIAVenutItem(BaseModel):
@@ -951,15 +976,10 @@ async def actualitzar_domini_tenant(
     claims: Dict[str, Any] = Depends(require_roles(["SUPERADMIN"])),
 ) -> Dict[str, Any]:
     """Actualitza el domini personalitzat de l'empresa o el seu subdomini intern."""
-    try:
-        emp_uuid = uuid.UUID(empresa_id)
-    except ValueError:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="UUID invàlid.")
-
-    res = await db.execute(select(Empresa).where(Empresa.id == emp_uuid))
-    emp = res.scalars().first()
+    emp = await _resolve_empresa(db, empresa_id)
     if not emp:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant no trobat.")
+    emp_uuid = emp.id
 
     if payload.domini_custom is not None:
         dom_clean = payload.domini_custom.strip().lower() or None
@@ -1028,15 +1048,10 @@ async def obtenir_tenant(
     claims: Dict[str, Any] = Depends(require_roles(["SUPERADMIN"])),
 ) -> Dict[str, Any]:
     """Retorna totes les metadades, CRM, condicions comercials i quotes d'un tenant individual."""
-    try:
-        emp_uuid = uuid.UUID(empresa_id)
-    except ValueError:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="UUID invàlid.")
-
-    emp_res = await db.execute(select(Empresa).where(Empresa.id == emp_uuid))
-    emp = emp_res.scalars().first()
+    emp = await _resolve_empresa(db, empresa_id)
     if not emp:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant no trobat.")
+    emp_uuid = emp.id
 
     count_res = await db.execute(
         select(func.count(Usuari.id)).where(
@@ -1143,15 +1158,10 @@ async def canviar_estat_tenant(
     if nou_estat == "SUSPES":
         nou_estat = "SUSPES_PAGAMENT"
 
-    try:
-        emp_uuid = uuid.UUID(empresa_id)
-    except ValueError:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="UUID invàlid.")
-
-    emp_res = await db.execute(select(Empresa).where(Empresa.id == emp_uuid))
-    empresa = emp_res.scalars().first()
+    empresa = await _resolve_empresa(db, empresa_id)
     if not empresa:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Empresa no trobada.")
+    emp_uuid = empresa.id
 
     estat_anterior = empresa.estat_pagament
     empresa.estat_pagament = nou_estat
@@ -1201,15 +1211,10 @@ async def canviar_quota_tenant(
     db: AsyncSession = Depends(get_db_with_tenant_context),
     claims: Dict[str, Any] = Depends(require_roles(["SUPERADMIN"])),
 ) -> Dict[str, Any]:
-    try:
-        emp_uuid = uuid.UUID(empresa_id)
-    except ValueError:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="UUID invàlid.")
-
-    emp_res = await db.execute(select(Empresa).where(Empresa.id == emp_uuid))
-    empresa = emp_res.scalars().first()
+    empresa = await _resolve_empresa(db, empresa_id)
     if not empresa:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Empresa no trobada.")
+    emp_uuid = empresa.id
 
     nou_pla = (payload.pla_subscripcio or empresa.pla_subscripcio or "STARTER").strip().upper()
     if payload.quota_operaris is not None:
@@ -1275,15 +1280,10 @@ async def actualitzar_crm_tenant(
     claims: Dict[str, Any] = Depends(require_roles(["SUPERADMIN"])),
 ) -> Dict[str, Any]:
     """Actualitza les condicions comercials del CRM, tarifes editables, equips IA (venda) i notes."""
-    try:
-        emp_uuid = uuid.UUID(empresa_id)
-    except ValueError:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="UUID invàlid.")
-
-    emp_res = await db.execute(select(Empresa).where(Empresa.id == emp_uuid))
-    empresa = emp_res.scalars().first()
+    empresa = await _resolve_empresa(db, empresa_id)
     if not empresa:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Empresa no trobada.")
+    emp_uuid = empresa.id
 
     if payload.quota_operaris is not None:
         count_res = await db.execute(
@@ -1350,15 +1350,10 @@ async def recuperar_dades_empresa_zip(
     claims: Dict[str, Any] = Depends(require_roles(["SUPERADMIN"])),
 ) -> StreamingResponse:
     """Exporta un paquet .zip amb totes les dades de l'empresa abans de donar-la de baixa."""
-    try:
-        emp_uuid = uuid.UUID(empresa_id)
-    except ValueError:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="UUID invàlid.")
-
-    emp_res = await db.execute(select(Empresa).where(Empresa.id == emp_uuid))
-    emp = emp_res.scalars().first()
+    emp = await _resolve_empresa(db, empresa_id)
     if not emp:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Empresa no trobada.")
+    emp_uuid = emp.id
 
     usuaris_res = await db.execute(select(Usuari).where(Usuari.empresa_id == emp_uuid))
     usuaris = [
@@ -1509,13 +1504,7 @@ async def update_feature_flags(
     db: AsyncSession = Depends(get_db_with_tenant_context),
     claims: Dict[str, Any] = Depends(require_roles(["SUPERADMIN"])),
 ) -> Dict[str, Any]:
-    try:
-        emp_uuid = uuid.UUID(empresa_id)
-    except ValueError:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="UUID invàlid.")
-
-    emp_res = await db.execute(select(Empresa).where(Empresa.id == emp_uuid))
-    empresa = emp_res.scalars().first()
+    empresa = await _resolve_empresa(db, empresa_id)
     if not empresa:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Empresa no trobada.")
 
@@ -1551,13 +1540,7 @@ async def impersonate_tenant(
     db: AsyncSession = Depends(get_db_with_tenant_context),
     claims: Dict[str, Any] = Depends(require_roles(["SUPERADMIN"])),
 ) -> Dict[str, Any]:
-    try:
-        emp_uuid = uuid.UUID(empresa_id)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="UUID invàlid")
-
-    emp_res = await db.execute(select(Empresa).where(Empresa.id == emp_uuid))
-    empresa = emp_res.scalars().first()
+    empresa = await _resolve_empresa(db, empresa_id)
     if not empresa:
         raise HTTPException(status_code=404, detail="Empresa no trobada")
 
@@ -1599,15 +1582,10 @@ async def regenerar_activacio_boss(
     claims: Dict[str, Any] = Depends(require_roles(["SUPERADMIN"])),
 ) -> Dict[str, Any]:
     """Genera o recupera un enllaç d'activació 2FA per al compte BOSS del tenant."""
-    try:
-        emp_uuid = uuid.UUID(empresa_id)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="UUID invàlid")
-
-    emp_res = await db.execute(select(Empresa).where(Empresa.id == emp_uuid))
-    emp = emp_res.scalars().first()
+    emp = await _resolve_empresa(db, empresa_id)
     if not emp:
         raise HTTPException(status_code=404, detail="Empresa no trobada")
+    emp_uuid = emp.id
 
     boss_res = await db.execute(
         select(Usuari).where(
@@ -1654,10 +1632,10 @@ async def establir_password_boss(
     claims: Dict[str, Any] = Depends(require_roles(["SUPERADMIN"])),
 ) -> Dict[str, Any]:
     """Estableix directament la contrasenya del BOSS per si no es fa servir l'enllaç d'activació."""
-    try:
-        emp_uuid = uuid.UUID(empresa_id)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="UUID invàlid")
+    emp = await _resolve_empresa(db, empresa_id)
+    if not emp:
+        raise HTTPException(status_code=404, detail="Empresa no trobada")
+    emp_uuid = emp.id
 
     boss_res = await db.execute(
         select(Usuari).where(
@@ -1686,15 +1664,10 @@ async def destroy_tenant(
     db: AsyncSession = Depends(get_db_with_tenant_context),
     claims: Dict[str, Any] = Depends(require_roles(["SUPERADMIN"])),
 ) -> Dict[str, Any]:
-    try:
-        tenant_uuid = uuid.UUID(tenant_id)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="UUID invàlid")
-
-    emp_res = await db.execute(select(Empresa).where(Empresa.id == tenant_uuid))
-    emp = emp_res.scalar_one_or_none()
+    emp = await _resolve_empresa(db, tenant_id)
     if not emp:
         raise HTTPException(status_code=404, detail="Tenant no trobat")
+    tenant_uuid = emp.id
 
     estat_ant = emp.estat_pagament
     emp.estat_pagament = "ELIMINAT"

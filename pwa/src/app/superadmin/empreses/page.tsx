@@ -21,7 +21,7 @@ import {
   FileText,
   Cpu,
 } from "lucide-react";
-import { apiFetch, getApiBaseUrl, setAuthToken } from "@/lib/api";
+import { apiFetch, getApiBaseUrl, getAuthToken, setAuthToken } from "@/lib/api";
 
 interface Tenant {
   id: string;
@@ -128,21 +128,32 @@ export default function EmpresesPage() {
     }
     setImpersonatingId(tenantId);
     try {
+      const currentToken = getAuthToken();
+      if (currentToken) {
+        localStorage.setItem("sevalor_superadmin_token", currentToken);
+      }
       const data = await apiFetch<any>(`/superadmin/tenants/${tenantId}/impersonate`, {
         method: "POST",
       });
       if (data && data.access_token) {
+        const found = tenants.find((t) => t.id === tenantId);
+        const actualEmpresaId = data.empresa_id || tenantId;
+        const tenantNom = found?.nom || found?.rao_social || "";
         setAuthToken(data.access_token);
         localStorage.setItem(
           "sevalor_user",
           JSON.stringify({
             ...data,
             is_impersonation: true,
-            empresa_id: tenantId,
+            empresa_id: actualEmpresaId,
+            empresa_nom: tenantNom,
             rol: "SUPERADMIN",
           })
         );
-        localStorage.setItem("sevalor_tenant_id", tenantId);
+        localStorage.setItem("sevalor_tenant_id", actualEmpresaId);
+        if (typeof sessionStorage !== "undefined") {
+          sessionStorage.setItem("sevalor_tenant_id", actualEmpresaId);
+        }
         window.location.href = "/gestio";
       }
     } catch (e: any) {
