@@ -1579,8 +1579,10 @@ IMPERSONATION_HANDOFF_PREFIX = "impersonation_handoff:"
 
 
 def _host_tenant_empresa(empresa: Empresa) -> Optional[str]:
-    """Retorna el host públic propi de l'empresa (domini_custom) o None si no en té."""
-    domini = (empresa.domini_custom or "").strip().lower()
+    """Retorna el host públic propi de l'empresa (domini_custom o subdomini.projectexinoxano.cat)."""
+    subd = (empresa.subdomini or "").strip().lower()
+    base_subdomini = f"{subd}.projectexinoxano.cat" if subd else ""
+    domini = (empresa.domini_custom or "").strip().lower() or base_subdomini
     if not domini or not re.fullmatch(r"[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?", domini):
         return None
     if domini == (settings.PLATFORM_ADMIN_HOST or "").strip().lower():

@@ -1,6 +1,7 @@
 """Helper centralitzat per a la gestió de Redis asíncron (Spec 04 & Blacklist de Tenants)."""
 
 import logging
+import os
 from typing import Optional
 
 import redis.asyncio as aioredis
@@ -16,17 +17,25 @@ async def get_redis_client() -> Optional[aioredis.Redis]:
     """Retorna una instància compartida de connexió a Redis o None si no està disponible."""
     global _redis_client
     if _redis_client is not None:
-        return _redis_client
+        try:
+            await _redis_client.ping()
+            return _redis_client
+        except Exception:
+            _redis_client = None
 
     try:
-        redis_url = str(settings.REDIS_URL or "redis://localhost:6379/0")
-        _redis_client = aioredis.from_url(
+        redis_pass = os.getenv("REDIS_PASSWORD", "sevalor_redis_pass")
+        auth_part = f":{redis_pass}@" if redis_pass else ""
+        default_url = f"redis://{auth_part}{settings.REDIS_HOST}:{settings.REDIS_PORT}/0"
+        redis_url = str(os.getenv("REDIS_URL") or settings.REDIS_URL or default_url)
+        client = aioredis.from_url(
             redis_url,
             socket_connect_timeout=1.5,
             socket_timeout=1.5,
             decode_responses=True,
         )
-        await _redis_client.ping()
+        await client.ping()
+        _redis_client = client
         return _redis_client
     except Exception as exc:
         logger.warning("Redis no disponible en get_redis_client: %s", exc)
