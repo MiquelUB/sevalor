@@ -373,7 +373,7 @@ class Article(Base):
     )
     referencia_inventari: Mapped[str] = mapped_column(String(50), nullable=False)
     codi_barres: Mapped[Optional[str]] = mapped_column(String(100), unique=True)
-    nom: Mapped[str] = mapped_column(String(150), nullable=False)
+    nom: Mapped[str] = mapped_column(String(500), nullable=False)
     unitat_mesura: Mapped[str] = mapped_column(
         String(30), default="UNITAT", server_default="UNITAT"
     )
@@ -655,7 +655,7 @@ class EinaCustodia(Base):
         UUID(as_uuid=True), ForeignKey("empreses.id", ondelete="CASCADE"), nullable=False
     )
     referencia_fabricant: Mapped[Optional[str]] = mapped_column(String(100))
-    nom: Mapped[str] = mapped_column(String(150), nullable=False)
+    nom: Mapped[str] = mapped_column(String(500), nullable=False)
     model: Mapped[Optional[str]] = mapped_column(String(100))
     numero_serie: Mapped[str] = mapped_column(String(100), nullable=False)
     estat: Mapped[str] = mapped_column(

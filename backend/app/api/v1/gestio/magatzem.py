@@ -72,7 +72,7 @@ class ArticleCreate(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     referencia_inventari: str = Field(..., max_length=50)
     codi_barres: Optional[str] = Field(None, max_length=100)
-    nom: str = Field(..., max_length=150)
+    nom: str = Field(..., max_length=500)
     unitat_mesura: str = Field("UNITAT", max_length=30)
     es_material_continu: bool = Field(False)
     familia: str = Field("GENERAL", max_length=50)
@@ -254,7 +254,7 @@ from app.models.models import EinaCustodia  # noqa: E402
 class EinaCreate(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     referencia_fabricant: Optional[str] = None
-    nom: str = Field(..., max_length=150)
+    nom: str = Field(..., max_length=500)
     model: Optional[str] = None
     numero_serie: str = Field(..., max_length=100)
     data_fi_garantia: Optional[date] = None
@@ -969,8 +969,8 @@ async def confirmar_document(
                 for _ in range(quantitat):
                     eina_ocr = EinaCustodia(
                         empresa_id=empresa_id,
-                        referencia_fabricant=linia.referencia,
-                        nom=linia.nom,
+                        referencia_fabricant=linia.referencia[:100] if linia.referencia else None,
+                        nom=linia.nom.strip()[:500] if linia.nom else "Eina sense nom",
                         model="OCR pendent revisió",
                         numero_serie=f"PENDENT_SN_{uuid.uuid4().hex[:8].upper()}",
                         estat="DISPONIBLE",
@@ -980,17 +980,19 @@ async def confirmar_document(
                 # Les eines no sumen al moviment d'estoc de materials ni al preu PMP.
                 continue
 
+            ref_neta = linia.referencia.strip()[:50] if linia.referencia else f"REF-{uuid.uuid4().hex[:8].upper()}"
             stmt_art = select(Article).where(
                 Article.empresa_id == empresa_id,
-                Article.referencia_inventari == linia.referencia,
+                Article.referencia_inventari == ref_neta,
             )
             article = (await db.execute(stmt_art)).scalars().first()
 
             if not article:
+                nom_net = linia.nom.strip()[:500] if linia.nom else "Article sense nom"
                 article = Article(
                     empresa_id=empresa_id,
-                    referencia_inventari=linia.referencia,
-                    nom=linia.nom,
+                    referencia_inventari=ref_neta,
+                    nom=nom_net,
                     unitat_mesura="UNITAT",
                     familia="GENERAL",
                     proveidor_id=prov.id,

@@ -78,3 +78,61 @@ async def test_albara_ocr_i_confirmacio(admin_session, headers, boss_token):
         assert res_fac.status_code == 201, res_fac.json()
         data_fac = res_fac.json()
         assert data_fac["estat"] == "OK"
+
+
+@pytest.mark.asyncio
+async def test_albara_confirmar_descripcio_llarga_mes_de_150_caracters(admin_session, headers, boss_token):
+    """Verifica que descripcions d'articles i eines de més de 150 caràcters s'insereixen correctament sense error 500."""
+    token, empresa_id = boss_token
+    boss_nif = "B" + str(uuid.uuid4())[:8].upper()
+
+    admin_session.add(Empresa(
+        id=uuid.UUID(empresa_id), nom='Test OCR Desc Llarga', nif=boss_nif, subdomini='testdesc-' + str(uuid.uuid4())[:5], pla_subscripcio='STARTER', estat_pagament='ACTIU'
+    ))
+    await admin_session.flush()
+
+    nom_llarg_160 = "Carraca d'alta precisió amb posicionador integrat - E Parell Contactes de Connectors de coure estanyat MC4 IP68 Mascle/Femella amb tancament 1500V snap-in DC"
+    assert len(nom_llarg_160) > 150
+
+    nom_ultra_llarg_600 = "Component solar especialitzat " + ("X" * 580)
+    assert len(nom_ultra_llarg_600) > 500
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        payload_confirmar = {
+            "proveidor": {"nif": "B98765432", "nom": "Distribuïdor Solar S.L.", "adreca": "Polígon Ind.", "telefon": "977112233", "email": "solar@example.com"},
+            "numero_document": f"ALB-LLARG-{uuid.uuid4().hex[:6]}",
+            "tipus_document": "ALBARA",
+            "data_document": date.today().isoformat(),
+            "numero_albarans_vinculats": [],
+            "linies": [
+                {
+                    "referencia": "CON-MC4",
+                    "nom": nom_llarg_160,
+                    "quantitat": 50,
+                    "preu": 1.70,
+                    "descompte_percent": 8.0,
+                    "tipus": "MATERIAL"
+                },
+                {
+                    "referencia": "EINA-CRIMP-01",
+                    "nom": nom_llarg_160,
+                    "quantitat": 1,
+                    "preu": 85.0,
+                    "descompte_percent": 0.0,
+                    "tipus": "EINA"
+                },
+                {
+                    "referencia": "ART-ULTRA",
+                    "nom": nom_ultra_llarg_600,
+                    "quantitat": 10,
+                    "preu": 25.0,
+                    "descompte_percent": 5.0,
+                    "tipus": "MATERIAL"
+                }
+            ]
+        }
+        res = await ac.post("/api/v1/gestio/magatzem/albara/confirmar", json=payload_confirmar, headers=headers)
+        assert res.status_code == 201, res.text
+        data = res.json()
+        assert data["estat"] == "OK"
+        assert data["articles_creats"] == 2
