@@ -437,15 +437,24 @@ export default function LlistaMaquinesPage() {
                     </p>
                   </div>
                 </div>
-                <a
-                  href={`/api/v1/operari/planols/${ordre.planol_id}/fitxer`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="px-3 py-1.5 rounded-lg bg-primary hover:bg-primary/90 text-white text-xs font-bold flex items-center gap-1.5 transition-all shadow-sm active:scale-95 cursor-pointer"
-                >
-                  <ExternalLink className="w-3.5 h-3.5" />
-                  <span>Veure Plànol</span>
-                </a>
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <Link
+                    href={`/operari/planols?planol=${ordre.planol_id}&ordre_id=${ordre.id}`}
+                    className="px-3 py-1.5 rounded-lg bg-secondary-container hover:brightness-110 text-white text-xs font-bold flex items-center gap-1.5 transition-all shadow-sm active:scale-95 cursor-pointer"
+                  >
+                    <Layers className="w-3.5 h-3.5" />
+                    <span>Editar As-Built</span>
+                  </Link>
+                  <a
+                    href={`/api/v1/operari/planols/${ordre.planol_id}/fitxer`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="px-2.5 py-1.5 rounded-lg border border-outline-variant/60 bg-surface-container-lowest text-on-surface hover:bg-surface-container text-xs font-semibold flex items-center gap-1 transition-all"
+                  >
+                    <ExternalLink className="w-3 h-3 text-primary" />
+                    <span>PDF</span>
+                  </a>
+                </div>
               </div>
               <div className="p-2.5 bg-surface-container-low dark:bg-slate-800/60 rounded-lg text-xs font-medium text-slate-800 dark:text-slate-200">
                 {ordre.planol_titol || "Plànol d'emplaçament o instal·lació d'obra"}

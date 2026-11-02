@@ -25,16 +25,51 @@ router = APIRouter(
 
 class CapaVectorialCreate(BaseModel):
     nom: str
+    disciplina: str = "OBRA_CIVIL"
+    color_hex: str = "#0284c7"
+    gruix_linia: int = 3
     es_tancada: bool = False
     visible: bool = True
-    dades_geojson: Dict[str, Any]
+    dades_geojson: Dict[str, Any] | None = None
+    geometries_geojson: Dict[str, Any] | None = None
 
 
 class CapaVectorialResponse(BaseModel):
     id: uuid.UUID
     nom: str
+    disciplina: str
+    color_hex: str
+    gruix_linia: int
     es_tancada: bool
+    visible: bool
     dades_geojson: Dict[str, Any]
+
+
+@router.get("/disponibles")
+async def llistar_planols_disponibles_operari(
+    request: Request,
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+):
+    """Llista els plànols base disponibles per a l'operari."""
+    empresa_id = request.state.empresa_id
+    if not empresa_id or empresa_id == "undefined":
+        raise HTTPException(status_code=401, detail="Context d'empresa no trobat")
+
+    result = await db.execute(
+        select(PlanolBase).where(PlanolBase.empresa_id == uuid.UUID(empresa_id))
+    )
+    planols = result.scalars().all()
+    return [
+        {
+            "id": str(p.id),
+            "titol": p.titol,
+            "codi_referencia": p.codi_referencia,
+            "tipus_fitxer": p.tipus_fitxer,
+            "es_georeferenciat": p.es_georeferenciat,
+            "projeccio": p.projeccio,
+        }
+        for p in planols
+    ]
 
 
 @router.post(
@@ -59,17 +94,19 @@ async def crear_capa_operari(
     if not planol_res.scalars().first():
         raise HTTPException(status_code=404, detail="Plànol no trobat")
 
+    geojson = payload.geometries_geojson or payload.dades_geojson or {"type": "FeatureCollection", "features": []}
+
     nova_capa = CapaVectorial(
         empresa_id=uuid.UUID(empresa_id),
         planol_base_id=planol_id,
         nom=payload.nom,
-        disciplina="OBRA_CIVIL",
+        disciplina=payload.disciplina or "OBRA_CIVIL",
         es_immutable=payload.es_tancada,
-        color_hex="#2563eb",
-        gruix_linia=2,
+        color_hex=payload.color_hex or "#0284c7",
+        gruix_linia=payload.gruix_linia or 3,
         opacitat_percent=100,
-        visible=True,
-        geometries_geojson=payload.dades_geojson,
+        visible=payload.visible,
+        geometries_geojson=geojson,
         version_id=1,
     )
     db.add(nova_capa)
@@ -78,7 +115,11 @@ async def crear_capa_operari(
     return CapaVectorialResponse(
         id=nova_capa.id,
         nom=nova_capa.nom,
+        disciplina=nova_capa.disciplina,
+        color_hex=nova_capa.color_hex,
+        gruix_linia=nova_capa.gruix_linia,
         es_tancada=nova_capa.es_immutable,
+        visible=nova_capa.visible,
         dades_geojson=nova_capa.geometries_geojson,
     )
 
