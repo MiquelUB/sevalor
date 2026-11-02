@@ -28,8 +28,29 @@ class OperariCreate(BaseModel):
     nom: str = Field(..., max_length=100)
     cognoms: str = Field("", max_length=100)
     telefon: str = Field(..., max_length=20)
+    email: Optional[str] = Field(None, max_length=150)
+    rol: str = Field("OPERARI", max_length=30)
     especialitat: str = Field("SISTEMES_REG", max_length=50)
     cost_hora_eur: float = Field(22.50)
+    carnet_conduir: str = Field("B", max_length=20)
+
+
+class OperariUpdate(BaseModel):
+    nom: Optional[str] = Field(None, max_length=100)
+    cognoms: Optional[str] = Field(None, max_length=100)
+    nif: Optional[str] = Field(None, max_length=20)
+    telefon: Optional[str] = Field(None, max_length=20)
+    email: Optional[str] = Field(None, max_length=150)
+    rol: Optional[str] = Field(None, max_length=30)
+    especialitat: Optional[str] = Field(None, max_length=50)
+    estat_operatiu: Optional[str] = Field(None, max_length=30)
+    estat: Optional[str] = Field(None, max_length=20)
+    cost_hora_eur: Optional[float] = None
+    carnet_conduir: Optional[str] = Field(None, max_length=20)
+    carnet_caducitat: Optional[date] = None
+    prl_certificat_vigencia: Optional[date] = None
+    cap_de_grup_id: Optional[uuid.UUID] = None
+    vehicle_assignat_id: Optional[uuid.UUID] = None
 
 
 class OperariResponse(BaseModel):
@@ -53,6 +74,8 @@ class OperariResponse(BaseModel):
     vehicle_assignat_id: Optional[uuid.UUID] = None
     latitud: Optional[float] = None
     longitud: Optional[float] = None
+    pin_generat: Optional[str] = None
+    login_url: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -155,8 +178,9 @@ async def alta_operari(
                 ),
             )
 
+    nif_clean = operari.nif.strip().upper()
     stmt = select(Usuari).where(
-        Usuari.empresa_id == emp_uuid, Usuari.nif == operari.nif
+        Usuari.empresa_id == emp_uuid, func.upper(Usuari.nif) == nif_clean
     )
     result = await db.execute(stmt)
     if result.scalars().first():
@@ -164,24 +188,138 @@ async def alta_operari(
 
     nou_pin = generar_pin()
     hashed_pin = hash_pin(nou_pin)
+    rol_norm = operari.rol.strip().upper() if operari.rol else "OPERARI"
+    if rol_norm not in ("OPERARI", "CAP_DE_COLLA"):
+        rol_norm = "OPERARI"
 
     nou_usuari = Usuari(
+        id=uuid.uuid4(),
         empresa_id=uuid.UUID(empresa_id),
-        nif=operari.nif,
-        nom=operari.nom,
-        cognoms=operari.cognoms,
-        telefon=operari.telefon,
+        nif=nif_clean,
+        nom=operari.nom.strip(),
+        cognoms=(operari.cognoms or "").strip(),
+        email=operari.email.strip().lower() if operari.email else None,
+        telefon=operari.telefon.strip(),
         especialitat=operari.especialitat,
         cost_hora_eur=operari.cost_hora_eur,
-        rol="OPERARI",
+        carnet_conduir=operari.carnet_conduir or "B",
+        rol=rol_norm,
         estat="ACTIU",
         pin_hash=hashed_pin,
     )
     db.add(nou_usuari)
+    await db.flush()
+    resp_obj = OperariResponse.model_validate(nou_usuari)
+    resp_obj.pin_generat = nou_pin
+    resp_obj.login_url = "/operari/login"
     await db.commit()
 
     print(f"[SMS DISPATCH] -> Per a {operari.telefon}: El teu nou PIN de CampoPro és {nou_pin}")
-    return nou_usuari
+    return resp_obj
+
+
+@router.put("/{operari_id}", response_model=OperariResponse)
+async def actualitzar_operari(
+    request: Request,
+    operari_id: uuid.UUID,
+    payload: OperariUpdate,
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+    claims: dict = Depends(require_roles(["BOSS", "SECRETARIA"])),
+):
+    """Actualitza les dades d'un operari (només BOSS i SECRETARIA; Veto d'Enginyer HTTP 403)."""
+    empresa_id = await verificar_permisos_boss(request)
+    emp_uuid = uuid.UUID(empresa_id)
+
+    stmt = select(Usuari).where(
+        Usuari.id == operari_id,
+        Usuari.empresa_id == emp_uuid,
+        Usuari.rol.in_(["OPERARI", "CAP_DE_COLLA"]),
+    )
+    result = await db.execute(stmt)
+    usuari = result.scalars().first()
+    if not usuari:
+        raise HTTPException(status_code=404, detail="Operari no trobat")
+
+    if payload.nif is not None:
+        nif_clean = payload.nif.strip().upper()
+        if nif_clean != usuari.nif:
+            res_nif = await db.execute(
+                select(Usuari).where(
+                    Usuari.empresa_id == emp_uuid,
+                    func.upper(Usuari.nif) == nif_clean,
+                    Usuari.id != operari_id,
+                )
+            )
+            if res_nif.scalars().first():
+                raise HTTPException(
+                    status_code=400, detail="Ja existeix un altre usuari amb aquest NIF"
+                )
+            usuari.nif = nif_clean
+
+    if payload.nom is not None and payload.nom.strip():
+        usuari.nom = payload.nom.strip()
+    if payload.cognoms is not None:
+        usuari.cognoms = payload.cognoms.strip()
+    if payload.telefon is not None and payload.telefon.strip():
+        usuari.telefon = payload.telefon.strip()
+    if payload.email is not None:
+        usuari.email = payload.email.strip().lower() if payload.email.strip() else None
+    if payload.rol is not None:
+        rol_norm = payload.rol.strip().upper()
+        if rol_norm in ("OPERARI", "CAP_DE_COLLA"):
+            usuari.rol = rol_norm
+    if payload.especialitat is not None and payload.especialitat.strip():
+        usuari.especialitat = payload.especialitat.strip()
+    if payload.estat_operatiu is not None and payload.estat_operatiu.strip():
+        usuari.estat_operatiu = payload.estat_operatiu.strip().upper()
+    if payload.estat is not None and payload.estat.strip():
+        usuari.estat = payload.estat.strip().upper()
+    if payload.cost_hora_eur is not None:
+        usuari.cost_hora_eur = float(payload.cost_hora_eur)
+    if payload.carnet_conduir is not None and payload.carnet_conduir.strip():
+        usuari.carnet_conduir = payload.carnet_conduir.strip()
+    if payload.carnet_caducitat is not None:
+        usuari.carnet_caducitat = payload.carnet_caducitat
+    if payload.prl_certificat_vigencia is not None:
+        usuari.prl_certificat_vigencia = payload.prl_certificat_vigencia
+    if "cap_de_grup_id" in payload.model_fields_set:
+        usuari.cap_de_grup_id = payload.cap_de_grup_id
+    if "vehicle_assignat_id" in payload.model_fields_set:
+        usuari.vehicle_assignat_id = payload.vehicle_assignat_id
+
+    usuari.updated_at = datetime.now(timezone.utc)
+    await db.flush()
+    resp_obj = OperariResponse.model_validate(usuari)
+    await db.commit()
+    return resp_obj
+
+
+@router.post("/{operari_id}/baixa")
+async def tramitar_baixa_operari(
+    request: Request,
+    operari_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+    claims: dict = Depends(require_roles(["BOSS", "SECRETARIA"])),
+):
+    """Tramita la baixa laboral d'un operari (només BOSS i SECRETARIA)."""
+    empresa_id = await verificar_permisos_boss(request)
+    emp_uuid = uuid.UUID(empresa_id)
+
+    stmt = select(Usuari).where(
+        Usuari.id == operari_id,
+        Usuari.empresa_id == emp_uuid,
+    )
+    result = await db.execute(stmt)
+    usuari = result.scalars().first()
+    if not usuari:
+        raise HTTPException(status_code=404, detail="Operari no trobat")
+
+    usuari.estat = "BAIXA"
+    usuari.estat_operatiu = "BAIXA"
+    usuari.updated_at = datetime.now(timezone.utc)
+    await db.commit()
+
+    return {"status": "OK", "missatge": "Baixa laboral tramitada correctament", "id": str(operari_id)}
 
 
 @router.post("/{operari_id}/reset-pin")
@@ -204,14 +342,25 @@ async def reset_pin_operari(
     usuari.pin_hash = hash_pin(nou_pin)
     usuari.pin_bloquejat = False
     usuari.intents_pin_fallits = 0
+    nom_complet = f"{usuari.nom or ''} {usuari.cognoms or ''}".strip()
+    nif_str = usuari.nif
+    telefon_str = usuari.telefon
+    rol_str = usuari.rol
 
     await db.commit()
-    print(f"[SMS DISPATCH] -> Per a {usuari.telefon}: El teu nou PIN de CampoPro és {nou_pin}")
+    print(f"[SMS DISPATCH] -> Per a {telefon_str}: El teu nou PIN de CampoPro és {nou_pin}")
 
     return {
         "missatge": "Nou PIN generat i tramès per SMS",
-        "pin_bloquejat": usuari.pin_bloquejat,
-        "intents_pin_fallits": usuari.intents_pin_fallits,
+        "id": str(operari_id),
+        "nom_complet": nom_complet,
+        "nif": nif_str,
+        "telefon": telefon_str,
+        "rol": rol_str,
+        "pin_generat": nou_pin,
+        "login_url": "/operari/login",
+        "pin_bloquejat": False,
+        "intents_pin_fallits": 0,
     }
 
 

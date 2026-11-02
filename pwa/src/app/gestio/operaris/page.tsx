@@ -35,6 +35,7 @@ import {
   DollarSign,
   AlertCircle,
   Mic,
+  Pencil,
 } from "lucide-react";
 import { useGestio } from "@/lib/gestio-context";
 
@@ -117,13 +118,16 @@ export default function GestioOperarisPage() {
 
   // Modals
   const [modalAltaObert, setModalAltaObert] = useState<boolean>(false);
+  const [modalEditarObert, setModalEditarObert] = useState<boolean>(false);
   const [modalRegularitzarObert, setModalRegularitzarObert] = useState<boolean>(false);
   const [shiftPerRegularitzar, setShiftPerRegularitzar] = useState<ShiftItem | null>(null);
   const [modalResetPinObert, setModalResetPinObert] = useState<boolean>(false);
   const [modalBaixaObert, setModalBaixaObert] = useState<boolean>(false);
-  const [modalCostHoraObert, setModalCostHoraObert] = useState<boolean>(false);
 
-  // Formularis
+  // Permís d'edició per a BOSS i SECRETARIA
+  const potEditarOperari = rolActiu === "BOSS" || rolActiu === "SECRETARIA";
+
+  // Formularis d'Alta
   const [nouNom, setNouNom] = useState<string>("");
   const [nousCognoms, setNousCognoms] = useState<string>("");
   const [nouNif, setNouNif] = useState<string>("");
@@ -133,6 +137,22 @@ export default function GestioOperarisPage() {
   const [novaEspecialitat, setNovaEspecialitat] = useState<string>("SISTEMES_REG");
   const [nouCostHora, setNouCostHora] = useState<number>(22.50);
   const [nouCarnet, setNouCarnet] = useState<string>("B");
+
+  // Formulari d'Edició d'Operari (BOSS / SECRETARIA)
+  const [operariEditantId, setOperariEditantId] = useState<string | null>(null);
+  const [editNom, setEditNom] = useState<string>("");
+  const [editCognoms, setEditCognoms] = useState<string>("");
+  const [editNif, setEditNif] = useState<string>("");
+  const [editTelefon, setEditTelefon] = useState<string>("");
+  const [editEmail, setEditEmail] = useState<string>("");
+  const [editRol, setEditRol] = useState<"OPERARI" | "CAP_DE_COLLA">("OPERARI");
+  const [editEspecialitat, setEditEspecialitat] = useState<string>("SISTEMES_REG");
+  const [editEstatOperatiu, setEditEstatOperatiu] = useState<"DISPONIBLE" | "EN_FEINA" | "VACANCES" | "BAIXA">("DISPONIBLE");
+  const [editCostHora, setEditCostHora] = useState<number>(22.50);
+  const [editCarnet, setEditCarnet] = useState<string>("B");
+  const [editCarnetCaducitat, setEditCarnetCaducitat] = useState<string>("");
+  const [editPrlVigencia, setEditPrlVigencia] = useState<string>("");
+  const [desantEdicio, setDesantEdicio] = useState<boolean>(false);
 
   // Form Regularització
   const [regHoraInici, setRegHoraInici] = useState<string>("08:00");
@@ -236,6 +256,84 @@ export default function GestioOperarisPage() {
     } catch (err: any) {
       alert("Error creant operari: " + (err.message || "Error desconegut"));
       setModalAltaObert(false);
+    }
+  };
+
+  // Obrir editor d'operari (només BOSS i SECRETARIA)
+  const obrirEditorOperari = (op: OperariItem) => {
+    setOperariEditantId(op.id);
+    setEditNom(op.nom || "");
+    setEditCognoms(op.cognoms || "");
+    setEditNif(op.nif || "");
+    setEditTelefon(op.telefon || "");
+    setEditEmail(op.email || "");
+    setEditRol(op.rol || "OPERARI");
+    setEditEspecialitat(op.especialitat || "SISTEMES_REG");
+    setEditEstatOperatiu(op.estat_operatiu || "DISPONIBLE");
+    setEditCostHora(Number(op.cost_hora_eur) || 22.50);
+    setEditCarnet(op.carnet_conduir || "B");
+    setEditCarnetCaducitat(op.carnet_caducitat || "");
+    setEditPrlVigencia(op.prl_certificat_vigencia || "");
+    setModalEditarObert(true);
+  };
+
+  // Desar edició d'operari (PUT /gestio/operaris/{id})
+  const handleDesarEdicioOperari = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!operariEditantId || !editNom || !editNif || !editTelefon) return;
+
+    setDesantEdicio(true);
+    try {
+      await apiFetch<any>(`/gestio/operaris/${operariEditantId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          nom: editNom,
+          cognoms: editCognoms,
+          nif: editNif,
+          telefon: editTelefon,
+          email: editEmail || null,
+          rol: editRol,
+          especialitat: editEspecialitat,
+          estat_operatiu: editEstatOperatiu,
+          estat: editEstatOperatiu === "BAIXA" ? "INACTIU" : "ACTIU",
+          cost_hora_eur: editCostHora,
+          carnet_conduir: editCarnet,
+          carnet_caducitat: editCarnetCaducitat || null,
+          prl_certificat_vigencia: editPrlVigencia || null,
+        }),
+      });
+
+      setPinGeneratAlert(`Dades de l'operari ${editNom} ${editCognoms} actualitzades correctament.`);
+      setModalEditarObert(false);
+
+      // Si l'operari seleccionat a la Fitxa 360° és el mateix, actualitzem la seva fitxa al vol
+      if (operariSeleccionat && operariSeleccionat.id === operariEditantId) {
+        setOperariSeleccionat({
+          ...operariSeleccionat,
+          nom: editNom,
+          cognoms: editCognoms,
+          nom_complet: `${editNom} ${editCognoms}`.trim(),
+          nif: editNif,
+          telefon: editTelefon,
+          email: editEmail || "",
+          rol: editRol,
+          is_team_leader: editRol === "CAP_DE_COLLA",
+          especialitat: editEspecialitat,
+          estat_operatiu: editEstatOperatiu,
+          actiu: editEstatOperatiu !== "BAIXA",
+          cost_hora_eur: editCostHora,
+          carnet_conduir: editCarnet,
+          carnet_caducitat: editCarnetCaducitat || null,
+          prl_certificat_vigencia: editPrlVigencia || null,
+        });
+      }
+
+      fetchOperaris();
+    } catch (err: any) {
+      alert("Error actualitzant operari: " + (err.message || "Error desconegut"));
+    } finally {
+      setDesantEdicio(false);
     }
   };
 
@@ -597,15 +695,14 @@ export default function GestioOperarisPage() {
                         <span className="font-bold text-slate-900 dark:text-white">
                           {op.cost_hora_eur.toFixed(2)} €/h
                         </span>
-                        {rolActiu !== "ENGINYER" && (
+                        {potEditarOperari && (
                           <button
                             onClick={(e) => {
                               e.stopPropagation();
-                              setOperariSeleccionat(op);
-                              setModalCostHoraObert(true);
+                              obrirEditorOperari(op);
                             }}
-                            className="p-0.5 hover:bg-slate-200 dark:hover:bg-slate-700 rounded text-slate-400"
-                            title="Editar cost hora"
+                            className="p-0.5 hover:bg-slate-200 dark:hover:bg-slate-700 rounded text-slate-400 hover:text-amber-500 transition-colors"
+                            title="Editar operari i cost hora"
                           >
                             ✎
                           </button>
@@ -636,6 +733,16 @@ export default function GestioOperarisPage() {
                     {/* Accions */}
                     <td className="px-4 py-3 text-right">
                       <div className="flex items-center justify-end gap-1.5" onClick={(e) => e.stopPropagation()}>
+                        {potEditarOperari && (
+                          <button
+                            onClick={() => obrirEditorOperari(op)}
+                            className="px-2 py-1 rounded bg-amber-100 hover:bg-amber-200 dark:bg-amber-950/60 dark:hover:bg-amber-900 text-amber-800 dark:text-amber-300 border border-amber-300/60 dark:border-amber-800/60 text-[11px] font-mono font-bold flex items-center gap-1 transition-colors"
+                            title="Editar fitxa de l'operari (Secretaria / Boss)"
+                          >
+                            <Pencil className="w-3 h-3" />
+                            <span>Editar</span>
+                          </button>
+                        )}
                         <button
                           onClick={() => {
                             setOperariSeleccionat(op);
@@ -680,6 +787,16 @@ export default function GestioOperarisPage() {
                 </div>
               </div>
               <div className="flex items-center gap-2">
+                {potEditarOperari && (
+                  <button
+                    onClick={() => obrirEditorOperari(operariSeleccionat)}
+                    className="px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-500 text-white font-bold text-xs flex items-center gap-1.5 shadow-sm transition-colors"
+                    title="Editar dades de l'operari"
+                  >
+                    <Pencil className="w-3.5 h-3.5" />
+                    <span>Editar Operari</span>
+                  </button>
+                )}
                 <Link
                   href={`/gestio/mapa?operari_id=${operariSeleccionat.id}`}
                   className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs flex items-center gap-1.5 shadow-sm transition-colors"
@@ -758,8 +875,15 @@ export default function GestioOperarisPage() {
                     </p>
                   </div>
 
-                  {rolActiu !== "ENGINYER" && (
-                    <div className="flex gap-2 pt-2">
+                  {potEditarOperari && (
+                    <div className="flex flex-wrap gap-2 pt-2">
+                      <button
+                        onClick={() => obrirEditorOperari(operariSeleccionat)}
+                        className="px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-500 text-white font-bold flex items-center gap-1.5"
+                      >
+                        <Pencil className="w-3.5 h-3.5" />
+                        <span>Editar Fitxa Operari</span>
+                      </button>
                       <button
                         onClick={() => setModalResetPinObert(true)}
                         className="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-bold flex items-center gap-1.5"
@@ -1098,6 +1222,196 @@ export default function GestioOperarisPage() {
                 >
                   <Check className="w-4 h-4" />
                   <span>Crear i Trametre PIN SMS</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL EDITOR D'OPERARI (BOSS / SECRETARIA) */}
+      {modalEditarObert && potEditarOperari && (
+        <div className="fixed inset-0 z-[60] bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="w-full max-w-xl bg-white dark:bg-slate-900 rounded-2xl shadow-xl border border-slate-200 dark:border-slate-800 overflow-hidden font-mono text-xs">
+            <div className="p-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between">
+              <h3 className="font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                <Pencil className="w-4 h-4 text-amber-500" />
+                <span>Editor d'Operari (Rol Secretaria & Boss)</span>
+              </h3>
+              <button
+                onClick={() => setModalEditarObert(false)}
+                className="p-1 hover:bg-slate-100 dark:hover:bg-slate-800 rounded"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleDesarEdicioOperari} className="p-5 space-y-3 max-h-[82vh] overflow-y-auto">
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-[10px] text-slate-400">Nom *</label>
+                  <input
+                    type="text"
+                    required
+                    value={editNom}
+                    onChange={(e) => setEditNom(e.target.value)}
+                    placeholder="Ex: Jordi"
+                    className="w-full px-3 py-1.5 rounded-lg bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs mt-1"
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] text-slate-400">Cognoms *</label>
+                  <input
+                    type="text"
+                    required
+                    value={editCognoms}
+                    onChange={(e) => setEditCognoms(e.target.value)}
+                    placeholder="Ex: Soler Vila"
+                    className="w-full px-3 py-1.5 rounded-lg bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs mt-1"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-[10px] text-slate-400">NIF / NIE *</label>
+                  <input
+                    type="text"
+                    required
+                    value={editNif}
+                    onChange={(e) => setEditNif(e.target.value)}
+                    placeholder="Ex: 47821948B"
+                    className="w-full px-3 py-1.5 rounded-lg bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs mt-1 uppercase"
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] text-slate-400">Telèfon Corporatiu / SMS *</label>
+                  <input
+                    type="tel"
+                    required
+                    value={editTelefon}
+                    onChange={(e) => setEditTelefon(e.target.value)}
+                    placeholder="Ex: +34612345678"
+                    className="w-full px-3 py-1.5 rounded-lg bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs mt-1"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="text-[10px] text-slate-400">Correu Electrònic (Opcional)</label>
+                <input
+                  type="email"
+                  value={editEmail}
+                  onChange={(e) => setEditEmail(e.target.value)}
+                  placeholder="Ex: operari@empresa.cat"
+                  className="w-full px-3 py-1.5 rounded-lg bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs mt-1"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-[10px] text-slate-400">Rol a Camp</label>
+                  <select
+                    value={editRol}
+                    onChange={(e) => setEditRol(e.target.value as "OPERARI" | "CAP_DE_COLLA")}
+                    className="w-full px-3 py-1.5 rounded-lg bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs mt-1"
+                  >
+                    <option value="OPERARI">Oficial / Operari de Camp</option>
+                    <option value="CAP_DE_COLLA">Cap de Colla 👑</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="text-[10px] text-slate-400">Especialitat Tècnica</label>
+                  <select
+                    value={editEspecialitat}
+                    onChange={(e) => setEditEspecialitat(e.target.value)}
+                    className="w-full px-3 py-1.5 rounded-lg bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs mt-1"
+                  >
+                    <option value="SISTEMES_REG">Sistemes de Reg</option>
+                    <option value="OBRA_CIVIL">Obra Civil</option>
+                    <option value="ELECTRICITAT">Electricitat</option>
+                    <option value="CONDUCTOR_MAQUINARIA">Maquinària</option>
+                    <option value="FONTANERIA">Fontaneria</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-[10px] text-slate-400">Estat Operatiu</label>
+                  <select
+                    value={editEstatOperatiu}
+                    onChange={(e) => setEditEstatOperatiu(e.target.value as any)}
+                    className="w-full px-3 py-1.5 rounded-lg bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs mt-1"
+                  >
+                    <option value="DISPONIBLE">DISPONIBLE</option>
+                    <option value="EN_FEINA">EN FEINA</option>
+                    <option value="VACANCES">VACANCES</option>
+                    <option value="BAIXA">BAIXA</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="text-[10px] text-slate-400">Cost/Hora Imputació d'Obra (€/h)</label>
+                  <input
+                    type="number"
+                    step="0.5"
+                    min="0"
+                    value={editCostHora}
+                    onChange={(e) => setEditCostHora(parseFloat(e.target.value) || 0)}
+                    className="w-full px-3 py-1.5 rounded-lg bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs mt-1"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-3 gap-3">
+                <div>
+                  <label className="text-[10px] text-slate-400">Carnet de Conduir</label>
+                  <select
+                    value={editCarnet}
+                    onChange={(e) => setEditCarnet(e.target.value)}
+                    className="w-full px-3 py-1.5 rounded-lg bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs mt-1"
+                  >
+                    <option value="B">Permís B</option>
+                    <option value="B+E">Permís B+E (Remolc)</option>
+                    <option value="C">Permís C (Camió)</option>
+                    <option value="C+E">Permís C+E</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="text-[10px] text-slate-400">Caducitat Carnet</label>
+                  <input
+                    type="date"
+                    value={editCarnetCaducitat}
+                    onChange={(e) => setEditCarnetCaducitat(e.target.value)}
+                    className="w-full px-3 py-1.5 rounded-lg bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs mt-1"
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] text-slate-400">Vigència PRL</label>
+                  <input
+                    type="date"
+                    value={editPrlVigencia}
+                    onChange={(e) => setEditPrlVigencia(e.target.value)}
+                    className="w-full px-3 py-1.5 rounded-lg bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs mt-1"
+                  />
+                </div>
+              </div>
+
+              <div className="pt-3 border-t border-slate-200 dark:border-slate-800 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setModalEditarObert(false)}
+                  className="px-3 py-1.5 rounded-lg bg-slate-100 dark:bg-slate-800 font-bold"
+                >
+                  Cancel·lar
+                </button>
+                <button
+                  type="submit"
+                  disabled={desantEdicio}
+                  className="px-4 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white font-bold flex items-center gap-1.5 shadow"
+                >
+                  <Check className="w-4 h-4" />
+                  <span>{desantEdicio ? "Desant..." : "Desar Canvis"}</span>
                 </button>
               </div>
             </form>
