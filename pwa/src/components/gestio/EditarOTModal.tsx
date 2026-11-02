@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo, useRef } from "react";
 import {
   X,
   Save,
@@ -21,6 +21,8 @@ import {
   CheckCircle2,
   Box,
   Clock,
+  Search,
+  Tag,
 } from "lucide-react";
 import { apiFetch } from "@/lib/api";
 import { geocodificarAdreca } from "@/lib/geocoding";
@@ -61,6 +63,7 @@ interface ArticleCataleg {
   nom: string;
   referencia_inventari: string;
   unitat_mesura: string;
+  familia?: string;
   estoc_real?: number;
   actiu?: boolean;
 }
@@ -105,12 +108,78 @@ export function EditarOTModal({ feinaId, onClose, onSuccess }: EditarOTModalProp
   const [liniesPicking, setLiniesPicking] = useState<LiniaPickingUI[]>([]);
   const [selectedEinaIds, setSelectedEinaIds] = useState<string[]>([]);
 
-  // Subform for adding picking item
+  // Autocomplete & Family state for Picking (Materials)
+  const [filtreFamilia, setFiltreFamilia] = useState<string>("TOTES");
+  const [cercaArticle, setCercaArticle] = useState<string>("");
+  const [selectedArticle, setSelectedArticle] = useState<ArticleCataleg | null>(null);
   const [selectedArticleId, setSelectedArticleId] = useState("");
   const [quantitatPickingInput, setQuantitatPickingInput] = useState<number>(1);
+  const [isArticleDropdownOpen, setIsArticleDropdownOpen] = useState(false);
+  const articleComboboxRef = useRef<HTMLDivElement>(null);
 
-  // Subform for adding tool
+  // Autocomplete state for Eines (Tools)
+  const [cercaEina, setCercaEina] = useState<string>("");
+  const [selectedEina, setSelectedEina] = useState<EinaUI | null>(null);
   const [selectedEinaInputId, setSelectedEinaInputId] = useState("");
+  const [isEinaDropdownOpen, setIsEinaDropdownOpen] = useState(false);
+  const einaComboboxRef = useRef<HTMLDivElement>(null);
+
+  // Close dropdowns on outside click
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (articleComboboxRef.current && !articleComboboxRef.current.contains(e.target as Node)) {
+        setIsArticleDropdownOpen(false);
+      }
+      if (einaComboboxRef.current && !einaComboboxRef.current.contains(e.target as Node)) {
+        setIsEinaDropdownOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
+  // Compute available families for articles
+  const familiesDisponibles = useMemo(() => {
+    const fams = new Set<string>();
+    articlesCatalog.forEach((a) => {
+      if (a.familia && a.familia.trim()) fams.add(a.familia.trim());
+    });
+    return Array.from(fams).sort();
+  }, [articlesCatalog]);
+
+  // Filtered articles for autocomplete (capped at 10 items for responsive UX)
+  const filteredArticles = useMemo(() => {
+    const q = cercaArticle.trim().toLowerCase();
+    return articlesCatalog
+      .filter((art) => {
+        if (filtreFamilia !== "TOTES" && (art.familia || "").toUpperCase() !== filtreFamilia.toUpperCase()) {
+          return false;
+        }
+        if (!q) return true;
+        return (
+          art.nom.toLowerCase().includes(q) ||
+          art.referencia_inventari.toLowerCase().includes(q) ||
+          (art.familia && art.familia.toLowerCase().includes(q))
+        );
+      })
+      .slice(0, 10);
+  }, [articlesCatalog, cercaArticle, filtreFamilia]);
+
+  // Filtered tools for autocomplete (capped at 10 items)
+  const filteredEines = useMemo(() => {
+    const q = cercaEina.trim().toLowerCase();
+    return einesCatalog
+      .filter((e) => !selectedEinaIds.includes(e.id))
+      .filter((e) => {
+        if (!q) return true;
+        return (
+          e.nom.toLowerCase().includes(q) ||
+          e.numero_serie.toLowerCase().includes(q) ||
+          (e.model && e.model.toLowerCase().includes(q))
+        );
+      })
+      .slice(0, 10);
+  }, [einesCatalog, selectedEinaIds, cercaEina]);
 
   // Load feina and auxiliary catalogs
   useEffect(() => {
@@ -230,9 +299,22 @@ export function EditarOTModal({ feinaId, onClose, onSuccess }: EditarOTModalProp
   };
 
   // Picking functions
+  const handleSelectArticle = (art: ArticleCataleg) => {
+    setSelectedArticle(art);
+    setSelectedArticleId(art.id);
+    setCercaArticle(`[${art.referencia_inventari}] ${art.nom}`);
+    setIsArticleDropdownOpen(false);
+  };
+
+  const handleClearArticle = () => {
+    setSelectedArticle(null);
+    setSelectedArticleId("");
+    setCercaArticle("");
+    setIsArticleDropdownOpen(false);
+  };
+
   const handleAfegirMaterial = () => {
-    if (!selectedArticleId) return;
-    const article = articlesCatalog.find((a) => a.id === selectedArticleId);
+    const article = selectedArticle || articlesCatalog.find((a) => a.id === selectedArticleId);
     if (!article) return;
 
     if (quantitatPickingInput <= 0) {
@@ -241,7 +323,7 @@ export function EditarOTModal({ feinaId, onClose, onSuccess }: EditarOTModalProp
     }
 
     // Check if already in list
-    const existentIndex = liniesPicking.findIndex((l) => l.article_id === selectedArticleId);
+    const existentIndex = liniesPicking.findIndex((l) => l.article_id === article.id);
     if (existentIndex >= 0) {
       const noves = [...liniesPicking];
       noves[existentIndex].quantitat_prevista += quantitatPickingInput;
@@ -260,7 +342,7 @@ export function EditarOTModal({ feinaId, onClose, onSuccess }: EditarOTModalProp
       ]);
     }
 
-    setSelectedArticleId("");
+    handleClearArticle();
     setQuantitatPickingInput(1);
     setErrorMsg(null);
   };
@@ -277,11 +359,26 @@ export function EditarOTModal({ feinaId, onClose, onSuccess }: EditarOTModalProp
   };
 
   // Eines functions
-  const handleVincularEina = () => {
-    if (!selectedEinaInputId) return;
-    if (selectedEinaIds.includes(selectedEinaInputId)) return;
-    setSelectedEinaIds([...selectedEinaIds, selectedEinaInputId]);
+  const handleSelectEina = (eina: EinaUI) => {
+    setSelectedEina(eina);
+    setSelectedEinaInputId(eina.id);
+    setCercaEina(`${eina.nom} (${eina.model || eina.numero_serie})`);
+    setIsEinaDropdownOpen(false);
+  };
+
+  const handleClearEina = () => {
+    setSelectedEina(null);
     setSelectedEinaInputId("");
+    setCercaEina("");
+    setIsEinaDropdownOpen(false);
+  };
+
+  const handleVincularEina = () => {
+    const einaId = selectedEina?.id || selectedEinaInputId;
+    if (!einaId) return;
+    if (selectedEinaIds.includes(einaId)) return;
+    setSelectedEinaIds([...selectedEinaIds, einaId]);
+    handleClearEina();
   };
 
   const handleDesvincularEina = (einaId: string) => {
@@ -781,54 +878,169 @@ export function EditarOTModal({ feinaId, onClose, onSuccess }: EditarOTModalProp
                       Fulla de Picking (Pickup de Materials & Control d&apos;Inventari)
                     </p>
                     <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
-                      Els materials sol·licitats es reserven automàticament de l&apos;estoc de magatzem per evitar trencaments i es sincronitzen amb la càrrega de la furgoneta.
+                      Filtra per família i comença a escriure per autocompletar l&apos;article. La quantitat sol·licitada es reserva automàticament de l&apos;estoc de magatzem.
                     </p>
                   </div>
                 </div>
 
-                {/* Subformulari afegir article */}
-                <div className="p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 flex flex-col sm:flex-row items-end gap-3">
-                  <div className="flex-1 w-full">
-                    <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                      Seleccionar Article de Magatzem
-                    </label>
-                    <select
-                      value={selectedArticleId}
-                      onChange={(e) => setSelectedArticleId(e.target.value)}
-                      className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary"
-                    >
-                      <option value="">Tria un article de l&apos;inventari...</option>
-                      {articlesCatalog.map((art) => (
-                        <option key={art.id} value={art.id}>
-                          [{art.referencia_inventari}] {art.nom} (Estoc: {art.estoc_real ?? 0} {art.unitat_mesura})
-                        </option>
-                      ))}
-                    </select>
+                {/* Subformulari afegir article amb cerca autocompletable i selecció de família */}
+                <div className="p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 space-y-3">
+                  {/* Fila 1: Filtre de Família & Input de Cerca Autocompletable */}
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    {/* Selector de Família */}
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1 flex items-center gap-1">
+                        <Tag className="w-3.5 h-3.5 text-primary" />
+                        <span>Família de Material</span>
+                      </label>
+                      <select
+                        value={filtreFamilia}
+                        onChange={(e) => {
+                          setFiltreFamilia(e.target.value);
+                          setIsArticleDropdownOpen(true);
+                        }}
+                        className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary"
+                      >
+                        <option value="TOTES">Totes les famílies ({articlesCatalog.length})</option>
+                        {familiesDisponibles.map((f) => (
+                          <option key={f} value={f}>
+                            {f}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    {/* Cerca Autocompletable */}
+                    <div className="sm:col-span-2 relative" ref={articleComboboxRef}>
+                      <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1 flex items-center justify-between">
+                        <span className="flex items-center gap-1">
+                          <Search className="w-3.5 h-3.5 text-primary" />
+                          <span>Cerca d&apos;Article (Autocompletar)</span>
+                        </span>
+                        {selectedArticle && (
+                          <span className="text-[11px] font-mono font-bold text-emerald-600 dark:text-emerald-400">
+                            Estoc: {selectedArticle.estoc_real ?? 0} {selectedArticle.unitat_mesura}
+                          </span>
+                        )}
+                      </label>
+
+                      <div className="relative">
+                        <input
+                          type="text"
+                          value={cercaArticle}
+                          onFocus={() => setIsArticleDropdownOpen(true)}
+                          onChange={(e) => {
+                            setCercaArticle(e.target.value);
+                            setSelectedArticle(null);
+                            setSelectedArticleId("");
+                            setIsArticleDropdownOpen(true);
+                          }}
+                          placeholder="Escriu per cercar per referència, nom o família..."
+                          className="w-full pl-9 pr-8 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary font-medium"
+                        />
+                        <Search className="w-4 h-4 text-slate-400 absolute left-3 top-2.5 pointer-events-none" />
+                        {cercaArticle && (
+                          <button
+                            type="button"
+                            onClick={handleClearArticle}
+                            className="absolute right-2.5 top-2.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer"
+                          >
+                            <X className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </div>
+
+                      {/* Dropdown d'autocompletat */}
+                      {isArticleDropdownOpen && (
+                        <div className="absolute top-full left-0 right-0 mt-1 z-30 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl shadow-2xl overflow-hidden max-h-60 overflow-y-auto">
+                          {filteredArticles.length > 0 ? (
+                            filteredArticles.map((art) => (
+                              <button
+                                key={art.id}
+                                type="button"
+                                onClick={() => handleSelectArticle(art)}
+                                className="w-full text-left px-3 py-2 text-xs hover:bg-slate-50 dark:hover:bg-slate-800/70 border-b border-slate-100 dark:border-slate-800 last:border-b-0 flex items-center justify-between gap-2 transition-colors cursor-pointer"
+                              >
+                                <div className="min-w-0 flex-1">
+                                  <div className="flex items-center gap-1.5 flex-wrap">
+                                    <span className="font-mono text-[11px] font-bold text-primary">
+                                      [{art.referencia_inventari}]
+                                    </span>
+                                    <span className="font-medium text-slate-800 dark:text-slate-200 truncate">
+                                      {art.nom}
+                                    </span>
+                                  </div>
+                                  {art.familia && (
+                                    <span className="inline-block mt-0.5 text-[10px] px-1.5 py-0.2 rounded bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 font-mono">
+                                      {art.familia}
+                                    </span>
+                                  )}
+                                </div>
+                                <div className="text-right shrink-0">
+                                  <span
+                                    className={`font-mono text-[11px] font-bold ${
+                                      (art.estoc_real ?? 0) <= 0
+                                        ? "text-error"
+                                        : "text-slate-600 dark:text-slate-300"
+                                    }`}
+                                  >
+                                    {art.estoc_real ?? 0} {art.unitat_mesura}
+                                  </span>
+                                </div>
+                              </button>
+                            ))
+                          ) : (
+                            <div className="p-3 text-center text-xs text-slate-400">
+                              Cap article coincident amb la cerca.
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
                   </div>
 
-                  <div className="w-full sm:w-28">
-                    <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                      Quantitat
-                    </label>
-                    <input
-                      type="number"
-                      step="any"
-                      min="0.001"
-                      value={quantitatPickingInput}
-                      onChange={(e) => setQuantitatPickingInput(parseFloat(e.target.value) || 0)}
-                      className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary font-mono"
-                    />
-                  </div>
+                  {/* Fila 2: Detalls de l'article seleccionat i botó d'afegir */}
+                  {selectedArticle && (
+                    <div className="pt-2 border-t border-slate-100 dark:border-slate-800 flex flex-col sm:flex-row items-end gap-3 animate-in fade-in duration-100">
+                      <div className="flex-1 w-full p-2.5 rounded-lg bg-primary/5 dark:bg-primary/10 border border-primary/20 flex items-center justify-between">
+                        <div className="min-w-0">
+                          <p className="text-[11px] text-slate-500 dark:text-slate-400 font-mono">
+                            Article seleccionat:
+                          </p>
+                          <p className="text-xs font-bold text-slate-900 dark:text-white truncate">
+                            [{selectedArticle.referencia_inventari}] {selectedArticle.nom}
+                          </p>
+                        </div>
+                        <span className="shrink-0 text-xs font-mono font-bold text-emerald-600 dark:text-emerald-400 ml-2">
+                          {selectedArticle.estoc_real ?? 0} {selectedArticle.unitat_mesura} disp.
+                        </span>
+                      </div>
 
-                  <button
-                    type="button"
-                    onClick={handleAfegirMaterial}
-                    disabled={!selectedArticleId || quantitatPickingInput <= 0}
-                    className="w-full sm:w-auto px-4 py-2 rounded-xl bg-primary hover:bg-primary-container text-white text-xs font-bold transition-all flex items-center justify-center gap-1 cursor-pointer disabled:opacity-40"
-                  >
-                    <Plus className="w-3.5 h-3.5" />
-                    <span>Afegir</span>
-                  </button>
+                      <div className="w-full sm:w-28">
+                        <label className="block text-[11px] font-bold text-slate-700 dark:text-slate-300 mb-1">
+                          Quantitat ({selectedArticle.unitat_mesura})
+                        </label>
+                        <input
+                          type="number"
+                          step="any"
+                          min="0.001"
+                          value={quantitatPickingInput}
+                          onChange={(e) => setQuantitatPickingInput(parseFloat(e.target.value) || 0)}
+                          className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary font-mono"
+                        />
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={handleAfegirMaterial}
+                        disabled={quantitatPickingInput <= 0}
+                        className="w-full sm:w-auto px-4 py-2 rounded-xl bg-primary hover:bg-primary-container text-white text-xs font-bold transition-all flex items-center justify-center gap-1 cursor-pointer disabled:opacity-40"
+                      >
+                        <Plus className="w-3.5 h-3.5" />
+                        <span>Afegir Material</span>
+                      </button>
+                    </div>
+                  )}
                 </div>
 
                 {/* Taula de materials reservats */}
@@ -921,43 +1133,110 @@ export function EditarOTModal({ feinaId, onClose, onSuccess }: EditarOTModalProp
                       Eines i Equips Tècnics en Custòdia
                     </p>
                     <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
-                      Assigna maquinària, eines especialitzades o equips de mesura. Quedaran sota la custòdia directa de l&apos;operari cap de colla mentre duri la feina.
+                      Comença a escriure per autocompletar l&apos;eina per nom, model o número de sèrie. Quedaran sota la custòdia directa del cap de colla mentre duri la feina.
                     </p>
                   </div>
                 </div>
 
-                {/* Subformulari vincular eina */}
-                <div className="flex items-center gap-3">
-                  <div className="flex-1">
-                    <select
-                      value={selectedEinaInputId}
-                      onChange={(e) => setSelectedEinaInputId(e.target.value)}
-                      className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary"
-                    >
-                      <option value="">Selecciona una eina disponible per assignar...</option>
-                      {einesCatalog
-                        .filter(
-                          (eina) =>
-                            !selectedEinaIds.includes(eina.id) &&
-                            (eina.estat === "DISPONIBLE" || eina.estat === "CUSTODIADA")
-                        )
-                        .map((eina) => (
-                          <option key={eina.id} value={eina.id}>
-                            {eina.nom} {eina.model ? `(${eina.model})` : ""} — SN: {eina.numero_serie} [{eina.estat}]
-                          </option>
-                        ))}
-                    </select>
-                  </div>
+                {/* Subformulari vincular eina amb cerca autocompletable */}
+                <div className="p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 space-y-3">
+                  <div className="flex flex-col sm:flex-row items-end gap-3">
+                    {/* Input de Cerca Autocompletable */}
+                    <div className="flex-1 w-full relative" ref={einaComboboxRef}>
+                      <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1 flex items-center justify-between">
+                        <span className="flex items-center gap-1">
+                          <Search className="w-3.5 h-3.5 text-primary" />
+                          <span>Cerca d&apos;Eina / Equip (Autocompletar)</span>
+                        </span>
+                        {selectedEina && (
+                          <span className="text-[11px] font-mono font-bold text-primary">
+                            SN: {selectedEina.numero_serie}
+                          </span>
+                        )}
+                      </label>
 
-                  <button
-                    type="button"
-                    onClick={handleVincularEina}
-                    disabled={!selectedEinaInputId}
-                    className="px-4 py-2 rounded-xl bg-primary hover:bg-primary-container text-white text-xs font-bold transition-all flex items-center gap-1 cursor-pointer disabled:opacity-40"
-                  >
-                    <Plus className="w-3.5 h-3.5" />
-                    <span>Assignar</span>
-                  </button>
+                      <div className="relative">
+                        <input
+                          type="text"
+                          value={cercaEina}
+                          onFocus={() => setIsEinaDropdownOpen(true)}
+                          onChange={(e) => {
+                            setCercaEina(e.target.value);
+                            setSelectedEina(null);
+                            setSelectedEinaInputId("");
+                            setIsEinaDropdownOpen(true);
+                          }}
+                          placeholder="Escriu nom, model o número de sèrie per autocompletar..."
+                          className="w-full pl-9 pr-8 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary font-medium"
+                        />
+                        <Search className="w-4 h-4 text-slate-400 absolute left-3 top-2.5 pointer-events-none" />
+                        {cercaEina && (
+                          <button
+                            type="button"
+                            onClick={handleClearEina}
+                            className="absolute right-2.5 top-2.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer"
+                          >
+                            <X className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </div>
+
+                      {/* Dropdown d'autocompletat d'eines */}
+                      {isEinaDropdownOpen && (
+                        <div className="absolute top-full left-0 right-0 mt-1 z-30 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl shadow-2xl overflow-hidden max-h-60 overflow-y-auto">
+                          {filteredEines.length > 0 ? (
+                            filteredEines.map((eina) => (
+                              <button
+                                key={eina.id}
+                                type="button"
+                                onClick={() => handleSelectEina(eina)}
+                                className="w-full text-left px-3 py-2 text-xs hover:bg-slate-50 dark:hover:bg-slate-800/70 border-b border-slate-100 dark:border-slate-800 last:border-b-0 flex items-center justify-between gap-2 transition-colors cursor-pointer"
+                              >
+                                <div className="min-w-0 flex-1">
+                                  <div className="flex items-center gap-1.5 flex-wrap">
+                                    <span className="font-bold text-slate-800 dark:text-slate-200">
+                                      {eina.nom}
+                                    </span>
+                                    {eina.model && (
+                                      <span className="text-[11px] text-slate-500 dark:text-slate-400">
+                                        ({eina.model})
+                                      </span>
+                                    )}
+                                  </div>
+                                  <span className="inline-block mt-0.5 text-[10px] text-slate-400 font-mono">
+                                    SN: {eina.numero_serie}
+                                  </span>
+                                </div>
+                                <span
+                                  className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded-full shrink-0 ${
+                                    eina.estat === "DISPONIBLE"
+                                      ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300"
+                                      : "bg-blue-100 text-blue-800 dark:bg-blue-950/60 dark:text-blue-300"
+                                  }`}
+                                >
+                                  {eina.estat}
+                                </span>
+                              </button>
+                            ))
+                          ) : (
+                            <div className="p-3 text-center text-xs text-slate-400">
+                              Cap eina disponible coincident.
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={handleVincularEina}
+                      disabled={!selectedEina && !selectedEinaInputId}
+                      className="w-full sm:w-auto px-4 py-2 rounded-xl bg-primary hover:bg-primary-container text-white text-xs font-bold transition-all flex items-center justify-center gap-1 cursor-pointer disabled:opacity-40"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      <span>Assignar Custòdia</span>
+                    </button>
+                  </div>
                 </div>
 
                 {/* Llistat d'eines assignades */}
