@@ -504,10 +504,17 @@ async def verificar_node_ia(
                     break
                 except httpx.ConnectError:
                     last_error_motiu = "PORT_TANCAT"
-                    last_error_msg = (
-                        "Connexió rebutjada. El port està tancat o el servei d'IA (LM Studio / Ollama) "
-                        "no està en marxa a la IP/port indicats."
-                    )
+                    if "127.0.0.1" in raw_url or "localhost" in raw_url:
+                        last_error_msg = (
+                            "Connexió rebutjada a 127.0.0.1. Recordeu que si Sevalor s'executa al núvol (Hetzner Cloud), "
+                            "'127.0.0.1' apunta al mateix servidor remot d'Alemanya i no a l'ordinador dedicat de la seu de l'empresa. "
+                            "Per connectar el node de la seu des del núvol, cal indicar una adreça accessible (túnel segur HTTPS com Cloudflare o Pinggy, o domini FQDN)."
+                        )
+                    else:
+                        last_error_msg = (
+                            "Connexió rebutjada. El port està tancat o el servei d'IA (LM Studio / Ollama) "
+                            "no està en marxa a la IP/port indicats."
+                        )
                     break
                 except Exception as e:
                     last_error_motiu = "ERROR_XARXA"
@@ -591,10 +598,17 @@ async def verificar_disc_dur(
                     break
                 except httpx.ConnectError:
                     last_error_motiu = "PORT_TANCAT"
-                    last_error_msg = (
-                        "Connexió rebutjada. El port està tancat o l'ordinador dedicat "
-                        "no està en marxa a la IP/port indicats."
-                    )
+                    if "127.0.0.1" in raw_url or "localhost" in raw_url:
+                        last_error_msg = (
+                            "Connexió rebutjada a 127.0.0.1. Si Sevalor s'executa al núvol (Hetzner Cloud), "
+                            "'127.0.0.1' apunta al servidor remot d'Alemanya i no a l'ordinador dedicat de la seu. "
+                            "Per connectar el disc dur de la seu des del núvol, cal indicar una adreça accessible (túnel segur HTTPS o domini FQDN)."
+                        )
+                    else:
+                        last_error_msg = (
+                            "Connexió rebutjada. El port està tancat o l'ordinador dedicat "
+                            "no està en marxa a la IP/port indicats."
+                        )
                     break
                 except Exception as e:
                     last_error_motiu = "ERROR_XARXA"

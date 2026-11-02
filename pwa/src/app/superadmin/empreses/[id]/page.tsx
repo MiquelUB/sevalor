@@ -2394,7 +2394,7 @@ export default function EmpresaDetailPage({ params }: { params: { id: string } }
                 <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
                   <input
                     type="text"
-                    placeholder="URL de l'ordinador dedicat (ex. http://127.0.0.1:1234 o https://ia.empresa.cat)"
+                    placeholder="https://ia.empresa.cat o túnel segur (ex: https://*.trycloudflare.com)"
                     value={features.node_ia_url}
                     onChange={(e) => {
                       setFeatures({ ...features, node_ia_url: e.target.value.trim() });
@@ -2426,6 +2426,9 @@ export default function EmpresaDetailPage({ params }: { params: { id: string } }
                     </button>
                   </div>
                 </div>
+                <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                  <span className="font-semibold text-emerald-600 dark:text-emerald-400">Desplegament al Núvol (Hetzner):</span> Com que la plataforma s'executa a Hetzner, l'ordinador dedicat de la seu s'ha d'enllaçar mitjançant un túnel segur HTTPS (Cloudflare, Pinggy) o domini de l'empresa. <code className="text-[10px] bg-slate-200 dark:bg-slate-700 px-1 py-0.5 rounded">127.0.0.1</code> només és per a entorn local.
+                </p>
               </div>
 
               {/* Caixes de diagnòstic en viu (Doble Validació: IA + Disc Dur) */}
