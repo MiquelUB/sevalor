@@ -360,8 +360,11 @@ export default function ConfiguracioPage() {
       });
 
       mostrarFeedback("EXIT", "Usuari creat correctament. Credencials d'accés generades.");
-    } catch {
-      mostrarFeedback("ERROR", "No s'ha pogut crear l'usuari. Verifiqueu la connexió amb el backend.");
+    } catch (err: any) {
+      mostrarFeedback(
+        "ERROR",
+        err?.message || "No s'ha pogut crear l'usuari. Verifiqueu la connexió amb el backend."
+      );
     }
   };
 
@@ -388,11 +391,12 @@ export default function ConfiguracioPage() {
         email: u.email,
         contrasenya: contrasenya,
         rol: u.rol,
+        secret_2fa: resp.secret_2fa,
         login_url: resp.login_url || "/gestio/login",
       });
       mostrarFeedback("EXIT", `Nova contrasenya generada per a ${u.nom_complet}.`);
-    } catch {
-      mostrarFeedback("ERROR", "No s'ha pogut restablir la contrasenya de l'usuari.");
+    } catch (err: any) {
+      mostrarFeedback("ERROR", err?.message || "No s'ha pogut restablir la contrasenya de l'usuari.");
     }
   };
 
@@ -431,15 +435,18 @@ export default function ConfiguracioPage() {
     }
 
     try {
-      const data = await apiFetch<{ secret: string }>(`/gestio/configuracio/usuaris/${u.id}/reset-2fa`, { method: "POST" });
+      const data = await apiFetch<{ secret?: string; secret_2fa?: string }>(
+        `/gestio/configuracio/usuaris/${u.id}/reset-2fa`,
+        { method: "POST" }
+      );
       setModalQr2fa({
         obert: true,
         usuariNom: u.nom_complet,
-        secret: data.secret,
+        secret: data.secret_2fa || data.secret || "",
       });
       mostrarFeedback("EXIT", `2FA reiniciat per a ${u.nom_complet}. Escanegeu el codi QR amb Google Authenticator.`);
-    } catch {
-      mostrarFeedback("ERROR", "No s'ha pogut reiniciar el 2FA.");
+    } catch (err: any) {
+      mostrarFeedback("ERROR", err?.message || "No s'ha pogut reiniciar el 2FA.");
     }
   };
 

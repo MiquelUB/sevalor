@@ -13,6 +13,8 @@ export default function GestioLogin() {
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [otpDigits, setOtpDigits] = useState<string[]>(["", "", "", "", "", ""]);
+  const [manualKey2fa, setManualKey2fa] = useState("");
+  const [useManualKey, setUseManualKey] = useState(false);
   const otpRefs = useRef<(HTMLInputElement | null)[]>([]);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
@@ -33,12 +35,39 @@ export default function GestioLogin() {
   };
 
   const handleOtpChange = (index: number, val: string) => {
+    const trimmed = val.trim();
+    // Si l'usuari enganxa una clau llarga (Clau Manual 2FA) o els 6 dígits de cop
+    if (trimmed.length > 6 || (trimmed.length > 1 && /[A-Za-z]/.test(trimmed))) {
+      setManualKey2fa(trimmed.toUpperCase());
+      setUseManualKey(true);
+      return;
+    }
+    if (trimmed.length === 6 && /^\d{6}$/.test(trimmed)) {
+      setOtpDigits(trimmed.split(""));
+      otpRefs.current[5]?.focus();
+      return;
+    }
+
     const clean = val.replace(/\D/g, "").slice(-1);
     const next = [...otpDigits];
     next[index] = clean;
     setOtpDigits(next);
     if (clean && index < 5) {
       otpRefs.current[index + 1]?.focus();
+    }
+  };
+
+  const handleOtpPaste = (e: React.ClipboardEvent<HTMLInputElement>) => {
+    const pasted = e.clipboardData.getData("text").trim();
+    if (!pasted) return;
+    e.preventDefault();
+    if (/^\d{6}$/.test(pasted)) {
+      setOtpDigits(pasted.split(""));
+      setUseManualKey(false);
+      otpRefs.current[5]?.focus();
+    } else if (pasted.length > 6 || /[A-Za-z]/.test(pasted)) {
+      setManualKey2fa(pasted.toUpperCase());
+      setUseManualKey(true);
     }
   };
 
@@ -55,7 +84,7 @@ export default function GestioLogin() {
 
     try {
       const baseUrl = apiUrl || getApiBaseUrl();
-      const totpCode = otpDigits.join("");
+      const totpCode = useManualKey ? manualKey2fa.trim() : otpDigits.join("");
       const tenantId =
         (typeof sessionStorage !== "undefined" ? sessionStorage.getItem("sevalor_tenant_id") : null) ||
         (typeof localStorage !== "undefined" ? localStorage.getItem("sevalor_tenant_id") : null);
@@ -68,8 +97,8 @@ export default function GestioLogin() {
         },
         body: JSON.stringify({
           email: email.trim(),
-          password,
-          ...(totpCode.length === 6 ? { totp_code: totpCode } : {}),
+          password: password.trim(),
+          ...(totpCode ? { totp_code: totpCode } : {}),
         }),
       });
 
@@ -87,8 +116,14 @@ export default function GestioLogin() {
 
       // Guardar token al localStorage per a apiFetch
       setAuthToken(data.access_token);
-      // Guardar dades d'usuari
+      // Guardar dades d'usuari i sincronitzar el tenant_id de l'usuari autenticat
       localStorage.setItem("sevalor_user", JSON.stringify(data));
+      if (data.empresa_id) {
+        localStorage.setItem("sevalor_tenant_id", data.empresa_id);
+        if (typeof sessionStorage !== "undefined") {
+          sessionStorage.setItem("sevalor_tenant_id", data.empresa_id);
+        }
+      }
 
       window.location.href = "/gestio";
     } catch (err: any) {
@@ -215,34 +250,71 @@ export default function GestioLogin() {
             </label>
           </div>
 
-          {/* 2FA Section (Stitch Integrated TOTP) */}
+          {/* 2FA Section (Stitch Integrated TOTP + Suport Clau Manual 2FA) */}
           <div className="pt-md border-t border-surface-container-highest">
-            <div className="flex items-center gap-xs mb-md">
-              <span className="material-symbols-outlined text-secondary text-[18px]">
-                verified_user
-              </span>
-              <span className="font-label-caps text-label-caps text-on-surface uppercase">
-                Verificació en dos passos (2FA Opcional)
-              </span>
+            <div className="flex items-center justify-between gap-xs mb-md">
+              <div className="flex items-center gap-xs">
+                <span className="material-symbols-outlined text-secondary text-[18px]">
+                  verified_user
+                </span>
+                <span className="font-label-caps text-label-caps text-on-surface uppercase">
+                  Verificació en dos passos (2FA Opcional)
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setUseManualKey(!useManualKey);
+                  if (!useManualKey) {
+                    setOtpDigits(["", "", "", "", "", ""]);
+                  } else {
+                    setManualKey2fa("");
+                  }
+                }}
+                className="text-[11px] font-medium text-primary hover:underline transition-colors"
+              >
+                {useManualKey ? "Usar 6 dígits" : "Enganxar Clau Manual 2FA"}
+              </button>
             </div>
-            <div className="grid grid-cols-6 gap-sm">
-              {otpDigits.map((digit, idx) => (
+
+            {useManualKey ? (
+              <div className="space-y-1.5">
                 <input
-                  key={idx}
-                  ref={(el) => {
-                    otpRefs.current[idx] = el;
-                  }}
                   type="text"
-                  inputMode="numeric"
-                  maxLength={1}
-                  value={digit}
-                  onChange={(e) => handleOtpChange(idx, e.target.value)}
-                  onKeyDown={(e) => handleOtpKeyDown(idx, e)}
-                  placeholder="·"
-                  className="w-full h-11 text-center font-data-tabular text-lg font-bold bg-surface-container-low border border-outline-variant rounded-lg focus:border-secondary-container focus:ring-2 focus:ring-secondary-container/20 outline-none transition-all"
+                  value={manualKey2fa}
+                  onChange={(e) => setManualKey2fa(e.target.value.toUpperCase())}
+                  placeholder="Enganxeu la Clau manual 2FA TOTP o el codi de 6 dígits"
+                  className="w-full px-3.5 py-2.5 font-mono text-xs font-bold tracking-wider bg-surface-container-low border border-outline-variant rounded-lg text-on-surface focus:border-secondary-container focus:ring-2 focus:ring-secondary-container/20 outline-none transition-all uppercase"
                 />
-              ))}
-            </div>
+                <p className="text-[11px] text-on-surface-variant">
+                  Podeu introduir directament la clau manual de la fitxa de credencials o el codi de 6 dígits.
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-1.5">
+                <div className="grid grid-cols-6 gap-sm">
+                  {otpDigits.map((digit, idx) => (
+                    <input
+                      key={idx}
+                      ref={(el) => {
+                        otpRefs.current[idx] = el;
+                      }}
+                      type="text"
+                      inputMode="numeric"
+                      value={digit}
+                      onChange={(e) => handleOtpChange(idx, e.target.value)}
+                      onPaste={handleOtpPaste}
+                      onKeyDown={(e) => handleOtpKeyDown(idx, e)}
+                      placeholder="·"
+                      className="w-full h-11 text-center font-data-tabular text-lg font-bold bg-surface-container-low border border-outline-variant rounded-lg focus:border-secondary-container focus:ring-2 focus:ring-secondary-container/20 outline-none transition-all"
+                    />
+                  ))}
+                </div>
+                <p className="text-[11px] text-on-surface-variant">
+                  També podeu enganxar directament a la primera casella la Clau manual 2FA TOTP rebuda a l&apos;alta.
+                </p>
+              </div>
+            )}
           </div>
 
           {/* Submit CTA */}

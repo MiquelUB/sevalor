@@ -1,5 +1,6 @@
 """Endpoints de configuració de l'empresa, jornada laboral, marca camaleònica i rols (/gestio/configuracio — Spec 011)."""
 
+import base64
 import os
 import secrets
 import string
@@ -139,6 +140,11 @@ def generar_contrasenya_forta(longitud: int = 12) -> str:
     pwd += [secrets.choice(caracters) for _ in range(longitud - 4)]
     secrets.SystemRandom().shuffle(pwd)
     return "".join(pwd)
+
+
+def generar_secret_totp_base32() -> str:
+    """Genera un secret TOTP en format Base32 estàndard RFC 4648 (16 caràcters A-Z, 2-7) compatible amb Google Authenticator."""
+    return base64.b32encode(secrets.token_bytes(10)).decode("utf-8").rstrip("=")
 
 
 def generar_monograma_net(nom: str) -> str:
@@ -667,29 +673,57 @@ async def crear_usuari_administratiu(
             detail="Rol administratiu no permès",
         )
 
-    # Comprovar unicitat NIF
+    # Comprovar unicitat NIF i Email dins la plataforma
+    nif_clean = payload.nif.strip().upper()
+    email_clean = payload.email.strip().lower()
+
     res_nif = await db.execute(
         select(Usuari).where(
             Usuari.empresa_id == uuid.UUID(empresa_id),
-            Usuari.nif == payload.nif.strip().upper(),
+            Usuari.nif == nif_clean,
         )
     )
     if res_nif.scalar_one_or_none():
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail=f"Ja existeix un usuari amb el NIF {payload.nif} en aquesta empresa",
+            detail=f"Ja existeix un usuari amb el NIF {nif_clean} en aquesta empresa",
+        )
+
+    # Comprovar que l'email no estigui duplicat a cap empresa (evita bloqueig a /auth/login)
+    res_role = await db.execute(text("SELECT current_user;"))
+    current_role = res_role.scalar()
+    await db.execute(text("RESET ROLE;"))
+    try:
+        res_email = await db.execute(
+            select(Usuari).where(func.lower(Usuari.email) == email_clean)
+        )
+        usuari_existent_email = res_email.scalars().first()
+    finally:
+        if current_role:
+            await db.execute(text(f'SET ROLE "{current_role}";'))
+
+    if usuari_existent_email:
+        if str(usuari_existent_email.empresa_id) == str(empresa_id):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Ja existeix un usuari amb el correu {email_clean} en aquesta empresa. Utilitzeu el botó de restablir contrasenya a la taula.",
+            )
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"El correu electrònic {email_clean} ja està registrat a la plataforma.",
         )
 
     contrasenya_generada = generar_contrasenya_forta(12)
-    # Generar secret TOTP 2FA per defecte
-    secret_2fa_provisional = secrets.token_hex(16).upper()
+    # Generar secret TOTP 2FA en Base32 RFC 4648 compatible amb Google Authenticator
+    secret_2fa_provisional = generar_secret_totp_base32()
 
     nou_usuari = Usuari(
+        id=uuid.uuid4(),
         empresa_id=uuid.UUID(empresa_id),
-        nif=payload.nif.strip().upper(),
+        nif=nif_clean,
         nom=payload.nom.strip(),
         cognoms=payload.cognoms.strip(),
-        email=payload.email.strip().lower(),
+        email=email_clean,
         telefon=payload.telefon.strip() if payload.telefon else None,
         password_hash=bcrypt.hashpw(contrasenya_generada.encode("utf-8"), bcrypt.gensalt()).decode(
             "utf-8"
@@ -702,12 +736,14 @@ async def crear_usuari_administratiu(
     )
 
     db.add(nou_usuari)
+    await db.flush()
+    usuari_id_str = str(nou_usuari.id)
+    created_at_iso = nou_usuari.created_at.isoformat() if nou_usuari.created_at else None
     await db.commit()
-    await db.refresh(nou_usuari)
 
     return {
         "status": "OK",
-        "id": str(nou_usuari.id),
+        "id": usuari_id_str,
         "nom": nou_usuari.nom,
         "cognoms": nou_usuari.cognoms,
         "nom_complet": f"{nou_usuari.nom} {nou_usuari.cognoms}".strip(),
@@ -718,7 +754,7 @@ async def crear_usuari_administratiu(
         "estat": nou_usuari.estat,
         "totp_activat": nou_usuari.totp_activat,
         "slot_jornada_id": str(nou_usuari.slot_jornada_id) if nou_usuari.slot_jornada_id else None,
-        "created_at": nou_usuari.created_at.isoformat() if nou_usuari.created_at else None,
+        "created_at": created_at_iso,
         "contrasenya_generada": contrasenya_generada,
         "contrasenya_temporal_12_caracters": contrasenya_generada,
         "requereix_enrolament_2fa": True,
@@ -861,20 +897,28 @@ async def restablir_contrasenya_usuari(
     usuari.password_hash = bcrypt.hashpw(
         nova_contrasenya.encode("utf-8"), bcrypt.gensalt()
     ).decode("utf-8")
+    if not usuari.secret_2fa:
+        usuari.secret_2fa = generar_secret_totp_base32()
+
+    usuari_id_str = str(usuari.id)
+    nom_complet_str = f"{usuari.nom} {usuari.cognoms}".strip()
+    email_str = usuari.email
+    rol_str = usuari.rol
+    secret_2fa_str = usuari.secret_2fa
 
     await db.commit()
-    await db.refresh(usuari)
 
     return {
         "status": "OK",
-        "id": str(usuari.id),
-        "nom_complet": f"{usuari.nom} {usuari.cognoms}".strip(),
-        "email": usuari.email,
-        "rol": usuari.rol,
+        "id": usuari_id_str,
+        "nom_complet": nom_complet_str,
+        "email": email_str,
+        "rol": rol_str,
         "contrasenya_generada": nova_contrasenya,
         "contrasenya_temporal_12_caracters": nova_contrasenya,
+        "secret_2fa": secret_2fa_str,
         "login_url": "/gestio/login",
-        "missatge": f"Contrasenya restablerta correctament per a {usuari.email}",
+        "missatge": f"Contrasenya restablerta correctament per a {email_str}",
     }
 
 
@@ -906,17 +950,20 @@ async def reiniciar_2fa_usuari(
     if not usuari:
         raise HTTPException(status_code=404, detail="Usuari no trobat")
 
-    nou_secret = secrets.token_hex(16).upper()
+    nou_secret = generar_secret_totp_base32()
     usuari.secret_2fa = nou_secret
     usuari.totp_activat = False
+    nom_complet = f"{usuari.nom} {usuari.cognoms}".strip()
+    email_str = usuari.email
 
     await db.commit()
 
-    otpauth_url = f"otpauth://totp/SEVALOR:{usuari.email}?secret={nou_secret}&issuer=SEVALOR"
+    otpauth_url = f"otpauth://totp/SEVALOR:{email_str}?secret={nou_secret}&issuer=SEVALOR"
 
     return {
         "status": "OK",
-        "missatge": f"2FA reiniciat correctament per a {usuari.nom} {usuari.cognoms}",
+        "missatge": f"2FA reiniciat correctament per a {nom_complet}",
+        "secret": nou_secret,
         "secret_2fa": nou_secret,
         "otpauth_url": otpauth_url,
     }
@@ -961,7 +1008,7 @@ async def acces_emergencia_2fa_boss(
     # Consumir el codi i reiniciar 2FA
     codis.remove(payload.codi_recuperacio.strip())
     empresa.codis_recuperacio_2fa = codis
-    nou_secret = secrets.token_hex(16).upper()
+    nou_secret = generar_secret_totp_base32()
     usuari.secret_2fa = nou_secret
     usuari.totp_activat = False
 

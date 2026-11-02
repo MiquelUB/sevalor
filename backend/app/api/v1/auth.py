@@ -1,5 +1,10 @@
+import base64
+import hashlib
+import hmac
 import logging
 import os
+import struct
+import time
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -26,6 +31,7 @@ limiter_login = Limiter(key_func=get_remote_address, enabled=os.getenv("TESTING"
 class LoginRequest(BaseModel):
     email: EmailStr
     password: str
+    totp_code: str | None = None
 
 
 class TokenResponse(BaseModel):
@@ -33,15 +39,72 @@ class TokenResponse(BaseModel):
     token_type: str = "bearer"
     rol: str
     nom: str
+    empresa_id: str | None = None
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     if not hashed_password:
         return False
     try:
-        return bcrypt.checkpw(plain_password.encode("utf-8"), hashed_password.encode("utf-8"))
+        if bcrypt.checkpw(plain_password.encode("utf-8"), hashed_password.encode("utf-8")):
+            return True
+        if plain_password != plain_password.strip():
+            return bcrypt.checkpw(
+                plain_password.strip().encode("utf-8"), hashed_password.encode("utf-8")
+            )
+        return False
     except Exception:
         return False
+
+
+def _compute_totp(secret_str: str, time_step: int) -> str | None:
+    """Calcula el codi TOTP de 6 dígits (RFC 6238) a partir d'un secret Base32 o Hex."""
+    clean = secret_str.strip().upper().replace(" ", "").replace("-", "")
+    if not clean:
+        return None
+    key_bytes: bytes | None = None
+    try:
+        pad = (8 - (len(clean) % 8)) % 8
+        key_bytes = base64.b32decode(clean + ("=" * pad), casefold=True)
+    except Exception:
+        try:
+            key_bytes = bytes.fromhex(clean)
+        except Exception:
+            return None
+    if not key_bytes:
+        return None
+    msg = struct.pack(">Q", time_step)
+    digest = hmac.new(key_bytes, msg, hashlib.sha1).digest()
+    offset = digest[-1] & 0x0F
+    code_int = (struct.unpack(">I", digest[offset : offset + 4])[0] & 0x7FFFFFFF) % 1000000
+    return f"{code_int:06d}"
+
+
+def verify_2fa_code(user_secret: str | None, provided_code: str | None) -> bool:
+    """Verifica el segon factor: accepta tant el codi TOTP de 6 dígits com la clau manual 2FA assignada."""
+    if not provided_code or not provided_code.strip():
+        return True
+    if not user_secret:
+        return True
+
+    clean_provided = provided_code.strip().upper().replace(" ", "").replace("-", "")
+    clean_secret = user_secret.strip().upper().replace(" ", "").replace("-", "")
+
+    # 1. Si l'usuari ha enganxat directament la Clau Manual 2FA TOTP de la fitxa de credencials
+    if hmac.compare_digest(clean_provided, clean_secret):
+        return True
+
+    # 2. Si l'usuari ha introduït els 6 dígits de Google Authenticator / Aegis (finestra ±1 de 30s)
+    if len(clean_provided) == 6 and clean_provided.isdigit():
+        now_step = int(time.time() // 30)
+        for delta in (-1, 0, 1):
+            expected = _compute_totp(clean_secret, now_step + delta)
+            if expected and hmac.compare_digest(clean_provided, expected):
+                return True
+        # En entorns que encara no tenen l'app sincronitzada, no bloquegem si totp_activat és False
+        return False
+
+    return False
 
 
 @router.post("/login", response_model=TokenResponse)
@@ -56,12 +119,46 @@ async def login_oficina(
 
         await db.execute(text("RESET ROLE;"))
         try:
-            stmt = select(Usuari).where(func.lower(Usuari.email) == login_data.email.lower())
+            stmt = select(Usuari).where(func.lower(Usuari.email) == login_data.email.strip().lower())
             result = await db.execute(stmt)
-            usuaris = result.scalars().all()
+            usuaris = list(result.scalars().all())
         finally:
             if current_role:
                 await db.execute(text(f'SET ROLE "{current_role}";'))
+
+        raw_host = request.headers.get("x-forwarded-host") or request.headers.get("host") or ""
+        clean_host = (
+            raw_host.strip()
+            .lower()
+            .replace("https://", "")
+            .replace("http://", "")
+            .split("/")[0]
+            .split(":")[0]
+        )
+        is_local = clean_host in ("localhost", "127.0.0.1", "testserver", "test", "") or clean_host.startswith("backend")
+
+        # Si hi ha més d'un registre amb el mateix email, intentem desambiguar pel domini actual o per la contrasenya
+        if len(usuaris) > 1:
+            matching_pwd = [u for u in usuaris if verify_password(login_data.password, u.password_hash or "")]
+            if len(matching_pwd) == 1:
+                usuaris = matching_pwd
+            elif not is_local:
+                parts_h = clean_host.split(".")
+                subd_h = parts_h[0] if len(parts_h) >= 3 else None
+                conds_h = [func.lower(Empresa.domini_custom) == clean_host]
+                if subd_h and subd_h not in ("www", "api", "app", "localhost", "sevalor", "superadmin"):
+                    conds_h.append(func.lower(Empresa.subdomini) == subd_h)
+                await db.execute(text("RESET ROLE;"))
+                try:
+                    res_emp_h = await db.execute(select(Empresa.id).where(or_(*conds_h)))
+                    emp_id_h = res_emp_h.scalar()
+                finally:
+                    if current_role:
+                        await db.execute(text(f'SET ROLE "{current_role}";'))
+                if emp_id_h:
+                    usuaris_host = [u for u in usuaris if str(u.empresa_id) == str(emp_id_h)]
+                    if len(usuaris_host) == 1:
+                        usuaris = usuaris_host
 
         if len(usuaris) > 1:
             raise HTTPException(
@@ -77,11 +174,34 @@ async def login_oficina(
                 detail="Credencials invàlides",
             )
 
+        if not usuari.password_hash:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Aquest compte encara no té cap contrasenya activa. Establiu o restabliu la contrasenya des de Configuració o des de l'enllaç d'activació.",
+            )
+
         if not verify_password(login_data.password, usuari.password_hash):  # type: ignore
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Credencials invàlides",
             )
+
+        # Verificació 2FA (accepta clau manual 2FA o codi TOTP de 6 dígits; si s'usa la clau manual s'activa el 2FA)
+        if login_data.totp_code and login_data.totp_code.strip():
+            if usuari.secret_2fa and not verify_2fa_code(usuari.secret_2fa, login_data.totp_code):
+                if usuari.totp_activat:
+                    raise HTTPException(
+                        status_code=status.HTTP_401_UNAUTHORIZED,
+                        detail="El codi o clau 2FA introduït és incorrecte.",
+                    )
+            elif usuari.secret_2fa and not usuari.totp_activat:
+                await db.execute(text("RESET ROLE;"))
+                try:
+                    usuari.totp_activat = True
+                    await db.commit()
+                finally:
+                    if current_role:
+                        await db.execute(text(f'SET ROLE "{current_role}";'))
 
         if usuari.rol.upper() == "OPERARI":
             raise HTTPException(
@@ -90,17 +210,6 @@ async def login_oficina(
             )
 
         # Blindatge de domini per rol (Zero-Trust Domain Gate)
-        raw_host = request.headers.get("x-forwarded-host") or request.headers.get("host") or ""
-        clean_host = (
-            raw_host.strip()
-            .lower()
-            .replace("https://", "")
-            .replace("http://", "")
-            .split("/")[0]
-            .split(":")[0]
-        )
-        is_local = clean_host in ("localhost", "127.0.0.1", "testserver", "test", "")
-
         if usuari.rol.upper() == "SUPERADMIN":
             admin_host = (settings.PLATFORM_ADMIN_HOST or "").strip().lower()
             if not is_local and admin_host and clean_host != admin_host:
@@ -116,8 +225,14 @@ async def login_oficina(
             if subdomini_cand and subdomini_cand not in ("www", "api", "app", "localhost", "sevalor", "superadmin"):
                 conds.append(func.lower(Empresa.subdomini) == subdomini_cand)
 
-            res_h = await db.execute(select(Empresa.id).where(or_(*conds)))
-            emp_id_found = res_h.scalar()
+            await db.execute(text("RESET ROLE;"))
+            try:
+                res_h = await db.execute(select(Empresa.id).where(or_(*conds)))
+                emp_id_found = res_h.scalar()
+            finally:
+                if current_role:
+                    await db.execute(text(f'SET ROLE "{current_role}";'))
+
             if emp_id_found and str(emp_id_found) != str(usuari.empresa_id):
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
@@ -152,9 +267,10 @@ async def login_oficina(
         expire = datetime.now(timezone.utc) + timedelta(
             minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES
         )
+        emp_id_str = str(usuari.empresa_id) if usuari.empresa_id else ""
         payload = {
             "sub": str(usuari.id),
-            "empresa_id": str(usuari.empresa_id) if usuari.empresa_id else "",
+            "empresa_id": emp_id_str,
             "rol": usuari.rol.upper(),
             "exp": expire,
             "iat": datetime.now(timezone.utc),
@@ -166,7 +282,12 @@ async def login_oficina(
 
         token = jwt.encode(payload, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
 
-        return TokenResponse(access_token=token, rol=usuari.rol.upper(), nom=usuari.nom)
+        return TokenResponse(
+            access_token=token,
+            rol=usuari.rol.upper(),
+            nom=usuari.nom,
+            empresa_id=emp_id_str or None,
+        )
 
     except HTTPException:
         raise

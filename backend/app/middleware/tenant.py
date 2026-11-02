@@ -14,7 +14,12 @@ from app.core.redis import get_redis_client, is_tenant_blacklisted
 
 async def resoldre_empresa_id_per_host(clean_host: str) -> Optional[str]:
     """Cerca l'empresa_id associat a un domini o subdomini, amb suport de memòria cau."""
-    if not clean_host or clean_host in ("localhost", "127.0.0.1", "testserver", "test"):
+    if (
+        not clean_host
+        or clean_host in ("localhost", "127.0.0.1", "testserver", "test")
+        or clean_host.startswith("backend")
+        or clean_host.startswith("sevalor_backend")
+    ):
         return None
 
     parts = clean_host.split(".")
@@ -92,7 +97,11 @@ class TenantMiddleware(BaseHTTPMiddleware):
             .split(":")[0]
         )
         request.state.tenant_host = clean_host
-        is_local = clean_host in ("localhost", "127.0.0.1", "testserver", "test", "")
+        is_local = (
+            clean_host in ("localhost", "127.0.0.1", "testserver", "test", "")
+            or clean_host.startswith("backend")
+            or clean_host.startswith("sevalor_backend")
+        )
 
         path = request.url.path
 
