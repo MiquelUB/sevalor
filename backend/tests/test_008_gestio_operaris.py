@@ -203,3 +203,81 @@ async def test_editar_operari_boss_i_secretaria(admin_session, boss_token):
         assert res_eng.status_code == 403, res_eng.text
 
 
+@pytest.mark.asyncio
+async def test_metrics_operaris_i_fitxa_360(admin_session, boss_token):
+    boss_jwt, empresa_id = boss_token
+    emp_uuid = uuid.UUID(empresa_id)
+
+    admin_session.add(Empresa(
+        id=emp_uuid,
+        nom='Test Metrics 360',
+        nif='MET' + str(uuid.uuid4())[:8],
+        subdomini='sub' + str(uuid.uuid4())[:6],
+        pla_subscripcio='STARTER',
+        estat_pagament='ACTIU'
+    ))
+    await admin_session.flush()
+
+    operari_id = str(uuid.uuid4())
+    admin_session.add(Usuari(
+        id=uuid.UUID(operari_id),
+        empresa_id=emp_uuid,
+        nif='99887766K',
+        nom='Carles',
+        cognoms='Roca',
+        telefon='+34677889900',
+        rol='OPERARI',
+        especialitat='OBRA_CIVIL',
+        cost_hora_eur=24.00,
+        estat='ACTIU',
+    ))
+    await admin_session.flush()
+
+    boss_headers = {"Authorization": f"Bearer {boss_jwt}"}
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        # 1. Obtenir mètriques de capçalera (Zero Mock)
+        res_m = await ac.get("/api/v1/gestio/operaris/metrics", headers=boss_headers)
+        assert res_m.status_code == 200, res_m.text
+        m = res_m.json()
+        assert m["total_operaris"] >= 1
+        assert "compliment_horari_avui_percent" in m
+        assert "valoracio_mitjana_clients" in m
+        assert "km_conduits_mes" in m
+        assert "total_eines_assignades" in m
+
+        # 2. Obtenir eines de l'operari
+        res_eines = await ac.get(f"/api/v1/gestio/operaris/{operari_id}/eines", headers=boss_headers)
+        assert res_eines.status_code == 200
+        assert isinstance(res_eines.json(), list)
+
+        # 3. Obtenir incidències de l'operari
+        res_inc = await ac.get(f"/api/v1/gestio/operaris/{operari_id}/incidencies", headers=boss_headers)
+        assert res_inc.status_code == 200
+        assert isinstance(res_inc.json(), list)
+
+        # 4. Obtenir feines de l'operari
+        res_feines = await ac.get(f"/api/v1/gestio/operaris/{operari_id}/feines", headers=boss_headers)
+        assert res_feines.status_code == 200
+        assert isinstance(res_feines.json(), list)
+
+        # 5. Obtenir shifts amb rol BOSS (200)
+        res_shifts = await ac.get(f"/api/v1/gestio/operaris/{operari_id}/shifts", headers=boss_headers)
+        assert res_shifts.status_code == 200
+        assert isinstance(res_shifts.json(), list)
+
+        # 6. Veto d'Enginyer sobre shifts (403)
+        eng_jwt = jwt.encode(
+            {
+                "sub": str(uuid.uuid4()),
+                "rol": "ENGINYER",
+                "empresa_id": empresa_id,
+                "exp": datetime.now(timezone.utc) + timedelta(minutes=15),
+            },
+            settings.SECRET_KEY,
+            algorithm=settings.ALGORITHM,
+        )
+        res_veto = await ac.get(f"/api/v1/gestio/operaris/{operari_id}/shifts", headers={"Authorization": f"Bearer {eng_jwt}"})
+        assert res_veto.status_code == 403
+
+
+

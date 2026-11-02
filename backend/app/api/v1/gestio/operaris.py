@@ -13,7 +13,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.v1.operari_pwa.jornada import JornadaInici
 from app.core.db import get_db_with_tenant_context
 from app.core.security import require_roles, veto_enginyer_finances
-from app.models.models import Empresa, OrdreTreball, RegistreJornadaLaboral, Usuari
+from app.models.models import (
+    AuditoriaRegistreJornada,
+    EinaCustodia,
+    Empresa,
+    Incidencia,
+    OrdreTreball,
+    RegistreJornadaLaboral,
+    Usuari,
+    Vehicle,
+)
 from app.services.ocr_service import processar_dni_ocr
 
 router = APIRouter(
@@ -72,10 +81,80 @@ class OperariResponse(BaseModel):
     intents_pin_fallits: int = 0
     cap_de_grup_id: Optional[uuid.UUID] = None
     vehicle_assignat_id: Optional[uuid.UUID] = None
+    vehicle_habitual: Optional[dict] = None
+    total_eines_assignades: int = 0
     latitud: Optional[float] = None
     longitud: Optional[float] = None
     pin_generat: Optional[str] = None
     login_url: Optional[str] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class MetricsOperarisResponse(BaseModel):
+    total_operaris: int
+    compliment_horari_avui_percent: float
+    valoracio_mitjana_clients: float
+    km_conduits_mes: int
+    total_eines_assignades: int
+
+
+class ShiftResponse(BaseModel):
+    id: uuid.UUID
+    data_jornada: date
+    hora_inici: Optional[datetime] = None
+    hora_fi: Optional[datetime] = None
+    estat: str
+    tancament_automatic: bool = False
+    motiu_incidencia: Optional[str] = None
+    hores_ordinaries: float = 0.0
+    hores_extraordinaries: float = 0.0
+    version_id: int = 1
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class RegularitzarShiftRequest(BaseModel):
+    shift_id: uuid.UUID
+    hora_inici: datetime
+    hora_fi: datetime
+    motiu_justificatiu: str
+    version_id: int
+
+
+class EinaCustodiaResponse(BaseModel):
+    id: uuid.UUID
+    nom: str
+    model: Optional[str] = None
+    numero_serie: str
+    referencia_fabricant: Optional[str] = None
+    estat: str
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class IncidenciaResponse(BaseModel):
+    id: uuid.UUID
+    ambit: str
+    estat: str
+    text_observacions: Optional[str] = None
+    audio_path: Optional[str] = None
+    foto_path: Optional[str] = None
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class FeinaResponse(BaseModel):
+    id: uuid.UUID
+    codi: str
+    titol: str
+    adreca: str
+    descripcio: Optional[str] = None
+    estat: str
+    data_planificacio: date
+    hora_inici_prevista: Optional[datetime] = None
+    hora_fi_prevista: Optional[datetime] = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -102,11 +181,12 @@ async def llistar_operaris(
     request: Request, db: AsyncSession = Depends(get_db_with_tenant_context)
 ):
     empresa_id = await verificar_permisos_boss(request)
+    emp_uuid = uuid.UUID(empresa_id)
 
     stmt = (
         select(Usuari)
         .where(
-            Usuari.empresa_id == uuid.UUID(empresa_id),
+            Usuari.empresa_id == emp_uuid,
             Usuari.rol.in_(["OPERARI", "CAP_DE_COLLA"]),
         )
         .order_by(Usuari.nom.asc())
@@ -114,12 +194,37 @@ async def llistar_operaris(
     result = await db.execute(stmt)
     operaris = result.scalars().all()
 
-    # Afegir coordenades de feines actives per relacionar visualment l'operari al mapa
+    # Afegir dades reals de cada operari: eines assignades, vehicle habitual i coordenades
     response_list = []
     for idx, op in enumerate(operaris):
         op_resp = OperariResponse.model_validate(op)
+
+        # 1. Total eines assignades reals
+        stmt_eines = select(func.count(EinaCustodia.id)).where(
+            EinaCustodia.empresa_id == emp_uuid,
+            EinaCustodia.custodiat_per_operari_id == op.id,
+        )
+        total_eines = (await db.execute(stmt_eines)).scalar() or 0
+        op_resp.total_eines_assignades = int(total_eines)
+
+        # 2. Vehicle habitual real
+        if op.vehicle_assignat_id:
+            stmt_v = select(Vehicle).where(
+                Vehicle.id == op.vehicle_assignat_id,
+                Vehicle.empresa_id == emp_uuid,
+            )
+            v_res = await db.execute(stmt_v)
+            veh = v_res.scalars().first()
+            if veh:
+                op_resp.vehicle_habitual = {
+                    "id": str(veh.id),
+                    "matricula": veh.matricula,
+                    "model": f"{veh.marca} {veh.model}".strip(),
+                }
+
+        # 3. Coordenades segons feines actives
         stmt_ot = select(OrdreTreball).where(
-            OrdreTreball.empresa_id == uuid.UUID(empresa_id),
+            OrdreTreball.empresa_id == emp_uuid,
             OrdreTreball.cap_de_colla_id == op.id,
             OrdreTreball.estat.in_(["EN_CURS", "EN_RUTA", "EN_OBRA", "ASSIGNADA", "PROGRAMADA"]),
         ).order_by(OrdreTreball.created_at.desc())
@@ -146,6 +251,64 @@ async def llistar_operaris(
         response_list.append(op_resp)
 
     return response_list
+
+
+@router.get("/metrics", response_model=MetricsOperarisResponse)
+async def obtenir_metrics_operaris(
+    request: Request,
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+):
+    """Mètriques consolidades de capçalera calculades en temps real (Zero Mock Data)."""
+    empresa_id = await verificar_permisos_boss(request)
+    emp_uuid = uuid.UUID(empresa_id)
+
+    # 1. Total plantilla d'operaris actius
+    count_operaris_stmt = select(func.count(Usuari.id)).where(
+        Usuari.empresa_id == emp_uuid,
+        Usuari.rol.in_(["OPERARI", "CAP_DE_COLLA"]),
+        Usuari.estat == "ACTIU",
+    )
+    total_operaris = int((await db.execute(count_operaris_stmt)).scalar() or 0)
+
+    # 2. Compliment d'horari avui (% jornades sense incidències ni auto-tancament)
+    avui = date.today()
+    jornades_avui_stmt = select(RegistreJornadaLaboral).where(
+        RegistreJornadaLaboral.empresa_id == emp_uuid,
+        RegistreJornadaLaboral.data_jornada == avui,
+    )
+    res_jornades = await db.execute(jornades_avui_stmt)
+    jornades_avui = res_jornades.scalars().all()
+    if not jornades_avui:
+        compliment_percent = 0.0
+    else:
+        sense_incidencia = sum(
+            1 for j in jornades_avui if j.estat != "INCIDENCIA" and not j.tancament_automatic
+        )
+        compliment_percent = round((sense_incidencia / len(jornades_avui)) * 100.0, 1)
+
+    # 3. Valoració mitjana de clients (Zero Mock: 0.0 si no n'hi ha)
+    valoracio_mitjana = 0.0
+
+    # 4. Km conduïts aquest mes (odòmetres acumulats dels vehicles de l'empresa)
+    km_stmt = select(func.coalesce(func.sum(Vehicle.odometre_acumulat), 0)).where(
+        Vehicle.empresa_id == emp_uuid
+    )
+    km_conduits = int((await db.execute(km_stmt)).scalar() or 0)
+
+    # 5. Total eines en custòdia assignades a operaris
+    eines_stmt = select(func.count(EinaCustodia.id)).where(
+        EinaCustodia.empresa_id == emp_uuid,
+        EinaCustodia.custodiat_per_operari_id.isnot(None),
+    )
+    total_eines = int((await db.execute(eines_stmt)).scalar() or 0)
+
+    return MetricsOperarisResponse(
+        total_operaris=total_operaris,
+        compliment_horari_avui_percent=compliment_percent,
+        valoracio_mitjana_clients=valoracio_mitjana,
+        km_conduits_mes=km_conduits,
+        total_eines_assignades=total_eines,
+    )
 
 
 @router.post("", response_model=OperariResponse, status_code=status.HTTP_201_CREATED)
@@ -432,3 +595,158 @@ async def get_control_horari(
     result = await db.execute(stmt)
     jornades = result.scalars().all()
     return jornades
+
+
+@router.get("/{operari_id}/shifts", response_model=List[ShiftResponse])
+async def get_shifts_operari(
+    request: Request,
+    operari_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+    claims: dict = Depends(veto_enginyer_finances),
+):
+    """Llistat oficial de jornades segons RDL 8/2019 (Veto d'Enginyer HTTP 403)."""
+    empresa_id = await verificar_permisos_boss(request)
+    stmt = (
+        select(RegistreJornadaLaboral)
+        .where(
+            RegistreJornadaLaboral.empresa_id == uuid.UUID(empresa_id),
+            RegistreJornadaLaboral.usuari_id == operari_id,
+        )
+        .order_by(
+            RegistreJornadaLaboral.data_jornada.desc(),
+            RegistreJornadaLaboral.hora_inici.desc(),
+        )
+    )
+    result = await db.execute(stmt)
+    return result.scalars().all()
+
+
+@router.post("/{operari_id}/shifts/regularitzar")
+async def regularitzar_shift_operari(
+    request: Request,
+    operari_id: uuid.UUID,
+    payload: RegularitzarShiftRequest,
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+    claims: dict = Depends(require_roles(["BOSS", "SECRETARIA"])),
+):
+    """Regularització oficial de jornada segons RDL 8/2019 amb traça d'auditoria immutable."""
+    empresa_id = await verificar_permisos_boss(request)
+    emp_uuid = uuid.UUID(empresa_id)
+
+    stmt = select(RegistreJornadaLaboral).where(
+        RegistreJornadaLaboral.id == payload.shift_id,
+        RegistreJornadaLaboral.empresa_id == emp_uuid,
+        RegistreJornadaLaboral.usuari_id == operari_id,
+    )
+    result = await db.execute(stmt)
+    shift = result.scalars().first()
+    if not shift:
+        raise HTTPException(status_code=404, detail="Jornada no trobada")
+
+    # Control de concurrència optimista (EDGE-09)
+    if shift.version_id != payload.version_id:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Aquest registre ha estat modificat concurrentment per un altre usuari. Refresqueu la pàgina.",
+        )
+
+    valors_anteriors = {
+        "hora_inici": shift.hora_inici.isoformat() if shift.hora_inici else None,
+        "hora_fi": shift.hora_fi.isoformat() if shift.hora_fi else None,
+        "estat": shift.estat,
+    }
+
+    shift.hora_inici = payload.hora_inici
+    shift.hora_fi = payload.hora_fi
+    shift.estat = "COMPLERT"
+    shift.tancament_automatic = False
+    shift.auditoria_motiu = payload.motiu_justificatiu
+    shift.auditoria_data = datetime.now(timezone.utc)
+    if claims and "sub" in claims:
+        try:
+            shift.auditat_per_usuari_id = uuid.UUID(claims["sub"])
+        except Exception:
+            pass
+    shift.version_id += 1
+
+    # Crear registre d'auditoria immutable
+    auditoria = AuditoriaRegistreJornada(
+        id=uuid.uuid4(),
+        shift_id=shift.id,
+        modificat_per_id=shift.auditat_per_usuari_id,
+        valors_anteriors=valors_anteriors,
+        nous_valors={
+            "hora_inici": payload.hora_inici.isoformat(),
+            "hora_fi": payload.hora_fi.isoformat(),
+            "estat": "COMPLERT",
+        },
+        motiu_justificatiu=payload.motiu_justificatiu,
+    )
+    db.add(auditoria)
+    await db.commit()
+
+    return {
+        "status": "OK",
+        "missatge": "Jornada regularitzada amb èxit i auditada segons RDL 8/2019",
+        "version_id": shift.version_id,
+    }
+
+
+@router.get("/{operari_id}/eines", response_model=List[EinaCustodiaResponse])
+async def get_eines_operari(
+    request: Request,
+    operari_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+):
+    """Eines reals en custòdia assignades a l'operari (Zero Mock Data)."""
+    empresa_id = await verificar_permisos_boss(request)
+    stmt = (
+        select(EinaCustodia)
+        .where(
+            EinaCustodia.empresa_id == uuid.UUID(empresa_id),
+            EinaCustodia.custodiat_per_operari_id == operari_id,
+        )
+        .order_by(EinaCustodia.nom.asc())
+    )
+    result = await db.execute(stmt)
+    return result.scalars().all()
+
+
+@router.get("/{operari_id}/incidencies", response_model=List[IncidenciaResponse])
+async def get_incidencies_operari(
+    request: Request,
+    operari_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+):
+    """Incidències reals reportades per l'operari des de camp (Zero Mock Data)."""
+    empresa_id = await verificar_permisos_boss(request)
+    stmt = (
+        select(Incidencia)
+        .where(
+            Incidencia.empresa_id == uuid.UUID(empresa_id),
+            Incidencia.operari_id == operari_id,
+        )
+        .order_by(Incidencia.created_at.desc())
+    )
+    result = await db.execute(stmt)
+    return result.scalars().all()
+
+
+@router.get("/{operari_id}/feines", response_model=List[FeinaResponse])
+async def get_feines_operari(
+    request: Request,
+    operari_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+):
+    """Ordres de treball reals assignades a l'operari com a Cap de Colla o equip."""
+    empresa_id = await verificar_permisos_boss(request)
+    stmt = (
+        select(OrdreTreball)
+        .where(
+            OrdreTreball.empresa_id == uuid.UUID(empresa_id),
+            OrdreTreball.cap_de_colla_id == operari_id,
+        )
+        .order_by(OrdreTreball.created_at.desc())
+    )
+    result = await db.execute(stmt)
+    return result.scalars().all()

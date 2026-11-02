@@ -36,6 +36,8 @@ import {
   AlertCircle,
   Mic,
   Pencil,
+  Copy,
+  ExternalLink,
 } from "lucide-react";
 import { useGestio } from "@/lib/gestio-context";
 
@@ -91,6 +93,16 @@ interface ConsolidatedMetrics {
   total_eines_assignades: number;
 }
 
+interface CredencialsOperariModalState {
+  titol: string;
+  nom_complet: string;
+  nif: string;
+  telefon: string;
+  rol: string;
+  pin_generat: string;
+  login_url: string;
+}
+
 export default function GestioOperarisPage() {
   const { rolActiu } = useGestio();
   const [operaris, setOperaris] = useState<OperariItem[]>([]);
@@ -112,9 +124,15 @@ export default function GestioOperarisPage() {
     "info" | "shifts" | "crew" | "jobs" | "reviews" | "vehicles" | "tools" | "incidents"
   >("info");
 
-  // Estat shifts de l'operari seleccionat
+  // Estat de les pestanyes de l'operari seleccionat (Zero Mock Data)
   const [shifts, setShifts] = useState<ShiftItem[]>([]);
   const [carregantShifts, setCarregantShifts] = useState<boolean>(false);
+  const [einesOperari, setEinesOperari] = useState<any[]>([]);
+  const [carregantEines, setCarregantEines] = useState<boolean>(false);
+  const [incidenciesOperari, setIncidenciesOperari] = useState<any[]>([]);
+  const [carregantIncidencies, setCarregantIncidencies] = useState<boolean>(false);
+  const [feinesOperari, setFeinesOperari] = useState<any[]>([]);
+  const [carregantFeines, setCarregantFeines] = useState<boolean>(false);
 
   // Modals
   const [modalAltaObert, setModalAltaObert] = useState<boolean>(false);
@@ -123,6 +141,11 @@ export default function GestioOperarisPage() {
   const [shiftPerRegularitzar, setShiftPerRegularitzar] = useState<ShiftItem | null>(null);
   const [modalResetPinObert, setModalResetPinObert] = useState<boolean>(false);
   const [modalBaixaObert, setModalBaixaObert] = useState<boolean>(false);
+  const [credencialsOperariModal, setCredencialsOperariModal] = useState<CredencialsOperariModalState | null>(null);
+
+  // Estat de còpia al portapapers
+  const [copiatPin, setCopiatPin] = useState<boolean>(false);
+  const [copiatTot, setCopiatTot] = useState<boolean>(false);
 
   // Permís d'edició per a BOSS i SECRETARIA
   const potEditarOperari = rolActiu === "BOSS" || rolActiu === "SECRETARIA";
@@ -153,22 +176,42 @@ export default function GestioOperarisPage() {
   const [editCarnetCaducitat, setEditCarnetCaducitat] = useState<string>("");
   const [editPrlVigencia, setEditPrlVigencia] = useState<string>("");
   const [desantEdicio, setDesantEdicio] = useState<boolean>(false);
+  const [pinGeneratEditor, setPinGeneratEditor] = useState<string | null>(null);
+  const [regenerantPinEditor, setRegenerantPinEditor] = useState<boolean>(false);
 
   // Form Regularització
   const [regHoraInici, setRegHoraInici] = useState<string>("08:00");
   const [regHoraFi, setRegHoraFi] = useState<string>("17:00");
   const [regMotiu, setRegMotiu] = useState<string>("");
 
-  // Notificació de PIN generat
+  // Notificació visual
   const [pinGeneratAlert, setPinGeneratAlert] = useState<string | null>(null);
 
-  // Carregar operaris des del backend
-  // Carregar operaris des del backend
+  // Funció per copiar text al portapapers
+  const copiarAlPortapapers = async (text: string, tipus: "pin" | "tot") => {
+    try {
+      await navigator.clipboard.writeText(text);
+      if (tipus === "pin") {
+        setCopiatPin(true);
+        setTimeout(() => setCopiatPin(false), 2000);
+      } else {
+        setCopiatTot(true);
+        setTimeout(() => setCopiatTot(false), 2000);
+      }
+    } catch (err) {
+      console.error("Error copiant:", err);
+    }
+  };
+
+  // Carregar operaris i mètriques reals des del backend (Zero Mock Data)
   const fetchOperaris = async () => {
     setCarregant(true);
     try {
-      const data = await apiFetch<any>("/gestio/operaris");
-      const list = Array.isArray(data) ? data : (data?.operaris || []);
+      const [dataOperaris, dataMetrics] = await Promise.all([
+        apiFetch<any>("/gestio/operaris"),
+        apiFetch<any>("/gestio/operaris/metrics").catch(() => null),
+      ]);
+      const list = Array.isArray(dataOperaris) ? dataOperaris : (dataOperaris?.operaris || []);
       const formatted: OperariItem[] = list.map((op: any) => ({
         id: op.id,
         nom: op.nom || "",
@@ -194,20 +237,27 @@ export default function GestioOperarisPage() {
         total_eines_assignades: op.total_eines_assignades || 0,
       }));
       setOperaris(formatted);
-      if (data && data.metrics) {
-        setMetrics(data.metrics);
+      if (dataMetrics) {
+        setMetrics(dataMetrics);
       } else {
         setMetrics({
           total_operaris: formatted.length,
-          valoracio_mitjana_clients: 4.8,
-          compliment_horari_avui_percent: 100,
-          km_conduits_mes: 340,
-          total_eines_assignades: 12,
+          valoracio_mitjana_clients: 0.0,
+          compliment_horari_avui_percent: 0.0,
+          km_conduits_mes: 0,
+          total_eines_assignades: 0,
         });
       }
     } catch (err) {
       console.error("Error carregant operaris:", err);
       setOperaris([]);
+      setMetrics({
+        total_operaris: 0,
+        valoracio_mitjana_clients: 0.0,
+        compliment_horari_avui_percent: 0.0,
+        km_conduits_mes: 0,
+        total_eines_assignades: 0,
+      });
     } finally {
       setCarregant(false);
     }
@@ -217,14 +267,33 @@ export default function GestioOperarisPage() {
     fetchOperaris();
   }, [rolActiu]);
 
-  // Carregar shifts quan s'obre la pestanya de shifts i no som Enginyer
+  // Carregar dades reals segons la pestanya de la Fitxa 360° (Zero Mock Data)
   useEffect(() => {
-    if (operariSeleccionat && pestanyaActiva === "shifts" && rolActiu !== "ENGINYER") {
+    if (!operariSeleccionat) return;
+    if (pestanyaActiva === "shifts" && rolActiu !== "ENGINYER") {
       setCarregantShifts(true);
       apiFetch(`/gestio/operaris/${operariSeleccionat.id}/shifts`)
         .then((data: any) => setShifts(Array.isArray(data) ? data : (data?.shifts || [])))
         .catch(() => setShifts([]))
         .finally(() => setCarregantShifts(false));
+    } else if (pestanyaActiva === "tools") {
+      setCarregantEines(true);
+      apiFetch(`/gestio/operaris/${operariSeleccionat.id}/eines`)
+        .then((data: any) => setEinesOperari(Array.isArray(data) ? data : []))
+        .catch(() => setEinesOperari([]))
+        .finally(() => setCarregantEines(false));
+    } else if (pestanyaActiva === "incidents") {
+      setCarregantIncidencies(true);
+      apiFetch(`/gestio/operaris/${operariSeleccionat.id}/incidencies`)
+        .then((data: any) => setIncidenciesOperari(Array.isArray(data) ? data : []))
+        .catch(() => setIncidenciesOperari([]))
+        .finally(() => setCarregantIncidencies(false));
+    } else if (pestanyaActiva === "jobs") {
+      setCarregantFeines(true);
+      apiFetch(`/gestio/operaris/${operariSeleccionat.id}/feines`)
+        .then((data: any) => setFeinesOperari(Array.isArray(data) ? data : []))
+        .catch(() => setFeinesOperari([]))
+        .finally(() => setCarregantFeines(false));
     }
   }, [operariSeleccionat, pestanyaActiva, rolActiu]);
 
@@ -250,8 +319,21 @@ export default function GestioOperarisPage() {
         }),
       });
 
-      setPinGeneratAlert(`Operari registrat! S'ha generat el PIN per SMS al número ${nouTelefon}.`);
       setModalAltaObert(false);
+      if (data && data.pin_generat) {
+        setCredencialsOperariModal({
+          titol: "Alta d'Operari Completada — Credencials d'Accés PWA",
+          nom_complet: `${nouNom} ${nousCognoms}`.trim(),
+          nif: nouNif.toUpperCase(),
+          telefon: nouTelefon,
+          rol: nouRol,
+          pin_generat: data.pin_generat,
+          login_url: "/operari/login",
+        });
+        setPinGeneratAlert(`Operari registrat correctament! PIN d'accés PWA: ${data.pin_generat}`);
+      } else {
+        setPinGeneratAlert(`Operari registrat correctament!`);
+      }
       fetchOperaris();
     } catch (err: any) {
       alert("Error creant operari: " + (err.message || "Error desconegut"));
@@ -274,7 +356,37 @@ export default function GestioOperarisPage() {
     setEditCarnet(op.carnet_conduir || "B");
     setEditCarnetCaducitat(op.carnet_caducitat || "");
     setEditPrlVigencia(op.prl_certificat_vigencia || "");
+    setPinGeneratEditor(null);
     setModalEditarObert(true);
+  };
+
+  // Regenerar PIN directament des de l'editor d'operari (perquè no hi ha SMS)
+  const handleRegenerarPinDesDeEditor = async () => {
+    if (!operariEditantId) return;
+    setRegenerantPinEditor(true);
+    try {
+      const data = await apiFetch<any>(`/gestio/operaris/${operariEditantId}/reset-pin`, {
+        method: "POST",
+      });
+      if (data && data.pin_generat) {
+        setPinGeneratEditor(data.pin_generat);
+        setCredencialsOperariModal({
+          titol: "PIN Regenerat — Credencials d'Accés PWA",
+          nom_complet: `${editNom} ${editCognoms}`.trim(),
+          nif: editNif,
+          telefon: editTelefon,
+          rol: editRol,
+          pin_generat: data.pin_generat,
+          login_url: "/operari/login",
+        });
+        setPinGeneratAlert(`Nou PIN generat per a ${editNom}: ${data.pin_generat}`);
+      }
+      fetchOperaris();
+    } catch (err: any) {
+      alert("Error regenerant PIN: " + (err.message || "Error desconegut"));
+    } finally {
+      setRegenerantPinEditor(false);
+    }
   };
 
   // Desar edició d'operari (PUT /gestio/operaris/{id})
@@ -344,8 +456,19 @@ export default function GestioOperarisPage() {
       const data = await apiFetch<any>(`/gestio/operaris/${operariSeleccionat.id}/reset-pin`, {
         method: "POST",
       });
-      setPinGeneratAlert(`PIN restablert per SMS a ${operariSeleccionat.telefon}.`);
       setModalResetPinObert(false);
+      if (data && data.pin_generat) {
+        setCredencialsOperariModal({
+          titol: "PIN Restablert — Credencials d'Accés PWA",
+          nom_complet: operariSeleccionat.nom_complet,
+          nif: operariSeleccionat.nif,
+          telefon: operariSeleccionat.telefon,
+          rol: operariSeleccionat.rol,
+          pin_generat: data.pin_generat,
+          login_url: "/operari/login",
+        });
+        setPinGeneratAlert(`Nou PIN generat per a ${operariSeleccionat.nom_complet}: ${data.pin_generat}`);
+      }
       fetchOperaris();
     } catch (err: any) {
       alert("Error restablint PIN: " + (err.message || "Error desconegut"));
@@ -848,22 +971,22 @@ export default function GestioOperarisPage() {
                   <div className="grid grid-cols-2 gap-3">
                     <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700">
                       <span className="text-slate-400">Telèfon Corporatiu:</span>
-                      <p className="font-bold text-slate-900 dark:text-white mt-1">{operariSeleccionat.telefon}</p>
+                      <p className="font-bold text-slate-900 dark:text-white mt-1">{operariSeleccionat.telefon || "No indicat"}</p>
                     </div>
                     <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700">
                       <span className="text-slate-400">Correu Electrònic:</span>
-                      <p className="font-bold text-slate-900 dark:text-white mt-1">{operariSeleccionat.email}</p>
+                      <p className="font-bold text-slate-900 dark:text-white mt-1">{operariSeleccionat.email || "No indicat"}</p>
                     </div>
                     <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700">
                       <span className="text-slate-400">Carnet de Conduir:</span>
                       <p className="font-bold text-slate-900 dark:text-white mt-1">
-                        Permís {operariSeleccionat.carnet_conduir} (Vigent fins {operariSeleccionat.carnet_caducitat || "2030-05-15"})
+                        Permís {operariSeleccionat.carnet_conduir} (Vigent fins: {operariSeleccionat.carnet_caducitat || "Pendent de registrar"})
                       </p>
                     </div>
                     <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700">
                       <span className="text-slate-400">Certificació PRL:</span>
                       <p className="font-bold text-slate-900 dark:text-white mt-1">
-                        Vàlida fins {operariSeleccionat.prl_certificat_vigencia || "2027-01-10"}
+                        Vàlida fins: {operariSeleccionat.prl_certificat_vigencia || "Pendent de registrar"}
                       </p>
                     </div>
                   </div>
@@ -879,21 +1002,21 @@ export default function GestioOperarisPage() {
                     <div className="flex flex-wrap gap-2 pt-2">
                       <button
                         onClick={() => obrirEditorOperari(operariSeleccionat)}
-                        className="px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-500 text-white font-bold flex items-center gap-1.5"
+                        className="px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-500 text-white font-bold flex items-center gap-1.5 shadow-sm transition-colors"
                       >
                         <Pencil className="w-3.5 h-3.5" />
                         <span>Editar Fitxa Operari</span>
                       </button>
                       <button
                         onClick={() => setModalResetPinObert(true)}
-                        className="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-bold flex items-center gap-1.5"
+                        className="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-bold flex items-center gap-1.5 shadow-sm transition-colors"
                       >
                         <KeyRound className="w-3.5 h-3.5" />
-                        <span>Restablir PIN (SMS)</span>
+                        <span>Restablir PIN d'Accés</span>
                       </button>
                       <button
                         onClick={() => setModalBaixaObert(true)}
-                        className="px-3 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-white font-bold flex items-center gap-1.5"
+                        className="px-3 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-white font-bold flex items-center gap-1.5 shadow-sm transition-colors"
                       >
                         <UserX className="w-3.5 h-3.5" />
                         <span>Tramitar Baixa Laboral</span>
@@ -996,30 +1119,40 @@ export default function GestioOperarisPage() {
                 </div>
               )}
 
-              {/* 4. JOBS (TASQUES I 3 FOTOS OBLIGATÒRIES) */}
+              {/* 4. JOBS (TASQUES I ORDRES DE TREBALL REALS — ZERO MOCK) */}
               {pestanyaActiva === "jobs" && (
                 <div className="space-y-3 text-xs font-mono">
                   <span className="font-bold text-slate-700 dark:text-slate-300">
-                    Historial de Tasques d'Obra (Protocol 3 Fotos)
+                    Historial de Tasques d'Obra
                   </span>
-                  <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 space-y-2">
-                    <p className="font-bold text-slate-900 dark:text-white">Sense ordre activa</p>
-                    <p className="text-[11px] text-slate-500">Sense assignació d'obra en aquest moment</p>
-                    <div className="grid grid-cols-3 gap-2 pt-2">
-                      <div className="p-2 rounded bg-slate-100 dark:bg-slate-800 text-center">
-                        <Camera className="w-4 h-4 mx-auto text-slate-400 mb-1" />
-                        <span className="text-[9px]">1. Inicial</span>
-                      </div>
-                      <div className="p-2 rounded bg-slate-100 dark:bg-slate-800 text-center">
-                        <Camera className="w-4 h-4 mx-auto text-slate-400 mb-1" />
-                        <span className="text-[9px]">2. Procés</span>
-                      </div>
-                      <div className="p-2 rounded bg-slate-100 dark:bg-slate-800 text-center">
-                        <Camera className="w-4 h-4 mx-auto text-emerald-500 mb-1" />
-                        <span className="text-[9px] text-emerald-600 font-bold">3. Finalitzada</span>
-                      </div>
+                  {carregantFeines ? (
+                    <p className="text-center py-6 text-slate-400">Carregant tasques...</p>
+                  ) : feinesOperari.length === 0 ? (
+                    <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-700 text-center text-slate-500">
+                      Sense ordres de treball assignades a aquest operari en aquest moment.
                     </div>
-                  </div>
+                  ) : (
+                    <div className="space-y-2">
+                      {feinesOperari.map((f) => (
+                        <div
+                          key={f.id}
+                          className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 space-y-1"
+                        >
+                          <div className="flex items-center justify-between">
+                            <span className="font-bold text-slate-900 dark:text-white flex items-center gap-1.5">
+                              <FileText className="w-3.5 h-3.5 text-amber-500" />
+                              <span>{f.codi} — {f.titol}</span>
+                            </span>
+                            <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300">
+                              {f.estat}
+                            </span>
+                          </div>
+                          <p className="text-[11px] text-slate-500">{f.adreca}</p>
+                          <p className="text-[10px] text-slate-400">Data planificació: {f.data_planificacio}</p>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -1046,42 +1179,92 @@ export default function GestioOperarisPage() {
                       </p>
                     </div>
                   ) : (
-                    <p className="text-slate-500 italic">No té vehicle assignat en custòdia.</p>
+                    <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-700 text-center text-slate-500">
+                      Sense vehicle de flota assignat en custòdia.
+                    </div>
                   )}
                 </div>
               )}
 
-              {/* 7. TOOLS */}
+              {/* 7. TOOLS (EINES REALS DE LA BD — ZERO MOCK) */}
               {pestanyaActiva === "tools" && (
                 <div className="space-y-3 text-xs font-mono">
                   <span className="font-bold text-slate-700 dark:text-slate-300">
-                    Eines Assignades ({operariSeleccionat.total_eines_assignades})
+                    Eines en Custòdia ({einesOperari.length})
                   </span>
                   <p className="text-[11px] text-slate-500">
-                    Identificació obligatòria per número de referència, marca i número de sèrie de fabricant (sense codis QR en eines segons la Constitució).
+                    Identificació obligatòria per número de referència, marca i número de sèrie de fabricant (sense codis QR segons la Constitució).
                   </p>
-                  <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 space-y-1">
-                    <p className="font-bold text-slate-900 dark:text-white">Soldadora de Polietilè electrofusió Ritmo</p>
-                    <p className="text-[11px] text-slate-500">SN: RIT-2024-8841 • Ref: EIN-0042 • Estat: OPERATIVA</p>
-                  </div>
+                  {carregantEines ? (
+                    <p className="text-center py-6 text-slate-400">Carregant eines en custòdia...</p>
+                  ) : einesOperari.length === 0 ? (
+                    <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-700 text-center text-slate-500">
+                      No hi ha eines en custòdia assignades a aquest treballador.
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      {einesOperari.map((eina) => (
+                        <div
+                          key={eina.id}
+                          className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 space-y-1"
+                        >
+                          <div className="flex items-center justify-between">
+                            <p className="font-bold text-slate-900 dark:text-white flex items-center gap-1.5">
+                              <Wrench className="w-3.5 h-3.5 text-teal-500" />
+                              <span>{eina.nom}</span>
+                            </p>
+                            <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-teal-100 text-teal-800 dark:bg-teal-950 dark:text-teal-300">
+                              {eina.estat}
+                            </span>
+                          </div>
+                          <p className="text-[11px] text-slate-500">
+                            SN: {eina.numero_serie} {eina.referencia_fabricant ? `• Ref: ${eina.referencia_fabricant}` : ""} {eina.model ? `• Model: ${eina.model}` : ""}
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               )}
 
-              {/* 8. INCIDENTS */}
+              {/* 8. INCIDENTS (INCIDÈNCIES REALS DE LA BD — ZERO MOCK) */}
               {pestanyaActiva === "incidents" && (
                 <div className="space-y-3 text-xs font-mono">
-                  <span className="font-bold text-slate-700 dark:text-slate-300">Incidències de Camp Reportades</span>
-                  <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 space-y-2">
-                    <div className="flex items-center justify-between">
-                      <span className="font-bold text-rose-600 dark:text-rose-400">INC-2026-012</span>
-                      <span className="text-[10px] text-slate-400">08/09/2026 10:15</span>
+                  <span className="font-bold text-slate-700 dark:text-slate-300">Incidències de Camp Reportades ({incidenciesOperari.length})</span>
+                  {carregantIncidencies ? (
+                    <p className="text-center py-6 text-slate-400">Carregant incidències...</p>
+                  ) : incidenciesOperari.length === 0 ? (
+                    <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-700 text-center text-slate-500">
+                      Sense incidències de camp reportades per aquest treballador.
                     </div>
-                    <p className="text-slate-800 dark:text-slate-200">Fuga inesperada en enllaç de pressió 110mm</p>
-                    <div className="flex items-center gap-2 pt-1 text-[11px] text-slate-500">
-                      <Mic className="w-3.5 h-3.5 text-indigo-500" />
-                      <span>Nota d'àudio nativa enregistrada (24s)</span>
+                  ) : (
+                    <div className="space-y-2">
+                      {incidenciesOperari.map((inc) => (
+                        <div
+                          key={inc.id}
+                          className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 space-y-1.5"
+                        >
+                          <div className="flex items-center justify-between">
+                            <span className="font-bold text-rose-600 dark:text-rose-400">
+                              Àmbit: {inc.ambit} ({inc.estat})
+                            </span>
+                            <span className="text-[10px] text-slate-400">
+                              {inc.created_at ? inc.created_at.slice(0, 16).replace("T", " ") : ""}
+                            </span>
+                          </div>
+                          {inc.text_observacions && (
+                            <p className="text-slate-800 dark:text-slate-200">{inc.text_observacions}</p>
+                          )}
+                          {inc.audio_path && (
+                            <div className="flex items-center gap-2 pt-1 text-[11px] text-slate-500">
+                              <Mic className="w-3.5 h-3.5 text-indigo-500" />
+                              <span>Nota d'àudio enregistrada</span>
+                            </div>
+                          )}
+                        </div>
+                      ))}
                     </div>
-                  </div>
+                  )}
                 </div>
               )}
             </div>
@@ -1247,6 +1430,44 @@ export default function GestioOperarisPage() {
             </div>
 
             <form onSubmit={handleDesarEdicioOperari} className="p-5 space-y-3 max-h-[82vh] overflow-y-auto">
+              {/* Secció Credencials d'Accés PWA (Login) */}
+              <div className="p-3.5 rounded-xl bg-amber-50/70 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="font-bold text-amber-900 dark:text-amber-200 flex items-center gap-1.5">
+                    <KeyRound className="w-4 h-4 text-amber-600" />
+                    <span>Credencials d'Accés PWA (PIN 4 Dígits)</span>
+                  </span>
+                  <button
+                    type="button"
+                    onClick={handleRegenerarPinDesDeEditor}
+                    disabled={regenerantPinEditor}
+                    className="px-2.5 py-1 rounded bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white font-bold text-[11px] flex items-center gap-1 shadow-sm transition-colors"
+                  >
+                    <RefreshCw className={`w-3 h-3 ${regenerantPinEditor ? "animate-spin" : ""}`} />
+                    <span>{regenerantPinEditor ? "Generant..." : "Generar Nou PIN"}</span>
+                  </button>
+                </div>
+                <p className="text-[11px] text-slate-600 dark:text-slate-400">
+                  ⚠️ El servei d'enviament per SMS no està configurat. El codi PIN generat es mostrarà directament en pantalla per facilitar-lo al treballador.
+                </p>
+                {pinGeneratEditor && (
+                  <div className="p-3 rounded-lg bg-white dark:bg-slate-900 border border-emerald-300 dark:border-emerald-700 flex items-center justify-between shadow-sm">
+                    <div>
+                      <span className="text-[10px] text-slate-500">Nou PIN d'accés operari generat:</span>
+                      <p className="text-xl font-mono font-bold tracking-widest text-emerald-600 dark:text-emerald-400">{pinGeneratEditor}</p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => copiarAlPortapapers(pinGeneratEditor, "pin")}
+                      className="px-2.5 py-1.5 rounded-lg bg-emerald-50 dark:bg-emerald-950/50 hover:bg-emerald-100 text-emerald-700 dark:text-emerald-300 text-xs font-bold flex items-center gap-1 border border-emerald-300 dark:border-emerald-700"
+                    >
+                      <Copy className="w-3.5 h-3.5" />
+                      <span>{copiatPin ? "Copiat!" : "Copiar PIN"}</span>
+                    </button>
+                  </div>
+                )}
+              </div>
+
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="text-[10px] text-slate-400">Nom *</label>
@@ -1562,6 +1783,133 @@ export default function GestioOperarisPage() {
               >
                 Confirmar Baixa
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL CREDENCIALS D'ACCÉS PWA (LOGIN OPERARI — SMS NO CONFIGURAT) */}
+      {credencialsOperariModal && (
+        <div className="fixed inset-0 z-[70] bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="w-full max-w-lg bg-white dark:bg-slate-900 rounded-2xl shadow-2xl border border-amber-300 dark:border-amber-800 overflow-hidden font-mono text-xs animate-in zoom-in-95 duration-150">
+            {/* Capçalera */}
+            <div className="p-4 bg-gradient-to-r from-amber-500/10 to-amber-600/10 border-b border-amber-200 dark:border-amber-800/80 flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-xl bg-amber-500 text-white flex items-center justify-center shadow-sm">
+                  <KeyRound className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-slate-900 dark:text-white text-sm">
+                    {credencialsOperariModal.titol}
+                  </h3>
+                  <p className="text-[10px] text-amber-700 dark:text-amber-400">
+                    Credencials d'Accés per a la PWA Mòbil de Camp
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setCredencialsOperariModal(null)}
+                className="p-1 hover:bg-amber-100 dark:hover:bg-amber-950 rounded text-slate-400 hover:text-slate-700 dark:hover:text-slate-200"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-5 space-y-4">
+              {/* Avís SMS No Configurat */}
+              <div className="p-3 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800 text-[11px] text-amber-900 dark:text-amber-200 space-y-1">
+                <div className="flex items-center gap-1.5 font-bold">
+                  <AlertCircle className="w-3.5 h-3.5 text-amber-600" />
+                  <span>Atenció: Servei SMS No Activat</span>
+                </div>
+                <p className="text-slate-600 dark:text-slate-300">
+                  Com que el servei de missatgeria SMS no està configurat, aquest codi PIN <strong>només es mostra en aquesta pantalla</strong>. Faciliteu o envieu aquestes credencials manualment al treballador.
+                </p>
+              </div>
+
+              {/* Caixa del Codi PIN Destacat */}
+              <div className="p-4 rounded-xl bg-slate-900 text-white dark:bg-black border border-slate-700 text-center space-y-2 shadow-inner">
+                <span className="text-[10px] text-slate-400 uppercase tracking-wider font-bold">
+                  Codi PIN d'Accés (4 Dígits)
+                </span>
+                <div className="text-3xl font-mono font-black tracking-[0.4em] text-amber-400 flex items-center justify-center pl-2">
+                  {credencialsOperariModal.pin_generat}
+                </div>
+                <div className="pt-1 flex justify-center">
+                  <button
+                    type="button"
+                    onClick={() => copiarAlPortapapers(credencialsOperariModal.pin_generat, "pin")}
+                    className="px-3 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-amber-300 text-xs font-bold flex items-center gap-1.5 border border-slate-700 transition-colors shadow-sm"
+                  >
+                    <Copy className="w-3.5 h-3.5" />
+                    <span>{copiatPin ? "PIN Copiat!" : "Copiar PIN (4 dígits)"}</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Dades d'Inici de Sessió */}
+              <div className="space-y-2 p-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 text-xs">
+                <div className="flex items-center justify-between py-1 border-b border-slate-200 dark:border-slate-700/60">
+                  <span className="text-slate-500">Treballador:</span>
+                  <span className="font-bold text-slate-900 dark:text-white">{credencialsOperariModal.nom_complet}</span>
+                </div>
+                <div className="flex items-center justify-between py-1 border-b border-slate-200 dark:border-slate-700/60">
+                  <span className="text-slate-500">Telèfon d'Inici (Login):</span>
+                  <span className="font-bold text-slate-900 dark:text-white font-mono">{credencialsOperariModal.telefon}</span>
+                </div>
+                <div className="flex items-center justify-between py-1 border-b border-slate-200 dark:border-slate-700/60">
+                  <span className="text-slate-500">NIF / Identificador:</span>
+                  <span className="font-bold text-slate-900 dark:text-white font-mono">{credencialsOperariModal.nif}</span>
+                </div>
+                <div className="flex items-center justify-between py-1 border-b border-slate-200 dark:border-slate-700/60">
+                  <span className="text-slate-500">Rol a Camp:</span>
+                  <span className="font-bold text-slate-900 dark:text-white">{credencialsOperariModal.rol}</span>
+                </div>
+                <div className="flex items-center justify-between py-1">
+                  <span className="text-slate-500">Enllaç Accés PWA:</span>
+                  <a
+                    href={credencialsOperariModal.login_url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="font-bold text-amber-600 dark:text-amber-400 hover:underline flex items-center gap-1"
+                  >
+                    <span>/operari/login</span>
+                    <ExternalLink className="w-3 h-3" />
+                  </a>
+                </div>
+              </div>
+
+              {/* Botons d'Acció */}
+              <div className="pt-2 flex flex-wrap gap-2 justify-end border-t border-slate-200 dark:border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const urlLogin = typeof window !== "undefined" ? `${window.location.origin}/operari/login` : "/operari/login";
+                    const resum = [
+                      "SEVALOR Suite — Credencials d'Accés per a Operari",
+                      "--------------------------------------------------",
+                      `Treballador: ${credencialsOperariModal.nom_complet}`,
+                      `Telèfon (Login): ${credencialsOperariModal.telefon}`,
+                      `NIF: ${credencialsOperariModal.nif}`,
+                      `Rol: ${credencialsOperariModal.rol}`,
+                      `PIN d'accés (4 dígits): ${credencialsOperariModal.pin_generat}`,
+                      `Adreça web (PWA): ${urlLogin}`,
+                    ].join("\n");
+                    copiarAlPortapapers(resum, "tot");
+                  }}
+                  className="px-3 py-1.5 rounded-lg bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 font-bold flex items-center gap-1.5 transition-colors"
+                >
+                  <Copy className="w-3.5 h-3.5" />
+                  <span>{copiatTot ? "Totes les Dades Copiades!" : "Copiar Totes les Dades"}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setCredencialsOperariModal(null)}
+                  className="px-4 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-500 text-white font-bold transition-colors shadow"
+                >
+                  Entès / Tancar
+                </button>
+              </div>
             </div>
           </div>
         </div>
