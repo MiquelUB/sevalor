@@ -47,6 +47,23 @@ class FeinaResponse(FeinaCreate):
     model_config = ConfigDict(from_attributes=True)
 
 
+class FeinaUpdate(BaseModel):
+    titol: Optional[str] = Field(None, max_length=200)
+    descripcio: Optional[str] = None
+    client_id: Optional[uuid.UUID] = None
+    finca_id: Optional[uuid.UUID] = None
+    adreca: Optional[str] = Field(None, max_length=255)
+    estat: Optional[str] = Field(None, max_length=30)
+    data_planificacio: Optional[date] = None
+    cap_de_colla_id: Optional[uuid.UUID] = None
+    vehicle_id: Optional[uuid.UUID] = None
+    latitud: Optional[float] = None
+    longitud: Optional[float] = None
+    versio: Optional[int] = None
+    eina_ids: Optional[List[uuid.UUID]] = None
+    model_config = ConfigDict(from_attributes=True)
+
+
 @router.get("", response_model=List[FeinaResponse])
 async def llistar_feines(
     request: Request,
@@ -216,6 +233,148 @@ async def llistar_feines_mapa(
         )
 
     return {"type": "FeatureCollection", "features": features}
+
+
+@router.get("/{feina_id}", response_model=FeinaResponse)
+async def obtenir_feina(
+    feina_id: uuid.UUID,
+    request: Request,
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+):
+    """Obté el detall complet d'una Ordre de Treball per ID amb aïllament RLS."""
+    empresa_id = getattr(request.state, "empresa_id", None) or request.headers.get("X-Empresa-ID")
+    if not empresa_id or empresa_id in ("undefined", "null", "None"):
+        raise HTTPException(status_code=401, detail="No identificat")
+
+    stmt = (
+        select(OrdreTreball, Client, Usuari)
+        .outerjoin(Client, OrdreTreball.client_id == Client.id)
+        .outerjoin(Usuari, OrdreTreball.cap_de_colla_id == Usuari.id)
+        .where(
+            OrdreTreball.id == feina_id,
+            OrdreTreball.empresa_id == uuid.UUID(empresa_id),
+        )
+    )
+    result = await db.execute(stmt)
+    row = result.first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Ordre de treball no trobada")
+
+    ordre, client, operari = row
+    f_resp = FeinaResponse.model_validate(ordre)
+    if (f_resp.latitud is None or f_resp.longitud is None) and ordre.adreca:
+        c_lat, c_lng = geocodificar_adreca(ordre.adreca)
+        if c_lat is not None and c_lng is not None:
+            f_resp.latitud = c_lat
+            f_resp.longitud = c_lng
+    if client:
+        f_resp.client_nom = client.rao_social
+    if operari:
+        f_resp.cap_de_colla_nom = f"{operari.nom} {operari.cognoms or ''}".strip()
+
+    return f_resp
+
+
+@router.put("/{feina_id}", response_model=FeinaResponse)
+async def modificar_feina(
+    feina_id: uuid.UUID,
+    payload: FeinaUpdate,
+    request: Request,
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+):
+    """Actualitza i edita una Ordre de Treball existent amb concurrència optimista."""
+    empresa_id = getattr(request.state, "empresa_id", None) or request.headers.get("X-Empresa-ID")
+    if not empresa_id or empresa_id in ("undefined", "null", "None"):
+        raise HTTPException(status_code=401, detail="No identificat")
+
+    stmt = select(OrdreTreball).where(
+        OrdreTreball.id == feina_id,
+        OrdreTreball.empresa_id == uuid.UUID(empresa_id),
+    )
+    result = await db.execute(stmt)
+    ordre = result.scalars().first()
+    if not ordre:
+        raise HTTPException(status_code=404, detail="Ordre de treball no trobada")
+
+    if payload.versio is not None and ordre.versio != payload.versio:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Conflicte de concurrència: la feina ha estat modificada per un altre usuari (versió actual: {ordre.versio}, versió enviada: {payload.versio})",
+        )
+
+    update_data = payload.model_dump(exclude_unset=True)
+
+    if "titol" in update_data and update_data["titol"]:
+        ordre.titol = update_data["titol"].strip()
+    if "descripcio" in update_data:
+        ordre.descripcio = update_data["descripcio"].strip() if update_data["descripcio"] else None
+    if "client_id" in update_data and update_data["client_id"]:
+        ordre.client_id = update_data["client_id"]
+    if "finca_id" in update_data:
+        ordre.finca_id = update_data["finca_id"]
+    if "data_planificacio" in update_data and update_data["data_planificacio"]:
+        ordre.data_planificacio = update_data["data_planificacio"]
+    if "estat" in update_data and update_data["estat"]:
+        ordre.estat = update_data["estat"]
+    if "vehicle_id" in update_data:
+        ordre.vehicle_id = update_data["vehicle_id"]
+
+    # Assignació operativa (cap de colla)
+    if "cap_de_colla_id" in update_data:
+        nou_cap = update_data["cap_de_colla_id"]
+        ordre.cap_de_colla_id = nou_cap
+        if nou_cap and ordre.estat == "PENDENT":
+            ordre.estat = "ASSIGNADA"
+        elif not nou_cap and ordre.estat == "ASSIGNADA":
+            ordre.estat = "PENDENT"
+
+    # Adreça i coordenades
+    if "adreca" in update_data and update_data["adreca"]:
+        ordre.adreca = update_data["adreca"].strip()
+        c_lat, c_lng = geocodificar_adreca(
+            ordre.adreca, update_data.get("latitud"), update_data.get("longitud")
+        )
+        if c_lat is not None and c_lng is not None:
+            ordre.latitud = c_lat
+            ordre.longitud = c_lng
+    elif "latitud" in update_data and "longitud" in update_data:
+        ordre.latitud = update_data["latitud"]
+        ordre.longitud = update_data["longitud"]
+
+    # Eines en custòdia
+    if "eina_ids" in update_data and update_data["eina_ids"] is not None:
+        for eina_id in update_data["eina_ids"]:
+            stmt_eina = select(EinaCustodia).where(
+                EinaCustodia.id == eina_id,
+                EinaCustodia.empresa_id == uuid.UUID(empresa_id),
+            )
+            eina_obj = (await db.execute(stmt_eina)).scalars().first()
+            if eina_obj:
+                eina_obj.estat = "CUSTODIADA"
+                if ordre.cap_de_colla_id:
+                    eina_obj.custodiat_per_operari_id = ordre.cap_de_colla_id
+
+    ordre.versio = (ordre.versio or 1) + 1
+    await db.commit()
+    await db.refresh(ordre)
+
+    # Obtenir noms per a la resposta
+    client_nom = None
+    if ordre.client_id:
+        c_stmt = select(Client.rao_social).where(Client.id == ordre.client_id)
+        client_nom = (await db.execute(c_stmt)).scalars().first()
+
+    cap_nom = None
+    if ordre.cap_de_colla_id:
+        u_stmt = select(Usuari).where(Usuari.id == ordre.cap_de_colla_id)
+        u_obj = (await db.execute(u_stmt)).scalars().first()
+        if u_obj:
+            cap_nom = f"{u_obj.nom} {u_obj.cognoms or ''}".strip()
+
+    resp = FeinaResponse.model_validate(ordre)
+    resp.client_nom = client_nom
+    resp.cap_de_colla_nom = cap_nom
+    return resp
 
 
 class AgendarFeinaRequest(BaseModel):

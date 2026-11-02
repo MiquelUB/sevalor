@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState } from "react";
-import { Users, Truck, Phone, Navigation, MapPin, Briefcase, Plus, Check } from "lucide-react";
+import { Users, Truck, Phone, Navigation, MapPin, Briefcase, Plus, Check, Edit } from "lucide-react";
 import { Feina, Operari } from "@/components/gestio/Map";
 
 interface QuadrillesTaulerProps {
@@ -10,6 +10,7 @@ interface QuadrillesTaulerProps {
   selectedOperariId: string | null;
   onSelectOperari: (operariId: string) => void;
   onSelectFeina?: (feinaId: string) => void;
+  onEditFeina?: (feinaId: string) => void;
   onDropAssignment: (feinaId: string, versio: number, operariId: string) => Promise<void>;
 }
 
@@ -19,6 +20,7 @@ export function QuadrillesTauler({
   selectedOperariId,
   onSelectOperari,
   onSelectFeina,
+  onEditFeina,
   onDropAssignment,
 }: QuadrillesTaulerProps) {
   const [dragOverOperariId, setDragOverOperariId] = useState<string | null>(null);
@@ -170,7 +172,22 @@ export function QuadrillesTauler({
                               {feina.titol}
                             </span>
                           </div>
-                          <MapPin className="w-3 h-3 text-slate-400 group-hover/item:text-emerald-500 shrink-0 ml-1" />
+                          <div className="flex items-center gap-1 shrink-0 ml-1">
+                            {onEditFeina && (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  onEditFeina(feina.id);
+                                }}
+                                className="p-0.5 rounded hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-400 hover:text-primary transition-colors cursor-pointer"
+                                title="Editar aquesta ordre de treball"
+                              >
+                                <Edit className="w-3 h-3" />
+                              </button>
+                            )}
+                            <MapPin className="w-3 h-3 text-slate-400 group-hover/item:text-emerald-500 shrink-0" />
+                          </div>
                         </div>
                       ))
                     )}

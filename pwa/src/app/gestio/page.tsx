@@ -11,6 +11,7 @@ import {
 import Link from "next/link";
 import { apiFetch } from "@/lib/api";
 import { CrearOTModal } from "@/components/gestio/CrearOTModal";
+import { EditarOTModal } from "@/components/gestio/EditarOTModal";
 import GestioMap, { Feina, Operari } from "@/components/gestio/Map";
 import { QuadrillesTauler } from "@/components/gestio/QuadrillesTauler";
 
@@ -35,6 +36,8 @@ export default function GestioDashboardPage() {
   }, []);
 
   const [showModalOT, setShowModalOT] = useState(false);
+  const [showModalEditarOT, setShowModalEditarOT] = useState(false);
+  const [editingFeinaId, setEditingFeinaId] = useState<string | null>(null);
   const [hud, setHud] = useState({
     active_jobs: 0,
     completed_jobs: 0,
@@ -133,6 +136,11 @@ export default function GestioDashboardPage() {
     if (mapaElement) {
       mapaElement.scrollIntoView({ behavior: "smooth", block: "center" });
     }
+  };
+
+  const handleEditarFeina = (feinaId: string) => {
+    setEditingFeinaId(feinaId);
+    setShowModalEditarOT(true);
   };
 
   // Càlcul reactiu i coherent dels KPIs operatius en temps real (Zero Mock Data)
@@ -338,10 +346,23 @@ export default function GestioDashboardPage() {
                                   type="button"
                                   onClick={(e) => {
                                     e.stopPropagation();
+                                    handleEditarFeina(feina.id);
+                                  }}
+                                  className="p-xs hover:bg-surface-container-highest rounded text-on-surface-variant hover:text-primary transition-colors cursor-pointer"
+                                  title="Editar ordre de treball"
+                                >
+                                  <span className="material-symbols-outlined text-[18px]">
+                                    edit
+                                  </span>
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
                                     setVistaActiva("FEINA");
                                     setTimeout(() => handleFocusFeinaAlMapa(feina.id), 100);
                                   }}
-                                  className="p-xs hover:bg-surface-container-highest rounded text-on-surface-variant"
+                                  className="p-xs hover:bg-surface-container-highest rounded text-on-surface-variant cursor-pointer"
                                   title="Veure al Mapa"
                                 >
                                   <span className="material-symbols-outlined text-[18px]">
@@ -695,13 +716,26 @@ export default function GestioDashboardPage() {
                             </p>
                           </div>
                         </div>
-                        <div className="text-right flex flex-col items-end shrink-0 ml-sm">
-                          <span className="font-data-tabular font-semibold text-primary text-xs">
-                            {feina.data_planificacio || "Avui"}
-                          </span>
-                          <span className="text-[10px] font-label-caps text-on-surface-variant mt-xs">
-                            {feina.cap_de_colla_nom || feina.estat}
-                          </span>
+                        <div className="text-right flex items-center gap-2 shrink-0 ml-sm">
+                          <div className="flex flex-col items-end">
+                            <span className="font-data-tabular font-semibold text-primary text-xs">
+                              {feina.data_planificacio || "Avui"}
+                            </span>
+                            <span className="text-[10px] font-label-caps text-on-surface-variant mt-xs">
+                              {feina.cap_de_colla_nom || feina.estat}
+                            </span>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleEditarFeina(feina.id);
+                            }}
+                            className="p-1.5 rounded-lg hover:bg-surface-container-highest text-on-surface-variant hover:text-primary transition-colors cursor-pointer"
+                            title="Editar ordre de treball"
+                          >
+                            <span className="material-symbols-outlined text-[16px]">edit</span>
+                          </button>
                         </div>
                       </div>
                     );
@@ -726,6 +760,7 @@ export default function GestioDashboardPage() {
             selectedOperariId={selectedOperariId}
             onSelectOperari={handleFocusOperariAlMapa}
             onSelectFeina={handleFocusFeinaAlMapa}
+            onEditFeina={handleEditarFeina}
             onDropAssignment={handleDropAssignment}
           />
 
@@ -908,14 +943,25 @@ export default function GestioDashboardPage() {
                           </div>
                         </td>
                         <td className="py-3 px-4 text-right">
-                          <button
-                            type="button"
-                            onClick={() => handleFocusFeinaAlMapa(feina.id)}
-                            className="px-3 py-1.5 text-xs font-body-strong rounded-lg bg-primary/10 hover:bg-primary hover:text-white text-primary inline-flex items-center gap-1 transition-colors"
-                          >
-                            <Navigation className="w-3 h-3" />
-                            <span>Veure al mapa</span>
-                          </button>
+                          <div className="flex items-center justify-end gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => handleEditarFeina(feina.id)}
+                              className="px-2.5 py-1.5 text-xs font-body-strong rounded-lg bg-surface-container-high hover:bg-primary hover:text-white text-on-surface inline-flex items-center gap-1 transition-colors cursor-pointer"
+                              title="Editar ordre de treball"
+                            >
+                              <span className="material-symbols-outlined text-[15px]">edit</span>
+                              <span>Editar</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleFocusFeinaAlMapa(feina.id)}
+                              className="px-2.5 py-1.5 text-xs font-body-strong rounded-lg bg-primary/10 hover:bg-primary hover:text-white text-primary inline-flex items-center gap-1 transition-colors cursor-pointer"
+                            >
+                              <Navigation className="w-3 h-3" />
+                              <span>Veure al mapa</span>
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     ))}
@@ -931,6 +977,21 @@ export default function GestioDashboardPage() {
         <CrearOTModal
           onClose={() => setShowModalOT(false)}
           onSuccess={() => carregarDades()}
+        />
+      )}
+
+      {showModalEditarOT && editingFeinaId && (
+        <EditarOTModal
+          feinaId={editingFeinaId}
+          onClose={() => {
+            setShowModalEditarOT(false);
+            setEditingFeinaId(null);
+          }}
+          onSuccess={() => {
+            setShowModalEditarOT(false);
+            setEditingFeinaId(null);
+            carregarDades();
+          }}
         />
       )}
     </div>
