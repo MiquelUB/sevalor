@@ -522,7 +522,11 @@ export default function EmpresaDetailPage({ params }: { params: { id: string } }
       ? [`${base}/models`]
       : [`${base}/v1/models`, `${base}/api/tags`, `${base}/models`];
 
+    const isLocalClientUrl =
+      /^https?:\/\/(127\.0\.0\.1|localhost|192\.168\.|10\.|172\.(1[6-9]|2\d|3[0-1])\.)/i.test(base);
+
     // 1. Sonda directa des de la plataforma (navegador del client -> ordinador local 127.0.0.1 / LAN)
+    let lastClientErr = "";
     for (const url of candidateEndpoints) {
       try {
         const t0 = performance.now();
@@ -530,7 +534,7 @@ export default function EmpresaDetailPage({ params }: { params: { id: string } }
         const timer = setTimeout(() => ctrl.abort(), 3500);
         const resp = await fetch(url, {
           method: "GET",
-          headers: { Accept: "application/json" },
+          mode: "cors",
           signal: ctrl.signal,
         });
         clearTimeout(timer);
@@ -559,13 +563,28 @@ export default function EmpresaDetailPage({ params }: { params: { id: string } }
           setFeatures((prev) => ({ ...prev, node_ia_actiu: true }));
           setNodeIaTesting(false);
           return;
+        } else {
+          lastClientErr = `HTTP ${resp.status}`;
         }
-      } catch {
-        // Continua provant el següent endpoint o fallback de servidor
+      } catch (e: any) {
+        lastClientErr = e?.message || "Connexió rebutjada pel navegador";
       }
     }
 
-    // 2. Fallback via servidor backend (per a nodes remots amb restricció CORS al navegador)
+    // Si és una adreça local (127.0.0.1 / localhost / LAN), NO enviem mai la petició al servidor de Hetzner
+    if (isLocalClientUrl) {
+      setNodeIaStatus({
+        status: "ERROR",
+        motiu: "PORT_LOCAL_NO_RESPON",
+        missatge: `El navegador no ha pogut connectar amb ${base} (${lastClientErr}). Verifica que LM Studio / Ollama tingui el servidor local engegat ('Start Server') i l'opció CORS activada.`,
+        models: [],
+        latencia_ms: null,
+      });
+      setNodeIaTesting(false);
+      return;
+    }
+
+    // 2. Fallback via servidor backend només per a dominis públics remots amb restricció CORS al navegador
     try {
       const res = await apiFetch<any>("/superadmin/tenants/verificar-node-ia", {
         method: "POST",
@@ -671,6 +690,8 @@ export default function EmpresaDetailPage({ params }: { params: { id: string } }
     // 2. Sonda HTTP directa des de la plataforma (navegador del client -> 127.0.0.1 / LAN)
     if (rawDiscUrl.startsWith("http://") || rawDiscUrl.startsWith("https://")) {
       const base = rawDiscUrl.replace(/\/+$/, "");
+      const isLocalDiscUrl =
+        /^https?:\/\/(127\.0\.0\.1|localhost|192\.168\.|10\.|172\.(1[6-9]|2\d|3[0-1])\.)/i.test(base);
       const testUrls = [
         `${base}/docs/planols`,
         `${base}/docs`,
@@ -685,6 +706,7 @@ export default function EmpresaDetailPage({ params }: { params: { id: string } }
           const timer = setTimeout(() => ctrl.abort(), 3500);
           const resp = await fetch(url, {
             method: "GET",
+            mode: "cors",
             signal: ctrl.signal,
           });
           clearTimeout(timer);
@@ -705,6 +727,17 @@ export default function EmpresaDetailPage({ params }: { params: { id: string } }
         } catch {
           // Següent ruta
         }
+      }
+
+      if (isLocalDiscUrl) {
+        setDiscDurStatus({
+          status: "ERROR",
+          motiu: "DISC_LOCAL_NO_RESPON",
+          missatge: `El navegador no ha pogut connectar amb ${base}. Pots clicar el botó 'Seleccionar Carpeta' per enllaçar directament la carpeta del teu disc dur des de la plataforma.`,
+          latencia_ms: null,
+        });
+        setDiscDurTesting(false);
+        return;
       }
     }
 

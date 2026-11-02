@@ -493,6 +493,8 @@ export default function ConfiguracioPage() {
 
     // 1. Sonda directa des de la plataforma (navegador -> 127.0.0.1 / LAN)
     const base = rawUrl.replace(/\/+$/, "");
+    const isLocalClientUrl =
+      /^https?:\/\/(127\.0\.0\.1|localhost|192\.168\.|10\.|172\.(1[6-9]|2\d|3[0-1])\.)/i.test(base);
     const candidateEndpoints = base.endsWith("/v1")
       ? [`${base}/models`]
       : [`${base}/v1/models`, `${base}/api/tags`, `${base}/models`];
@@ -504,7 +506,7 @@ export default function ConfiguracioPage() {
         const timer = setTimeout(() => ctrl.abort(), 3500);
         const resp = await fetch(url, {
           method: "GET",
-          headers: { Accept: "application/json" },
+          mode: "cors",
           signal: ctrl.signal,
         });
         clearTimeout(timer);
@@ -530,8 +532,15 @@ export default function ConfiguracioPage() {
           return;
         }
       } catch {
-        // Fallback al backend
+        // Continua amb el següent endpoint
       }
+    }
+
+    if (isLocalClientUrl) {
+      setNodeIaEstat("ERROR_CONNEXIO");
+      mostrarFeedback("ERROR", `El navegador no ha pogut connectar amb ${base}. Verifica que LM Studio / Ollama tingui el servidor local engegat i CORS activat.`);
+      setNodeIaTestant(false);
+      return;
     }
 
     try {
