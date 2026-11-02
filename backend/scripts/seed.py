@@ -26,6 +26,9 @@ async def seed():
                 "ALTER TABLE empreses ADD COLUMN IF NOT EXISTS estat_domini VARCHAR(30) NOT NULL DEFAULT 'NO_CONFIGURAT'"
             )
         )
+        await conn.execute(
+            text("ALTER TABLE empreses ADD COLUMN IF NOT EXISTS disc_dur_url VARCHAR(255)")
+        )
     print("✅ Taules comprovades correctament!")
 
     async with AsyncSessionLocal() as session:
