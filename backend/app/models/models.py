@@ -664,6 +664,9 @@ class EinaCustodia(Base):
     custodiat_per_operari_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True), ForeignKey("usuaris.id", ondelete="SET NULL")
     )
+    ordre_treball_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("ordres_treball.id", ondelete="SET NULL")
+    )
     magatzem_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True), ForeignKey("magatzems.id", ondelete="SET NULL")
     )
@@ -885,6 +888,9 @@ class OrdreTreball(Base):
     )
     vehicle_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True), ForeignKey("vehicles.id", ondelete="SET NULL")
+    )
+    planol_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("planols_base.id", ondelete="SET NULL")
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

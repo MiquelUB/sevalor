@@ -11,10 +11,15 @@ import {
   MapPin,
   Truck,
   AlignLeft,
-  Check,
-  Clock,
   AlertCircle,
   RefreshCw,
+  Layers,
+  Package,
+  Wrench,
+  Plus,
+  Trash2,
+  CheckCircle2,
+  Box,
 } from "lucide-react";
 import { apiFetch } from "@/lib/api";
 import { geocodificarAdreca } from "@/lib/geocoding";
@@ -25,7 +30,42 @@ interface EditarOTModalProps {
   onSuccess?: () => void;
 }
 
+interface LiniaPickingUI {
+  id?: string;
+  article_id: string;
+  article_nom: string;
+  referencia_inventari: string;
+  quantitat_prevista: number;
+  unitat_mesura: string;
+  estoc_disponible: number;
+}
+
+interface EinaUI {
+  id: string;
+  nom: string;
+  model?: string | null;
+  numero_serie: string;
+  estat: string;
+}
+
+interface PlanolUI {
+  id: string;
+  titol: string;
+  codi_referencia: string;
+  tipus_fitxer: string;
+}
+
+interface ArticleCataleg {
+  id: string;
+  nom: string;
+  referencia_inventari: string;
+  unitat_mesura: string;
+  estoc_real?: number;
+  actiu?: boolean;
+}
+
 export function EditarOTModal({ feinaId, onClose, onSuccess }: EditarOTModalProps) {
+  const [activeTab, setActiveTab] = useState<"GENERAL" | "PLANOL" | "PICKING" | "EINES">("GENERAL");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -35,6 +75,9 @@ export function EditarOTModal({ feinaId, onClose, onSuccess }: EditarOTModalProp
   const [finques, setFinques] = useState<any[]>([]);
   const [operaris, setOperaris] = useState<any[]>([]);
   const [vehicles, setVehicles] = useState<any[]>([]);
+  const [planols, setPlanols] = useState<PlanolUI[]>([]);
+  const [articlesCatalog, setArticlesCatalog] = useState<ArticleCataleg[]>([]);
+  const [einesCatalog, setEinesCatalog] = useState<EinaUI[]>([]);
 
   // Form state
   const [formData, setFormData] = useState({
@@ -51,7 +94,19 @@ export function EditarOTModal({ feinaId, onClose, onSuccess }: EditarOTModalProp
     estat: "PENDENT",
     latitud: null as number | null,
     longitud: null as number | null,
+    planol_id: "",
   });
+
+  // Picking & Eines state
+  const [liniesPicking, setLiniesPicking] = useState<LiniaPickingUI[]>([]);
+  const [selectedEinaIds, setSelectedEinaIds] = useState<string[]>([]);
+
+  // Subform for adding picking item
+  const [selectedArticleId, setSelectedArticleId] = useState("");
+  const [quantitatPickingInput, setQuantitatPickingInput] = useState<number>(1);
+
+  // Subform for adding tool
+  const [selectedEinaInputId, setSelectedEinaInputId] = useState("");
 
   // Load feina and auxiliary catalogs
   useEffect(() => {
@@ -61,8 +116,11 @@ export function EditarOTModal({ feinaId, onClose, onSuccess }: EditarOTModalProp
       apiFetch<any>("/gestio/clients").catch(() => []),
       apiFetch<any>("/gestio/operaris").catch(() => []),
       apiFetch<any>("/gestio/flota").catch(() => []),
+      apiFetch<PlanolUI[]>("/gestio/planols").catch(() => []),
+      apiFetch<ArticleCataleg[]>("/gestio/magatzem/articles").catch(() => []),
+      apiFetch<EinaUI[]>("/gestio/magatzem/eines").catch(() => []),
     ])
-      .then(([feinaData, clientsData, operarisData, flotaData]) => {
+      .then(([feinaData, clientsData, operarisData, flotaData, planolsData, articlesData, einesData]) => {
         setFormData({
           codi: feinaData.codi || "",
           versio: feinaData.versio || 1,
@@ -77,7 +135,30 @@ export function EditarOTModal({ feinaId, onClose, onSuccess }: EditarOTModalProp
           estat: feinaData.estat || "PENDENT",
           latitud: feinaData.latitud ?? null,
           longitud: feinaData.longitud ?? null,
+          planol_id: feinaData.planol_id || "",
         });
+
+        // Initialize picking lines
+        if (Array.isArray(feinaData.linies_picking)) {
+          setLiniesPicking(
+            feinaData.linies_picking.map((lp: any) => ({
+              id: lp.id,
+              article_id: lp.article_id,
+              article_nom: lp.article_nom || "Article sense nom",
+              referencia_inventari: lp.referencia_inventari || "S/REF",
+              quantitat_prevista: Number(lp.quantitat_prevista) || 1,
+              unitat_mesura: lp.unitat_mesura || "UNITAT",
+              estoc_disponible: Number(lp.estoc_disponible) || 0,
+            }))
+          );
+        }
+
+        // Initialize linked tools
+        if (Array.isArray(feinaData.eina_ids)) {
+          setSelectedEinaIds(feinaData.eina_ids);
+        } else if (Array.isArray(feinaData.eines)) {
+          setSelectedEinaIds(feinaData.eines.map((e: any) => e.id));
+        }
 
         setClients(Array.isArray(clientsData) ? clientsData : clientsData?.items || []);
         setOperaris(
@@ -86,6 +167,9 @@ export function EditarOTModal({ feinaId, onClose, onSuccess }: EditarOTModalProp
           )
         );
         setVehicles(Array.isArray(flotaData) ? flotaData : flotaData?.vehicles || []);
+        setPlanols(Array.isArray(planolsData) ? planolsData : []);
+        setArticlesCatalog(Array.isArray(articlesData) ? articlesData : []);
+        setEinesCatalog(Array.isArray(einesData) ? einesData : []);
 
         if (feinaData.client_id) {
           apiFetch<any>(`/gestio/clients/${feinaData.client_id}/fitxa360`)
@@ -111,14 +195,75 @@ export function EditarOTModal({ feinaId, onClose, onSuccess }: EditarOTModalProp
     }
   };
 
+  // Picking functions
+  const handleAfegirMaterial = () => {
+    if (!selectedArticleId) return;
+    const article = articlesCatalog.find((a) => a.id === selectedArticleId);
+    if (!article) return;
+
+    if (quantitatPickingInput <= 0) {
+      setErrorMsg("La quantitat del material ha de ser superior a zero.");
+      return;
+    }
+
+    // Check if already in list
+    const existentIndex = liniesPicking.findIndex((l) => l.article_id === selectedArticleId);
+    if (existentIndex >= 0) {
+      const noves = [...liniesPicking];
+      noves[existentIndex].quantitat_prevista += quantitatPickingInput;
+      setLiniesPicking(noves);
+    } else {
+      setLiniesPicking([
+        ...liniesPicking,
+        {
+          article_id: article.id,
+          article_nom: article.nom,
+          referencia_inventari: article.referencia_inventari,
+          quantitat_prevista: quantitatPickingInput,
+          unitat_mesura: article.unitat_mesura || "UNITAT",
+          estoc_disponible: article.estoc_real || 0,
+        },
+      ]);
+    }
+
+    setSelectedArticleId("");
+    setQuantitatPickingInput(1);
+    setErrorMsg(null);
+  };
+
+  const handleEliminarLiniaPicking = (articleId: string) => {
+    setLiniesPicking(liniesPicking.filter((l) => l.article_id !== articleId));
+  };
+
+  const handleCanviarQuantitatPicking = (articleId: string, novaQ: number) => {
+    if (novaQ <= 0) return;
+    setLiniesPicking(
+      liniesPicking.map((l) => (l.article_id === articleId ? { ...l, quantitat_prevista: novaQ } : l))
+    );
+  };
+
+  // Eines functions
+  const handleVincularEina = () => {
+    if (!selectedEinaInputId) return;
+    if (selectedEinaIds.includes(selectedEinaInputId)) return;
+    setSelectedEinaIds([...selectedEinaIds, selectedEinaInputId]);
+    setSelectedEinaInputId("");
+  };
+
+  const handleDesvincularEina = (einaId: string) => {
+    setSelectedEinaIds(selectedEinaIds.filter((id) => id !== einaId));
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!formData.titol.trim()) {
       setErrorMsg("El títol de la feina és obligatori.");
+      setActiveTab("GENERAL");
       return;
     }
     if (!formData.adreca.trim()) {
       setErrorMsg("L'adreça d'obra és obligatòria.");
+      setActiveTab("GENERAL");
       return;
     }
 
@@ -133,6 +278,7 @@ export function EditarOTModal({ feinaId, onClose, onSuccess }: EditarOTModalProp
         descripcio: formData.descripcio.trim() || null,
         client_id: formData.client_id || null,
         finca_id: formData.finca_id || null,
+        planol_id: formData.planol_id || null,
         adreca: formData.adreca.trim(),
         data_planificacio: formData.data_planificacio,
         estat: formData.estat,
@@ -141,6 +287,11 @@ export function EditarOTModal({ feinaId, onClose, onSuccess }: EditarOTModalProp
         latitud: geo.lat,
         longitud: geo.lng,
         versio: formData.versio,
+        eina_ids: selectedEinaIds,
+        linies_picking: liniesPicking.map((l) => ({
+          article_id: l.article_id,
+          quantitat_prevista: Number(l.quantitat_prevista),
+        })),
       };
 
       await apiFetch(`/gestio/feines/${feinaId}`, {
@@ -158,9 +309,12 @@ export function EditarOTModal({ feinaId, onClose, onSuccess }: EditarOTModalProp
     }
   };
 
+  // Helper for blueprint info
+  const selectedPlanol = planols.find((p) => p.id === formData.planol_id);
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-in fade-in duration-150">
-      <div className="relative w-full max-w-2xl bg-white dark:bg-slate-900 rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-800 flex flex-col max-h-[90vh] overflow-hidden">
+      <div className="relative w-full max-w-3xl bg-white dark:bg-slate-900 rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-800 flex flex-col max-h-[92vh] overflow-hidden">
         {/* Capçalera Modal */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/40">
           <div className="flex items-center gap-3">
@@ -192,22 +346,90 @@ export function EditarOTModal({ feinaId, onClose, onSuccess }: EditarOTModalProp
                 </span>
               </div>
               <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                Modifica l&apos;assignació, la planificació o les dades tècniques d&apos;aquesta intervenció.
+                Gestió integral: assignació, plànols tècnics, picking de materials i eines en custòdia.
               </p>
             </div>
           </div>
           <button
             onClick={onClose}
             type="button"
-            className="p-2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl transition-colors"
+            className="p-2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl transition-colors cursor-pointer"
           >
             <X className="w-5 h-5" />
           </button>
         </div>
 
+        {/* Pestanyes de Navegació */}
+        <div className="flex items-center border-b border-slate-200 dark:border-slate-800 bg-slate-50/80 dark:bg-slate-800/20 px-6 gap-2">
+          <button
+            type="button"
+            onClick={() => setActiveTab("GENERAL")}
+            className={`py-3 px-3 text-xs font-bold flex items-center gap-1.5 border-b-2 transition-all cursor-pointer ${
+              activeTab === "GENERAL"
+                ? "border-primary text-primary"
+                : "border-transparent text-slate-500 hover:text-slate-700 dark:hover:text-slate-300"
+            }`}
+          >
+            <FileText className="w-3.5 h-3.5" />
+            <span>General & Dades</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveTab("PLANOL")}
+            className={`py-3 px-3 text-xs font-bold flex items-center gap-1.5 border-b-2 transition-all cursor-pointer ${
+              activeTab === "PLANOL"
+                ? "border-primary text-primary"
+                : "border-transparent text-slate-500 hover:text-slate-700 dark:hover:text-slate-300"
+            }`}
+          >
+            <Layers className="w-3.5 h-3.5" />
+            <span>Plànol Tècnic</span>
+            {formData.planol_id && (
+              <span className="w-2 h-2 rounded-full bg-primary inline-block" />
+            )}
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveTab("PICKING")}
+            className={`py-3 px-3 text-xs font-bold flex items-center gap-1.5 border-b-2 transition-all cursor-pointer ${
+              activeTab === "PICKING"
+                ? "border-primary text-primary"
+                : "border-transparent text-slate-500 hover:text-slate-700 dark:hover:text-slate-300"
+            }`}
+          >
+            <Package className="w-3.5 h-3.5" />
+            <span>Pickup Materials</span>
+            {liniesPicking.length > 0 && (
+              <span className="ml-1 px-1.5 py-0.2 rounded-full text-[10px] font-mono bg-primary/10 text-primary font-bold">
+                {liniesPicking.length}
+              </span>
+            )}
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveTab("EINES")}
+            className={`py-3 px-3 text-xs font-bold flex items-center gap-1.5 border-b-2 transition-all cursor-pointer ${
+              activeTab === "EINES"
+                ? "border-primary text-primary"
+                : "border-transparent text-slate-500 hover:text-slate-700 dark:hover:text-slate-300"
+            }`}
+          >
+            <Wrench className="w-3.5 h-3.5" />
+            <span>Eines en Custòdia</span>
+            {selectedEinaIds.length > 0 && (
+              <span className="ml-1 px-1.5 py-0.2 rounded-full text-[10px] font-mono bg-primary/10 text-primary font-bold">
+                {selectedEinaIds.length}
+              </span>
+            )}
+          </button>
+        </div>
+
         {/* Cos del Formulari */}
         {loading ? (
-          <div className="p-12 flex flex-col items-center justify-center gap-3">
+          <div className="p-16 flex flex-col items-center justify-center gap-3">
             <RefreshCw className="w-8 h-8 text-primary animate-spin" />
             <p className="text-xs text-slate-500 font-mono">Carregant dades de l&apos;ordre de treball...</p>
           </div>
@@ -220,186 +442,517 @@ export function EditarOTModal({ feinaId, onClose, onSuccess }: EditarOTModalProp
               </div>
             )}
 
-            {/* Títol de la feina */}
-            <div>
-              <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1 flex items-center gap-1.5">
-                <FileText className="w-3.5 h-3.5 text-primary" />
-                <span>Títol de la Feina / Intervenció *</span>
-              </label>
-              <input
-                type="text"
-                required
-                value={formData.titol}
-                onChange={(e) => setFormData({ ...formData, titol: e.target.value })}
-                placeholder="Ex: Reparació electrobomba sector Nord"
-                className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary font-medium"
-              />
-            </div>
+            {/* TAB 1: GENERAL */}
+            {activeTab === "GENERAL" && (
+              <div className="space-y-4 animate-in fade-in duration-100">
+                {/* Títol de la feina */}
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1 flex items-center gap-1.5">
+                    <FileText className="w-3.5 h-3.5 text-primary" />
+                    <span>Títol de la Feina / Intervenció *</span>
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={formData.titol}
+                    onChange={(e) => setFormData({ ...formData, titol: e.target.value })}
+                    placeholder="Ex: Reparació electrobomba sector Nord"
+                    className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary font-medium"
+                  />
+                </div>
 
-            {/* Descripció tècnica */}
-            <div>
-              <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1 flex items-center gap-1.5">
-                <AlignLeft className="w-3.5 h-3.5 text-slate-400" />
-                <span>Instruccions Tècniques per a l&apos;Operari</span>
-              </label>
-              <textarea
-                rows={2}
-                value={formData.descripcio}
-                onChange={(e) => setFormData({ ...formData, descripcio: e.target.value })}
-                placeholder="Observacions, accessos o tasques específiques a realitzar sobre el terreny..."
-                className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary resize-none"
-              />
-            </div>
+                {/* Descripció tècnica */}
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1 flex items-center gap-1.5">
+                    <AlignLeft className="w-3.5 h-3.5 text-slate-400" />
+                    <span>Instruccions Tècniques per a l&apos;Operari</span>
+                  </label>
+                  <textarea
+                    rows={2}
+                    value={formData.descripcio}
+                    onChange={(e) => setFormData({ ...formData, descripcio: e.target.value })}
+                    placeholder="Observacions, accessos o tasques específiques a realitzar sobre el terreny..."
+                    className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary resize-none"
+                  />
+                </div>
 
-            {/* Client i Finca */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div>
-                <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1 flex items-center gap-1.5">
-                  <Building2 className="w-3.5 h-3.5 text-slate-400" />
-                  <span>Client Associat</span>
-                </label>
-                <select
-                  value={formData.client_id}
-                  onChange={(e) => handleClientChange(e.target.value)}
-                  className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary"
-                >
-                  <option value="">Selecciona un client...</option>
-                  {clients.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.rao_social} ({c.nif || c.codi})
-                    </option>
-                  ))}
-                </select>
+                {/* Client i Finca */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1 flex items-center gap-1.5">
+                      <Building2 className="w-3.5 h-3.5 text-slate-400" />
+                      <span>Client Associat</span>
+                    </label>
+                    <select
+                      value={formData.client_id}
+                      onChange={(e) => handleClientChange(e.target.value)}
+                      className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary"
+                    >
+                      <option value="">Selecciona un client...</option>
+                      {clients.map((c) => (
+                        <option key={c.id} value={c.id}>
+                          {c.rao_social} ({c.nif || c.codi})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1 flex items-center gap-1.5">
+                      <MapPin className="w-3.5 h-3.5 text-slate-400" />
+                      <span>Finca / Emplaçament</span>
+                    </label>
+                    <select
+                      value={formData.finca_id}
+                      onChange={(e) => setFormData({ ...formData, finca_id: e.target.value })}
+                      disabled={!formData.client_id || finques.length === 0}
+                      className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-50"
+                    >
+                      <option value="">
+                        {finques.length === 0
+                          ? formData.client_id
+                            ? "Aquest client no té finques"
+                            : "Selecciona client primer"
+                          : "Selecciona una finca..."}
+                      </option>
+                      {finques.map((f) => (
+                        <option key={f.id} value={f.id}>
+                          {f.nom || f.adreca || "Finca sense nom"}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                {/* Adreça física d'obra */}
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1 flex items-center gap-1.5">
+                    <MapPin className="w-3.5 h-3.5 text-secondary" />
+                    <span>Adreça / Coordenades d&apos;Obra *</span>
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={formData.adreca}
+                    onChange={(e) => setFormData({ ...formData, adreca: e.target.value })}
+                    placeholder="Carrer, municipi o coordenades lat, lng"
+                    className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary font-mono"
+                  />
+                </div>
+
+                {/* Assignació Operativa (Cap de Colla) i Vehicle */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1 flex items-center gap-1.5">
+                      <User className="w-3.5 h-3.5 text-primary" />
+                      <span>Cap de Colla / Operari Assignat</span>
+                    </label>
+                    <select
+                      value={formData.cap_de_colla_id}
+                      onChange={(e) => {
+                        const newOp = e.target.value;
+                        setFormData({
+                          ...formData,
+                          cap_de_colla_id: newOp,
+                          estat: newOp && formData.estat === "PENDENT" ? "ASSIGNADA" : formData.estat,
+                        });
+                      }}
+                      className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary"
+                    >
+                      <option value="">Pendent d&apos;assignar (Sense colla)</option>
+                      {operaris.map((op) => (
+                        <option key={op.id} value={op.id}>
+                          {op.nom} {op.cognoms || ""} ({op.nif || "Operari"})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1 flex items-center gap-1.5">
+                      <Truck className="w-3.5 h-3.5 text-slate-400" />
+                      <span>Vehicle Assignat (Flota)</span>
+                    </label>
+                    <select
+                      value={formData.vehicle_id}
+                      onChange={(e) => setFormData({ ...formData, vehicle_id: e.target.value })}
+                      className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary"
+                    >
+                      <option value="">Sense vehicle assignat</option>
+                      {vehicles.map((v) => (
+                        <option key={v.id} value={v.id}>
+                          {v.matricula} — {v.marca || ""} {v.model || ""}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                {/* Data Planificada i Estat */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1 flex items-center gap-1.5">
+                      <Calendar className="w-3.5 h-3.5 text-slate-400" />
+                      <span>Data Planificada</span>
+                    </label>
+                    <input
+                      type="date"
+                      required
+                      value={formData.data_planificacio}
+                      onChange={(e) => setFormData({ ...formData, data_planificacio: e.target.value })}
+                      className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary font-mono"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1 flex items-center gap-1.5">
+                      <Calendar className="w-3.5 h-3.5 text-slate-400" />
+                      <span>Estat Operatiu</span>
+                    </label>
+                    <select
+                      value={formData.estat}
+                      onChange={(e) => setFormData({ ...formData, estat: e.target.value })}
+                      className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary font-medium"
+                    >
+                      <option value="PENDENT">PENDENT</option>
+                      <option value="ASSIGNADA">ASSIGNADA</option>
+                      <option value="PROGRAMADA">PROGRAMADA</option>
+                      <option value="EN_RUTA">EN RUTA</option>
+                      <option value="EN_OBRA">EN OBRA</option>
+                      <option value="EN_CURS">EN CURS</option>
+                      <option value="COMPLETADA">COMPLETADA</option>
+                      <option value="BLOQUEJADA">BLOQUEJADA</option>
+                    </select>
+                  </div>
+                </div>
               </div>
+            )}
 
-              <div>
-                <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1 flex items-center gap-1.5">
-                  <MapPin className="w-3.5 h-3.5 text-slate-400" />
-                  <span>Finca / Emplaçament</span>
-                </label>
-                <select
-                  value={formData.finca_id}
-                  onChange={(e) => setFormData({ ...formData, finca_id: e.target.value })}
-                  disabled={!formData.client_id || finques.length === 0}
-                  className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-50"
-                >
-                  <option value="">
-                    {finques.length === 0
-                      ? formData.client_id
-                        ? "Aquest client no té finques"
-                        : "Selecciona client primer"
-                      : "Selecciona una finca..."}
-                  </option>
-                  {finques.map((f) => (
-                    <option key={f.id} value={f.id}>
-                      {f.nom || f.adreca || "Finca sense nom"}
-                    </option>
-                  ))}
-                </select>
+            {/* TAB 2: PLÀNOL TÈCNIC */}
+            {activeTab === "PLANOL" && (
+              <div className="space-y-4 animate-in fade-in duration-100">
+                <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-800 text-xs text-slate-600 dark:text-slate-300 flex items-start gap-2.5">
+                  <Layers className="w-4 h-4 text-primary shrink-0 mt-0.5" />
+                  <div>
+                    <p className="font-semibold text-slate-800 dark:text-white">
+                      Assignació de Plànol Tècnic d&apos;Obra
+                    </p>
+                    <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+                      Vincula el croquis, esquema unifilar elèctric, plànol de reg o distribució tècnica. L&apos;operari podrà consultar-lo directament des de la PWA al terreny.
+                    </p>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1.5 flex items-center justify-between">
+                    <span>Selecciona el Plànol Tècnic</span>
+                    {formData.planol_id && (
+                      <button
+                        type="button"
+                        onClick={() => setFormData({ ...formData, planol_id: "" })}
+                        className="text-[11px] text-error hover:underline cursor-pointer"
+                      >
+                        Desvincular plànol
+                      </button>
+                    )}
+                  </label>
+                  <select
+                    value={formData.planol_id}
+                    onChange={(e) => setFormData({ ...formData, planol_id: e.target.value })}
+                    className="w-full px-3 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary"
+                  >
+                    <option value="">Sense plànol vinculat</option>
+                    {planols.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        [{p.codi_referencia}] {p.titol} ({p.tipus_fitxer})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {selectedPlanol ? (
+                  <div className="p-4 rounded-xl border border-primary/20 bg-primary/5 dark:bg-primary/10 flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-lg bg-primary/20 flex items-center justify-center text-primary">
+                        <Layers className="w-5 h-5" />
+                      </div>
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <span className="font-mono text-xs font-bold text-primary">
+                            {selectedPlanol.codi_referencia}
+                          </span>
+                          <span className="text-[10px] px-1.5 py-0.2 rounded font-mono uppercase bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-300">
+                            {selectedPlanol.tipus_fitxer}
+                          </span>
+                        </div>
+                        <h4 className="text-xs font-bold text-slate-900 dark:text-white mt-0.5">
+                          {selectedPlanol.titol}
+                        </h4>
+                      </div>
+                    </div>
+                    <span className="text-xs font-medium text-emerald-600 dark:text-emerald-400 flex items-center gap-1">
+                      <CheckCircle2 className="w-4 h-4" />
+                      Vinculat
+                    </span>
+                  </div>
+                ) : (
+                  <div className="p-8 text-center border border-dashed border-slate-200 dark:border-slate-800 rounded-xl">
+                    <Layers className="w-8 h-8 text-slate-300 dark:text-slate-600 mx-auto mb-2" />
+                    <p className="text-xs text-slate-500 dark:text-slate-400">
+                      Aquesta ordre de treball no té cap plànol tècnic associat.
+                    </p>
+                  </div>
+                )}
               </div>
-            </div>
+            )}
 
-            {/* Adreça física d'obra */}
-            <div>
-              <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1 flex items-center gap-1.5">
-                <MapPin className="w-3.5 h-3.5 text-secondary" />
-                <span>Adreça / Coordenades d&apos;Obra *</span>
-              </label>
-              <input
-                type="text"
-                required
-                value={formData.adreca}
-                onChange={(e) => setFormData({ ...formData, adreca: e.target.value })}
-                placeholder="Carrer, municipi o coordenades lat, lng"
-                className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary font-mono"
-              />
-            </div>
+            {/* TAB 3: PICKING DE MATERIALS */}
+            {activeTab === "PICKING" && (
+              <div className="space-y-4 animate-in fade-in duration-100">
+                <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-800 text-xs text-slate-600 dark:text-slate-300 flex items-start gap-2.5">
+                  <Package className="w-4 h-4 text-primary shrink-0 mt-0.5" />
+                  <div>
+                    <p className="font-semibold text-slate-800 dark:text-white">
+                      Fulla de Picking (Pickup de Materials & Control d&apos;Inventari)
+                    </p>
+                    <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+                      Els materials sol·licitats es reserven automàticament de l&apos;estoc de magatzem per evitar trencaments i es sincronitzen amb la càrrega de la furgoneta.
+                    </p>
+                  </div>
+                </div>
 
-            {/* Assignació Operativa (Cap de Colla) i Vehicle */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div>
-                <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1 flex items-center gap-1.5">
-                  <User className="w-3.5 h-3.5 text-primary" />
-                  <span>Cap de Colla / Operari Assignat</span>
-                </label>
-                <select
-                  value={formData.cap_de_colla_id}
-                  onChange={(e) => {
-                    const newOp = e.target.value;
-                    setFormData({
-                      ...formData,
-                      cap_de_colla_id: newOp,
-                      estat: newOp && formData.estat === "PENDENT" ? "ASSIGNADA" : formData.estat,
-                    });
-                  }}
-                  className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary"
-                >
-                  <option value="">Pendent d&apos;assignar (Sense colla)</option>
-                  {operaris.map((op) => (
-                    <option key={op.id} value={op.id}>
-                      {op.nom} {op.cognoms || ""} ({op.nif || "Operari"})
-                    </option>
-                  ))}
-                </select>
+                {/* Subformulari afegir article */}
+                <div className="p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 flex flex-col sm:flex-row items-end gap-3">
+                  <div className="flex-1 w-full">
+                    <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                      Seleccionar Article de Magatzem
+                    </label>
+                    <select
+                      value={selectedArticleId}
+                      onChange={(e) => setSelectedArticleId(e.target.value)}
+                      className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary"
+                    >
+                      <option value="">Tria un article de l&apos;inventari...</option>
+                      {articlesCatalog.map((art) => (
+                        <option key={art.id} value={art.id}>
+                          [{art.referencia_inventari}] {art.nom} (Estoc: {art.estoc_real ?? 0} {art.unitat_mesura})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div className="w-full sm:w-28">
+                    <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                      Quantitat
+                    </label>
+                    <input
+                      type="number"
+                      step="any"
+                      min="0.001"
+                      value={quantitatPickingInput}
+                      onChange={(e) => setQuantitatPickingInput(parseFloat(e.target.value) || 0)}
+                      className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary font-mono"
+                    />
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={handleAfegirMaterial}
+                    disabled={!selectedArticleId || quantitatPickingInput <= 0}
+                    className="w-full sm:w-auto px-4 py-2 rounded-xl bg-primary hover:bg-primary-container text-white text-xs font-bold transition-all flex items-center justify-center gap-1 cursor-pointer disabled:opacity-40"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>Afegir</span>
+                  </button>
+                </div>
+
+                {/* Taula de materials reservats */}
+                {liniesPicking.length > 0 ? (
+                  <div className="border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden">
+                    <table className="w-full text-left text-xs">
+                      <thead className="bg-slate-50 dark:bg-slate-800/60 text-slate-600 dark:text-slate-300 border-b border-slate-200 dark:border-slate-800">
+                        <tr>
+                          <th className="py-2.5 px-3 font-semibold">Ref / Article</th>
+                          <th className="py-2.5 px-3 font-semibold text-center">Quantitat Prevista</th>
+                          <th className="py-2.5 px-3 font-semibold text-right">Estoc Magatzem</th>
+                          <th className="py-2.5 px-3 text-right">Acció</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                        {liniesPicking.map((linia) => (
+                          <tr key={linia.article_id} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/40">
+                            <td className="py-2.5 px-3">
+                              <span className="font-mono text-[11px] font-bold text-primary mr-1.5">
+                                {linia.referencia_inventari}
+                              </span>
+                              <span className="text-slate-800 dark:text-slate-200">
+                                {linia.article_nom}
+                              </span>
+                            </td>
+                            <td className="py-2.5 px-3 text-center">
+                              <div className="inline-flex items-center gap-1.5">
+                                <input
+                                  type="number"
+                                  step="any"
+                                  min="0.001"
+                                  value={linia.quantitat_prevista}
+                                  onChange={(e) =>
+                                    handleCanviarQuantitatPicking(
+                                      linia.article_id,
+                                      parseFloat(e.target.value) || 0
+                                    )
+                                  }
+                                  className="w-20 px-2 py-1 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-mono text-center focus:outline-none focus:ring-1 focus:ring-primary"
+                                />
+                                <span className="text-[11px] font-mono text-slate-500">
+                                  {linia.unitat_mesura}
+                                </span>
+                              </div>
+                            </td>
+                            <td className="py-2.5 px-3 text-right">
+                              <span
+                                className={`text-[11px] font-mono px-2 py-0.5 rounded-full ${
+                                  linia.estoc_disponible < linia.quantitat_prevista
+                                    ? "bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300"
+                                    : "bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300"
+                                }`}
+                              >
+                                {linia.estoc_disponible} {linia.unitat_mesura} disp.
+                              </span>
+                            </td>
+                            <td className="py-2.5 px-3 text-right">
+                              <button
+                                type="button"
+                                onClick={() => handleEliminarLiniaPicking(linia.article_id)}
+                                className="p-1.5 text-slate-400 hover:text-error hover:bg-error/10 rounded-lg transition-colors cursor-pointer"
+                                title="Eliminar de la fulla de picking"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                  <div className="p-8 text-center border border-dashed border-slate-200 dark:border-slate-800 rounded-xl">
+                    <Box className="w-8 h-8 text-slate-300 dark:text-slate-600 mx-auto mb-2" />
+                    <p className="text-xs text-slate-500 dark:text-slate-400">
+                      Cap material reservat a la fulla de picking d&apos;aquesta intervenció.
+                    </p>
+                  </div>
+                )}
               </div>
+            )}
 
-              <div>
-                <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1 flex items-center gap-1.5">
-                  <Truck className="w-3.5 h-3.5 text-slate-400" />
-                  <span>Vehicle Assignat (Flota)</span>
-                </label>
-                <select
-                  value={formData.vehicle_id}
-                  onChange={(e) => setFormData({ ...formData, vehicle_id: e.target.value })}
-                  className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary"
-                >
-                  <option value="">Sense vehicle assignat</option>
-                  {vehicles.map((v) => (
-                    <option key={v.id} value={v.id}>
-                      {v.matricula} — {v.marca || ""} {v.model || ""}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            </div>
+            {/* TAB 4: EINES EN CUSTÒDIA */}
+            {activeTab === "EINES" && (
+              <div className="space-y-4 animate-in fade-in duration-100">
+                <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-800 text-xs text-slate-600 dark:text-slate-300 flex items-start gap-2.5">
+                  <Wrench className="w-4 h-4 text-primary shrink-0 mt-0.5" />
+                  <div>
+                    <p className="font-semibold text-slate-800 dark:text-white">
+                      Eines i Equips Tècnics en Custòdia
+                    </p>
+                    <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+                      Assigna maquinària, eines especialitzades o equips de mesura. Quedaran sota la custòdia directa de l&apos;operari cap de colla mentre duri la feina.
+                    </p>
+                  </div>
+                </div>
 
-            {/* Data Planificada i Estat */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div>
-                <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1 flex items-center gap-1.5">
-                  <Calendar className="w-3.5 h-3.5 text-slate-400" />
-                  <span>Data Planificada</span>
-                </label>
-                <input
-                  type="date"
-                  required
-                  value={formData.data_planificacio}
-                  onChange={(e) => setFormData({ ...formData, data_planificacio: e.target.value })}
-                  className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary font-mono"
-                />
-              </div>
+                {/* Subformulari vincular eina */}
+                <div className="flex items-center gap-3">
+                  <div className="flex-1">
+                    <select
+                      value={selectedEinaInputId}
+                      onChange={(e) => setSelectedEinaInputId(e.target.value)}
+                      className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary"
+                    >
+                      <option value="">Selecciona una eina disponible per assignar...</option>
+                      {einesCatalog
+                        .filter(
+                          (eina) =>
+                            !selectedEinaIds.includes(eina.id) &&
+                            (eina.estat === "DISPONIBLE" || eina.estat === "CUSTODIADA")
+                        )
+                        .map((eina) => (
+                          <option key={eina.id} value={eina.id}>
+                            {eina.nom} {eina.model ? `(${eina.model})` : ""} — SN: {eina.numero_serie} [{eina.estat}]
+                          </option>
+                        ))}
+                    </select>
+                  </div>
 
-              <div>
-                <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1 flex items-center gap-1.5">
-                  <Clock className="w-3.5 h-3.5 text-slate-400" />
-                  <span>Estat Operatiu</span>
-                </label>
-                <select
-                  value={formData.estat}
-                  onChange={(e) => setFormData({ ...formData, estat: e.target.value })}
-                  className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary font-medium"
-                >
-                  <option value="PENDENT">PENDENT</option>
-                  <option value="ASSIGNADA">ASSIGNADA</option>
-                  <option value="PROGRAMADA">PROGRAMADA</option>
-                  <option value="EN_RUTA">EN RUTA</option>
-                  <option value="EN_OBRA">EN OBRA</option>
-                  <option value="EN_CURS">EN CURS</option>
-                  <option value="COMPLETADA">COMPLETADA</option>
-                  <option value="BLOQUEJADA">BLOQUEJADA</option>
-                </select>
+                  <button
+                    type="button"
+                    onClick={handleVincularEina}
+                    disabled={!selectedEinaInputId}
+                    className="px-4 py-2 rounded-xl bg-primary hover:bg-primary-container text-white text-xs font-bold transition-all flex items-center gap-1 cursor-pointer disabled:opacity-40"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>Assignar</span>
+                  </button>
+                </div>
+
+                {/* Llistat d'eines assignades */}
+                {selectedEinaIds.length > 0 ? (
+                  <div className="border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden divide-y divide-slate-100 dark:divide-slate-800">
+                    {selectedEinaIds.map((einaId) => {
+                      const eina = einesCatalog.find((e) => e.id === einaId);
+                      return (
+                        <div
+                          key={einaId}
+                          className="p-3 flex items-center justify-between hover:bg-slate-50/50 dark:hover:bg-slate-800/40"
+                        >
+                          <div className="flex items-center gap-3">
+                            <div className="w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center text-primary">
+                              <Wrench className="w-4 h-4" />
+                            </div>
+                            <div>
+                              <div className="flex items-center gap-2">
+                                <h4 className="text-xs font-bold text-slate-900 dark:text-white">
+                                  {eina ? eina.nom : "Eina assignada"}
+                                </h4>
+                                {eina?.model && (
+                                  <span className="text-[11px] text-slate-500 dark:text-slate-400">
+                                    {eina.model}
+                                  </span>
+                                )}
+                              </div>
+                              <p className="text-[11px] font-mono text-slate-400 mt-0.5">
+                                SN: {eina ? eina.numero_serie : einaId}
+                              </p>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-3">
+                            <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded-full bg-blue-100 text-blue-800 dark:bg-blue-950/60 dark:text-blue-300">
+                              CUSTÒDIA
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => handleDesvincularEina(einaId)}
+                              className="p-1.5 text-slate-400 hover:text-error hover:bg-error/10 rounded-lg transition-colors cursor-pointer"
+                              title="Alliberar custòdia d'aquesta eina"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div className="p-8 text-center border border-dashed border-slate-200 dark:border-slate-800 rounded-xl">
+                    <Wrench className="w-8 h-8 text-slate-300 dark:text-slate-600 mx-auto mb-2" />
+                    <p className="text-xs text-slate-500 dark:text-slate-400">
+                      Cap eina ni equip tècnic en custòdia assignat a aquesta ordre de treball.
+                    </p>
+                  </div>
+                )}
               </div>
-            </div>
+            )}
 
             {/* Peu Modal */}
             <div className="flex items-center justify-between pt-4 border-t border-slate-100 dark:border-slate-800">
@@ -411,7 +964,7 @@ export function EditarOTModal({ feinaId, onClose, onSuccess }: EditarOTModalProp
                   type="button"
                   onClick={onClose}
                   disabled={saving}
-                  className="px-4 py-2 rounded-xl text-xs font-bold text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+                  className="px-4 py-2 rounded-xl text-xs font-bold text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
                 >
                   Cancel·lar
                 </button>
