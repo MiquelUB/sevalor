@@ -9,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db_with_tenant_context
+from app.core.network_utils import resolve_effective_node_url
 from app.core.security import require_roles
 from app.models.models import CapaAnotacio, CapaVectorial, Empresa, PlanolBase
 
@@ -145,9 +146,11 @@ async def consultar_planol_arxiu_extern_empresa(
             },
         )
 
-    base_url = emp.node_ia_url.rstrip("/")
-    if not base_url.startswith("http"):
-        base_url = f"http://{base_url}"
+    raw_url = emp.node_ia_url.rstrip("/")
+    if not raw_url.startswith("http"):
+        raw_url = f"http://{raw_url}"
+    effective_url = resolve_effective_node_url(raw_url) or raw_url
+    base_url = effective_url.rstrip("/")
 
     try:
         async with httpx.AsyncClient(timeout=2.0) as client:

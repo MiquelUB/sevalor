@@ -4,6 +4,8 @@ from typing import Any, Dict, List, Optional
 import httpx
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
+from app.core.network_utils import resolve_effective_node_url
+
 logger = logging.getLogger("llm_client")
 
 
@@ -13,7 +15,8 @@ class LLMClientError(Exception):
 
 class LLMClient:
     def __init__(self, base_url: Optional[str] = None, timeout: int = 30):
-        url: Optional[str] = str(base_url).rstrip("/") if (base_url and str(base_url).strip()) else None
+        resolved = resolve_effective_node_url(base_url)
+        url: Optional[str] = str(resolved).rstrip("/") if (resolved and str(resolved).strip()) else None
         self.base_url = url
         self.timeout = timeout
 

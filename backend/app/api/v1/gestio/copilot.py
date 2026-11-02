@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.db import get_db_with_tenant_context
+from app.core.network_utils import resolve_effective_node_url
 from app.core.security import get_current_user_claims, require_roles
 from app.models.models import (
     AlertaGarantiaRecompra,
@@ -636,10 +637,11 @@ async def cridar_lm_studio(
     node_ia_url: Optional[str] = None,
 ) -> Optional[str]:
     """Cridar el node d'IA local dedicat de l'empresa. Zero egress a Hetzner."""
-    lm_url = (
+    raw_target = (
         (empresa.node_ia_url.strip() if (empresa and empresa.node_ia_actiu and getattr(empresa, "feature_copilot_ia", True) and empresa.node_ia_url) else None)
         or (node_ia_url.strip() if (node_ia_url and node_ia_url.strip()) else None)
     )
+    lm_url = resolve_effective_node_url(raw_target)
     if not lm_url:
         return None
 
@@ -711,7 +713,9 @@ async def cridar_lm_studio_amb_tools(
         )
         return None, None, None, None
 
-    lm_url = empresa.node_ia_url.strip()
+    lm_url = resolve_effective_node_url(empresa.node_ia_url.strip())
+    if not lm_url:
+        return None, None, None, None
     base_url = lm_url.rstrip("/")
     endpoint = (
         f"{base_url}/chat/completions"

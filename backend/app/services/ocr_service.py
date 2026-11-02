@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Optional
 import httpx
 
 from app.core.config import settings
+from app.core.network_utils import resolve_effective_node_url
 
 logger = logging.getLogger("ocr_service")
 
@@ -51,7 +52,7 @@ async def _cridar_ia_vision(
     node_ia_url: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     """Crida el node local dedicat de l'empresa per extreure dades estructurades. Zero fallback a Hetzner."""
-    lm_url = node_ia_url.strip() if (node_ia_url and node_ia_url.strip()) else None
+    lm_url = resolve_effective_node_url(node_ia_url)
     if not lm_url:
         logger.info("Empresa sense node d'IA dedicat actiu. Zero egress d'IA a Hetzner (Constitució §2.V).")
         return None

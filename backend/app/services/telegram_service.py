@@ -7,6 +7,7 @@ from sqlalchemy import text as sa_text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.core.network_utils import resolve_effective_node_url
 from app.models.models import Client, Empresa, TokenInvitacioTelegram
 
 logger = logging.getLogger("telegram_service")
@@ -141,11 +142,12 @@ class TelegramService:
         # La IA només opera si l'empresa té ordinador dedicat actiu. Zero egress a Hetzner.
         stmt_emp = select(Empresa).where(Empresa.id == empresa_id)
         emp_obj = (await db.execute(stmt_emp)).scalar_one_or_none()
-        lm_url = (
+        raw_url = (
             emp_obj.node_ia_url.strip()
             if (emp_obj and emp_obj.node_ia_actiu and getattr(emp_obj, "feature_copilot_ia", True) and emp_obj.node_ia_url)
             else None
         )
+        lm_url = resolve_effective_node_url(raw_url)
         if not lm_url:
             if context_rag:
                 return f"Informació d'atenció al client:\n\n{context_rag}"

@@ -18,6 +18,7 @@ from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db, set_tenant_context
+from app.core.network_utils import resolve_effective_node_url
 from app.core.security import get_current_user_claims
 from app.models.models import Empresa, SlotJornada, Usuari
 
@@ -1261,7 +1262,9 @@ async def provar_connexio_node_ia(
             "missatge": "No hi ha cap URL d'ordinador dedicat configurat per a aquesta empresa",
         }
 
-    base_url = empresa.node_ia_url.strip().rstrip("/")
+    raw_url = empresa.node_ia_url.strip()
+    effective_url = resolve_effective_node_url(raw_url) or raw_url
+    base_url = effective_url.rstrip("/")
     endpoint = f"{base_url}/models" if base_url.endswith("/v1") else f"{base_url}/v1/models"
 
     start_time = time_lib.time()

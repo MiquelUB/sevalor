@@ -23,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.db import get_db_with_tenant_context
+from app.core.network_utils import get_candidate_node_urls
 from app.core.security import require_roles
 from app.models.models import (
     Client,
@@ -444,69 +445,73 @@ async def verificar_node_ia(
             "latencia_ms": None,
         }
 
-    base = raw_url.rstrip("/")
-    test_urls = (
-        [f"{base}/models"]
-        if base.endswith("/v1")
-        else [f"{base}/v1/models", f"{base}/api/tags", f"{base}/models"]
-    )
+    candidate_bases = get_candidate_node_urls(raw_url)
+    if not candidate_bases:
+        candidate_bases = [raw_url.rstrip("/")]
 
     start = time.perf_counter()
     last_error_motiu = "CONNEXIO_FALLIDA"
     last_error_msg = "No s'ha pogut establir connexió amb el node d'IA."
 
     async with httpx.AsyncClient(timeout=4.0) as client:
-        for url in test_urls:
-            try:
-                t0 = time.perf_counter()
-                resp = await client.get(url)
-                latencia = int((time.perf_counter() - t0) * 1000)
-                if resp.status_code == 200:
-                    models: List[str] = []
-                    try:
-                        data = resp.json()
-                        if isinstance(data, dict):
-                            if "data" in data and isinstance(data["data"], list):
-                                models = [
-                                    str(m.get("id") or m.get("name"))
-                                    for m in data["data"]
-                                    if isinstance(m, dict) and (m.get("id") or m.get("name"))
-                                ]
-                            elif "models" in data and isinstance(data["models"], list):
-                                models = [
-                                    str(m.get("name") or m.get("id"))
-                                    for m in data["models"]
-                                    if isinstance(m, dict) and (m.get("name") or m.get("id"))
-                                ]
-                    except Exception:
-                        pass
-                    return {
-                        "status": "OK",
-                        "motiu": "CONNEXIO_ESTABLERTA",
-                        "missatge": f"Connexió establerta correctament amb el node d'IA dedicat ({latencia} ms).",
-                        "models": models,
-                        "latencia_ms": latencia,
-                    }
-                else:
-                    last_error_motiu = "HTTP_ERROR"
-                    last_error_msg = f"El servei ha respost amb codi d'error HTTP {resp.status_code}."
-            except (httpx.ConnectTimeout, httpx.ReadTimeout):
-                last_error_motiu = "TIMEOUT"
-                last_error_msg = (
-                    "Temps d'espera esgotat (4s). Comprova que l'ordinador dedicat està encès "
-                    "i que el tallafocs permet el port d'entrada."
-                )
-                break
-            except httpx.ConnectError:
-                last_error_motiu = "PORT_TANCAT"
-                last_error_msg = (
-                    "Connexió rebutjada. El port està tancat o el servei d'IA (LM Studio / Ollama) "
-                    "no està en marxa a la IP/port indicats."
-                )
-                break
-            except Exception as e:
-                last_error_motiu = "ERROR_XARXA"
-                last_error_msg = f"Error de xarxa: {str(e)}"
+        for base in candidate_bases:
+            test_urls = (
+                [f"{base}/models"]
+                if base.endswith("/v1")
+                else [f"{base}/v1/models", f"{base}/api/tags", f"{base}/models"]
+            )
+            for url in test_urls:
+                try:
+                    t0 = time.perf_counter()
+                    resp = await client.get(url)
+                    latencia = int((time.perf_counter() - t0) * 1000)
+                    if resp.status_code == 200:
+                        models: List[str] = []
+                        try:
+                            data = resp.json()
+                            if isinstance(data, dict):
+                                if "data" in data and isinstance(data["data"], list):
+                                    models = [
+                                        str(m.get("id") or m.get("name"))
+                                        for m in data["data"]
+                                        if isinstance(m, dict) and (m.get("id") or m.get("name"))
+                                    ]
+                                elif "models" in data and isinstance(data["models"], list):
+                                    models = [
+                                        str(m.get("name") or m.get("id"))
+                                        for m in data["models"]
+                                        if isinstance(m, dict) and (m.get("name") or m.get("id"))
+                                    ]
+                        except Exception:
+                            pass
+                        return {
+                            "status": "OK",
+                            "motiu": "CONNEXIO_ESTABLERTA",
+                            "missatge": f"Connexió establerta correctament amb el node d'IA dedicat ({latencia} ms).",
+                            "models": models,
+                            "latencia_ms": latencia,
+                            "url_efectiva": base,
+                        }
+                    else:
+                        last_error_motiu = "HTTP_ERROR"
+                        last_error_msg = f"El servei ha respost amb codi d'error HTTP {resp.status_code}."
+                except (httpx.ConnectTimeout, httpx.ReadTimeout):
+                    last_error_motiu = "TIMEOUT"
+                    last_error_msg = (
+                        "Temps d'espera esgotat (4s). Comprova que l'ordinador dedicat està encès "
+                        "i que el tallafocs permet el port d'entrada."
+                    )
+                    break
+                except httpx.ConnectError:
+                    last_error_motiu = "PORT_TANCAT"
+                    last_error_msg = (
+                        "Connexió rebutjada. El port està tancat o el servei d'IA (LM Studio / Ollama) "
+                        "no està en marxa a la IP/port indicats."
+                    )
+                    break
+                except Exception as e:
+                    last_error_motiu = "ERROR_XARXA"
+                    last_error_msg = f"Error de xarxa: {str(e)}"
 
     total_latency = int((time.perf_counter() - start) * 1000)
     return {
@@ -533,63 +538,67 @@ async def verificar_disc_dur(
             "latencia_ms": None,
         }
 
-    base = raw_url.rstrip("/")
-    test_urls = [
-        f"{base}/docs/planols",
-        f"{base}/docs",
-        f"{base}/storage",
-        f"{base}/health",
-        f"{base}/",
-    ]
+    candidate_bases = get_candidate_node_urls(raw_url)
+    if not candidate_bases:
+        candidate_bases = [raw_url.rstrip("/")]
 
     start = time.perf_counter()
     last_error_motiu = "CONNEXIO_FALLIDA"
     last_error_msg = "No s'ha pogut establir connexió amb el disc dur dedicat de l'empresa."
 
     async with httpx.AsyncClient(timeout=4.0) as client:
-        for url in test_urls:
-            try:
-                t0 = time.perf_counter()
-                resp = await client.get(url)
-                latencia = int((time.perf_counter() - t0) * 1000)
-                if resp.status_code < 500:
-                    tipus_resposta = (
-                        "Arxiu Mestre de Plànols / Docs"
-                        if "docs" in url
-                        else "Node Local Operatiu"
+        for base in candidate_bases:
+            test_urls = [
+                f"{base}/docs/planols",
+                f"{base}/docs",
+                f"{base}/storage",
+                f"{base}/health",
+                f"{base}/",
+            ]
+            for url in test_urls:
+                try:
+                    t0 = time.perf_counter()
+                    resp = await client.get(url)
+                    latencia = int((time.perf_counter() - t0) * 1000)
+                    if resp.status_code < 500:
+                        tipus_resposta = (
+                            "Arxiu Mestre de Plànols / Docs"
+                            if "docs" in url
+                            else "Node Local Operatiu"
+                        )
+                        return {
+                            "status": "OK",
+                            "motiu": "DISC_OPERATIU",
+                            "missatge": (
+                                f"Connexió establerta amb el disc dur dedicat de la seu ({latencia} ms). "
+                                "L'arxiu històric està disponible per servir dades en temps real a les PWA."
+                            ),
+                            "endpoint_resolt": url,
+                            "tipus_resposta": tipus_resposta,
+                            "codi_http": resp.status_code,
+                            "latencia_ms": latencia,
+                            "url_efectiva": base,
+                        }
+                    else:
+                        last_error_motiu = "HTTP_ERROR"
+                        last_error_msg = f"El servidor de disc dur ha retornat un codi d'error HTTP {resp.status_code}."
+                except (httpx.ConnectTimeout, httpx.ReadTimeout):
+                    last_error_motiu = "TIMEOUT"
+                    last_error_msg = (
+                        "Temps d'espera esgotat (4s). Comprova que l'ordinador dedicat està encès "
+                        "i que el servei d'arxius/disc dur està accessible."
                     )
-                    return {
-                        "status": "OK",
-                        "motiu": "DISC_OPERATIU",
-                        "missatge": (
-                            f"Connexió establerta amb el disc dur dedicat de la seu ({latencia} ms). "
-                            "L'arxiu històric està disponible per servir dades en temps real a les PWA."
-                        ),
-                        "endpoint_resolt": url,
-                        "tipus_resposta": tipus_resposta,
-                        "codi_http": resp.status_code,
-                        "latencia_ms": latencia,
-                    }
-                else:
-                    last_error_motiu = "HTTP_ERROR"
-                    last_error_msg = f"El servidor de disc dur ha retornat un codi d'error HTTP {resp.status_code}."
-            except (httpx.ConnectTimeout, httpx.ReadTimeout):
-                last_error_motiu = "TIMEOUT"
-                last_error_msg = (
-                    "Temps d'espera esgotat (4s). Comprova que l'ordinador dedicat està encès "
-                    "i que el servei d'arxius/disc dur està accessible."
-                )
-                break
-            except httpx.ConnectError:
-                last_error_motiu = "PORT_TANCAT"
-                last_error_msg = (
-                    "Connexió rebutjada. El port està tancat o l'ordinador dedicat "
-                    "no està en marxa a la IP/port indicats."
-                )
-                break
-            except Exception as e:
-                last_error_motiu = "ERROR_XARXA"
-                last_error_msg = f"Error de xarxa en accedir al disc dur: {str(e)}"
+                    break
+                except httpx.ConnectError:
+                    last_error_motiu = "PORT_TANCAT"
+                    last_error_msg = (
+                        "Connexió rebutjada. El port està tancat o l'ordinador dedicat "
+                        "no està en marxa a la IP/port indicats."
+                    )
+                    break
+                except Exception as e:
+                    last_error_motiu = "ERROR_XARXA"
+                    last_error_msg = f"Error de xarxa en accedir al disc dur: {str(e)}"
 
     total_latency = int((time.perf_counter() - start) * 1000)
     return {

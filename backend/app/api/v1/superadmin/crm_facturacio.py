@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.superadmin.tenants import _resolve_empresa
 from app.core.db import get_db_with_tenant_context
+from app.core.network_utils import resolve_effective_node_url
 from app.core.security import require_roles
 from app.models.models import (
     Empresa,
@@ -708,12 +709,13 @@ async def _comprovar_pc_local_empresa(node_ia_url: Optional[str]) -> bool:
     """Fa un ping ràpid a l'ordinador local de l'empresa per diagnosticar si està encès."""
     if not node_ia_url or not node_ia_url.strip():
         return False
-    url = node_ia_url.strip()
-    if not url.startswith("http"):
-        url = f"http://{url}"
+    raw_url = node_ia_url.strip()
+    if not raw_url.startswith("http"):
+        raw_url = f"http://{raw_url}"
+    effective = resolve_effective_node_url(raw_url) or raw_url
     try:
         async with httpx.AsyncClient(timeout=1.5) as client:
-            resp = await client.get(url)
+            resp = await client.get(effective)
             return resp.status_code < 500
     except Exception:
         return False

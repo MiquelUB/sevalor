@@ -15,6 +15,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.core.network_utils import resolve_effective_node_url
 from app.models.models import ConsultaXatCopilot, Empresa, OrdreTreball, Usuari
 from app.services.subagents.base import BaseSubagent
 from app.services.subagents.subagent_auditoria_marge import SubagentAuditoriaMarge
@@ -434,7 +435,8 @@ class CopilotDispatcher:
         selected_subagent: BaseSubagent = primary_subagent
 
         if es_actiu and node_url:
-            base_url = node_url.rstrip("/")
+            effective_url = resolve_effective_node_url(node_url) or node_url
+            base_url = effective_url.rstrip("/")
             endpoint = f"{base_url}/chat/completions" if base_url.endswith("/v1") else f"{base_url}/v1/chat/completions"
             model_name = getattr(settings, "LM_STUDIO_MODEL", "qwen2.5-vl-7b-instruct")
             api_key = getattr(settings, "LM_STUDIO_API_KEY", "lm-studio")

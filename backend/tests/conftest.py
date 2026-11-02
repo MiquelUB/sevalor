@@ -39,7 +39,7 @@ if os.getenv("TESTING") == "1":
 
 TEST_DB_URL = os.getenv(
     "TEST_DATABASE_URL",
-    f"postgresql+asyncpg://{settings.POSTGRES_USER}:{settings.POSTGRES_PASSWORD}@{settings.POSTGRES_SERVER}:{settings.POSTGRES_PORT}/{settings.POSTGRES_DB}",
+    settings.get_database_url(),
 )
 
 
