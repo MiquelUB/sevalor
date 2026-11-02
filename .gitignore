@@ -48,6 +48,10 @@ backups/
 data/
 *.sql
 !db/migrations/*.sql
+
+# Scripts binaris i estat de túnel
+scripts/cloudflared
+scripts/CURRENT_TUNNEL_URL.txt
 *.dump
 *.sqlite3
 
