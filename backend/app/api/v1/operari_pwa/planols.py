@@ -1,9 +1,10 @@
+import os
 import uuid
 from typing import Any, Dict, List
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -106,6 +107,54 @@ async def llistar_capes_operari(
         )
         for c in capes
     ]
+
+
+@router.get("/{planol_id}/fitxer")
+async def descarregar_fitxer_planol_operari(
+    planol_id: uuid.UUID,
+    request: Request,
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+):
+    """Serveix el fitxer del plànol per a la PWA d'operari."""
+    empresa_id = request.state.empresa_id
+    if not empresa_id or empresa_id == "undefined":
+        raise HTTPException(status_code=401, detail="Context d'empresa no trobat")
+
+    stmt = select(PlanolBase).where(
+        PlanolBase.id == planol_id, PlanolBase.empresa_id == uuid.UUID(empresa_id)
+    )
+    planol = (await db.execute(stmt)).scalars().first()
+    if not planol or not planol.fitxer_path:
+        raise HTTPException(status_code=404, detail="Fitxer de plànol no trobat")
+
+    fpath = planol.fitxer_path
+    if not os.path.isabs(fpath):
+        fpath = os.path.abspath(fpath)
+    if not os.path.exists(fpath):
+        raise HTTPException(status_code=404, detail="Fitxer de plànol no trobat al disc")
+
+    filename = os.path.basename(fpath)
+    ext = os.path.splitext(filename)[1].lower()
+    media_types = {
+        ".pdf": "application/pdf",
+        ".png": "image/png",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".svg": "image/svg+xml",
+        ".dxf": "application/dxf",
+        ".dwg": "application/acad",
+        ".geojson": "application/geo+json",
+        ".json": "application/json",
+        ".kml": "application/vnd.google-earth.kml+xml",
+    }
+    media_type = media_types.get(ext, "application/octet-stream")
+    content_disposition_type = "inline" if ext in [".pdf", ".png", ".jpg", ".jpeg", ".svg"] else "attachment"
+    return FileResponse(
+        path=fpath,
+        filename=filename,
+        media_type=media_type,
+        content_disposition_type=content_disposition_type,
+    )
 
 
 @router.get("/arxiu-extern", response_model=Dict[str, Any])

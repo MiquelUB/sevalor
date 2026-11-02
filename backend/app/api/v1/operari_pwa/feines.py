@@ -71,6 +71,10 @@ class FeinaOperariDetailResponse(BaseModel):
     client: Optional[ClientResponse] = None
     vehicle: Optional[VehicleResponse] = None
     picking_id: Optional[uuid.UUID] = None
+    planol_id: Optional[uuid.UUID] = None
+    planol_titol: Optional[str] = None
+    planol_codi: Optional[str] = None
+    planol_tipus_fitxer: Optional[str] = None
     linies_picking: List[LiniaPickingDetailResponse] = []
     eines_assignades: List[EinaCustodiaResponse] = []
     model_config = ConfigDict(from_attributes=True)
@@ -212,6 +216,20 @@ async def obtenir_detall_feina(
         resp.eines_assignades = [
             EinaCustodiaResponse.model_validate(e) for e in result_eines.scalars().all()
         ]
+
+        # Plànol tècnic assignat a la feina
+        if feina.planol_id:
+            from app.models.models import PlanolBase
+            p_stmt = select(PlanolBase).where(
+                PlanolBase.id == feina.planol_id,
+                PlanolBase.empresa_id == uuid.UUID(empresa_id),
+            )
+            p_obj = (await db.execute(p_stmt)).scalars().first()
+            if p_obj:
+                resp.planol_id = p_obj.id
+                resp.planol_titol = p_obj.titol
+                resp.planol_codi = p_obj.codi_referencia
+                resp.planol_tipus_fitxer = p_obj.tipus_fitxer
 
         return resp
     except HTTPException:

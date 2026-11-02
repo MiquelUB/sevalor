@@ -1,7 +1,10 @@
+import os
+import re
 import uuid
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -30,6 +33,8 @@ class PlanolCreate(BaseModel):
 
 class PlanolResponse(PlanolCreate):
     id: uuid.UUID
+    carpeta_nom: Optional[str] = None
+    municipi: Optional[str] = None
 
 
 class CarpetaCreate(BaseModel):
@@ -69,6 +74,11 @@ class CapaVectorialResponse(BaseModel):
     color_hex: str
 
 
+class ImportarDirectoriRequest(BaseModel):
+    carpeta_id: uuid.UUID
+    ruta_origen: Optional[str] = None
+
+
 @router.get("", response_model=List[PlanolResponse])
 async def llistar_planols(
     request: Request,
@@ -82,7 +92,11 @@ async def llistar_planols(
     if not empresa_id or empresa_id == "undefined":
         raise HTTPException(status_code=401, detail="No identificat")
 
-    stmt = select(PlanolBase).where(PlanolBase.empresa_id == uuid.UUID(empresa_id))
+    stmt = (
+        select(PlanolBase, CarpetaPlanol.nom, CarpetaPlanol.municipi)
+        .outerjoin(CarpetaPlanol, PlanolBase.carpeta_id == CarpetaPlanol.id)
+        .where(PlanolBase.empresa_id == uuid.UUID(empresa_id))
+    )
 
     if carpeta_id:
         stmt = stmt.where(PlanolBase.carpeta_id == carpeta_id)
@@ -96,7 +110,24 @@ async def llistar_planols(
     stmt = stmt.limit(limit).offset(offset).order_by(PlanolBase.created_at.desc())
 
     result = await db.execute(stmt)
-    planols = result.scalars().all()
+    rows = result.all()
+
+    planols = []
+    for p_obj, c_nom, c_mun in rows:
+        planols.append(
+            PlanolResponse(
+                id=p_obj.id,
+                titol=p_obj.titol,
+                codi_referencia=p_obj.codi_referencia,
+                carpeta_id=p_obj.carpeta_id,
+                tipus_fitxer=p_obj.tipus_fitxer,
+                fitxer_path=p_obj.fitxer_path,
+                mida_bytes=p_obj.mida_bytes,
+                es_georeferenciat=p_obj.es_georeferenciat,
+                carpeta_nom=c_nom,
+                municipi=c_mun,
+            )
+        )
 
     return planols
 
@@ -114,7 +145,8 @@ async def alta_planol(
         CarpetaPlanol.id == planol.carpeta_id, CarpetaPlanol.empresa_id == uuid.UUID(empresa_id)
     )
     res_carp = await db.execute(stmt_carp)
-    if not res_carp.scalars().first():
+    carpeta = res_carp.scalars().first()
+    if not carpeta:
         raise HTTPException(status_code=400, detail="Carpeta no vàlida o no pertany a l'empresa")
 
     stmt_codi = select(PlanolBase).where(
@@ -139,7 +171,282 @@ async def alta_planol(
     db.add(nou_planol)
     await db.commit()
 
-    return nou_planol
+    return PlanolResponse(
+        id=nou_planol.id,
+        titol=nou_planol.titol,
+        codi_referencia=nou_planol.codi_referencia,
+        carpeta_id=nou_planol.carpeta_id,
+        tipus_fitxer=nou_planol.tipus_fitxer,
+        fitxer_path=nou_planol.fitxer_path,
+        mida_bytes=nou_planol.mida_bytes,
+        es_georeferenciat=nou_planol.es_georeferenciat,
+        carpeta_nom=carpeta.nom,
+        municipi=carpeta.municipi,
+    )
+
+
+@router.post("/upload", response_model=PlanolResponse, status_code=status.HTTP_201_CREATED)
+async def pujar_planol_fitxer(
+    request: Request,
+    carpeta_id: uuid.UUID = Form(...),
+    fitxer: UploadFile = File(...),
+    titol: Optional[str] = Form(None),
+    codi_referencia: Optional[str] = Form(None),
+    tipus_fitxer: Optional[str] = Form(None),
+    projeccio: Optional[str] = Form("ETRS89 / UTM 31N"),
+    es_georeferenciat: bool = Form(True),
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+):
+    """Puja un fitxer de plànol (PDF, DXF, DWG, GeoJSON, etc.) i el vincula a la carpeta."""
+    empresa_id = request.state.empresa_id
+    if not empresa_id or empresa_id == "undefined":
+        raise HTTPException(status_code=401, detail="No identificat")
+
+    stmt_carp = select(CarpetaPlanol).where(
+        CarpetaPlanol.id == carpeta_id, CarpetaPlanol.empresa_id == uuid.UUID(empresa_id)
+    )
+    res_carp = await db.execute(stmt_carp)
+    carpeta = res_carp.scalars().first()
+    if not carpeta:
+        raise HTTPException(status_code=400, detail="Carpeta no vàlida o no pertany a l'empresa")
+
+    content = await fitxer.read()
+    mida_bytes = len(content)
+    if mida_bytes == 0:
+        raise HTTPException(status_code=400, detail="El fitxer és buit")
+
+    filename = fitxer.filename or "planol.pdf"
+    base_name, file_ext = os.path.splitext(filename)
+    file_ext = file_ext.lower().lstrip(".")
+
+    detected_type = tipus_fitxer
+    if not detected_type:
+        ext_map = {
+            "pdf": "PDF",
+            "dxf": "DXF",
+            "dwg": "DWG",
+            "geojson": "GEOJSON",
+            "json": "GEOJSON",
+            "kml": "KML",
+            "png": "PNG",
+            "jpg": "JPG",
+            "jpeg": "JPG",
+            "tif": "TIFF",
+            "tiff": "TIFF",
+        }
+        detected_type = ext_map.get(file_ext, "DXF")
+
+    safe_id = str(uuid.uuid4())[:8]
+    clean_filename = re.sub(r"[^\w\-.]", "_", filename)
+    saved_filename = f"{safe_id}_{clean_filename}"
+
+    dest_dir = None
+    for base in [os.environ.get("HETZNER_DOCS_PATH", "/docs"), os.path.join(os.getcwd(), "docs")]:
+        try:
+            cand = os.path.join(base, str(empresa_id), "planols")
+            os.makedirs(cand, exist_ok=True)
+            dest_dir = cand
+            break
+        except (PermissionError, OSError):
+            continue
+
+    if not dest_dir:
+        dest_dir = os.path.join("/tmp", f"sevalor_docs_{empresa_id}_planols")
+        os.makedirs(dest_dir, exist_ok=True)
+
+    dest_file = os.path.join(dest_dir, saved_filename)
+    with open(dest_file, "wb") as f:
+        f.write(content)
+
+    final_titol = (titol or base_name.replace("_", " ")).strip()
+    if not codi_referencia or not codi_referencia.strip():
+        clean_code = re.sub(r"[^\w]", "-", base_name.upper())[:12]
+        final_codi = f"PLN-{clean_code}-{safe_id}"
+    else:
+        final_codi = codi_referencia.strip()
+
+    stmt_codi = select(PlanolBase).where(
+        PlanolBase.empresa_id == uuid.UUID(empresa_id),
+        PlanolBase.codi_referencia == final_codi,
+    )
+    if (await db.execute(stmt_codi)).scalars().first():
+        final_codi = f"{final_codi}-{safe_id}"
+
+    nou_planol = PlanolBase(
+        empresa_id=uuid.UUID(empresa_id),
+        titol=final_titol,
+        codi_referencia=final_codi,
+        carpeta_id=carpeta_id,
+        tipus_fitxer=detected_type,
+        fitxer_path=dest_file,
+        mida_bytes=mida_bytes,
+        es_georeferenciat=es_georeferenciat,
+        projeccio_origen=projeccio or "ETRS89 / UTM 31N",
+    )
+
+    db.add(nou_planol)
+    await db.commit()
+
+    return PlanolResponse(
+        id=nou_planol.id,
+        titol=nou_planol.titol,
+        codi_referencia=nou_planol.codi_referencia,
+        carpeta_id=nou_planol.carpeta_id,
+        tipus_fitxer=nou_planol.tipus_fitxer,
+        fitxer_path=nou_planol.fitxer_path,
+        mida_bytes=nou_planol.mida_bytes,
+        es_georeferenciat=nou_planol.es_georeferenciat,
+        carpeta_nom=carpeta.nom,
+        municipi=carpeta.municipi,
+    )
+
+
+@router.post("/importar-directori", response_model=List[PlanolResponse])
+async def importar_planols_directori(
+    request: Request,
+    payload: ImportarDirectoriRequest,
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+):
+    """Escaneja la carpeta d'origen al disc i registra automàticament els plànols trobats."""
+    empresa_id = request.state.empresa_id
+    if not empresa_id or empresa_id == "undefined":
+        raise HTTPException(status_code=401, detail="No identificat")
+
+    stmt_carp = select(CarpetaPlanol).where(
+        CarpetaPlanol.id == payload.carpeta_id, CarpetaPlanol.empresa_id == uuid.UUID(empresa_id)
+    )
+    carpeta = (await db.execute(stmt_carp)).scalars().first()
+    if not carpeta:
+        raise HTTPException(status_code=400, detail="Carpeta no vàlida")
+
+    candidats = []
+    if payload.ruta_origen and os.path.isdir(payload.ruta_origen):
+        candidats.append(payload.ruta_origen)
+
+    candidats.extend(
+        [
+            "/media/akaun/Project_1/Sevalormante_docs/planols",
+            "/media/akaun/Project_1/Sevalormante_docs",
+            os.path.join(
+                os.getcwd(),
+                "demo_docs",
+                "Banc_Documents_Sevalor_Complet",
+                "demo_docs",
+                "05_enginyeria_obres",
+            ),
+            os.path.join(os.getcwd(), "demo_docs"),
+            f"/docs/{empresa_id}/planols",
+        ]
+    )
+
+    importats = []
+    allowed_exts = {".pdf", ".dxf", ".dwg", ".geojson", ".kml", ".png", ".jpg"}
+
+    for dir_path in candidats:
+        if not os.path.exists(dir_path) or not os.path.isdir(dir_path):
+            continue
+
+        for root, _, files in os.walk(dir_path):
+            for file in files:
+                base_name, ext = os.path.splitext(file)
+                if ext.lower() not in allowed_exts:
+                    continue
+
+                full_path = os.path.join(root, file)
+                mida = os.path.getsize(full_path)
+                ext_type = ext.lower().lstrip(".").upper()
+                if ext_type == "JSON":
+                    ext_type = "GEOJSON"
+
+                clean_code = re.sub(r"[^\w]", "-", base_name.upper())[:15]
+                codi_ref = f"PLN-{clean_code}"
+
+                stmt_exist = select(PlanolBase).where(
+                    PlanolBase.empresa_id == uuid.UUID(empresa_id),
+                    PlanolBase.codi_referencia == codi_ref,
+                )
+                if (await db.execute(stmt_exist)).scalars().first():
+                    continue
+
+                nou = PlanolBase(
+                    empresa_id=uuid.UUID(empresa_id),
+                    titol=base_name.replace("_", " ").title(),
+                    codi_referencia=codi_ref,
+                    carpeta_id=payload.carpeta_id,
+                    tipus_fitxer=ext_type,
+                    fitxer_path=full_path,
+                    mida_bytes=mida,
+                    es_georeferenciat=True,
+                    projeccio_origen="ETRS89 / UTM 31N",
+                )
+                db.add(nou)
+                await db.flush()
+
+                importats.append(
+                    PlanolResponse(
+                        id=nou.id,
+                        titol=nou.titol,
+                        codi_referencia=nou.codi_referencia,
+                        carpeta_id=nou.carpeta_id,
+                        tipus_fitxer=nou.tipus_fitxer,
+                        fitxer_path=nou.fitxer_path,
+                        mida_bytes=nou.mida_bytes,
+                        es_georeferenciat=nou.es_georeferenciat,
+                        carpeta_nom=carpeta.nom,
+                        municipi=carpeta.municipi,
+                    )
+                )
+
+    await db.commit()
+    return importats
+
+
+@router.get("/{planol_id}/fitxer")
+async def descarregar_fitxer_planol(
+    planol_id: uuid.UUID,
+    request: Request,
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+):
+    """Serveix el fitxer del plànol per a visualització o descàrrega."""
+    empresa_id = request.state.empresa_id
+    if not empresa_id or empresa_id == "undefined":
+        raise HTTPException(status_code=401, detail="No identificat")
+
+    stmt = select(PlanolBase).where(
+        PlanolBase.id == planol_id, PlanolBase.empresa_id == uuid.UUID(empresa_id)
+    )
+    planol = (await db.execute(stmt)).scalars().first()
+    if not planol or not planol.fitxer_path:
+        raise HTTPException(status_code=404, detail="Fitxer de plànol no trobat")
+
+    fpath = planol.fitxer_path
+    if not os.path.isabs(fpath):
+        fpath = os.path.abspath(fpath)
+    if not os.path.exists(fpath):
+        raise HTTPException(status_code=404, detail="Fitxer de plànol no trobat al disc")
+
+    filename = os.path.basename(fpath)
+    ext = os.path.splitext(filename)[1].lower()
+    media_types = {
+        ".pdf": "application/pdf",
+        ".png": "image/png",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".svg": "image/svg+xml",
+        ".dxf": "application/dxf",
+        ".dwg": "application/acad",
+        ".geojson": "application/geo+json",
+        ".json": "application/json",
+        ".kml": "application/vnd.google-earth.kml+xml",
+    }
+    media_type = media_types.get(ext, "application/octet-stream")
+    content_disposition_type = "inline" if ext in [".pdf", ".png", ".jpg", ".jpeg", ".svg"] else "attachment"
+    return FileResponse(
+        path=fpath,
+        filename=filename,
+        media_type=media_type,
+        content_disposition_type=content_disposition_type,
+    )
 
 
 # ---------------------------------------------------------------------------

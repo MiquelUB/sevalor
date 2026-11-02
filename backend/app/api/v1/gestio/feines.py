@@ -119,9 +119,10 @@ async def llistar_feines(
         raise HTTPException(status_code=401, detail="No identificat")
 
     stmt = (
-        select(OrdreTreball, Client, Usuari)
+        select(OrdreTreball, Client, Usuari, PlanolBase)
         .outerjoin(Client, OrdreTreball.client_id == Client.id)
         .outerjoin(Usuari, OrdreTreball.cap_de_colla_id == Usuari.id)
+        .outerjoin(PlanolBase, OrdreTreball.planol_id == PlanolBase.id)
         .where(OrdreTreball.empresa_id == uuid.UUID(empresa_id))
     )
 
@@ -137,7 +138,7 @@ async def llistar_feines(
     rows = result.all()
 
     feines = []
-    for ordre, client, operari in rows:
+    for ordre, client, operari, planol in rows:
         f_resp = FeinaResponse.model_validate(ordre)
         # Resolució automàtica de coordenades si no estaven persistides
         if (f_resp.latitud is None or f_resp.longitud is None) and ordre.adreca:
@@ -149,6 +150,9 @@ async def llistar_feines(
             f_resp.client_nom = client.rao_social
         if operari:
             f_resp.cap_de_colla_nom = f"{operari.nom} {operari.cognoms or ''}".strip()
+        if planol:
+            f_resp.planol_titol = planol.titol
+            f_resp.planol_codi = planol.codi_referencia
         feines.append(f_resp)
 
     return feines

@@ -18,6 +18,8 @@ import {
   Navigation,
   CheckCircle2,
   MapPin,
+  Layers,
+  ExternalLink,
 } from "lucide-react";
 import { apiFetch } from "@/lib/api";
 import { db } from "@/lib/offline/db";
@@ -60,6 +62,10 @@ interface OrdreDetall {
   linies_picking?: LiniaPicking[];
   eines_assignades?: EinaCustodia[];
   assets: Asset[];
+  planol_id?: string | null;
+  planol_titol?: string | null;
+  planol_codi?: string | null;
+  planol_tipus_fitxer?: string | null;
 }
 
 export default function LlistaMaquinesPage() {
@@ -123,6 +129,10 @@ export default function LlistaMaquinesPage() {
             linies_picking: data.linies_picking || [],
             eines_assignades: data.eines_assignades || [],
             assets: data.assets || [],
+            planol_id: data.planol_id || null,
+            planol_titol: data.planol_titol || null,
+            planol_codi: data.planol_codi || null,
+            planol_tipus_fitxer: data.planol_tipus_fitxer || null,
           });
         } catch {
           throw new Error("PIN incorrecte o error de desxifratge.");
@@ -142,6 +152,10 @@ export default function LlistaMaquinesPage() {
             linies_picking: data.linies_picking || [],
             eines_assignades: data.eines_assignades || [],
             assets: data.assets || [],
+            planol_id: data.planol_id || null,
+            planol_titol: data.planol_titol || null,
+            planol_codi: data.planol_codi || null,
+            planol_tipus_fitxer: data.planol_tipus_fitxer || null,
           };
           setOrdre(mapped);
 
@@ -405,6 +419,39 @@ export default function LlistaMaquinesPage() {
               </span>
             </div>
           )}
+
+          {/* Plànol Tècnic Assignat */}
+          {ordre.planol_id ? (
+            <div className="bg-surface-container-lowest dark:bg-slate-900 p-4 rounded-xl border border-outline-variant/25 dark:border-slate-800 shadow-sm space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="p-2.5 bg-primary/10 rounded-xl text-primary">
+                    <Layers className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h4 className="text-xs font-extrabold uppercase tracking-wider text-primary dark:text-slate-100">
+                      Plànol Tècnic Assignat
+                    </h4>
+                    <p className="text-[11px] font-mono text-secondary font-bold">
+                      {ordre.planol_codi || "PLN"} • {ordre.planol_tipus_fitxer || "DOCUMENT"}
+                    </p>
+                  </div>
+                </div>
+                <a
+                  href={`/api/v1/operari/planols/${ordre.planol_id}/fitxer`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="px-3 py-1.5 rounded-lg bg-primary hover:bg-primary/90 text-white text-xs font-bold flex items-center gap-1.5 transition-all shadow-sm active:scale-95 cursor-pointer"
+                >
+                  <ExternalLink className="w-3.5 h-3.5" />
+                  <span>Veure Plànol</span>
+                </a>
+              </div>
+              <div className="p-2.5 bg-surface-container-low dark:bg-slate-800/60 rounded-lg text-xs font-medium text-slate-800 dark:text-slate-200">
+                {ordre.planol_titol || "Plànol d'emplaçament o instal·lació d'obra"}
+              </div>
+            </div>
+          ) : null}
 
           {/* Materials de Picking */}
           <div className="space-y-2">

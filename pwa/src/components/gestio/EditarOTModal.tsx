@@ -23,6 +23,7 @@ import {
   Clock,
   Search,
   Tag,
+  ExternalLink,
 } from "lucide-react";
 import { apiFetch } from "@/lib/api";
 import { geocodificarAdreca } from "@/lib/geocoding";
@@ -56,6 +57,8 @@ interface PlanolUI {
   titol: string;
   codi_referencia: string;
   tipus_fitxer: string;
+  carpeta_nom?: string | null;
+  municipi?: string | null;
 }
 
 interface ArticleCataleg {
@@ -824,38 +827,65 @@ export function EditarOTModal({ feinaId, onClose, onSuccess }: EditarOTModalProp
                     className="w-full px-3 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary"
                   >
                     <option value="">Sense plànol vinculat</option>
-                    {planols.map((p) => (
-                      <option key={p.id} value={p.id}>
-                        [{p.codi_referencia}] {p.titol} ({p.tipus_fitxer})
-                      </option>
+                    {Object.entries(
+                      planols.reduce((acc: Record<string, PlanolUI[]>, p: PlanolUI) => {
+                        const carp = p.carpeta_nom ? `Carpeta: ${p.carpeta_nom}` : "Biblioteca General";
+                        if (!acc[carp]) acc[carp] = [];
+                        acc[carp].push(p);
+                        return acc;
+                      }, {})
+                    ).map(([nomCarpeta, items]) => (
+                      <optgroup key={nomCarpeta} label={nomCarpeta}>
+                        {items.map((p) => (
+                          <option key={p.id} value={p.id}>
+                            [{p.codi_referencia}] {p.titol} ({p.tipus_fitxer})
+                          </option>
+                        ))}
+                      </optgroup>
                     ))}
                   </select>
                 </div>
 
                 {selectedPlanol ? (
-                  <div className="p-4 rounded-xl border border-primary/20 bg-primary/5 dark:bg-primary/10 flex items-center justify-between">
+                  <div className="p-4 rounded-xl border border-primary/20 bg-primary/5 dark:bg-primary/10 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                     <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 rounded-lg bg-primary/20 flex items-center justify-center text-primary">
+                      <div className="w-10 h-10 rounded-lg bg-primary/20 flex items-center justify-center text-primary shrink-0">
                         <Layers className="w-5 h-5" />
                       </div>
                       <div>
-                        <div className="flex items-center gap-2">
+                        <div className="flex items-center gap-2 flex-wrap">
                           <span className="font-mono text-xs font-bold text-primary">
                             {selectedPlanol.codi_referencia}
                           </span>
-                          <span className="text-[10px] px-1.5 py-0.2 rounded font-mono uppercase bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-300">
+                          <span className="text-[10px] px-1.5 py-0.5 rounded font-mono uppercase bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-300">
                             {selectedPlanol.tipus_fitxer}
                           </span>
+                          {selectedPlanol.carpeta_nom && (
+                            <span className="text-[10px] px-2 py-0.5 rounded bg-surface-container-high text-on-surface-variant font-medium">
+                              {selectedPlanol.carpeta_nom}
+                            </span>
+                          )}
                         </div>
                         <h4 className="text-xs font-bold text-slate-900 dark:text-white mt-0.5">
                           {selectedPlanol.titol}
                         </h4>
                       </div>
                     </div>
-                    <span className="text-xs font-medium text-emerald-600 dark:text-emerald-400 flex items-center gap-1">
-                      <CheckCircle2 className="w-4 h-4" />
-                      Vinculat
-                    </span>
+                    <div className="flex items-center gap-2 self-end sm:self-center">
+                      <a
+                        href={`/api/v1/gestio/planols/${selectedPlanol.id}/fitxer`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="px-3 py-1.5 rounded-lg bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700 text-xs font-medium text-slate-700 dark:text-slate-200 flex items-center gap-1.5 transition-colors cursor-pointer"
+                      >
+                        <ExternalLink className="w-3.5 h-3.5" />
+                        <span>Veure Fitxer</span>
+                      </a>
+                      <span className="text-xs font-medium text-emerald-600 dark:text-emerald-400 flex items-center gap-1 bg-emerald-50 dark:bg-emerald-950/30 px-2 py-1 rounded-lg border border-emerald-500/20">
+                        <CheckCircle2 className="w-4 h-4" />
+                        Vinculat
+                      </span>
+                    </div>
                   </div>
                 ) : (
                   <div className="p-8 text-center border border-dashed border-slate-200 dark:border-slate-800 rounded-xl">

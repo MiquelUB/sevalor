@@ -20,8 +20,9 @@ import {
   Wrench,
   Sparkles,
   Search,
+  ExternalLink,
 } from "lucide-react";
-import { apiFetch } from "@/lib/api";
+import { apiFetch, getApiBaseUrl } from "@/lib/api";
 import { geocodificarAdreca } from "@/lib/geocoding";
 
 interface CrearOTModalProps {
@@ -957,21 +958,79 @@ export function CrearOTModal({ onClose, onSuccess }: CrearOTModalProps) {
                 </div>
 
                 <div className="space-y-xs">
-                  <label className="font-label-caps text-on-surface-variant uppercase flex items-center gap-1">
-                    <MapIcon className="w-3.5 h-3.5" /> Plànol / Esbós Vinculat (Opcional)
+                  <label className="font-label-caps text-on-surface-variant uppercase flex items-center justify-between text-[11px]">
+                    <span className="flex items-center gap-1">
+                      <MapIcon className="w-3.5 h-3.5 text-primary" /> Plànol / Esbós de la Biblioteca (Opcional)
+                    </span>
+                    {formData.planol_id && (
+                      <button
+                        type="button"
+                        onClick={() => setFormData({ ...formData, planol_id: "" })}
+                        className="text-error hover:underline text-[10px] cursor-pointer"
+                      >
+                        Desvincular plànol
+                      </button>
+                    )}
                   </label>
                   <select
                     value={formData.planol_id}
                     onChange={(e) => setFormData({ ...formData, planol_id: e.target.value })}
-                    className="w-full p-sm bg-surface-container-low rounded-lg border border-outline-variant focus:border-primary outline-none text-sm"
+                    className="w-full p-sm bg-surface-container-low rounded-lg border border-outline-variant focus:border-primary outline-none text-xs"
                   >
                     <option value="">Sense plànol vinculat</option>
-                    {planols.map((p) => (
-                      <option key={p.id} value={p.id}>
-                        {p.titol} ({p.codi_referencia})
-                      </option>
+                    {Object.entries(
+                      planols.reduce((acc: Record<string, any[]>, p: any) => {
+                        const carp = p.carpeta_nom ? `Carpeta: ${p.carpeta_nom}` : "Biblioteca General";
+                        if (!acc[carp]) acc[carp] = [];
+                        acc[carp].push(p);
+                        return acc;
+                      }, {})
+                    ).map(([nomCarpeta, items]) => (
+                      <optgroup key={nomCarpeta} label={nomCarpeta}>
+                        {items.map((p: any) => (
+                          <option key={p.id} value={p.id}>
+                            [{p.codi_referencia}] {p.titol} ({p.tipus_fitxer})
+                          </option>
+                        ))}
+                      </optgroup>
                     ))}
                   </select>
+
+                  {/* Targeta del plànol seleccionat */}
+                  {(() => {
+                    const selP = planols.find((p) => p.id === formData.planol_id);
+                    if (!selP) return null;
+                    return (
+                      <div className="p-sm rounded-lg border border-primary/20 bg-primary/5 flex items-center justify-between gap-sm animate-in fade-in duration-100">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <div className="w-7 h-7 rounded bg-primary/10 flex items-center justify-center text-primary shrink-0">
+                            <MapIcon className="w-3.5 h-3.5" />
+                          </div>
+                          <div className="min-w-0">
+                            <p className="text-xs font-bold text-primary truncate">
+                              [{selP.codi_referencia}] {selP.titol}
+                            </p>
+                            <p className="text-[10px] text-on-surface-variant font-mono">
+                              {selP.carpeta_nom ? `Carpeta: ${selP.carpeta_nom}` : "Biblioteca"} · {selP.tipus_fitxer}
+                            </p>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          <a
+                            href={`${getApiBaseUrl()}/gestio/planols/${selP.id}/fitxer`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-[10px] text-primary hover:underline flex items-center gap-1 font-medium bg-primary/10 px-2 py-0.5 rounded cursor-pointer"
+                          >
+                            <ExternalLink className="w-3 h-3" /> Obrir
+                          </a>
+                          <span className="text-[10px] font-bold text-secondary bg-secondary-container/20 px-2 py-0.5 rounded-full">
+                            Vinculat
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })()}
                 </div>
               </div>
 

@@ -121,9 +121,16 @@ class TenantMiddleware(BaseHTTPMiddleware):
         jwt_empresa_id: str | None = None
         user_role: str | None = None
 
+        token: str | None = None
         auth_header = request.headers.get("Authorization")
         if auth_header and auth_header.startswith("Bearer "):
             token = auth_header.split(" ")[1]
+        elif request.cookies.get("sevalor_access_token"):
+            token = request.cookies.get("sevalor_access_token")
+        elif request.query_params.get("token"):
+            token = request.query_params.get("token")
+
+        if token:
             try:
                 payload = jwt.decode(
                     token,
@@ -154,10 +161,10 @@ class TenantMiddleware(BaseHTTPMiddleware):
             if header_tenant:
                 empresa_id = header_tenant.strip()
 
-        elif auth_header:
+        elif token:
             empresa_id = jwt_empresa_id or request.headers.get("X-Empresa-ID")
 
-        elif not auth_header:
+        elif not token:
             # Per a usuaris anònims (ex. pantalla de login PWA), acceptem X-Empresa-ID
             header_tenant = request.headers.get("X-Empresa-ID")
             if header_tenant:

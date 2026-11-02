@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import {
   Folder,
   FolderPlus,
@@ -10,9 +10,14 @@ import {
   Plus,
   X,
   RefreshCw,
+  UploadCloud,
+  FileUp,
+  Download,
+  ExternalLink,
+  CheckCircle2,
 } from "lucide-react";
 import { useGestio } from "@/lib/gestio-context";
-import { apiFetch } from "@/lib/api";
+import { apiFetch, getAuthToken, extractTenantId, getApiBaseUrl } from "@/lib/api";
 
 interface Carpeta {
   id: string;
@@ -31,6 +36,9 @@ interface Planol {
   tipus_fitxer: string;
   es_georeferenciat: boolean;
   fitxer_path?: string;
+  mida_bytes?: number;
+  carpeta_nom?: string;
+  municipi?: string;
   projeccio?: string;
   created_at?: string;
 }
@@ -52,6 +60,13 @@ export default function GestioPlanolsPage() {
   const [modalNovaCarpeta, setModalNovaCarpeta] = useState(false);
   const [modalNouPlanol, setModalNouPlanol] = useState(false);
   const [guardant, setGuardant] = useState(false);
+
+  // Fitxers i carpeta d'origen
+  const [fitxerPujada, setFitxerPujada] = useState<File | null>(null);
+  const [importantDirectori, setImportantDirectori] = useState(false);
+  const [missatgeExit, setMissatgeExit] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const multipleFileInputRef = useRef<HTMLInputElement>(null);
 
   // Formularis
   const [novaCarpeta, setNovaCarpeta] = useState({
@@ -99,6 +114,25 @@ export default function GestioPlanolsPage() {
     carregarDades();
   }, []);
 
+  const handleFitxerCanviat = (file: File) => {
+    setFitxerPujada(file);
+    const lastDot = file.name.lastIndexOf(".");
+    const baseName = lastDot > 0 ? file.name.substring(0, lastDot) : file.name;
+    const ext = (file.name.split(".").pop() || "").toUpperCase();
+    let format = "DXF";
+    if (ext === "PDF") format = "PDF";
+    else if (ext === "GEOJSON" || ext === "JSON") format = "GEOJSON";
+    else if (ext === "KML") format = "KML";
+    else if (ext === "DWG") format = "DWG";
+
+    setNouPlanol((prev) => ({
+      ...prev,
+      titol: prev.titol || baseName.replace(/[_-]/g, " ").trim(),
+      codi_referencia: prev.codi_referencia || `PLN-${baseName.substring(0, 10).toUpperCase()}`,
+      tipus_fitxer: format,
+    }));
+  };
+
   const handleCrearCarpeta = async (e: React.FormEvent) => {
     e.preventDefault();
     setGuardant(true);
@@ -124,20 +158,58 @@ export default function GestioPlanolsPage() {
     }
   };
 
-  const handleCrearPlanol = async (e: React.FormEvent) => {
+  const handlePujarFitxerPlanol = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!carpetaSeleccionada) return;
     setGuardant(true);
     setError(null);
     try {
-      const creat = await apiFetch<Planol>("/gestio/planols", {
-        method: "POST",
-        body: JSON.stringify({
-          ...nouPlanol,
-          carpeta_id: carpetaSeleccionada.id,
-        }),
-      });
+      if (fitxerPujada) {
+        const formData = new FormData();
+        formData.append("carpeta_id", carpetaSeleccionada.id);
+        formData.append("fitxer", fitxerPujada);
+        if (nouPlanol.titol) formData.append("titol", nouPlanol.titol);
+        if (nouPlanol.codi_referencia) formData.append("codi_referencia", nouPlanol.codi_referencia);
+        if (nouPlanol.tipus_fitxer) formData.append("tipus_fitxer", nouPlanol.tipus_fitxer);
+        if (nouPlanol.projeccio) formData.append("projeccio", nouPlanol.projeccio);
+        formData.append("es_georeferenciat", String(nouPlanol.es_georeferenciat));
+
+        const baseUrl = getApiBaseUrl();
+        const token = getAuthToken();
+        const tenantId = extractTenantId();
+
+        const res = await fetch(`${baseUrl}/gestio/planols/upload`, {
+          method: "POST",
+          headers: {
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+            ...(tenantId ? { "X-Empresa-ID": tenantId } : {}),
+          },
+          body: formData,
+        });
+
+        if (!res.ok) {
+          const errData = await res.json().catch(() => ({}));
+          throw new Error(errData.detail || "Error en pujar el fitxer");
+        }
+        const creat = await res.json();
+        setMissatgeExit(`Plànol "${creat.titol}" carregat correctament!`);
+        setTimeout(() => setMissatgeExit(null), 4000);
+        await carregarDades();
+        if (creat) setPlanolSeleccionat(creat);
+      } else {
+        const creat = await apiFetch<Planol>("/gestio/planols", {
+          method: "POST",
+          body: JSON.stringify({
+            ...nouPlanol,
+            carpeta_id: carpetaSeleccionada.id,
+          }),
+        });
+        await carregarDades();
+        if (creat) setPlanolSeleccionat(creat);
+      }
+
       setModalNouPlanol(false);
+      setFitxerPujada(null);
       setNouPlanol({
         titol: "",
         codi_referencia: "",
@@ -145,12 +217,72 @@ export default function GestioPlanolsPage() {
         es_georeferenciat: true,
         projeccio: "ETRS89 / UTM 31N",
       });
-      await carregarDades();
-      if (creat) setPlanolSeleccionat(creat);
     } catch (err: any) {
       setError(err.message || "Error al registrar el plànol");
     } finally {
       setGuardant(false);
+    }
+  };
+
+  const handleImportarDirectori = async () => {
+    if (!carpetaSeleccionada) return;
+    setImportantDirectori(true);
+    setError(null);
+    try {
+      const importats = await apiFetch<Planol[]>("/gestio/planols/importar-directori", {
+        method: "POST",
+        body: JSON.stringify({
+          carpeta_id: carpetaSeleccionada.id,
+        }),
+      });
+      await carregarDades();
+      const count = Array.isArray(importats) ? importats.length : 0;
+      setMissatgeExit(
+        count > 0
+          ? `S'han carregat ${count} plànols des de la carpeta d'origen correctament!`
+          : "S'ha escanejat la carpeta d'origen (cap plànol nou trobat o ja estaven registrats)."
+      );
+      setTimeout(() => setMissatgeExit(null), 5000);
+    } catch (err: any) {
+      setError(err.message || "Error important plànols des de la carpeta d'origen");
+    } finally {
+      setImportantDirectori(false);
+    }
+  };
+
+  const handleSeleccioMultipleFitxers = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0 || !carpetaSeleccionada) return;
+    setGuardant(true);
+    setError(null);
+    const baseUrl = getApiBaseUrl();
+    const token = getAuthToken();
+    const tenantId = extractTenantId();
+    let count = 0;
+    try {
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        const formData = new FormData();
+        formData.append("carpeta_id", carpetaSeleccionada.id);
+        formData.append("fitxer", file);
+        const res = await fetch(`${baseUrl}/gestio/planols/upload`, {
+          method: "POST",
+          headers: {
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+            ...(tenantId ? { "X-Empresa-ID": tenantId } : {}),
+          },
+          body: formData,
+        });
+        if (res.ok) count++;
+      }
+      await carregarDades();
+      setMissatgeExit(`S'han pujat ${count} plànols des de la carpeta d'origen!`);
+      setTimeout(() => setMissatgeExit(null), 4000);
+    } catch (err: any) {
+      setError("Error carregant fitxers: " + err.message);
+    } finally {
+      setGuardant(false);
+      if (multipleFileInputRef.current) multipleFileInputRef.current.value = "";
     }
   };
 
@@ -168,6 +300,18 @@ export default function GestioPlanolsPage() {
 
   return (
     <div className="flex flex-col w-full space-y-md">
+      {missatgeExit && (
+        <div className="p-md rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-800 dark:text-emerald-300 text-xs flex items-center justify-between animate-in fade-in">
+          <div className="flex items-center gap-2">
+            <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+            <span className="font-bold">{missatgeExit}</span>
+          </div>
+          <button onClick={() => setMissatgeExit(null)} className="p-1 hover:opacity-80">
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
+
       {error && (
         <div className="p-md rounded-xl bg-error-container/40 border border-error/30 text-on-error-container text-xs flex items-center justify-between">
           <div className="flex items-center gap-2">
@@ -371,13 +515,65 @@ export default function GestioPlanolsPage() {
               </div>
             </div>
 
-            <div className="flex items-center gap-sm">
+            <div className="flex items-center gap-sm flex-wrap">
+              {/* Input amagat per a selecció múltiple de fitxers d'origen */}
+              <input
+                type="file"
+                ref={multipleFileInputRef}
+                onChange={handleSeleccioMultipleFitxers}
+                multiple
+                accept=".pdf,.dxf,.dwg,.geojson,.json,.kml,.png,.jpg,.jpeg"
+                className="hidden"
+              />
+
+              {planolSeleccionat?.id && (
+                <a
+                  href={`${getApiBaseUrl()}/gestio/planols/${planolSeleccionat.id}/fitxer`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-outline-variant bg-surface-container-low text-on-surface hover:bg-surface-container text-xs font-semibold transition-colors"
+                  title="Obrir fitxer de plànol en pestanya nova"
+                >
+                  <ExternalLink className="w-3.5 h-3.5 text-primary" />
+                  <span>Obrir Fitxer</span>
+                </a>
+              )}
+
+              {/* Botó Carregar de Carpeta d'Origen */}
               <button
-                onClick={() => setModalNouPlanol(true)}
+                type="button"
+                onClick={() => multipleFileInputRef.current?.click()}
+                disabled={!carpetaSeleccionada || guardant}
+                className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-primary/30 bg-primary/5 hover:bg-primary/10 text-primary text-xs font-bold transition-all disabled:opacity-50"
+                title="Selecciona fitxers de la teva carpeta d'origen per carregar-los"
+              >
+                <UploadCloud className="w-3.5 h-3.5" />
+                <span>Carregar Carpeta d&apos;Origen</span>
+              </button>
+
+              {/* Botó Escaneig de documents de Sevalor */}
+              <button
+                type="button"
+                onClick={handleImportarDirectori}
+                disabled={!carpetaSeleccionada || importantDirectori}
+                className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-outline-variant bg-surface-container-low hover:bg-surface-container text-on-surface-variant hover:text-on-surface text-xs font-medium transition-all disabled:opacity-50"
+                title="Sincronitza els documents locals del disc de Sevalor"
+              >
+                <RefreshCw
+                  className={`w-3.5 h-3.5 ${importantDirectori ? "animate-spin text-primary" : ""}`}
+                />
+                <span>{importantDirectori ? "Escanejant..." : "Sincronitzar Disc"}</span>
+              </button>
+
+              <button
+                onClick={() => {
+                  setFitxerPujada(null);
+                  setModalNouPlanol(true);
+                }}
                 disabled={!carpetaSeleccionada}
                 className="flex items-center gap-sm px-md py-sm bg-primary text-on-primary rounded-lg font-body-strong text-xs hover:bg-primary-container transition-all disabled:opacity-50 shadow-sm"
               >
-                <span className="material-symbols-outlined text-[18px]">upload_file</span>
+                <Plus className="w-3.5 h-3.5" />
                 <span>Pujar Plànol</span>
               </button>
             </div>
@@ -390,18 +586,44 @@ export default function GestioPlanolsPage() {
               <p className="text-sm font-medium">Selecciona una carpeta de l&apos;arbre lateral</p>
             </div>
           ) : planolsFiltrats.length === 0 ? (
-            <div className="flex-1 flex flex-col items-center justify-center p-12 text-center m-lg bg-surface-container-low/50 rounded-2xl border border-dashed border-outline-variant">
-              <FileText className="w-10 h-10 text-outline mb-3" />
-              <h3 className="text-base font-bold text-on-surface">La carpeta està buida</h3>
-              <p className="text-xs text-on-surface-variant max-w-xs mt-1">
-                Estat Dia-0: Puja el primer arxiu DXF, GeoJSON o PDF georeferenciat d&apos;aquesta zona.
-              </p>
-              <button
-                onClick={() => setModalNouPlanol(true)}
-                className="mt-3 px-4 py-2 rounded-lg bg-primary hover:bg-primary-container text-white text-xs font-bold shadow"
-              >
-                + Pujar Plànol
-              </button>
+            <div className="flex-1 flex flex-col items-center justify-center p-12 text-center m-lg bg-surface-container-low/50 rounded-2xl border border-dashed border-outline-variant space-y-3">
+              <FileText className="w-10 h-10 text-outline mb-1" />
+              <div>
+                <h3 className="text-base font-bold text-on-surface">La carpeta està buida</h3>
+                <p className="text-xs text-on-surface-variant max-w-sm mt-1">
+                  Carrega els plànols des de la teva carpeta d&apos;origen (.pdf, .dxf, .dwg, .geojson) per associar-los a aquest projecte.
+                </p>
+              </div>
+              <div className="flex items-center gap-2 flex-wrap justify-center pt-2">
+                <button
+                  type="button"
+                  onClick={() => multipleFileInputRef.current?.click()}
+                  className="px-4 py-2 rounded-lg bg-primary hover:bg-primary-container text-white text-xs font-bold shadow flex items-center gap-1.5"
+                >
+                  <UploadCloud className="w-4 h-4" />
+                  <span>Carregar des de Carpeta d&apos;Origen</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={handleImportarDirectori}
+                  disabled={importantDirectori}
+                  className="px-4 py-2 rounded-lg border border-outline-variant bg-surface-container-lowest hover:bg-surface-container text-on-surface text-xs font-semibold flex items-center gap-1.5"
+                >
+                  <RefreshCw
+                    className={`w-3.5 h-3.5 ${importantDirectori ? "animate-spin text-primary" : ""}`}
+                  />
+                  <span>Sincronitzar Documents Locals</span>
+                </button>
+                <button
+                  onClick={() => {
+                    setFitxerPujada(null);
+                    setModalNouPlanol(true);
+                  }}
+                  className="px-4 py-2 rounded-lg border border-outline-variant hover:bg-surface-container text-on-surface-variant text-xs font-medium"
+                >
+                  + Formulari Manual
+                </button>
+              </div>
             </div>
           ) : (
             <div className="flex-1 relative bg-surface-dim flex flex-col justify-between overflow-y-auto">
@@ -501,6 +723,7 @@ export default function GestioPlanolsPage() {
                         <th className="p-2.5">Format</th>
                         <th className="p-2.5">Georeferenciat</th>
                         <th className="p-2.5">Projecció Cartogràfica</th>
+                        <th className="p-2.5 text-right">Accions</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-outline-variant/20">
@@ -525,7 +748,7 @@ export default function GestioPlanolsPage() {
                             <span
                               className={`px-2 py-0.5 rounded-full text-[9px] font-bold ${
                                 p.es_georeferenciat
-                                  ? "bg-green-100 text-green-800"
+                                    ? "bg-green-100 text-green-800"
                                   : "bg-surface-container text-on-surface-variant"
                               }`}
                             >
@@ -534,6 +757,18 @@ export default function GestioPlanolsPage() {
                           </td>
                           <td className="p-2.5 font-data-tabular text-on-surface-variant text-[11px]">
                             {p.projeccio || "—"}
+                          </td>
+                          <td className="p-2.5 text-right">
+                            <a
+                              href={`${getApiBaseUrl()}/gestio/planols/${p.id}/fitxer`}
+                              target="_blank"
+                              rel="noreferrer"
+                              onClick={(e) => e.stopPropagation()}
+                              className="inline-flex items-center gap-1 text-[11px] font-bold text-primary hover:underline"
+                            >
+                              <ExternalLink className="w-3 h-3" />
+                              <span>Obrir</span>
+                            </a>
                           </td>
                         </tr>
                       ))}
@@ -629,7 +864,52 @@ export default function GestioPlanolsPage() {
               </button>
             </div>
 
-            <form onSubmit={handleCrearPlanol} className="p-5 space-y-4">
+            <form onSubmit={handlePujarFitxerPlanol} className="p-5 space-y-4">
+              {/* Dropzone Selector de Fitxer de la Carpeta d'Origen */}
+              <div>
+                <label className="block font-label-caps text-on-surface-variant uppercase mb-1">
+                  Fitxer Cartogràfic (Des de Carpeta d&apos;Origen)
+                </label>
+                <div
+                  onClick={() => fileInputRef.current?.click()}
+                  className={`p-4 rounded-xl border-2 border-dashed transition-all cursor-pointer text-center ${
+                    fitxerPujada
+                      ? "border-emerald-500/60 bg-emerald-500/5 text-emerald-800 dark:text-emerald-300"
+                      : "border-outline-variant hover:border-primary/60 bg-surface-container-low"
+                  }`}
+                >
+                  <input
+                    type="file"
+                    ref={fileInputRef}
+                    onChange={(e) => {
+                      const f = e.target.files?.[0];
+                      if (f) handleFitxerCanviat(f);
+                    }}
+                    accept=".pdf,.dxf,.dwg,.geojson,.json,.kml,.png,.jpg,.jpeg"
+                    className="hidden"
+                  />
+                  {fitxerPujada ? (
+                    <div className="space-y-1">
+                      <CheckCircle2 className="w-6 h-6 text-emerald-600 mx-auto" />
+                      <p className="text-xs font-bold truncate">{fitxerPujada.name}</p>
+                      <p className="text-[10px] text-on-surface-variant font-mono">
+                        {(fitxerPujada.size / 1024).toFixed(1)} KB · Fes clic per canviar fitxer
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="space-y-1">
+                      <UploadCloud className="w-6 h-6 text-primary mx-auto" />
+                      <p className="text-xs font-bold text-on-surface">
+                        Selecciona o arrossega el fitxer des de la teva carpeta local
+                      </p>
+                      <p className="text-[10px] text-on-surface-variant">
+                        Formats admesos: PDF, DXF, DWG, GeoJSON, KML
+                      </p>
+                    </div>
+                  )}
+                </div>
+              </div>
+
               <div>
                 <label className="block font-label-caps text-on-surface-variant uppercase mb-1">
                   Codi Referència *

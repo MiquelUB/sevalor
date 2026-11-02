@@ -9,15 +9,22 @@ from app.core.config import settings
 
 
 def get_current_user_claims(request: Request) -> Dict[str, Any]:
-    """Extreu i valida el token JWT Bearer de la petició."""
+    """Extreu i valida el token JWT Bearer, Cookie o Query Param de la petició."""
     auth_header = request.headers.get("Authorization")
-    if not auth_header or not auth_header.startswith("Bearer "):
+    token: str | None = None
+    if auth_header and auth_header.startswith("Bearer "):
+        token = auth_header.split(" ")[1]
+    elif request.cookies.get("sevalor_access_token"):
+        token = request.cookies.get("sevalor_access_token")
+    elif request.query_params.get("token"):
+        token = request.query_params.get("token")
+
+    if not token:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Autenticació requerida. Capçalera Bearer no trobada.",
+            detail="Autenticació requerida. Token no trobat a la capçalera Bearer, cookie o paràmetre.",
         )
 
-    token = auth_header.split(" ")[1]
     try:
         payload = jwt.decode(
             token,
