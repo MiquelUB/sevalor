@@ -222,6 +222,10 @@ export default function EmpresaDetailPage({ params }: { params: { id: string } }
     node_ia_url: "",
     node_ia_actiu: false,
   });
+  const [nodeIaTesting, setNodeIaTesting] = useState(false);
+  const [nodeIaStatus, setNodeIaStatus] = useState<any>(null);
+  const [discDurTesting, setDiscDurTesting] = useState(false);
+  const [discDurStatus, setDiscDurStatus] = useState<any>(null);
 
   // CRM Condicions Comercials & Equips IA (Venda)
   const [tarifaLlicenciaBase, setTarifaLlicenciaBase] = useState<number>(0);
@@ -495,6 +499,68 @@ export default function EmpresaDetailPage({ params }: { params: { id: string } }
       setDnsCheckResult({ resolt: false, detall: e.message || "Error de resolució DNS" });
     } finally {
       setCheckingDns(false);
+    }
+  };
+
+  const handleVerificarNodeIa = async () => {
+    const rawUrl = features.node_ia_url?.trim();
+    if (!rawUrl) {
+      setErrorMessage("Introdueix l'adreça URL de l'ordinador dedicat d'IA (ex: http://127.0.0.1:1234) abans de verificar.");
+      return;
+    }
+    setNodeIaTesting(true);
+    setNodeIaStatus(null);
+    setErrorMessage(null);
+    try {
+      const res = await apiFetch<any>("/superadmin/tenants/verificar-node-ia", {
+        method: "POST",
+        body: JSON.stringify({ node_ia_url: rawUrl }),
+      });
+      setNodeIaStatus(res);
+      if (res.status === "OK") {
+        if (!features.node_ia_actiu) {
+          setFeatures((prev) => ({ ...prev, node_ia_actiu: true }));
+        }
+      }
+    } catch (err: any) {
+      setNodeIaStatus({
+        status: "ERROR",
+        motiu: "ERROR_XARXA",
+        missatge: err.message || "Error contactant amb el node d'IA.",
+      });
+    } finally {
+      setNodeIaTesting(false);
+    }
+  };
+
+  const handleVerificarDiscDur = async () => {
+    const rawUrl = features.node_ia_url?.trim();
+    if (!rawUrl) {
+      setErrorMessage("Introdueix l'adreça URL de l'ordinador dedicat (ex: http://127.0.0.1:1234) abans de verificar el disc dur.");
+      return;
+    }
+    setDiscDurTesting(true);
+    setDiscDurStatus(null);
+    setErrorMessage(null);
+    try {
+      const res = await apiFetch<any>("/superadmin/tenants/verificar-disc-dur", {
+        method: "POST",
+        body: JSON.stringify({ node_ia_url: rawUrl, empresa_id: params.id }),
+      });
+      setDiscDurStatus(res);
+      if (res.status === "OK") {
+        if (!features.node_ia_actiu) {
+          setFeatures((prev) => ({ ...prev, node_ia_actiu: true }));
+        }
+      }
+    } catch (err: any) {
+      setDiscDurStatus({
+        status: "ERROR",
+        motiu: "ERROR_XARXA",
+        missatge: err.message || "Error contactant amb el disc dur dedicat de l'empresa.",
+      });
+    } finally {
+      setDiscDurTesting(false);
     }
   };
 
@@ -2298,13 +2364,18 @@ export default function EmpresaDetailPage({ params }: { params: { id: string } }
             </label>
           </div>
 
-          <div className="pt-4 border-t border-slate-200 dark:border-slate-800 space-y-3">
+          <div className="pt-4 border-t border-slate-200 dark:border-slate-800 space-y-4">
             <div className="flex items-center justify-between">
-              <label className="text-xs font-bold text-slate-800 dark:text-slate-200 flex items-center gap-2">
-                <Cpu className="w-4 h-4 text-emerald-500" />
-                <span>Ordinador Dedicat de l'Empresa (IA Local + Disc Dur Mestre de Plànols Històrics)</span>
-              </label>
-              <label className="flex items-center gap-2 cursor-pointer text-xs">
+              <div>
+                <label className="text-xs font-bold text-slate-800 dark:text-slate-200 flex items-center gap-2">
+                  <Cpu className="w-4 h-4 text-emerald-500" />
+                  <span>Ordinador Dedicat de l'Empresa (IA Local + Disc Dur Mestre de Plànols Històrics)</span>
+                </label>
+                <p className="text-[11px] text-slate-500 mt-1 max-w-2xl leading-relaxed">
+                  L'equip dedicat a la seu de l'empresa allotja la <strong>IA local (càlcul i memòria)</strong> i el <strong>disc dur mestre (plànols històrics i arxiu)</strong>. Hetzner Cloud només actua com a passarel·la en temps real amb Buffer Diari de les feines d'avui, eliminant costos desorbitats de servidors GPU i garantint sobirania de dades.
+                </p>
+              </div>
+              <label className="flex items-center gap-2 cursor-pointer text-xs shrink-0 self-start mt-1">
                 <input
                   type="checkbox"
                   checked={features.node_ia_actiu}
@@ -2314,17 +2385,137 @@ export default function EmpresaDetailPage({ params }: { params: { id: string } }
                 <span className="font-semibold text-slate-700 dark:text-slate-300">Activat</span>
               </label>
             </div>
-            <div>
-              <input
-                type="text"
-                placeholder="URL de l'ordinador dedicat de l'empresa (ex. https://ia.empresa.cat/v1)"
-                value={features.node_ia_url}
-                onChange={(e) => setFeatures({ ...features, node_ia_url: e.target.value.trim() })}
-                className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-white text-xs rounded-xl p-2.5 font-mono"
-              />
-              <p className="text-[10px] text-slate-500 mt-1">
-                El servidor Hetzner només reté les feines d'avui (Buffer Diari). Qualsevol documentació o plànol històric no inclòs a l'OT del dia es consulta directament a aquest ordinador de l'empresa.
-              </p>
+
+            <div className="space-y-3">
+              <div className="space-y-1.5">
+                <label className="block text-[11px] font-mono font-bold text-slate-600 dark:text-slate-400">
+                  Adreça de Connexió de l'Ordinador Dedicat (Host / URL / Túnel)
+                </label>
+                <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+                  <input
+                    type="text"
+                    placeholder="URL de l'ordinador dedicat (ex. http://127.0.0.1:1234 o https://ia.empresa.cat)"
+                    value={features.node_ia_url}
+                    onChange={(e) => {
+                      setFeatures({ ...features, node_ia_url: e.target.value.trim() });
+                      if (nodeIaStatus) setNodeIaStatus(null);
+                      if (discDurStatus) setDiscDurStatus(null);
+                    }}
+                    className="flex-1 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-white text-xs rounded-xl p-2.5 font-mono focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 outline-none"
+                  />
+                  <div className="flex items-center gap-2 shrink-0">
+                    <button
+                      type="button"
+                      onClick={handleVerificarNodeIa}
+                      disabled={nodeIaTesting || !features.node_ia_url?.trim()}
+                      className="px-3.5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-300 dark:disabled:bg-slate-800 disabled:cursor-not-allowed text-white text-xs font-mono font-bold flex items-center justify-center gap-1.5 shadow-sm transition-all cursor-pointer"
+                      title="Verifica la connectivitat de la IA local i llistat de models"
+                    >
+                      <Zap className={`w-3.5 h-3.5 ${nodeIaTesting ? "animate-spin" : ""}`} />
+                      <span>{nodeIaTesting ? "Comprovant..." : "Provar Connexió IA"}</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleVerificarDiscDur}
+                      disabled={discDurTesting || !features.node_ia_url?.trim()}
+                      className="px-3.5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-300 dark:disabled:bg-slate-800 disabled:cursor-not-allowed text-white text-xs font-mono font-bold flex items-center justify-center gap-1.5 shadow-sm transition-all cursor-pointer"
+                      title="Verifica la connectivitat del disc dur dedicat i repositori d'arxius"
+                    >
+                      <HardDrive className={`w-3.5 h-3.5 ${discDurTesting ? "animate-spin" : ""}`} />
+                      <span>{discDurTesting ? "Comprovant..." : "Provar Disc Dur Dedicat"}</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {/* Caixes de diagnòstic en viu (Doble Validació: IA + Disc Dur) */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                {/* 1. Diagnòstic IA Local */}
+                {nodeIaStatus && (
+                  <div
+                    className={`p-3.5 rounded-xl border text-xs font-mono space-y-2 animate-in fade-in transition-all ${
+                      nodeIaStatus.status === "OK"
+                        ? "bg-emerald-50 dark:bg-emerald-950/60 border-emerald-300 dark:border-emerald-800 text-emerald-900 dark:text-emerald-200"
+                        : "bg-rose-50 dark:bg-rose-950/60 border-rose-300 dark:border-rose-800 text-rose-900 dark:text-rose-200"
+                    }`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2 font-bold">
+                        {nodeIaStatus.status === "OK" ? (
+                          <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                        ) : (
+                          <AlertTriangle className="w-4 h-4 text-rose-600 dark:text-rose-400" />
+                        )}
+                        <span>
+                          {nodeIaStatus.status === "OK"
+                            ? `IA Local Connectada (${nodeIaStatus.latencia_ms} ms)`
+                            : `Error IA [${nodeIaStatus.motiu || "ERROR"}]`}
+                        </span>
+                      </div>
+                      {nodeIaStatus.latencia_ms !== null && nodeIaStatus.latencia_ms !== undefined && (
+                        <span className="text-[10px] px-2 py-0.5 rounded bg-white/60 dark:bg-black/40 font-semibold">
+                          {nodeIaStatus.latencia_ms} ms
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-[11px] font-sans leading-relaxed">{nodeIaStatus.missatge}</p>
+                    {nodeIaStatus.models && nodeIaStatus.models.length > 0 && (
+                      <div className="pt-1.5 border-t border-emerald-200 dark:border-emerald-800/60">
+                        <span className="text-[10px] font-bold uppercase tracking-wider block text-emerald-800 dark:text-emerald-300 mb-1">
+                          Models de Visió / LLM Detectats ({nodeIaStatus.models.length}):
+                        </span>
+                        <div className="flex flex-wrap gap-1.5">
+                          {nodeIaStatus.models.map((m: string, idx: number) => (
+                            <span
+                              key={idx}
+                              className="px-2 py-0.5 rounded-md bg-white dark:bg-slate-900 border border-emerald-300 dark:border-emerald-700 text-[10px] font-mono text-emerald-700 dark:text-emerald-300"
+                            >
+                              {m}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* 2. Diagnòstic Disc Dur Dedicat / Arxiu Històric */}
+                {discDurStatus && (
+                  <div
+                    className={`p-3.5 rounded-xl border text-xs font-mono space-y-2 animate-in fade-in transition-all ${
+                      discDurStatus.status === "OK"
+                        ? "bg-emerald-50 dark:bg-emerald-950/60 border-emerald-300 dark:border-emerald-800 text-emerald-900 dark:text-emerald-200"
+                        : "bg-rose-50 dark:bg-rose-950/60 border-rose-300 dark:border-rose-800 text-rose-900 dark:text-rose-200"
+                    }`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2 font-bold">
+                        {discDurStatus.status === "OK" ? (
+                          <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                        ) : (
+                          <AlertTriangle className="w-4 h-4 text-rose-600 dark:text-rose-400" />
+                        )}
+                        <span>
+                          {discDurStatus.status === "OK"
+                            ? `Disc Dur Connectat (${discDurStatus.latencia_ms} ms)`
+                            : `Error Disc Dur [${discDurStatus.motiu || "ERROR"}]`}
+                        </span>
+                      </div>
+                      {discDurStatus.latencia_ms !== null && discDurStatus.latencia_ms !== undefined && (
+                        <span className="text-[10px] px-2 py-0.5 rounded bg-white/60 dark:bg-black/40 font-semibold">
+                          {discDurStatus.latencia_ms} ms
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-[11px] font-sans leading-relaxed">{discDurStatus.missatge}</p>
+                    {discDurStatus.status === "OK" && discDurStatus.endpoint_resolt && (
+                      <div className="pt-1.5 border-t border-emerald-200 dark:border-emerald-800/60 text-[10px] text-emerald-700 dark:text-emerald-300">
+                        • Sonda resolta a: <code>{discDurStatus.endpoint_resolt}</code> (Codi HTTP {discDurStatus.codi_http})
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         </div>

@@ -162,6 +162,11 @@ class VerificarNodeIaRequest(BaseModel):
     node_ia_url: str = Field(..., min_length=5, max_length=255)
 
 
+class VerificarDiscDurRequest(BaseModel):
+    node_ia_url: str = Field(..., min_length=5, max_length=255)
+    empresa_id: Optional[str] = None
+
+
 class UpdateDominiTenantRequest(BaseModel):
     domini_custom: Optional[str] = Field(
         None,
@@ -509,6 +514,88 @@ async def verificar_node_ia(
         "motiu": last_error_motiu,
         "missatge": last_error_msg,
         "models": [],
+        "latencia_ms": total_latency,
+    }
+
+
+@router.post("/verificar-disc-dur", response_model=Dict[str, Any])
+async def verificar_disc_dur(
+    payload: VerificarDiscDurRequest,
+    claims: Dict[str, Any] = Depends(require_roles(["SUPERADMIN"])),
+) -> Dict[str, Any]:
+    """Verifica en viu la connectivitat amb el disc dur dedicat i l'arxiu històric de plànols de l'empresa."""
+    raw_url = payload.node_ia_url.strip()
+    if not (raw_url.startswith("http://") or raw_url.startswith("https://")):
+        return {
+            "status": "ERROR",
+            "motiu": "URL_INVALIDA",
+            "missatge": "L'adreça URL ha de començar per http:// o https:// (ex: http://192.168.1.100:1234 o https://node.empresa.cat)",
+            "latencia_ms": None,
+        }
+
+    base = raw_url.rstrip("/")
+    test_urls = [
+        f"{base}/docs/planols",
+        f"{base}/docs",
+        f"{base}/storage",
+        f"{base}/health",
+        f"{base}/",
+    ]
+
+    start = time.perf_counter()
+    last_error_motiu = "CONNEXIO_FALLIDA"
+    last_error_msg = "No s'ha pogut establir connexió amb el disc dur dedicat de l'empresa."
+
+    async with httpx.AsyncClient(timeout=4.0) as client:
+        for url in test_urls:
+            try:
+                t0 = time.perf_counter()
+                resp = await client.get(url)
+                latencia = int((time.perf_counter() - t0) * 1000)
+                if resp.status_code < 500:
+                    tipus_resposta = (
+                        "Arxiu Mestre de Plànols / Docs"
+                        if "docs" in url
+                        else "Node Local Operatiu"
+                    )
+                    return {
+                        "status": "OK",
+                        "motiu": "DISC_OPERATIU",
+                        "missatge": (
+                            f"Connexió establerta amb el disc dur dedicat de la seu ({latencia} ms). "
+                            "L'arxiu històric està disponible per servir dades en temps real a les PWA."
+                        ),
+                        "endpoint_resolt": url,
+                        "tipus_resposta": tipus_resposta,
+                        "codi_http": resp.status_code,
+                        "latencia_ms": latencia,
+                    }
+                else:
+                    last_error_motiu = "HTTP_ERROR"
+                    last_error_msg = f"El servidor de disc dur ha retornat un codi d'error HTTP {resp.status_code}."
+            except (httpx.ConnectTimeout, httpx.ReadTimeout):
+                last_error_motiu = "TIMEOUT"
+                last_error_msg = (
+                    "Temps d'espera esgotat (4s). Comprova que l'ordinador dedicat està encès "
+                    "i que el servei d'arxius/disc dur està accessible."
+                )
+                break
+            except httpx.ConnectError:
+                last_error_motiu = "PORT_TANCAT"
+                last_error_msg = (
+                    "Connexió rebutjada. El port està tancat o l'ordinador dedicat "
+                    "no està en marxa a la IP/port indicats."
+                )
+                break
+            except Exception as e:
+                last_error_motiu = "ERROR_XARXA"
+                last_error_msg = f"Error de xarxa en accedir al disc dur: {str(e)}"
+
+    total_latency = int((time.perf_counter() - start) * 1000)
+    return {
+        "status": "ERROR",
+        "motiu": last_error_motiu,
+        "missatge": last_error_msg,
         "latencia_ms": total_latency,
     }
 

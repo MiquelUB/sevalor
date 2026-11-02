@@ -400,6 +400,32 @@ async def test_verificar_node_ia_diagnostics(headers):
 
 
 @pytest.mark.asyncio
+async def test_verificar_disc_dur_diagnostics(headers):
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        # 1. URL invàlida
+        res_inv = await ac.post(
+            "/api/v1/superadmin/tenants/verificar-disc-dur",
+            json={"node_ia_url": "invalid-url"},
+            headers=headers,
+        )
+        assert res_inv.status_code == 200
+        data_inv = res_inv.json()
+        assert data_inv["status"] == "ERROR"
+        assert data_inv["motiu"] == "URL_INVALIDA"
+
+        # 2. Port tancat / unreachable
+        res_closed = await ac.post(
+            "/api/v1/superadmin/tenants/verificar-disc-dur",
+            json={"node_ia_url": "http://127.0.0.1:59998"},
+            headers=headers,
+        )
+        assert res_closed.status_code == 200
+        data_closed = res_closed.json()
+        assert data_closed["status"] == "ERROR"
+        assert data_closed["motiu"] in ("PORT_TANCAT", "TIMEOUT", "ERROR_XARXA")
+
+
+@pytest.mark.asyncio
 async def test_onboarding_copilot_ia_validation(headers):
     unique_suffix = str(uuid.uuid4())[:8]
     # 1. Error quan copilot_ia=True però agent_prompt_system està buit
