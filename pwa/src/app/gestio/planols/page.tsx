@@ -15,6 +15,20 @@ import {
   Download,
   ExternalLink,
   CheckCircle2,
+  Layers,
+  Eye,
+  EyeOff,
+  Lock,
+  Pencil,
+  Trash2,
+  MousePointer,
+  Activity,
+  RotateCcw,
+  Save,
+  FileDown,
+  ShieldCheck,
+  Palette,
+  Check,
 } from "lucide-react";
 import { useGestio } from "@/lib/gestio-context";
 import { apiFetch, getAuthToken, extractTenantId, getApiBaseUrl } from "@/lib/api";
@@ -43,6 +57,49 @@ interface Planol {
   created_at?: string;
 }
 
+interface FeatureGeoJSON {
+  type: "Feature";
+  geometry: {
+    type: "LineString" | "Point";
+    coordinates: any;
+  };
+  properties: {
+    id: string;
+    nom?: string;
+    etiqueta?: string;
+    color?: string;
+    disciplina?: string;
+  };
+}
+
+interface CapaVectorialUI {
+  id: string;
+  planol_base_id?: string;
+  nom: string;
+  disciplina: string;
+  es_immutable: boolean;
+  version_id: number;
+  color_hex: string;
+  gruix_linia: number;
+  opacitat_percent: number;
+  visible: boolean;
+  geometries_geojson: {
+    type?: string;
+    features?: FeatureGeoJSON[];
+    [key: string]: any;
+  };
+  ordre_treball_id?: string | null;
+  created_at?: string;
+}
+
+const DISCIPLINES_DEFECTE = [
+  { id: "CANONADA_REG", label: "Aigua i Reg", color: "#0284c7" },
+  { id: "XARXA_ELECTRICA", label: "Baixa Tensió REBT", color: "#eab308" },
+  { id: "OBRA_CIVIL", label: "Obra Civil i Rases", color: "#ea580c" },
+  { id: "SANEJAMENT", label: "Sanejament i Drenatge", color: "#10b981" },
+  { id: "INCIDENCIA", label: "Anotacions i Incidències", color: "#ef4444" },
+];
+
 export default function GestioPlanolsPage() {
   const { rolActiu } = useGestio();
   const [carpetes, setCarpetes] = useState<Carpeta[]>([]);
@@ -53,8 +110,32 @@ export default function GestioPlanolsPage() {
   const [planolSeleccionat, setPlanolSeleccionat] = useState<Planol | null>(null);
   const [filtreCerca, setFiltreCerca] = useState("");
   const [opacitatPlanimetria, setOpacitatPlanimetria] = useState(85);
-  const [capaValvules, setCapaValvules] = useState(true);
-  const [capaPressio, setCapaPressio] = useState(false);
+
+  // Capes vectorials del plànol seleccionat
+  const [capes, setCapes] = useState<CapaVectorialUI[]>([]);
+  const [capaActivaId, setCapaActivaId] = useState<string | null>(null);
+  const [carregantCapes, setCarregantCapes] = useState(false);
+  const [desantCapa, setDesantCapa] = useState(false);
+  const [exportantPdf, setExportantPdf] = useState(false);
+
+  // Eines d'edició
+  const [einaDibuix, setEinaDibuix] = useState<"punter" | "canonada" | "punt">("punter");
+  const [puntsLiniaEnCurs, setPuntsLiniaEnCurs] = useState<Array<{ x: number; y: number }>>([]);
+  const canvasRef = useRef<HTMLDivElement>(null);
+
+  // Modals de capes i elements
+  const [modalNovaCapa, setModalNovaCapa] = useState(false);
+  const [modalNouElement, setModalNouElement] = useState<{ x: number; y: number } | null>(null);
+  const [etiquetaElement, setEtiquetaElement] = useState("Vàlvula");
+  const [guardantNovaCapa, setGuardantNovaCapa] = useState(false);
+
+  const [novaCapaForm, setNovaCapaForm] = useState({
+    nom: "",
+    disciplina: "CANONADA_REG",
+    color_hex: "#0284c7",
+    gruix_linia: 3,
+    opacitat_percent: 100,
+  });
 
   // Modals
   const [modalNovaCarpeta, setModalNovaCarpeta] = useState(false);
@@ -83,6 +164,287 @@ export default function GestioPlanolsPage() {
     es_georeferenciat: true,
     projeccio: "ETRS89 / UTM 31N",
   });
+
+  const capaActiva = capes.find((c) => c.id === capaActivaId);
+
+  const carregarCapesPlanol = async (planolId: string) => {
+    setCarregantCapes(true);
+    try {
+      const data = await apiFetch<CapaVectorialUI[]>(`/gestio/planols/${planolId}/capes`);
+      const list = Array.isArray(data) ? data : [];
+      setCapes(list);
+      if (list.length > 0) {
+        setCapaActivaId(list[0].id);
+      } else {
+        setCapaActivaId(null);
+      }
+    } catch {
+      setCapes([]);
+      setCapaActivaId(null);
+    } finally {
+      setCarregantCapes(false);
+    }
+  };
+
+  useEffect(() => {
+    if (planolSeleccionat?.id) {
+      carregarCapesPlanol(planolSeleccionat.id);
+    } else {
+      setCapes([]);
+      setCapaActivaId(null);
+    }
+    setPuntsLiniaEnCurs([]);
+  }, [planolSeleccionat?.id]);
+
+  const toggleVisibilitatCapa = async (capaId: string) => {
+    const target = capes.find((c) => c.id === capaId);
+    if (!target || !planolSeleccionat) return;
+    const novaVisibilitat = !target.visible;
+    setCapes((prev) =>
+      prev.map((c) => (c.id === capaId ? { ...c, visible: novaVisibilitat } : c))
+    );
+    try {
+      await apiFetch(`/gestio/planols/${planolSeleccionat.id}/capes/${capaId}`, {
+        method: "PUT",
+        body: JSON.stringify({ visible: novaVisibilitat }),
+      });
+    } catch (err: any) {
+      console.error("Error canviant visibilitat de la capa:", err);
+    }
+  };
+
+  const desarCanvisCapa = async (capa: CapaVectorialUI) => {
+    if (!planolSeleccionat) return;
+    setDesantCapa(true);
+    try {
+      await apiFetch(`/gestio/planols/${planolSeleccionat.id}/capes/${capa.id}`, {
+        method: "PUT",
+        body: JSON.stringify({
+          nom: capa.nom,
+          color_hex: capa.color_hex,
+          gruix_linia: capa.gruix_linia,
+          opacitat_percent: capa.opacitat_percent,
+          visible: capa.visible,
+          geometries_geojson: capa.geometries_geojson,
+        }),
+      });
+      setMissatgeExit(`Capa "${capa.nom}" desada. El plànol original roman intacte.`);
+      setTimeout(() => setMissatgeExit(null), 3500);
+    } catch (err: any) {
+      setError("Error desant canvis a la capa: " + (err.message || err));
+    } finally {
+      setDesantCapa(false);
+    }
+  };
+
+  const handleCrearCapa = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!planolSeleccionat || !novaCapaForm.nom.trim()) return;
+    setGuardantNovaCapa(true);
+    setError(null);
+    try {
+      const creada = await apiFetch<CapaVectorialUI>(
+        `/gestio/planols/${planolSeleccionat.id}/capes`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            planol_base_id: planolSeleccionat.id,
+            nom: novaCapaForm.nom.trim(),
+            disciplina: novaCapaForm.disciplina,
+            color_hex: novaCapaForm.color_hex,
+            gruix_linia: Number(novaCapaForm.gruix_linia) || 3,
+            opacitat_percent: Number(novaCapaForm.opacitat_percent) || 100,
+            visible: true,
+            geometries_geojson: {
+              type: "FeatureCollection",
+              features: [],
+            },
+          }),
+        }
+      );
+      setCapes((prev) => [...prev, creada]);
+      setCapaActivaId(creada.id);
+      setModalNovaCapa(false);
+      setNovaCapaForm({
+        nom: "",
+        disciplina: "CANONADA_REG",
+        color_hex: "#0284c7",
+        gruix_linia: 3,
+        opacitat_percent: 100,
+      });
+      setMissatgeExit(`Capa "${creada.nom}" creada! El plànol original roman intacte.`);
+      setTimeout(() => setMissatgeExit(null), 4000);
+    } catch (err: any) {
+      setError("Error creant la capa: " + (err.message || err));
+    } finally {
+      setGuardantNovaCapa(false);
+    }
+  };
+
+  const handleEliminarCapa = async (capaId: string) => {
+    if (!planolSeleccionat) return;
+    const capa = capes.find((c) => c.id === capaId);
+    if (!capa) return;
+    if (capa.es_immutable) {
+      alert("Aquesta capa és immutable i no es pot eliminar.");
+      return;
+    }
+    if (!confirm(`Segur que vols eliminar la capa "${capa.nom}"?`)) return;
+
+    try {
+      await apiFetch(`/gestio/planols/${planolSeleccionat.id}/capes/${capaId}`, {
+        method: "DELETE",
+      });
+      const remaining = capes.filter((c) => c.id !== capaId);
+      setCapes(remaining);
+      if (capaActivaId === capaId) {
+        setCapaActivaId(remaining.length > 0 ? remaining[0].id : null);
+      }
+      setMissatgeExit(`Capa "${capa.nom}" eliminada.`);
+      setTimeout(() => setMissatgeExit(null), 3000);
+    } catch (err: any) {
+      setError("Error eliminant la capa: " + (err.message || err));
+    }
+  };
+
+  const handleCanvasClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (einaDibuix === "punter") return;
+    if (!canvasRef.current) return;
+
+    const rect = canvasRef.current.getBoundingClientRect();
+    const x = Math.round(((e.clientX - rect.left) / rect.width) * 1000) / 10;
+    const y = Math.round(((e.clientY - rect.top) / rect.height) * 1000) / 10;
+
+    const act = capes.find((c) => c.id === capaActivaId);
+    if (!act) {
+      alert("Crea o selecciona una capa abans de dibuixar.");
+      return;
+    }
+    if (act.es_immutable) {
+      alert("Aquesta capa és immutable i no es pot modificar. Crea una nova capa per afegir anotacions.");
+      return;
+    }
+
+    if (einaDibuix === "canonada") {
+      setPuntsLiniaEnCurs((prev) => [...prev, { x, y }]);
+    } else if (einaDibuix === "punt") {
+      setModalNouElement({ x, y });
+      setEtiquetaElement("Vàlvula");
+    }
+  };
+
+  const finalitzarLinia = async () => {
+    if (puntsLiniaEnCurs.length < 2) {
+      setPuntsLiniaEnCurs([]);
+      return;
+    }
+    const act = capes.find((c) => c.id === capaActivaId);
+    if (!act || !planolSeleccionat) return;
+
+    const novaFeature: FeatureGeoJSON = {
+      type: "Feature",
+      geometry: {
+        type: "LineString",
+        coordinates: puntsLiniaEnCurs.map((p) => [p.x, p.y]),
+      },
+      properties: {
+        id: `line-${Date.now()}`,
+        nom: `Traçat ${act.disciplina.toLowerCase()}`,
+        color: act.color_hex,
+      },
+    };
+
+    const featuresActuals = act.geometries_geojson?.features || [];
+    const novesFeatures = [...featuresActuals, novaFeature];
+    const novaCapaActualitzada = {
+      ...act,
+      geometries_geojson: {
+        ...act.geometries_geojson,
+        type: "FeatureCollection",
+        features: novesFeatures,
+      },
+    };
+
+    setCapes((prev) => prev.map((c) => (c.id === act.id ? novaCapaActualitzada : c)));
+    setPuntsLiniaEnCurs([]);
+
+    await desarCanvisCapa(novaCapaActualitzada);
+  };
+
+  const confirmarNouElement = async () => {
+    if (!modalNouElement) return;
+    const act = capes.find((c) => c.id === capaActivaId);
+    if (!act || !planolSeleccionat) return;
+
+    const novaFeature: FeatureGeoJSON = {
+      type: "Feature",
+      geometry: {
+        type: "Point",
+        coordinates: [modalNouElement.x, modalNouElement.y],
+      },
+      properties: {
+        id: `point-${Date.now()}`,
+        nom: etiquetaElement.trim() || "Element",
+        etiqueta: etiquetaElement.trim() || "Element",
+        color: act.color_hex,
+      },
+    };
+
+    const featuresActuals = act.geometries_geojson?.features || [];
+    const novesFeatures = [...featuresActuals, novaFeature];
+    const novaCapaActualitzada = {
+      ...act,
+      geometries_geojson: {
+        ...act.geometries_geojson,
+        type: "FeatureCollection",
+        features: novesFeatures,
+      },
+    };
+
+    setCapes((prev) => prev.map((c) => (c.id === act.id ? novaCapaActualitzada : c)));
+    setModalNouElement(null);
+    setEtiquetaElement("");
+
+    await desarCanvisCapa(novaCapaActualitzada);
+  };
+
+  const buidarElementsCapaActiva = async () => {
+    const act = capes.find((c) => c.id === capaActivaId);
+    if (!act || !planolSeleccionat) return;
+    if (
+      !confirm(
+        `Segur que vols buidar tots els traçats de la capa "${act.nom}"? El plànol original romandrà 100% intacte.`
+      )
+    )
+      return;
+
+    const novaCapaActualitzada = {
+      ...act,
+      geometries_geojson: {
+        type: "FeatureCollection",
+        features: [],
+      },
+    };
+    setCapes((prev) => prev.map((c) => (c.id === act.id ? novaCapaActualitzada : c)));
+    setPuntsLiniaEnCurs([]);
+    await desarCanvisCapa(novaCapaActualitzada);
+  };
+
+  const handleExportarPdf = async () => {
+    if (!planolSeleccionat) return;
+    setExportantPdf(true);
+    try {
+      await apiFetch(`/gestio/planols/${planolSeleccionat.id}/exportar-pdf`, {
+        method: "POST",
+      });
+      setMissatgeExit("Sol·licitud d'exportació PDF amb capes enviada al servei de documents.");
+      setTimeout(() => setMissatgeExit(null), 4000);
+    } catch (err: any) {
+      setError("Error exportant plànol a PDF: " + (err.message || err));
+    } finally {
+      setExportantPdf(false);
+    }
+  };
 
   const carregarDades = async () => {
     setLoading(true);
@@ -627,81 +989,515 @@ export default function GestioPlanolsPage() {
             </div>
           ) : (
             <div className="flex-1 relative bg-surface-dim flex flex-col justify-between overflow-y-auto">
-              {/* Top Interactive Blueprint Canvas + Floating Layer Controls */}
-              <div
-                className="relative flex-1 min-h-[280px] p-lg flex items-start justify-between"
-                style={{ opacity: opacitatPlanimetria / 100 }}
-              >
-                {/* Blueprint Technical Grid Preview */}
-                <div className="visor-pdf bg-surface-container-lowest/90 backdrop-blur-md p-lg rounded-xl shadow-md border border-outline-variant/40 max-w-md">
-                  <span className="font-label-caps text-primary uppercase block mb-xs">
-                    Fitxa Cartogràfica Activa
-                  </span>
-                  <h3 className="font-body-strong text-base text-on-surface">
-                    {planolSeleccionat?.titol || planolsFiltrats[0]?.titol}
-                  </h3>
-                  <p className="text-xs font-data-tabular text-on-surface-variant mt-xs">
-                    Ref: {planolSeleccionat?.codi_referencia || planolsFiltrats[0]?.codi_referencia}{" "}
-                    · Format: {planolSeleccionat?.tipus_fitxer || planolsFiltrats[0]?.tipus_fitxer}
-                  </p>
+              {/* Top Interactive Blueprint Canvas + Floating Technical Layer Studio (FR-015) */}
+              <div className="p-md flex flex-col xl:flex-row gap-md min-h-[560px]">
+                {/* Left Side: Drawing Tools Toolbar + Canvas Viewport */}
+                <div className="flex-1 flex flex-col space-y-sm min-w-0">
+                  {/* Toolbar Bar */}
+                  <div className="p-sm bg-surface-container-lowest rounded-xl border border-outline-variant/30 flex flex-wrap items-center justify-between gap-2 shadow-sm">
+                    {/* Plan Reference & Non-Destructive Shield */}
+                    <div className="flex items-center gap-2">
+                      <span className="font-body-strong text-xs text-on-surface truncate max-w-[200px]">
+                        {planolSeleccionat?.titol || "Plànol Actiu"}
+                      </span>
+                      <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-surface-container-high text-on-surface-variant">
+                        {planolSeleccionat?.codi_referencia}
+                      </span>
+                      <div className="flex items-center gap-1 text-[11px] font-bold text-emerald-700 dark:text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-full border border-emerald-500/20">
+                        <ShieldCheck className="w-3.5 h-3.5" />
+                        <span>Base Immutable (No Destructiu)</span>
+                      </div>
+                    </div>
+
+                    {/* Tools Selector */}
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <div className="flex items-center bg-surface-container-low p-1 rounded-lg border border-outline-variant/30">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setEinaDibuix("punter");
+                            setPuntsLiniaEnCurs([]);
+                          }}
+                          className={`flex items-center gap-1 px-2.5 py-1 rounded text-xs font-semibold transition-all ${
+                            einaDibuix === "punter"
+                              ? "bg-primary text-white shadow-xs"
+                              : "text-on-surface-variant hover:text-on-surface"
+                          }`}
+                          title="Mode Navegació i Inspecció"
+                        >
+                          <MousePointer className="w-3.5 h-3.5" />
+                          <span>Punter</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (!capaActiva) {
+                              alert("Crea o selecciona una capa abans de començar a traçar.");
+                              return;
+                            }
+                            setEinaDibuix("canonada");
+                          }}
+                          className={`flex items-center gap-1 px-2.5 py-1 rounded text-xs font-semibold transition-all ${
+                            einaDibuix === "canonada"
+                              ? "bg-primary text-white shadow-xs"
+                              : "text-on-surface-variant hover:text-on-surface"
+                          }`}
+                          title="Dibuixar Canonada o Cablejat (Polilínia)"
+                        >
+                          <Activity className="w-3.5 h-3.5" />
+                          <span>Traçar Xarxa</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (!capaActiva) {
+                              alert("Crea o selecciona una capa abans d'afegir elements.");
+                              return;
+                            }
+                            setEinaDibuix("punt");
+                            setPuntsLiniaEnCurs([]);
+                          }}
+                          className={`flex items-center gap-1 px-2.5 py-1 rounded text-xs font-semibold transition-all ${
+                            einaDibuix === "punt"
+                              ? "bg-primary text-white shadow-xs"
+                              : "text-on-surface-variant hover:text-on-surface"
+                          }`}
+                          title="Afegir Vàlvula, Escomesa o Element Puntual"
+                        >
+                          <MapPin className="w-3.5 h-3.5" />
+                          <span>Afegir Element</span>
+                        </button>
+                      </div>
+
+                      {/* Controls while drawing a polyline */}
+                      {puntsLiniaEnCurs.length > 0 && (
+                        <div className="flex items-center gap-1">
+                          <span className="text-[11px] font-mono px-2 py-1 rounded bg-amber-500/10 text-amber-700 dark:text-amber-400 font-bold border border-amber-500/20">
+                            {puntsLiniaEnCurs.length} vèrtexs
+                          </span>
+                          <button
+                            type="button"
+                            onClick={finalitzarLinia}
+                            disabled={puntsLiniaEnCurs.length < 2}
+                            className="flex items-center gap-1 px-2.5 py-1 rounded bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition-all disabled:opacity-50"
+                          >
+                            <Check className="w-3.5 h-3.5" />
+                            <span>Desar Traçat</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setPuntsLiniaEnCurs([])}
+                            className="p-1 rounded hover:bg-surface-container text-outline hover:text-on-surface"
+                            title="Cancel·lar traçat en curs"
+                          >
+                            <X className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      )}
+
+                      {/* Clean active layer */}
+                      {capaActiva &&
+                        (capaActiva.geometries_geojson?.features?.length || 0) > 0 &&
+                        !capaActiva.es_immutable && (
+                          <button
+                            type="button"
+                            onClick={buidarElementsCapaActiva}
+                            className="flex items-center gap-1 px-2 py-1 rounded text-[11px] font-medium text-error hover:bg-error-container/20 border border-error/20 transition-all"
+                            title="Buidar traçats d'aquesta capa"
+                          >
+                            <RotateCcw className="w-3 h-3" />
+                            <span>Buidar Capa</span>
+                          </button>
+                        )}
+
+                      {/* Status saving layer */}
+                      {desantCapa && (
+                        <div className="flex items-center gap-1 text-[11px] text-primary font-bold animate-pulse">
+                          <RefreshCw className="w-3 h-3 animate-spin" />
+                          <span>Desant...</span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Canvas Viewport */}
+                  <div
+                    ref={canvasRef}
+                    onClick={handleCanvasClick}
+                    className={`relative flex-1 min-h-[460px] rounded-xl overflow-hidden border border-outline-variant/40 bg-[#09131d] shadow-inner select-none ${
+                      einaDibuix === "punter" ? "cursor-default" : "cursor-crosshair"
+                    }`}
+                  >
+                    {/* Immutable Base Blueprint Layer */}
+                    <div
+                      className="absolute inset-0 w-full h-full pointer-events-none transition-opacity duration-200"
+                      style={{ opacity: opacitatPlanimetria / 100 }}
+                    >
+                      {/* Technical CAD Grid Background */}
+                      <div
+                        className="absolute inset-0 w-full h-full opacity-25"
+                        style={{
+                          backgroundImage:
+                            "radial-gradient(circle, #38bdf8 1px, transparent 1px), linear-gradient(to right, #0369a1 1px, transparent 1px), linear-gradient(to bottom, #0369a1 1px, transparent 1px)",
+                          backgroundSize: "20px 20px, 100px 100px, 100px 100px",
+                        }}
+                      />
+
+                      {planolSeleccionat && (
+                        <div className="w-full h-full flex items-center justify-center">
+                          {planolSeleccionat.tipus_fitxer === "PDF" ? (
+                            <object
+                              data={`${getApiBaseUrl()}/gestio/planols/${planolSeleccionat.id}/fitxer#toolbar=0&navpanes=0`}
+                              type="application/pdf"
+                              className="w-full h-full pointer-events-none opacity-90"
+                            >
+                              <div className="flex flex-col items-center justify-center h-full text-slate-400 text-xs">
+                                <FileText className="w-12 h-12 text-primary/50 mb-2" />
+                                <span>{planolSeleccionat.titol}</span>
+                              </div>
+                            </object>
+                          ) : ["PNG", "JPG", "JPEG", "WEBP"].includes(
+                              planolSeleccionat.tipus_fitxer
+                            ) ? (
+                            <img
+                              src={`${getApiBaseUrl()}/gestio/planols/${planolSeleccionat.id}/fitxer`}
+                              alt={planolSeleccionat.titol}
+                              className="max-w-full max-h-full object-contain pointer-events-none"
+                            />
+                          ) : (
+                            <div className="flex flex-col items-center justify-center p-8 text-center text-slate-300">
+                              <div className="p-4 rounded-2xl bg-primary/10 border border-primary/30 mb-3">
+                                <Activity className="w-10 h-10 text-primary animate-pulse" />
+                              </div>
+                              <h4 className="text-sm font-bold text-white mb-1">
+                                Planimetria Vectorial CAD: {planolSeleccionat.titol}
+                              </h4>
+                              <p className="text-xs text-slate-400 font-mono">
+                                Ref: {planolSeleccionat.codi_referencia} · Format:{" "}
+                                {planolSeleccionat.tipus_fitxer} · Projecció:{" "}
+                                {planolSeleccionat.projeccio || "ETRS89 UTM 31N"}
+                              </p>
+                              <p className="text-[11px] text-emerald-400 mt-2 font-mono flex items-center gap-1">
+                                <ShieldCheck className="w-3.5 h-3.5" /> Fitxer base original preservat
+                                intacte (No destructiu)
+                              </p>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Vector Layers SVG Overlay */}
+                    <svg
+                      className="absolute inset-0 w-full h-full pointer-events-none select-none"
+                      viewBox="0 0 100 100"
+                      preserveAspectRatio="none"
+                    >
+                      {/* Capes visibles */}
+                      {capes
+                        .filter((c) => c.visible)
+                        .map((capa) => {
+                          const features = capa.geometries_geojson?.features || [];
+                          return (
+                            <g
+                              key={capa.id}
+                              opacity={(capa.opacitat_percent || 100) / 100}
+                            >
+                              {features.map((feat, fIdx) => {
+                                if (feat.geometry?.type === "LineString") {
+                                  const pts = (feat.geometry.coordinates || [])
+                                    .map((coord: number[]) => `${coord[0]},${coord[1]}`)
+                                    .join(" ");
+                                  return (
+                                    <g key={feat.properties?.id || `feat-line-${fIdx}`}>
+                                      <polyline
+                                        points={pts}
+                                        fill="none"
+                                        stroke={capa.color_hex}
+                                        strokeWidth={
+                                          capa.gruix_linia ? capa.gruix_linia * 0.35 : 1.2
+                                        }
+                                        strokeLinecap="round"
+                                        strokeLinejoin="round"
+                                      />
+                                      {feat.geometry.coordinates.map(
+                                        (c: number[], cIdx: number) => (
+                                          <circle
+                                            key={cIdx}
+                                            cx={c[0]}
+                                            cy={c[1]}
+                                            r={0.9}
+                                            fill="#ffffff"
+                                            stroke={capa.color_hex}
+                                            strokeWidth="0.4"
+                                          />
+                                        )
+                                      )}
+                                    </g>
+                                  );
+                                }
+                                if (feat.geometry?.type === "Point") {
+                                  const [px, py] = feat.geometry.coordinates || [0, 0];
+                                  const nomElement =
+                                    feat.properties?.nom ||
+                                    feat.properties?.etiqueta ||
+                                    "Element";
+                                  return (
+                                    <g key={feat.properties?.id || `feat-pt-${fIdx}`}>
+                                      <circle
+                                        cx={px}
+                                        cy={py}
+                                        r={1.8}
+                                        fill={capa.color_hex}
+                                        stroke="#ffffff"
+                                        strokeWidth="0.5"
+                                      />
+                                      <circle cx={px} cy={py} r={0.6} fill="#ffffff" />
+                                      <text
+                                        x={px + 2}
+                                        y={py - 1.2}
+                                        fill="#ffffff"
+                                        fontSize="2.4"
+                                        fontWeight="bold"
+                                        filter="drop-shadow(0px 1px 2px rgba(0,0,0,0.9))"
+                                      >
+                                        {nomElement}
+                                      </text>
+                                    </g>
+                                  );
+                                }
+                                return null;
+                              })}
+                            </g>
+                          );
+                        })}
+
+                      {/* Dibuix en curs */}
+                      {puntsLiniaEnCurs.length > 0 && (
+                        <g>
+                          <polyline
+                            points={puntsLiniaEnCurs.map((p) => `${p.x},${p.y}`).join(" ")}
+                            fill="none"
+                            stroke={capaActiva?.color_hex || "#38bdf8"}
+                            strokeWidth="1.2"
+                            strokeDasharray="2,2"
+                          />
+                          {puntsLiniaEnCurs.map((p, idx) => (
+                            <circle
+                              key={idx}
+                              cx={p.x}
+                              cy={p.y}
+                              r={1.2}
+                              fill="#ffffff"
+                              stroke={capaActiva?.color_hex || "#38bdf8"}
+                              strokeWidth="0.5"
+                            />
+                          ))}
+                        </g>
+                      )}
+                    </svg>
+
+                    {/* Canvas Bottom Instruction Banner */}
+                    <div className="absolute bottom-2 left-2 right-2 flex items-center justify-between pointer-events-none text-[11px] font-mono">
+                      <div className="px-2.5 py-1 rounded-lg bg-black/70 backdrop-blur-md text-white border border-white/10 flex items-center gap-2">
+                        {einaDibuix === "punter" && (
+                          <span>🔍 Fes clic a les capes per inspeccionar traçats.</span>
+                        )}
+                        {einaDibuix === "canonada" && (
+                          <span>
+                            ✏️ Fes clic per afegir vèrtexs. Clica &quot;Desar Traçat&quot; en acabar.
+                          </span>
+                        )}
+                        {einaDibuix === "punt" && (
+                          <span>📍 Clica al punt exacte per posicionar l&apos;element.</span>
+                        )}
+                      </div>
+
+                      {capaActiva ? (
+                        <div className="px-2.5 py-1 rounded-lg bg-black/70 backdrop-blur-md text-white border border-white/10 flex items-center gap-1.5">
+                          <span
+                            className="w-2.5 h-2.5 rounded-full inline-block"
+                            style={{ backgroundColor: capaActiva.color_hex }}
+                          />
+                          <span className="font-bold">{capaActiva.nom}</span>
+                        </div>
+                      ) : (
+                        <div className="px-2.5 py-1 rounded-lg bg-black/70 backdrop-blur-md text-amber-300 border border-white/10">
+                          Sense capa activa seleccionada
+                        </div>
+                      )}
+                    </div>
+                  </div>
                 </div>
 
-                {/* Stitch Floating Layer Controls */}
-                <div className="bg-surface/95 backdrop-blur-md p-md rounded-xl shadow-xl border border-outline-variant/30 w-64 space-y-md">
-                  <div className="flex items-center justify-between">
-                    <span className="font-label-caps text-label-caps text-on-surface-variant uppercase">
-                      Capes d&apos;Informació
-                    </span>
-                    <span className="material-symbols-outlined text-primary text-[18px]">
-                      layers
-                    </span>
+                {/* Right Side: Technical Layer Studio Panel */}
+                <div className="w-full xl:w-80 bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-md flex flex-col space-y-md shadow-sm">
+                  {/* Layer Studio Header */}
+                  <div className="flex items-center justify-between border-b border-outline-variant/20 pb-sm">
+                    <div className="flex items-center gap-1.5">
+                      <Layers className="w-4 h-4 text-primary" />
+                      <h3 className="font-section-title text-sm text-primary">
+                        Estudi de Capes ({capes.length})
+                      </h3>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setModalNovaCapa(true)}
+                      disabled={!planolSeleccionat}
+                      className="px-2 py-1 bg-primary text-white rounded-lg text-xs font-bold flex items-center gap-1 hover:bg-primary-container transition-all disabled:opacity-50"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      <span>Nova Capa</span>
+                    </button>
                   </div>
-                  <div className="space-y-xs">
-                    <div className="flex justify-between items-center text-data-tabular">
-                      <span>Opacitat Planimetria</span>
-                      <span>{opacitatPlanimetria}%</span>
+
+                  {/* Opacity Control for Base Blueprint */}
+                  <div className="p-sm rounded-lg bg-surface-container-low/60 border border-outline-variant/30 space-y-1">
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="font-semibold text-on-surface">Opacitat Plànol Base</span>
+                      <span className="font-mono text-[11px] text-primary font-bold">
+                        {opacitatPlanimetria}%
+                      </span>
                     </div>
                     <input
                       type="range"
-                      min={20}
+                      min={15}
                       max={100}
                       value={opacitatPlanimetria}
                       onChange={(e) => setOpacitatPlanimetria(Number(e.target.value))}
                       className="w-full h-1.5 bg-surface-container-highest rounded-lg cursor-pointer accent-primary"
                     />
                   </div>
-                  <div
-                    onClick={() => setCapaValvules(!capaValvules)}
-                    className="flex items-center justify-between cursor-pointer text-xs"
-                  >
-                    <span className="text-on-surface">Vàlvules i Escomeses</span>
-                    <div
-                      className={`w-8 h-4 rounded-full relative transition-colors ${
-                        capaValvules ? "bg-primary" : "bg-outline"
-                      }`}
-                    >
-                      <div
-                        className={`absolute top-1 w-2 h-2 bg-white rounded-full transition-all ${
-                          capaValvules ? "right-1" : "left-1"
-                        }`}
-                      ></div>
-                    </div>
+
+                  {/* Layers List */}
+                  <div className="flex-1 overflow-y-auto space-y-2 max-h-[340px] pr-1 custom-scrollbar">
+                    {carregantCapes ? (
+                      <div className="p-6 text-center text-xs text-outline flex flex-col items-center gap-2">
+                        <RefreshCw className="w-4 h-4 animate-spin text-primary" />
+                        <span>Carregant capes vectorials...</span>
+                      </div>
+                    ) : capes.length === 0 ? (
+                      <div className="p-5 text-center text-xs text-outline space-y-2 bg-surface-container-low/40 rounded-xl border border-dashed border-outline-variant/60">
+                        <Layers className="w-7 h-7 text-outline/60 mx-auto" />
+                        <p className="font-bold text-on-surface">Sense capes vectorials</p>
+                        <p className="text-[11px] text-on-surface-variant">
+                          Crea la primera capa per afegir xarxes o anotacions sense modificar el fitxer base.
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => setModalNovaCapa(true)}
+                          disabled={!planolSeleccionat}
+                          className="mt-1 px-3 py-1.5 rounded-lg bg-primary text-white text-xs font-bold shadow hover:bg-primary-container disabled:opacity-50"
+                        >
+                          + Crear Primera Capa
+                        </button>
+                      </div>
+                    ) : (
+                      capes.map((capa) => {
+                        const isActiva = capa.id === capaActivaId;
+                        const numFeatures = capa.geometries_geojson?.features?.length || 0;
+                        return (
+                          <div
+                            key={capa.id}
+                            onClick={() => setCapaActivaId(capa.id)}
+                            className={`p-2.5 rounded-xl border transition-all cursor-pointer flex items-center justify-between gap-2 ${
+                              isActiva
+                                ? "bg-primary/5 border-primary shadow-xs ring-1 ring-primary/20"
+                                : "bg-surface-container-low/50 hover:bg-surface-container-low border-outline-variant/30"
+                            }`}
+                          >
+                            <div className="flex items-center gap-2 min-w-0">
+                              <span
+                                className="w-3 h-3 rounded-full shrink-0 shadow-xs"
+                                style={{ backgroundColor: capa.color_hex }}
+                              />
+                              <div className="min-w-0">
+                                <div className="flex items-center gap-1.5">
+                                  <span className="font-body-strong text-xs text-on-surface truncate">
+                                    {capa.nom}
+                                  </span>
+                                  {capa.es_immutable && (
+                                    <span title="Capa tancada / immutable">
+                                      <Lock className="w-3 h-3 text-outline shrink-0" />
+                                    </span>
+                                  )}
+                                </div>
+                                <div className="flex items-center gap-1.5 text-[10px] text-on-surface-variant">
+                                  <span className="uppercase font-semibold text-primary">
+                                    {capa.disciplina.replace("_", " ")}
+                                  </span>
+                                  <span>·</span>
+                                  <span>{numFeatures} elements</span>
+                                </div>
+                              </div>
+                            </div>
+
+                            <div
+                              className="flex items-center gap-1 shrink-0"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <button
+                                type="button"
+                                onClick={() => toggleVisibilitatCapa(capa.id)}
+                                className="p-1 rounded hover:bg-surface-container text-on-surface-variant hover:text-on-surface transition-colors"
+                                title={capa.visible ? "Ocultar capa" : "Mostrar capa"}
+                              >
+                                {capa.visible ? (
+                                  <Eye className="w-3.5 h-3.5 text-primary" />
+                                ) : (
+                                  <EyeOff className="w-3.5 h-3.5 text-outline" />
+                                )}
+                              </button>
+
+                              {!capa.es_immutable && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleEliminarCapa(capa.id)}
+                                  className="p-1 rounded hover:bg-error-container/30 text-outline hover:text-error transition-colors"
+                                  title="Eliminar capa"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })
+                    )}
                   </div>
-                  <div
-                    onClick={() => setCapaPressio(!capaPressio)}
-                    className="flex items-center justify-between cursor-pointer text-xs"
-                  >
-                    <span className="text-on-surface"> telemetria / Isòbares</span>
-                    <div
-                      className={`w-8 h-4 rounded-full relative transition-colors ${
-                        capaPressio ? "bg-primary" : "bg-outline"
-                      }`}
+
+                  {/* Actions & Non-destructive Spec 015 Guarantee */}
+                  <div className="pt-sm border-t border-outline-variant/20 space-y-2">
+                    <button
+                      type="button"
+                      onClick={handleExportarPdf}
+                      disabled={exportantPdf || !planolSeleccionat}
+                      className="w-full py-2 px-3 rounded-lg bg-surface-container-high hover:bg-surface-container-highest border border-outline-variant text-on-surface text-xs font-bold flex items-center justify-center gap-1.5 transition-all disabled:opacity-50"
                     >
-                      <div
-                        className={`absolute top-1 w-2 h-2 bg-white rounded-full transition-all ${
-                          capaPressio ? "right-1" : "left-1"
-                        }`}
-                      ></div>
+                      {exportantPdf ? (
+                        <>
+                          <RefreshCw className="w-3.5 h-3.5 animate-spin text-primary" />
+                          <span>Exportant PDF...</span>
+                        </>
+                      ) : (
+                        <>
+                          <FileDown className="w-3.5 h-3.5 text-primary" />
+                          <span>Exportar PDF amb Capes</span>
+                        </>
+                      )}
+                    </button>
+
+                    <div className="p-2.5 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-[11px] text-emerald-800 dark:text-emerald-300 flex items-start gap-2">
+                      <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                      <div className="leading-tight">
+                        <span className="font-bold block">Garantia No Destructiva (FR-015)</span>
+                        <span className="text-[10px] text-emerald-700 dark:text-emerald-400">
+                          El fitxer original es manté inalterat. Les edicions es desen en capes
+                          vectorials independents.
+                        </span>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -989,6 +1785,260 @@ export default function GestioPlanolsPage() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Nova Capa Vectorial (FR-015) */}
+      {modalNovaCapa && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="w-full max-w-md bg-surface-container-lowest rounded-2xl shadow-2xl border border-outline-variant/40 overflow-hidden">
+            <div className="p-5 border-b border-surface-container flex items-center justify-between">
+              <h3 className="font-section-title text-base text-primary flex items-center gap-2">
+                <Layers className="w-4 h-4 text-secondary" />
+                Nova Capa Vectorial GIS
+              </h3>
+              <button
+                onClick={() => setModalNovaCapa(false)}
+                className="p-1 rounded-lg text-outline hover:text-on-surface"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleCrearCapa} className="p-5 space-y-4">
+              <div>
+                <label className="block font-label-caps text-on-surface-variant uppercase mb-1">
+                  Nom de la Capa *
+                </label>
+                <input
+                  type="text"
+                  required
+                  placeholder="Ex: Canonada PE-100 Ø90mm Polígon Nord"
+                  value={novaCapaForm.nom}
+                  onChange={(e) => setNovaCapaForm({ ...novaCapaForm, nom: e.target.value })}
+                  className="w-full px-3 py-2 rounded-lg border border-outline-variant bg-surface-container-low text-xs font-medium focus:border-primary outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="block font-label-caps text-on-surface-variant uppercase mb-1">
+                  Disciplina Tècnica
+                </label>
+                <select
+                  value={novaCapaForm.disciplina}
+                  onChange={(e) => {
+                    const disc = DISCIPLINES_DEFECTE.find((d) => d.id === e.target.value);
+                    setNovaCapaForm({
+                      ...novaCapaForm,
+                      disciplina: e.target.value,
+                      color_hex: disc ? disc.color : novaCapaForm.color_hex,
+                    });
+                  }}
+                  className="w-full px-3 py-2 rounded-lg border border-outline-variant bg-surface-container-low text-xs font-semibold focus:border-primary outline-none"
+                >
+                  {DISCIPLINES_DEFECTE.map((d) => (
+                    <option key={d.id} value={d.id}>
+                      {d.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block font-label-caps text-on-surface-variant uppercase mb-1">
+                  Color del Traçat
+                </label>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="color"
+                    value={novaCapaForm.color_hex}
+                    onChange={(e) =>
+                      setNovaCapaForm({ ...novaCapaForm, color_hex: e.target.value })
+                    }
+                    className="w-9 h-9 rounded-lg border border-outline-variant cursor-pointer p-0.5 bg-surface-container-low"
+                  />
+                  <input
+                    type="text"
+                    value={novaCapaForm.color_hex}
+                    onChange={(e) =>
+                      setNovaCapaForm({ ...novaCapaForm, color_hex: e.target.value })
+                    }
+                    className="w-28 px-2.5 py-1.5 rounded-lg border border-outline-variant bg-surface-container-low text-xs font-mono"
+                  />
+                  <div className="flex items-center gap-1.5 ml-auto">
+                    {DISCIPLINES_DEFECTE.map((d) => (
+                      <button
+                        key={d.id}
+                        type="button"
+                        onClick={() =>
+                          setNovaCapaForm({ ...novaCapaForm, color_hex: d.color })
+                        }
+                        className="w-5 h-5 rounded-full border border-black/20 transition-transform hover:scale-110"
+                        style={{ backgroundColor: d.color }}
+                        title={d.label}
+                      />
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-label-caps text-on-surface-variant uppercase mb-1">
+                    Gruix de Traç: {novaCapaForm.gruix_linia}px
+                  </label>
+                  <input
+                    type="range"
+                    min={1}
+                    max={8}
+                    value={novaCapaForm.gruix_linia}
+                    onChange={(e) =>
+                      setNovaCapaForm({ ...novaCapaForm, gruix_linia: Number(e.target.value) })
+                    }
+                    className="w-full h-1.5 bg-surface-container-highest rounded-lg cursor-pointer accent-primary"
+                  />
+                </div>
+
+                <div>
+                  <label className="block font-label-caps text-on-surface-variant uppercase mb-1">
+                    Opacitat: {novaCapaForm.opacitat_percent}%
+                  </label>
+                  <input
+                    type="range"
+                    min={20}
+                    max={100}
+                    value={novaCapaForm.opacitat_percent}
+                    onChange={(e) =>
+                      setNovaCapaForm({
+                        ...novaCapaForm,
+                        opacitat_percent: Number(e.target.value),
+                      })
+                    }
+                    className="w-full h-1.5 bg-surface-container-highest rounded-lg cursor-pointer accent-primary"
+                  />
+                </div>
+              </div>
+
+              <div className="p-2.5 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-[11px] text-emerald-800 dark:text-emerald-300 flex items-center gap-2">
+                <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0" />
+                <span>El document original romandrà 100% inalterat.</span>
+              </div>
+
+              <div className="pt-3 border-t border-surface-container flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setModalNovaCapa(false)}
+                  className="px-4 py-2 rounded-lg border border-outline-variant text-on-surface-variant text-xs font-medium"
+                >
+                  Cancel·lar
+                </button>
+                <button
+                  type="submit"
+                  disabled={guardantNovaCapa || !novaCapaForm.nom.trim()}
+                  className="px-4 py-2 rounded-lg bg-primary hover:bg-primary-container text-white text-xs font-bold shadow disabled:opacity-50 flex items-center gap-1.5"
+                >
+                  {guardantNovaCapa ? (
+                    <>
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                      <span>Creant...</span>
+                    </>
+                  ) : (
+                    <span>Crear Capa</span>
+                  )}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Afegir Element Puntual */}
+      {modalNouElement && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="w-full max-w-sm bg-surface-container-lowest rounded-2xl shadow-2xl border border-outline-variant/40 overflow-hidden">
+            <div className="p-4 border-b border-surface-container flex items-center justify-between">
+              <h3 className="font-section-title text-sm text-primary flex items-center gap-2">
+                <MapPin className="w-4 h-4 text-secondary" />
+                Afegir Element a la Capa
+              </h3>
+              <button
+                onClick={() => setModalNouElement(null)}
+                className="p-1 rounded-lg text-outline hover:text-on-surface"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-4 space-y-3">
+              <div>
+                <label className="block font-label-caps text-on-surface-variant uppercase mb-1">
+                  Nom / Etiqueta de l&apos;Element *
+                </label>
+                <input
+                  type="text"
+                  required
+                  placeholder="Ex: Vàlvula DN50"
+                  value={etiquetaElement}
+                  onChange={(e) => setEtiquetaElement(e.target.value)}
+                  className="w-full px-3 py-2 rounded-lg border border-outline-variant bg-surface-container-low text-xs font-medium focus:border-primary outline-none"
+                  autoFocus
+                />
+              </div>
+
+              <div>
+                <label className="block font-label-caps text-on-surface-variant uppercase mb-1 text-[10px]">
+                  Opcions ràpides
+                </label>
+                <div className="flex flex-wrap gap-1">
+                  {[
+                    "Vàlvula de tall",
+                    "Comptador",
+                    "Escomesa",
+                    "Bomba",
+                    "Hidrant",
+                    "Arqueta",
+                    "Caixa REBT",
+                    "Sensor Pressió",
+                  ].map((tipus) => (
+                    <button
+                      key={tipus}
+                      type="button"
+                      onClick={() => setEtiquetaElement(tipus)}
+                      className={`px-2 py-1 rounded text-[10px] font-semibold border transition-all ${
+                        etiquetaElement === tipus
+                          ? "bg-primary text-white border-primary"
+                          : "bg-surface-container-low border-outline-variant/40 hover:bg-surface-container"
+                      }`}
+                    >
+                      {tipus}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="text-[10px] text-on-surface-variant font-mono bg-surface-container-low/50 p-2 rounded-lg">
+                Posició relativa: X: {modalNouElement.x}% · Y: {modalNouElement.y}%
+              </div>
+
+              <div className="pt-2 border-t border-surface-container flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setModalNouElement(null)}
+                  className="px-3 py-1.5 rounded-lg border border-outline-variant text-on-surface-variant text-xs font-medium"
+                >
+                  Cancel·lar
+                </button>
+                <button
+                  type="button"
+                  onClick={confirmarNouElement}
+                  disabled={!etiquetaElement.trim()}
+                  className="px-3 py-1.5 rounded-lg bg-primary hover:bg-primary-container text-white text-xs font-bold shadow disabled:opacity-50"
+                >
+                  Confirmar Element
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}

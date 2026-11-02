@@ -1,6 +1,7 @@
 import os
 import re
 import uuid
+from datetime import datetime
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
@@ -55,13 +56,14 @@ class CarpetaResponse(BaseModel):
 
 
 class CapaVectorialCreate(BaseModel):
-    planol_base_id: uuid.UUID
+    planol_base_id: Optional[uuid.UUID] = None
     nom: str = Field(..., max_length=100)
     disciplina: str = Field("OBRA_CIVIL", max_length=30)
     ordre_treball_id: Optional[uuid.UUID] = None
     color_hex: str = Field("#2563eb", max_length=10)
     gruix_linia: int = 2
     opacitat_percent: int = 100
+    visible: bool = True
     geometries_geojson: dict = Field(default_factory=dict)
 
 
@@ -69,9 +71,17 @@ class CapaVectorialResponse(BaseModel):
     id: uuid.UUID
     nom: str
     disciplina: str
-    es_immutable: bool
-    version_id: int
-    color_hex: str
+    es_immutable: bool = False
+    version_id: int = 1
+    color_hex: str = "#2563eb"
+    gruix_linia: int = 2
+    opacitat_percent: int = 100
+    visible: bool = True
+    geometries_geojson: dict = Field(default_factory=dict)
+    planol_base_id: Optional[uuid.UUID] = None
+    ordre_treball_id: Optional[uuid.UUID] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
 
 
 class ImportarDirectoriRequest(BaseModel):
@@ -499,6 +509,7 @@ async def crear_carpeta(
 # ---------------------------------------------------------------------------
 
 
+@router.get("/{planol_id}/capes", response_model=List[CapaVectorialResponse])
 @router.get("/planols/{planol_id}/capes", response_model=List[CapaVectorialResponse])
 async def llistar_capes_planol(
     request: Request, planol_id: uuid.UUID, db: AsyncSession = Depends(get_db_with_tenant_context)
@@ -517,6 +528,11 @@ async def llistar_capes_planol(
     return result.scalars().all()
 
 
+@router.post(
+    "/{planol_id}/capes",
+    response_model=CapaVectorialResponse,
+    status_code=status.HTTP_201_CREATED,
+)
 @router.post(
     "/planols/{planol_id}/capes",
     response_model=CapaVectorialResponse,
@@ -552,6 +568,7 @@ async def crear_capa_planol(
         color_hex=payload.color_hex,
         gruix_linia=payload.gruix_linia,
         opacitat_percent=payload.opacitat_percent,
+        visible=payload.visible if payload.visible is not None else True,
         geometries_geojson=payload.geometries_geojson,
         version_id=1,
     )
@@ -569,6 +586,7 @@ class CapaVectorialUpdate(BaseModel):
     geometries_geojson: Optional[dict] = None
 
 
+@router.put("/{planol_id}/capes/{capa_id}", response_model=CapaVectorialResponse)
 @router.put("/planols/{planol_id}/capes/{capa_id}", response_model=CapaVectorialResponse)
 async def editar_capa_planol(
     request: Request,
@@ -614,6 +632,7 @@ async def editar_capa_planol(
     return capa
 
 
+@router.delete("/{planol_id}/capes/{capa_id}", status_code=status.HTTP_204_NO_CONTENT)
 @router.delete("/planols/{planol_id}/capes/{capa_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def eliminar_capa_planol(
     request: Request,

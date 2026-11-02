@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db_with_tenant_context
 from app.core.security import get_current_user_claims
-from app.models.models import Incidencia, OrdreTreball
+from app.models.models import CapaVectorial, Incidencia, OrdreTreball
 
 router = APIRouter(prefix="/sync", tags=["PWA Sync"])
 logger = logging.getLogger(__name__)
@@ -91,6 +91,72 @@ async def bulk_sync_push(
                                 status_code=409,
                                 detail=f"Conflicte detectat a l'ordre {ordre_id}. DB és més recent.",
                             )
+
+            elif accio.accio == "POST_PLANOL_CAPA":
+                logger.info(f"Processant POST_PLANOL_CAPA per {accio.id}")
+                planol_id = accio.payload.get("planol_id")
+                capa_data = accio.payload.get("capa", {})
+                if planol_id:
+                    pins = capa_data.get("pins", [])
+                    features = [
+                        {
+                            "type": "Feature",
+                            "geometry": {"type": "Point", "coordinates": [p.get("x", 0), p.get("y", 0)]},
+                            "properties": {"nom": p.get("etiqueta", "Anotació")},
+                        }
+                        for p in pins
+                    ]
+                    nova_capa = CapaVectorial(
+                        empresa_id=uuid.UUID(claims["empresa_id"]),
+                        planol_base_id=uuid.UUID(str(planol_id)),
+                        nom=capa_data.get("nom", "Capa Operari"),
+                        disciplina="OBRA_CIVIL",
+                        es_immutable=bool(capa_data.get("es_tancada", False)),
+                        color_hex="#0284c7",
+                        gruix_linia=3,
+                        opacitat_percent=100,
+                        visible=True,
+                        geometries_geojson={"type": "FeatureCollection", "features": features},
+                        version_id=1,
+                    )
+                    db.add(nova_capa)
+
+            elif accio.accio == "POST_PLANOL_PIN":
+                logger.info(f"Processant POST_PLANOL_PIN per {accio.id}")
+                planol_id = accio.payload.get("planol_id")
+                capa_id = accio.payload.get("capa_id")
+                pin = accio.payload.get("pin", {})
+                if planol_id and capa_id and pin:
+                    capa_uuid = None
+                    try:
+                        capa_uuid = uuid.UUID(str(capa_id))
+                    except ValueError:
+                        pass
+                    if capa_uuid:
+                        res = await db.execute(
+                            select(CapaVectorial).where(
+                                CapaVectorial.id == capa_uuid,
+                                CapaVectorial.empresa_id == uuid.UUID(claims["empresa_id"]),
+                            )
+                        )
+                        capa = res.scalars().first()
+                        if capa and not capa.es_immutable:
+                            features = list(capa.geometries_geojson.get("features", []))
+                            features.append(
+                                {
+                                    "type": "Feature",
+                                    "geometry": {
+                                        "type": "Point",
+                                        "coordinates": [pin.get("x", 0), pin.get("y", 0)],
+                                    },
+                                    "properties": {"nom": pin.get("etiqueta", "Anotació")},
+                                }
+                            )
+                            capa.geometries_geojson = {
+                                "type": "FeatureCollection",
+                                "features": features,
+                            }
+                            capa.version_id += 1
 
             else:
                 logger.warning(f"Acció desconeguda: {accio.accio}")

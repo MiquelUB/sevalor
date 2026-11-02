@@ -44,18 +44,44 @@ export default function OperariPlanolsPage() {
   const [refArxiuExtern, setRefArxiuExtern] = useState<string>("");
   const [consultantArxiu, setConsultantArxiu] = useState<boolean>(false);
 
-  // Carregar capes reals des del backend (buffer diari de feines d'avui)
+  // Carregar capes reals des del backend (buffer diari de feines d'avui o plànol específic)
   const carregarPlanol = async () => {
     setLoading(true);
     setErrorConnexio(null);
     try {
-      const data = await apiFetch("/operari/planols");
-      const capesData = Array.isArray(data) ? data : [];
-      const capesNormalitzades = capesData.map((c: any) => ({
-        ...c,
-        visible: c.visible ?? true,
-        pins: c.pins ?? [],
-      }));
+      const planolId =
+        typeof window !== "undefined"
+          ? new URLSearchParams(window.location.search).get("planol")
+          : null;
+
+      let capesData: any[] = [];
+      if (planolId) {
+        capesData = await apiFetch(`/operari/planols/${planolId}/capes`).catch(() => []);
+      }
+      if (!capesData || capesData.length === 0) {
+        capesData = await apiFetch("/operari/planols").catch(() => []);
+      }
+
+      const capesNormalitzades = (Array.isArray(capesData) ? capesData : []).map((c: any) => {
+        let pins = c.pins ?? [];
+        if ((!pins || pins.length === 0) && c.geometries_geojson?.features) {
+          pins = c.geometries_geojson.features
+            .filter((f: any) => f.geometry?.type === "Point")
+            .map((f: any) => ({
+              x: f.geometry.coordinates[0],
+              y: f.geometry.coordinates[1],
+              etiqueta: f.properties?.nom || f.properties?.etiqueta || "Anotació",
+            }));
+        }
+        return {
+          id: c.id,
+          nom: c.nom || c.nom_capa || "Capa Vectorial",
+          es_tancada: Boolean(c.es_immutable || c.es_tancada),
+          visible: c.visible ?? true,
+          pins,
+        };
+      });
+
       setCapes(capesNormalitzades);
       if (capesNormalitzades.length > 0 && !capaActivaId) {
         setCapaActivaId(capesNormalitzades[0].id);

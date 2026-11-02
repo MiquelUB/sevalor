@@ -48,6 +48,8 @@ async def crear_capa_operari(
 ) -> CapaVectorialResponse:
     """Operari crea una capa sobre un plànol (Spec 017 RF-13.1)."""
     empresa_id = request.state.empresa_id
+    if not empresa_id or empresa_id == "undefined":
+        raise HTTPException(status_code=401, detail="Context d'empresa no trobat")
 
     planol_res = await db.execute(
         select(PlanolBase).where(
@@ -59,10 +61,16 @@ async def crear_capa_operari(
 
     nova_capa = CapaVectorial(
         empresa_id=uuid.UUID(empresa_id),
-        planol_id=planol_id,
+        planol_base_id=planol_id,
         nom=payload.nom,
-        es_tancada=payload.es_tancada,
-        dades_geojson=payload.dades_geojson,
+        disciplina="OBRA_CIVIL",
+        es_immutable=payload.es_tancada,
+        color_hex="#2563eb",
+        gruix_linia=2,
+        opacitat_percent=100,
+        visible=True,
+        geometries_geojson=payload.dades_geojson,
+        version_id=1,
     )
     db.add(nova_capa)
     await db.commit()
@@ -70,9 +78,67 @@ async def crear_capa_operari(
     return CapaVectorialResponse(
         id=nova_capa.id,
         nom=nova_capa.nom,
-        es_tancada=nova_capa.es_tancada,  # type: ignore
-        dades_geojson=nova_capa.dades_geojson,  # type: ignore
+        es_tancada=nova_capa.es_immutable,
+        dades_geojson=nova_capa.geometries_geojson,
     )
+
+
+@router.get("/{planol_id}/capes")
+async def llistar_capes_operari_per_planol(
+    planol_id: uuid.UUID,
+    request: Request,
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+):
+    """Llista les capes vectorials d'un plànol per a la PWA operari."""
+    empresa_id = request.state.empresa_id
+    if not empresa_id or empresa_id == "undefined":
+        raise HTTPException(status_code=401, detail="Context d'empresa no trobat")
+
+    result = await db.execute(
+        select(CapaVectorial).where(
+            CapaVectorial.planol_base_id == planol_id,
+            CapaVectorial.empresa_id == uuid.UUID(empresa_id),
+        )
+    )
+    return result.scalars().all()
+
+
+@router.put("/{planol_id}/capes/{capa_id}")
+async def editar_capa_operari_per_planol(
+    planol_id: uuid.UUID,
+    capa_id: uuid.UUID,
+    request: Request,
+    payload: Dict[str, Any],
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+):
+    """Edita una capa vectorial d'un plànol des de la PWA operari."""
+    empresa_id = request.state.empresa_id
+    if not empresa_id or empresa_id == "undefined":
+        raise HTTPException(status_code=401, detail="Context d'empresa no trobat")
+
+    stmt = select(CapaVectorial).where(
+        CapaVectorial.id == capa_id,
+        CapaVectorial.planol_base_id == planol_id,
+        CapaVectorial.empresa_id == uuid.UUID(empresa_id),
+    )
+    capa = (await db.execute(stmt)).scalars().first()
+    if not capa:
+        raise HTTPException(status_code=404, detail="Capa no trobada")
+    if capa.es_immutable:
+        raise HTTPException(status_code=403, detail="La capa és immutable")
+
+    if "nom" in payload:
+        capa.nom = str(payload["nom"])
+    if "geometries_geojson" in payload:
+        capa.geometries_geojson = payload["geometries_geojson"]
+    elif "dades_geojson" in payload:
+        capa.geometries_geojson = payload["dades_geojson"]
+    if "visible" in payload:
+        capa.visible = bool(payload["visible"])
+
+    capa.version_id += 1
+    await db.commit()
+    return capa
 
 
 class CapaAnotacioOperariResponse(BaseModel):
