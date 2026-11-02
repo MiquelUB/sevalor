@@ -178,7 +178,8 @@ class EmpresaUpdateRequest(BaseModel):
 
 
 class NodeIaConfigRequest(BaseModel):
-    node_ia_url: Optional[str] = Field(None, max_length=255, description="URL de l'ordinador dedicat (ex: https://ia.empresa.cat/v1)")
+    node_ia_url: Optional[str] = Field(None, max_length=255, description="URL de l'ordinador dedicat (ex: http://127.0.0.1:1234)")
+    disc_dur_url: Optional[str] = Field(None, max_length=255, description="URL o ruta del disc dur dedicat d'arxiu històric")
     node_ia_actiu: bool = Field(False, description="Activa o desactiva l'ordinador dedicat local")
     agent_prompt_system: Optional[str] = Field(None, description="Directrius específiques del negoci per a l'assistent")
 
@@ -336,6 +337,7 @@ async def obtenir_dades_empresa(
         "feature_planols": empresa.feature_planols,
         "feature_telegram": empresa.feature_telegram,
         "node_ia_url": empresa.node_ia_url,
+        "disc_dur_url": getattr(empresa, "disc_dur_url", None),
         "node_ia_actiu": empresa.node_ia_actiu,
     }
 
@@ -1202,10 +1204,11 @@ async def obtenir_configuracio_node_ia(
 
     return {
         "node_ia_url": empresa.node_ia_url,
+        "disc_dur_url": getattr(empresa, "disc_dur_url", None),
         "node_ia_actiu": empresa.node_ia_actiu,
         "agent_prompt_system": empresa.agent_prompt_system,
         "vertical": empresa.vertical,
-        "te_ordinador_dedicat": bool(empresa.node_ia_url and empresa.node_ia_actiu),
+        "te_ordinador_dedicat": bool((empresa.node_ia_url or getattr(empresa, "disc_dur_url", None)) and empresa.node_ia_actiu),
     }
 
 
@@ -1228,6 +1231,8 @@ async def actualitzar_configuracio_node_ia(
         raise HTTPException(status_code=404, detail="Empresa no trobada")
 
     empresa.node_ia_url = payload.node_ia_url.strip() if payload.node_ia_url else None
+    if payload.disc_dur_url is not None:
+        empresa.disc_dur_url = payload.disc_dur_url.strip() if payload.disc_dur_url else None
     empresa.node_ia_actiu = payload.node_ia_actiu
     if payload.agent_prompt_system is not None:
         empresa.agent_prompt_system = payload.agent_prompt_system.strip()
@@ -1236,9 +1241,10 @@ async def actualitzar_configuracio_node_ia(
 
     return {
         "status": "OK",
-        "missatge": "Configuració de l'ordinador dedicat d'IA desada correctament",
+        "missatge": "Configuració de l'ordinador dedicat d'IA i disc dur desada correctament",
         "node_ia_actiu": empresa.node_ia_actiu,
         "node_ia_url": empresa.node_ia_url,
+        "disc_dur_url": getattr(empresa, "disc_dur_url", None),
     }
 
 

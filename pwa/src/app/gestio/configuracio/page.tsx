@@ -174,6 +174,7 @@ export default function ConfiguracioPage() {
 
   // Node d'IA Sobirà / Ordinador Dedicat (Constitució §2.V)
   const [nodeIaUrl, setNodeIaUrl] = useState("");
+  const [discDurUrl, setDiscDurUrl] = useState("");
   const [nodeIaActiu, setNodeIaActiu] = useState(false);
   const [agentPromptSystem, setAgentPromptSystem] = useState("");
   const [nodeIaEstat, setNodeIaEstat] = useState<"OPERATIU" | "ERROR_CONNEXIO" | "NO_CONFIGURAT">("NO_CONFIGURAT");
@@ -186,6 +187,7 @@ export default function ConfiguracioPage() {
     apiFetch("/gestio/configuracio/node-ia")
       .then((data: any) => {
         if (data.node_ia_url) setNodeIaUrl(data.node_ia_url);
+        if (data.disc_dur_url) setDiscDurUrl(data.disc_dur_url);
         if (data.node_ia_actiu !== undefined) setNodeIaActiu(Boolean(data.node_ia_actiu));
         if (data.agent_prompt_system) setAgentPromptSystem(data.agent_prompt_system);
         if (data.te_ordinador_dedicat) {
@@ -468,11 +470,12 @@ export default function ConfiguracioPage() {
         method: "PUT",
         body: JSON.stringify({
           node_ia_url: nodeIaUrl.trim() || null,
+          disc_dur_url: discDurUrl.trim() || null,
           node_ia_actiu: nodeIaActiu,
           agent_prompt_system: agentPromptSystem.trim() || null,
         }),
       });
-      mostrarFeedback("EXIT", "Paràmetres de l'ordinador dedicat d'IA desats correctament.");
+      mostrarFeedback("EXIT", "Paràmetres de l'ordinador dedicat d'IA i disc dur desats correctament.");
     } catch (err: any) {
       mostrarFeedback("ERROR", err.message || "Error en desar el node d'IA dedicat.");
     } finally {
@@ -481,11 +484,56 @@ export default function ConfiguracioPage() {
   };
 
   const handleProvarNodeIa = async () => {
-    if (!nodeIaUrl.trim()) {
+    const rawUrl = nodeIaUrl.trim();
+    if (!rawUrl) {
       mostrarFeedback("ERROR", "Cal introduir la URL de l'ordinador dedicat abans de provar la connexió.");
       return;
     }
     setNodeIaTestant(true);
+
+    // 1. Sonda directa des de la plataforma (navegador -> 127.0.0.1 / LAN)
+    const base = rawUrl.replace(/\/+$/, "");
+    const candidateEndpoints = base.endsWith("/v1")
+      ? [`${base}/models`]
+      : [`${base}/v1/models`, `${base}/api/tags`, `${base}/models`];
+
+    for (const url of candidateEndpoints) {
+      try {
+        const t0 = performance.now();
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), 3500);
+        const resp = await fetch(url, {
+          method: "GET",
+          headers: { Accept: "application/json" },
+          signal: ctrl.signal,
+        });
+        clearTimeout(timer);
+        const latencia = Math.max(1, Math.round(performance.now() - t0));
+        if (resp.ok) {
+          let models: string[] = [];
+          try {
+            const data = await resp.json();
+            if (data && Array.isArray(data.data)) {
+              models = data.data.map((m: any) => String(m.id || m.name)).filter(Boolean);
+            } else if (data && Array.isArray(data.models)) {
+              models = data.models.map((m: any) => String(m.name || m.id)).filter(Boolean);
+            }
+          } catch {
+            // Ignorem error de parseig
+          }
+          setNodeIaEstat("OPERATIU");
+          setNodeIaLatencia(latencia);
+          setNodeIaModelInfo(models.length > 0 ? models.join(", ") : "Model OpenAI compatible actiu");
+          setNodeIaActiu(true);
+          mostrarFeedback("EXIT", `Connexió establerta directament des de la plataforma (${latencia} ms)`);
+          setNodeIaTestant(false);
+          return;
+        }
+      } catch {
+        // Fallback al backend
+      }
+    }
+
     try {
       const res: any = await apiFetch("/gestio/configuracio/node-ia/provar", {
         method: "POST",
@@ -1392,23 +1440,39 @@ export default function ConfiguracioPage() {
               </label>
             </div>
 
-            {/* URL DE L'ORDINADOR DEDICAT */}
+            {/* URL DE L'ORDINADOR DEDICAT (COPILOT IA) */}
             <div className="space-y-1.5">
               <label className="text-xs font-bold text-slate-700 dark:text-slate-300 flex items-center justify-between">
-                <span>URL de l'Ordinador Dedicat (LM Studio / Ollama Local)</span>
+                <span>1. Adreça del Copilot Local (LM Studio / Ollama Local)</span>
                 <span className="text-[10px] font-normal text-slate-400">Endpoint OpenAI-compatible</span>
               </label>
               <input
                 type="text"
                 disabled={esEnginyer}
-                placeholder="Ex: https://ia.la-teva-empresa.cat/v1 o túnel xifrat privat"
+                placeholder="Ex: http://127.0.0.1:1234 o http://192.168.1.100:1234"
                 value={nodeIaUrl}
                 onChange={(e) => setNodeIaUrl(e.target.value)}
                 className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-mono text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500 disabled:opacity-50"
               />
               <p className="text-[10px] text-slate-400">
-                Punt d'accés del vostre ordinador de la seu. Podeu utilitzar un túnel de xarxa xifrat (Cloudflare Tunnel privat o Tailscale/Wireguard) per exposar de forma segura el port 1234 de LM Studio.
+                La plataforma verifica i connecta directament des del navegador cap al port local (ex: <code>http://127.0.0.1:1234</code>).
               </p>
+            </div>
+
+            {/* ADREÇA DEL DISC DUR DEDICAT */}
+            <div className="space-y-1.5">
+              <label className="text-xs font-bold text-slate-700 dark:text-slate-300 flex items-center justify-between">
+                <span>2. Adreça o Carpeta del Disc Dur Dedicat (Arxiu Històric i Plànols)</span>
+                <span className="text-[10px] font-normal text-slate-400">Memòria local de l'empresa</span>
+              </label>
+              <input
+                type="text"
+                disabled={esEnginyer}
+                placeholder="Ex: http://127.0.0.1:1234/docs, http://127.0.0.1:8080 o ruta del disc dur"
+                value={discDurUrl}
+                onChange={(e) => setDiscDurUrl(e.target.value)}
+                className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-mono text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500 disabled:opacity-50"
+              />
             </div>
 
             {/* DIAGNÒSTIC EN TEMPS REAL */}

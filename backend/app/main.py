@@ -74,6 +74,19 @@ limiter = Limiter(
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
+    if os.getenv("TESTING") != "1":
+        try:
+            from sqlalchemy import text
+
+            from app.core.db import AsyncSessionLocal
+
+            async with AsyncSessionLocal() as session:
+                await session.execute(
+                    text("ALTER TABLE empreses ADD COLUMN IF NOT EXISTS disc_dur_url VARCHAR(255);")
+                )
+                await session.commit()
+        except Exception:
+            pass
     yield
 
 

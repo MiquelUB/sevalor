@@ -424,6 +424,17 @@ async def test_verificar_disc_dur_diagnostics(headers):
         assert data_closed["status"] == "ERROR"
         assert data_closed["motiu"] in ("PORT_TANCAT", "TIMEOUT", "ERROR_XARXA")
 
+        # 3. Verificació de carpeta de disc dur local (disc_dur_url independent)
+        res_dir = await ac.post(
+            "/api/v1/superadmin/tenants/verificar-disc-dur",
+            json={"disc_dur_url": "/tmp"},
+            headers=headers,
+        )
+        assert res_dir.status_code == 200
+        data_dir = res_dir.json()
+        assert data_dir["status"] == "OK"
+        assert data_dir["motiu"] == "DISC_OPERATIU"
+
 
 @pytest.mark.asyncio
 async def test_onboarding_copilot_ia_validation(headers):

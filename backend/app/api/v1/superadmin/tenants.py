@@ -124,6 +124,7 @@ class OnboardingTenantRequest(BaseModel):
     magatzem_families_default: Optional[str] = None
     agent_prompt_system: Optional[str] = None
     node_ia_url: Optional[str] = None
+    disc_dur_url: Optional[str] = None
     estat_inicial: str = Field("TRIAL", pattern="^(TRIAL|ACTIU)$")
     pla_subscripcio: str = Field("STARTER", pattern="^(STARTER|PRO|ENTERPRISE|CUSTOM)$")
     quota_operaris: Optional[int] = Field(None, ge=1, le=500)
@@ -164,7 +165,8 @@ class VerificarNodeIaRequest(BaseModel):
 
 
 class VerificarDiscDurRequest(BaseModel):
-    node_ia_url: str = Field(..., min_length=5, max_length=255)
+    node_ia_url: Optional[str] = Field(None, min_length=1, max_length=255)
+    disc_dur_url: Optional[str] = Field(None, min_length=1, max_length=255)
     empresa_id: Optional[str] = None
 
 
@@ -208,6 +210,7 @@ class UpdateFeatureFlagsRequest(BaseModel):
     feature_planols: bool
     feature_telegram: bool
     node_ia_url: Optional[str] = None
+    disc_dur_url: Optional[str] = None
     node_ia_actiu: Optional[bool] = None
 
 
@@ -536,12 +539,44 @@ async def verificar_disc_dur(
     claims: Dict[str, Any] = Depends(require_roles(["SUPERADMIN"])),
 ) -> Dict[str, Any]:
     """Verifica en viu la connectivitat amb el disc dur dedicat i l'arxiu històric de plànols de l'empresa."""
-    raw_url = payload.node_ia_url.strip()
+    raw_url = (payload.disc_dur_url or payload.node_ia_url or "").strip()
+    if not raw_url:
+        return {
+            "status": "ERROR",
+            "motiu": "URL_INVALIDA",
+            "missatge": "Cal indicar l'adreça o carpeta del disc dur dedicat.",
+            "latencia_ms": None,
+        }
+
+    # Suport per a ruta local física al disc dur (ex. /media/..., /mnt/..., /data/...)
+    if raw_url.startswith("/") or (len(raw_url) > 2 and raw_url[1] == ":"):
+        t0 = time.perf_counter()
+        if os.path.exists(raw_url) and os.path.isdir(raw_url):
+            fitxers = 0
+            try:
+                for _r, _d, files in os.walk(raw_url):
+                    fitxers += len(files)
+                    if fitxers > 500:
+                        break
+            except OSError:
+                pass
+            lat = int((time.perf_counter() - t0) * 1000)
+            return {
+                "status": "OK",
+                "motiu": "DISC_OPERATIU",
+                "missatge": f"Carpeta de disc dur verificada ({fitxers} fitxers accessibles, {lat} ms).",
+                "endpoint_resolt": raw_url,
+                "tipus_resposta": "Carpeta de Disc Dur Dedicat",
+                "codi_http": 200,
+                "latencia_ms": lat,
+                "url_efectiva": raw_url,
+            }
+
     if not (raw_url.startswith("http://") or raw_url.startswith("https://")):
         return {
             "status": "ERROR",
             "motiu": "URL_INVALIDA",
-            "missatge": "L'adreça URL ha de començar per http:// o https:// (ex: http://192.168.1.100:1234 o https://node.empresa.cat)",
+            "missatge": "L'adreça del disc dur ha de començar per http://, https:// o seleccionar una carpeta local des de la plataforma.",
             "latencia_ms": None,
         }
 
@@ -930,7 +965,8 @@ async def crear_nou_tenant(
     node_ia_url_final = (
         payload.node_ia_url.strip() if (payload.node_ia_url and copilot_actiu) else None
     )
-    node_ia_actiu_final = bool(node_ia_url_final and copilot_actiu)
+    disc_dur_url_final = payload.disc_dur_url.strip() if payload.disc_dur_url else None
+    node_ia_actiu_final = bool((node_ia_url_final or disc_dur_url_final) and copilot_actiu)
     agent_prompt_final = (
         payload.agent_prompt_system.strip()
         if (payload.agent_prompt_system and copilot_actiu)
@@ -978,6 +1014,7 @@ async def crear_nou_tenant(
         magatzem_families_default=payload.magatzem_families_default,
         agent_prompt_system=agent_prompt_final,
         node_ia_url=node_ia_url_final,
+        disc_dur_url=disc_dur_url_final,
         node_ia_actiu=node_ia_actiu_final,
         data_onboarding=datetime.now(timezone.utc),
         feature_copilot_ia=copilot_actiu,
@@ -1071,6 +1108,7 @@ async def crear_nou_tenant(
             "enllac_activacio_2fa": enllac_activacio,
             "estat_inicial": payload.estat_inicial,
             "node_ia_url": nova_empresa.node_ia_url,
+            "disc_dur_url": getattr(nova_empresa, "disc_dur_url", None),
             "node_ia_actiu": nova_empresa.node_ia_actiu,
             "logotip_path": nova_empresa.logotip_path,
         },
@@ -1240,6 +1278,7 @@ async def obtenir_tenant(
         "feature_planols": bool(emp.feature_planols),
         "feature_telegram": bool(emp.feature_telegram),
         "node_ia_url": emp.node_ia_url,
+        "disc_dur_url": getattr(emp, "disc_dur_url", None),
         "node_ia_actiu": bool(emp.node_ia_actiu),
         "features": {
             "copilot_ia": bool(emp.feature_copilot_ia),
@@ -1624,6 +1663,8 @@ async def update_feature_flags(
     empresa.feature_telegram = payload.feature_telegram
     if payload.node_ia_url is not None:
         empresa.node_ia_url = payload.node_ia_url.strip() if payload.node_ia_url else None
+    if payload.disc_dur_url is not None:
+        empresa.disc_dur_url = payload.disc_dur_url.strip() if payload.disc_dur_url else None
     if payload.node_ia_actiu is not None:
         empresa.node_ia_actiu = payload.node_ia_actiu
     empresa.updated_at = datetime.now(timezone.utc)
@@ -1640,6 +1681,7 @@ async def update_feature_flags(
             "telegram": empresa.feature_telegram,
             "node_ia_actiu": empresa.node_ia_actiu,
             "node_ia_url": empresa.node_ia_url,
+            "disc_dur_url": getattr(empresa, "disc_dur_url", None),
         },
     }
 
