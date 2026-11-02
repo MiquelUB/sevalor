@@ -61,6 +61,8 @@ class FeinaCreate(BaseModel):
     descripcio: Optional[str] = None
     estat: str = Field("PENDENT", max_length=30)
     data_planificacio: date
+    hora_inici_prevista: Optional[datetime] = None
+    hora_fi_prevista: Optional[datetime] = None
     cap_de_colla_id: Optional[uuid.UUID] = None
     vehicle_id: Optional[uuid.UUID] = None
     latitud: Optional[float] = None
@@ -92,6 +94,8 @@ class FeinaUpdate(BaseModel):
     adreca: Optional[str] = Field(None, max_length=255)
     estat: Optional[str] = Field(None, max_length=30)
     data_planificacio: Optional[date] = None
+    hora_inici_prevista: Optional[datetime] = None
+    hora_fi_prevista: Optional[datetime] = None
     cap_de_colla_id: Optional[uuid.UUID] = None
     vehicle_id: Optional[uuid.UUID] = None
     latitud: Optional[float] = None
@@ -189,6 +193,8 @@ async def alta_feina(
         descripcio=feina.descripcio,
         estat=feina.estat,
         data_planificacio=feina.data_planificacio,
+        hora_inici_prevista=feina.hora_inici_prevista,
+        hora_fi_prevista=feina.hora_fi_prevista,
         cap_de_colla_id=feina.cap_de_colla_id,
         vehicle_id=feina.vehicle_id,
         latitud=lat,
@@ -436,6 +442,10 @@ async def modificar_feina(
         ordre.planol_id = update_data["planol_id"]
     if "data_planificacio" in update_data and update_data["data_planificacio"]:
         ordre.data_planificacio = update_data["data_planificacio"]
+    if "hora_inici_prevista" in update_data:
+        ordre.hora_inici_prevista = update_data["hora_inici_prevista"]
+    if "hora_fi_prevista" in update_data:
+        ordre.hora_fi_prevista = update_data["hora_fi_prevista"]
     if "estat" in update_data and update_data["estat"]:
         ordre.estat = update_data["estat"]
     if "vehicle_id" in update_data:

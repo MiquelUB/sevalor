@@ -20,6 +20,7 @@ import {
   Trash2,
   CheckCircle2,
   Box,
+  Clock,
 } from "lucide-react";
 import { apiFetch } from "@/lib/api";
 import { geocodificarAdreca } from "@/lib/geocoding";
@@ -97,6 +98,9 @@ export function EditarOTModal({ feinaId, onClose, onSuccess }: EditarOTModalProp
     planol_id: "",
   });
 
+  const [horaInici, setHoraInici] = useState("");
+  const [horaFi, setHoraFi] = useState("");
+
   // Picking & Eines state
   const [liniesPicking, setLiniesPicking] = useState<LiniaPickingUI[]>([]);
   const [selectedEinaIds, setSelectedEinaIds] = useState<string[]>([]);
@@ -137,6 +141,23 @@ export function EditarOTModal({ feinaId, onClose, onSuccess }: EditarOTModalProp
           longitud: feinaData.longitud ?? null,
           planol_id: feinaData.planol_id || "",
         });
+
+        if (feinaData.hora_inici_prevista) {
+          try {
+            const d = new Date(feinaData.hora_inici_prevista);
+            const hh = String(d.getHours()).padStart(2, "0");
+            const mm = String(d.getMinutes()).padStart(2, "0");
+            setHoraInici(`${hh}:${mm}`);
+          } catch {}
+        }
+        if (feinaData.hora_fi_prevista) {
+          try {
+            const d = new Date(feinaData.hora_fi_prevista);
+            const hh = String(d.getHours()).padStart(2, "0");
+            const mm = String(d.getMinutes()).padStart(2, "0");
+            setHoraFi(`${hh}:${mm}`);
+          } catch {}
+        }
 
         // Initialize picking lines
         if (Array.isArray(feinaData.linies_picking)) {
@@ -193,6 +214,19 @@ export function EditarOTModal({ feinaId, onClose, onSuccess }: EditarOTModalProp
     } else {
       setFinques([]);
     }
+  };
+
+  const handleFincaChange = (fincaId: string) => {
+    setFormData((prev) => {
+      const f = finques.find((x) => x.id === fincaId);
+      return {
+        ...prev,
+        finca_id: fincaId,
+        adreca: (!prev.adreca || prev.adreca.trim() === "") && f?.adreca ? f.adreca : prev.adreca,
+        latitud: f?.latitud != null ? Number(f.latitud) : prev.latitud,
+        longitud: f?.longitud != null ? Number(f.longitud) : prev.longitud,
+      };
+    });
   };
 
   // Picking functions
@@ -281,6 +315,8 @@ export function EditarOTModal({ feinaId, onClose, onSuccess }: EditarOTModalProp
         planol_id: formData.planol_id || null,
         adreca: formData.adreca.trim(),
         data_planificacio: formData.data_planificacio,
+        hora_inici_prevista: horaInici ? `${formData.data_planificacio}T${horaInici}:00` : null,
+        hora_fi_prevista: horaFi ? `${formData.data_planificacio}T${horaFi}:00` : null,
         estat: formData.estat,
         cap_de_colla_id: formData.cap_de_colla_id || null,
         vehicle_id: formData.vehicle_id || null,
@@ -504,7 +540,7 @@ export function EditarOTModal({ feinaId, onClose, onSuccess }: EditarOTModalProp
                     </label>
                     <select
                       value={formData.finca_id}
-                      onChange={(e) => setFormData({ ...formData, finca_id: e.target.value })}
+                      onChange={(e) => handleFincaChange(e.target.value)}
                       disabled={!formData.client_id || finques.length === 0}
                       className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-50"
                     >
@@ -623,6 +659,35 @@ export function EditarOTModal({ feinaId, onClose, onSuccess }: EditarOTModalProp
                       <option value="COMPLETADA">COMPLETADA</option>
                       <option value="BLOQUEJADA">BLOQUEJADA</option>
                     </select>
+                  </div>
+                </div>
+
+                {/* Franja Horària Prevista (Opcional) */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1 flex items-center gap-1.5">
+                      <Clock className="w-3.5 h-3.5 text-slate-400" />
+                      <span>Hora Inici Prevista (Opcional)</span>
+                    </label>
+                    <input
+                      type="time"
+                      value={horaInici}
+                      onChange={(e) => setHoraInici(e.target.value)}
+                      className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary font-mono"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1 flex items-center gap-1.5">
+                      <Clock className="w-3.5 h-3.5 text-slate-400" />
+                      <span>Hora Fi Prevista (Opcional)</span>
+                    </label>
+                    <input
+                      type="time"
+                      value={horaFi}
+                      onChange={(e) => setHoraFi(e.target.value)}
+                      className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary font-mono"
+                    />
                   </div>
                 </div>
               </div>
