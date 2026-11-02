@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import {
   X,
   Save,
@@ -8,6 +8,7 @@ import {
   User,
   FileText,
   Calendar,
+  Clock,
   MapPin,
   Map,
   Truck,
@@ -18,6 +19,7 @@ import {
   Trash2,
   Wrench,
   Sparkles,
+  Search,
 } from "lucide-react";
 import { apiFetch } from "@/lib/api";
 import { geocodificarAdreca } from "@/lib/geocoding";
@@ -53,14 +55,105 @@ export function CrearOTModal({ onClose, onSuccess }: CrearOTModalProps) {
     estat: "PENDENT",
   });
 
+  // Horaris previstos
+  const [horaInici, setHoraInici] = useState("");
+  const [horaFi, setHoraFi] = useState("");
+
   // Picking lines state
   const [liniesPicking, setLiniesPicking] = useState<{ article_id: string; quantitat: number }[]>([]);
   const [currentArticle, setCurrentArticle] = useState("");
   const [currentQty, setCurrentQty] = useState(1);
 
+  // Autocomplete & Family state for Picking (Materials)
+  const [filtreFamilia, setFiltreFamilia] = useState<string>("TOTES");
+  const [cercaArticle, setCercaArticle] = useState<string>("");
+  const [selectedArticle, setSelectedArticle] = useState<any | null>(null);
+  const [isArticleDropdownOpen, setIsArticleDropdownOpen] = useState(false);
+  const articleComboboxRef = useRef<HTMLDivElement>(null);
+
   // Eines en custòdia state
   const [selectedEinaIds, setSelectedEinaIds] = useState<string[]>([]);
   const [currentEina, setCurrentEina] = useState("");
+
+  // Autocomplete state for Eines (Tools)
+  const [cercaEina, setCercaEina] = useState<string>("");
+  const [selectedEina, setSelectedEina] = useState<any | null>(null);
+  const [isEinaDropdownOpen, setIsEinaDropdownOpen] = useState(false);
+  const einaComboboxRef = useRef<HTMLDivElement>(null);
+
+  // Close dropdowns on outside click
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (articleComboboxRef.current && !articleComboboxRef.current.contains(e.target as Node)) {
+        setIsArticleDropdownOpen(false);
+      }
+      if (einaComboboxRef.current && !einaComboboxRef.current.contains(e.target as Node)) {
+        setIsEinaDropdownOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
+  const familiesArticles = Array.from(
+    new Set(
+      articles
+        .map((a) => (a.familia ? String(a.familia).trim() : "GENERAL"))
+        .filter(Boolean)
+    )
+  ).sort();
+
+  const filteredArticles = articles
+    .filter((art) => {
+      const fam = art.familia ? String(art.familia).trim() : "GENERAL";
+      if (filtreFamilia !== "TOTES" && fam !== filtreFamilia) return false;
+      if (!cercaArticle.trim()) return true;
+      const term = cercaArticle.toLowerCase();
+      const nom = (art.nom || "").toLowerCase();
+      const ref = (art.referencia_inventari || "").toLowerCase();
+      return nom.includes(term) || ref.includes(term);
+    })
+    .slice(0, 10);
+
+  const filteredEines = eines
+    .filter((e) => !selectedEinaIds.includes(e.id))
+    .filter((e) => {
+      if (!cercaEina.trim()) return true;
+      const term = cercaEina.toLowerCase();
+      const nom = (e.nom || "").toLowerCase();
+      const model = (e.model || "").toLowerCase();
+      const sn = (e.numero_serie || "").toLowerCase();
+      return nom.includes(term) || model.includes(term) || sn.includes(term);
+    })
+    .slice(0, 10);
+
+  const handleSelectArticle = (art: any) => {
+    setSelectedArticle(art);
+    setCurrentArticle(art.id);
+    setCercaArticle(`${art.nom} (${art.referencia_inventari})`);
+    setIsArticleDropdownOpen(false);
+  };
+
+  const handleClearArticle = () => {
+    setSelectedArticle(null);
+    setCurrentArticle("");
+    setCercaArticle("");
+    setIsArticleDropdownOpen(false);
+  };
+
+  const handleSelectEina = (eina: any) => {
+    setSelectedEina(eina);
+    setCurrentEina(eina.id);
+    setCercaEina(`${eina.nom} - SN: ${eina.numero_serie}`);
+    setIsEinaDropdownOpen(false);
+  };
+
+  const handleClearEina = () => {
+    setSelectedEina(null);
+    setCurrentEina("");
+    setCercaEina("");
+    setIsEinaDropdownOpen(false);
+  };
 
   useEffect(() => {
     Promise.all([
@@ -98,16 +191,17 @@ export function CrearOTModal({ onClose, onSuccess }: CrearOTModalProps) {
   }, [formData.client_id]);
 
   const addLiniaPicking = () => {
-    if (!currentArticle || currentQty <= 0) return;
-    const existingIndex = liniesPicking.findIndex((l) => l.article_id === currentArticle);
+    const artId = selectedArticle?.id || currentArticle;
+    if (!artId || currentQty <= 0) return;
+    const existingIndex = liniesPicking.findIndex((l) => l.article_id === artId);
     if (existingIndex >= 0) {
       const newLinies = [...liniesPicking];
       newLinies[existingIndex].quantitat += currentQty;
       setLiniesPicking(newLinies);
     } else {
-      setLiniesPicking([...liniesPicking, { article_id: currentArticle, quantitat: currentQty }]);
+      setLiniesPicking([...liniesPicking, { article_id: artId, quantitat: currentQty }]);
     }
-    setCurrentArticle("");
+    handleClearArticle();
     setCurrentQty(1);
   };
 
@@ -118,9 +212,10 @@ export function CrearOTModal({ onClose, onSuccess }: CrearOTModalProps) {
   };
 
   const addEina = () => {
-    if (!currentEina || selectedEinaIds.includes(currentEina)) return;
-    setSelectedEinaIds([...selectedEinaIds, currentEina]);
-    setCurrentEina("");
+    const einaId = selectedEina?.id || currentEina;
+    if (!einaId || selectedEinaIds.includes(einaId)) return;
+    setSelectedEinaIds([...selectedEinaIds, einaId]);
+    handleClearEina();
   };
 
   const removeEina = (idToRemove: string) => {
@@ -133,24 +228,32 @@ export function CrearOTModal({ onClose, onSuccess }: CrearOTModalProps) {
 
     try {
       const geo = geocodificarAdreca(formData.adreca);
+      const horaIniciDate = horaInici
+        ? `${formData.data_planificacio}T${horaInici}:00`
+        : null;
+      const horaFiDate = horaFi
+        ? `${formData.data_planificacio}T${horaFi}:00`
+        : null;
+
       const payload = {
         ...formData,
+        planol_id: formData.planol_id || null,
         estat: formData.cap_de_colla_id ? "ASSIGNADA" : formData.estat || "PENDENT",
         latitud: geo.lat,
         longitud: geo.lng,
+        hora_inici_prevista: horaIniciDate,
+        hora_fi_prevista: horaFiDate,
         vehicle_id: formData.vehicle_id ? formData.vehicle_id : null,
         cap_de_colla_id: formData.cap_de_colla_id ? formData.cap_de_colla_id : null,
         finca_id: formData.finca_id ? formData.finca_id : null,
         eina_ids: selectedEinaIds.length > 0 ? selectedEinaIds : null,
       };
 
-      const { planol_id, ...backendPayload } = payload;
-
-      // 1. Create OT
+      // 1. Create OT directly with planol_id, eina_ids and schedule
       const createdOT = await apiFetch<any>("/gestio/feines", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(backendPayload),
+        body: JSON.stringify(payload),
       });
 
       // 2. Create Fulla de Picking if materials assigned
@@ -317,6 +420,31 @@ export function CrearOTModal({ onClose, onSuccess }: CrearOTModalProps) {
                     />
                   </div>
 
+                  <div className="grid grid-cols-2 gap-xs">
+                    <div className="space-y-xs">
+                      <label className="font-label-caps text-on-surface-variant uppercase flex items-center gap-1 text-[10px]">
+                        <Clock className="w-3 h-3 text-primary" /> Hora Inici
+                      </label>
+                      <input
+                        type="time"
+                        value={horaInici}
+                        onChange={(e) => setHoraInici(e.target.value)}
+                        className="w-full p-sm bg-surface-container-low rounded-lg border border-outline-variant focus:border-primary outline-none text-xs font-data-tabular"
+                      />
+                    </div>
+                    <div className="space-y-xs">
+                      <label className="font-label-caps text-on-surface-variant uppercase flex items-center gap-1 text-[10px]">
+                        <Clock className="w-3 h-3 text-primary" /> Hora Fi
+                      </label>
+                      <input
+                        type="time"
+                        value={horaFi}
+                        onChange={(e) => setHoraFi(e.target.value)}
+                        className="w-full p-sm bg-surface-container-low rounded-lg border border-outline-variant focus:border-primary outline-none text-xs font-data-tabular"
+                      />
+                    </div>
+                  </div>
+
                   <div className="space-y-xs md:col-span-2">
                     <label className="font-label-caps text-on-surface-variant uppercase">
                       Títol de la Intervenció
@@ -398,58 +526,174 @@ export function CrearOTModal({ onClose, onSuccess }: CrearOTModalProps) {
                   </h3>
                 </div>
 
-                {/* Sub-secció Picking */}
+                {/* Sub-secció Picking amb Autocompletat i Família */}
                 <div className="bg-surface-container-low p-md rounded-xl border border-outline-variant/40 space-y-md">
-                  <div className="flex items-end gap-sm flex-wrap">
-                    <div className="flex-1 min-w-[220px] space-y-xs">
-                      <label className="font-label-caps text-on-surface-variant uppercase flex items-center gap-1">
-                        <Package className="w-3.5 h-3.5" /> Article / Material
+                  <div className="flex items-center gap-2 border-b border-outline-variant/20 pb-2">
+                    <Package className="w-4 h-4 text-primary" />
+                    <h4 className="font-body-strong text-primary text-xs uppercase tracking-wider">
+                      Reserva de Materials & Control d&apos;Inventari
+                    </h4>
+                  </div>
+
+                  {/* Fila de selectors de materials: Família + Cerca autocompletable */}
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-sm items-start">
+                    {/* Selector de Família */}
+                    <div className="space-y-xs">
+                      <label className="font-label-caps text-on-surface-variant uppercase flex items-center gap-1 text-[11px]">
+                        <Package className="w-3.5 h-3.5 text-primary" /> Família
                       </label>
                       <select
-                        value={currentArticle}
-                        onChange={(e) => setCurrentArticle(e.target.value)}
-                        className="w-full p-sm rounded-lg border border-outline-variant bg-surface-container-lowest text-sm outline-none focus:border-primary"
+                        value={filtreFamilia}
+                        onChange={(e) => {
+                          setFiltreFamilia(e.target.value);
+                          setIsArticleDropdownOpen(true);
+                        }}
+                        className="w-full p-sm rounded-lg border border-outline-variant bg-surface-container-lowest text-xs text-on-surface outline-none focus:border-primary"
                       >
-                        <option value="">Cercar material disponible...</option>
-                        {articles.map((art) => (
-                          <option
-                            key={art.id}
-                            value={art.id}
-                            className={art.estoc_real <= 0 ? "text-error" : ""}
-                          >
-                            {art.nom} ({art.referencia_inventari}) - Estoc: {art.estoc_real ?? 0}{" "}
-                            {art.unitat_mesura}
+                        <option value="TOTES">Totes les famílies ({articles.length})</option>
+                        {familiesArticles.map((f) => (
+                          <option key={f} value={f}>
+                            {f}
                           </option>
                         ))}
                       </select>
                     </div>
-                    <div className="w-24 space-y-xs">
-                      <label className="font-label-caps text-on-surface-variant uppercase">
-                        Quantitat
+
+                    {/* Cerca Autocompletable */}
+                    <div className="sm:col-span-2 space-y-xs relative" ref={articleComboboxRef}>
+                      <label className="font-label-caps text-on-surface-variant uppercase flex items-center justify-between text-[11px]">
+                        <span className="flex items-center gap-1">
+                          <Search className="w-3.5 h-3.5 text-primary" /> Cerca Material (Escriu per filtrar)
+                        </span>
+                        {selectedArticle && (
+                          <span className="text-[10px] font-mono font-bold text-secondary">
+                            Disp: {selectedArticle.estoc_real ?? 0} {selectedArticle.unitat_mesura}
+                          </span>
+                        )}
                       </label>
-                      <input
-                        type="number"
-                        min="1"
-                        step="any"
-                        value={currentQty}
-                        onChange={(e) => setCurrentQty(Number(e.target.value))}
-                        className="w-full p-sm rounded-lg border border-outline-variant bg-surface-container-lowest text-sm font-data-tabular text-center outline-none focus:border-primary"
-                      />
+
+                      <div className="relative">
+                        <input
+                          type="text"
+                          value={cercaArticle}
+                          onFocus={() => setIsArticleDropdownOpen(true)}
+                          onChange={(e) => {
+                            setCercaArticle(e.target.value);
+                            setSelectedArticle(null);
+                            setCurrentArticle("");
+                            setIsArticleDropdownOpen(true);
+                          }}
+                          placeholder="Comença a escriure nom, codi o referència..."
+                          className="w-full pl-8 pr-7 py-2 rounded-lg border border-outline-variant bg-surface-container-lowest text-xs text-on-surface outline-none focus:border-primary font-medium"
+                        />
+                        <Search className="w-3.5 h-3.5 text-on-surface-variant absolute left-2.5 top-2.5 pointer-events-none" />
+                        {cercaArticle && (
+                          <button
+                            type="button"
+                            onClick={handleClearArticle}
+                            className="absolute right-2 top-2 text-on-surface-variant hover:text-primary cursor-pointer p-0.5"
+                          >
+                            <X className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </div>
+
+                      {/* Dropdown d'autocompletat */}
+                      {isArticleDropdownOpen && (
+                        <div className="absolute top-full left-0 right-0 mt-1 z-30 bg-surface-container-lowest border border-outline-variant/60 rounded-xl shadow-xl overflow-hidden max-h-56 overflow-y-auto">
+                          {filteredArticles.length > 0 ? (
+                            filteredArticles.map((art) => (
+                              <button
+                                key={art.id}
+                                type="button"
+                                onClick={() => handleSelectArticle(art)}
+                                className="w-full text-left px-3 py-2 text-xs hover:bg-surface-container border-b border-surface-container-high last:border-b-0 flex items-center justify-between gap-2 transition-colors cursor-pointer"
+                              >
+                                <div className="min-w-0 flex-1">
+                                  <div className="flex items-center gap-1.5 flex-wrap">
+                                    <span className="font-mono text-[11px] font-bold text-primary">
+                                      [{art.referencia_inventari}]
+                                    </span>
+                                    <span className="font-medium text-on-surface truncate">
+                                      {art.nom}
+                                    </span>
+                                  </div>
+                                  {art.familia && (
+                                    <span className="inline-block mt-0.5 text-[9px] px-1.5 py-0.2 rounded bg-surface-container-high text-on-surface-variant font-mono">
+                                      {art.familia}
+                                    </span>
+                                  )}
+                                </div>
+                                <div className="text-right shrink-0">
+                                  <span
+                                    className={`font-mono text-[11px] font-bold ${
+                                      (art.estoc_real ?? 0) <= 0
+                                        ? "text-error"
+                                        : "text-secondary"
+                                    }`}
+                                  >
+                                    {art.estoc_real ?? 0} {art.unitat_mesura}
+                                  </span>
+                                </div>
+                              </button>
+                            ))
+                          ) : (
+                            <div className="p-3 text-center text-xs text-on-surface-variant">
+                              Cap material coincideix amb la cerca.
+                            </div>
+                          )}
+                        </div>
+                      )}
                     </div>
-                    <button
-                      type="button"
-                      onClick={addLiniaPicking}
-                      disabled={!currentArticle || currentQty <= 0}
-                      className="px-md py-sm rounded-lg bg-primary hover:bg-primary-container disabled:opacity-50 text-on-primary text-xs font-body-strong transition-colors flex items-center gap-1 h-[38px]"
-                    >
-                      <Plus className="w-4 h-4" /> Afegir Material
-                    </button>
                   </div>
 
-                  {liniesPicking.length > 0 && (
+                  {/* Fila 2: Detalls de l'article seleccionat i botó d'afegir */}
+                  {selectedArticle && (
+                    <div className="pt-2 border-t border-outline-variant/30 flex flex-wrap items-end gap-sm animate-in fade-in duration-100">
+                      <div className="flex-1 min-w-[200px] p-2 rounded-lg bg-primary/5 border border-primary/20 flex items-center justify-between">
+                        <div className="min-w-0">
+                          <p className="text-[10px] text-on-surface-variant font-mono">
+                            Article seleccionat:
+                          </p>
+                          <p className="text-xs font-bold text-primary truncate">
+                            [{selectedArticle.referencia_inventari}] {selectedArticle.nom}
+                          </p>
+                        </div>
+                        <span className="shrink-0 text-xs font-mono font-bold text-secondary ml-2">
+                          {selectedArticle.estoc_real ?? 0} {selectedArticle.unitat_mesura} disp.
+                        </span>
+                      </div>
+
+                      <div className="w-28 space-y-xs">
+                        <label className="font-label-caps text-on-surface-variant uppercase text-[10px]">
+                          Quantitat ({selectedArticle.unitat_mesura})
+                        </label>
+                        <input
+                          type="number"
+                          min="0.001"
+                          step="any"
+                          value={currentQty}
+                          onChange={(e) => setCurrentQty(parseFloat(e.target.value) || 0)}
+                          className="w-full p-sm rounded-lg border border-outline-variant bg-surface-container-lowest text-xs font-data-tabular text-center outline-none focus:border-primary font-bold"
+                        />
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={addLiniaPicking}
+                        disabled={currentQty <= 0}
+                        className="px-md py-sm rounded-lg bg-primary hover:bg-primary-container disabled:opacity-50 text-on-primary text-xs font-body-strong transition-colors flex items-center gap-1 h-[36px] cursor-pointer"
+                      >
+                        <Plus className="w-4 h-4" /> Afegir a la Fulla
+                      </button>
+                    </div>
+                  )}
+
+                  {/* Taula de materials afegits a la fulla de picking */}
+                  {liniesPicking.length > 0 ? (
                     <div className="pt-sm border-t border-outline-variant/30">
-                      <h4 className="font-label-caps text-on-surface-variant uppercase mb-xs">
-                        Fulla de Picking (Per preparar):
+                      <h4 className="font-label-caps text-on-surface-variant uppercase mb-xs flex items-center justify-between">
+                        <span>Fulla de Picking ({liniesPicking.length} articles):</span>
                       </h4>
                       <ul className="space-y-xs">
                         {liniesPicking.map((linia, idx) => {
@@ -459,20 +703,23 @@ export function CrearOTModal({ onClose, onSuccess }: CrearOTModalProps) {
                               key={idx}
                               className="flex items-center justify-between bg-surface-container-lowest p-sm rounded-lg border border-outline-variant/30"
                             >
-                              <span className="font-body-strong text-on-surface text-xs">
-                                {articleDef?.nom}{" "}
-                                <span className="text-on-surface-variant font-normal">
-                                  ({articleDef?.referencia_inventari})
+                              <div className="min-w-0 flex-1">
+                                <span className="font-body-strong text-primary text-xs block truncate">
+                                  {articleDef?.nom || "Article"}{" "}
+                                  <span className="text-on-surface-variant font-mono font-normal">
+                                    ({articleDef?.referencia_inventari || linia.article_id})
+                                  </span>
                                 </span>
-                              </span>
-                              <div className="flex items-center gap-md">
-                                <span className="font-data-tabular font-bold text-primary text-xs">
-                                  {linia.quantitat} {articleDef?.unitat_mesura}
+                              </div>
+                              <div className="flex items-center gap-md shrink-0">
+                                <span className="font-data-tabular font-bold text-secondary text-xs">
+                                  {linia.quantitat} {articleDef?.unitat_mesura || "uts"}
                                 </span>
                                 <button
                                   type="button"
                                   onClick={() => removeLiniaPicking(idx)}
                                   className="text-error hover:bg-error-container/30 p-1 rounded transition-colors"
+                                  title="Eliminar de la fulla de picking"
                                 >
                                   <Trash2 className="w-3.5 h-3.5" />
                                 </button>
@@ -482,46 +729,121 @@ export function CrearOTModal({ onClose, onSuccess }: CrearOTModalProps) {
                         })}
                       </ul>
                     </div>
+                  ) : (
+                    <div className="p-3 text-center text-xs text-on-surface-variant border border-dashed border-outline-variant/50 rounded-lg">
+                      Cap material reservat a la fulla de picking d&apos;aquesta intervenció.
+                    </div>
                   )}
                 </div>
 
-                {/* Sub-secció Eines en Custòdia */}
+                {/* Sub-secció Eines en Custòdia amb Autocompletat */}
                 <div className="bg-surface-container-low p-md rounded-xl border border-outline-variant/40 space-y-md">
+                  <div className="flex items-center gap-2 border-b border-outline-variant/20 pb-2">
+                    <Wrench className="w-4 h-4 text-primary" />
+                    <h4 className="font-body-strong text-primary text-xs uppercase tracking-wider">
+                      Assignació d&apos;Eines i Maquinària en Custòdia
+                    </h4>
+                  </div>
+
                   <div className="flex items-end gap-sm flex-wrap">
-                    <div className="flex-1 min-w-[220px] space-y-xs">
-                      <label className="font-label-caps text-on-surface-variant uppercase flex items-center gap-1">
-                        <Wrench className="w-3.5 h-3.5" /> Eina o Maquinària en Custòdia
+                    {/* Cerca Autocompletable d'Eines */}
+                    <div className="flex-1 min-w-[260px] space-y-xs relative" ref={einaComboboxRef}>
+                      <label className="font-label-caps text-on-surface-variant uppercase flex items-center justify-between text-[11px]">
+                        <span className="flex items-center gap-1">
+                          <Search className="w-3.5 h-3.5 text-primary" /> Cerca Eina / Equip (Escriu per filtrar)
+                        </span>
+                        {selectedEina && (
+                          <span className="text-[10px] font-mono font-bold text-secondary">
+                            SN: {selectedEina.numero_serie}
+                          </span>
+                        )}
                       </label>
-                      <select
-                        value={currentEina}
-                        onChange={(e) => setCurrentEina(e.target.value)}
-                        className="w-full p-sm rounded-lg border border-outline-variant bg-surface-container-lowest text-sm outline-none focus:border-primary"
-                      >
-                        <option value="">Selecciona eina disponible...</option>
-                        {eines
-                          .filter((e) => !selectedEinaIds.includes(e.id))
-                          .map((e) => (
-                            <option key={e.id} value={e.id}>
-                              {e.nom} {e.model ? `(${e.model})` : ""} - SN: {e.numero_serie} [
-                              {e.estat}]
-                            </option>
-                          ))}
-                      </select>
+                      <div className="relative">
+                        <input
+                          type="text"
+                          value={cercaEina}
+                          onFocus={() => setIsEinaDropdownOpen(true)}
+                          onChange={(e) => {
+                            setCercaEina(e.target.value);
+                            setSelectedEina(null);
+                            setCurrentEina("");
+                            setIsEinaDropdownOpen(true);
+                          }}
+                          placeholder="Comença a escriure nom, model o núm. sèrie..."
+                          className="w-full pl-8 pr-7 py-2 rounded-lg border border-outline-variant bg-surface-container-lowest text-xs text-on-surface outline-none focus:border-primary font-medium"
+                        />
+                        <Search className="w-3.5 h-3.5 text-on-surface-variant absolute left-2.5 top-2.5 pointer-events-none" />
+                        {cercaEina && (
+                          <button
+                            type="button"
+                            onClick={handleClearEina}
+                            className="absolute right-2 top-2 text-on-surface-variant hover:text-primary cursor-pointer p-0.5"
+                          >
+                            <X className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </div>
+
+                      {/* Dropdown autocompletat d'eines */}
+                      {isEinaDropdownOpen && (
+                        <div className="absolute top-full left-0 right-0 mt-1 z-30 bg-surface-container-lowest border border-outline-variant/60 rounded-xl shadow-xl overflow-hidden max-h-56 overflow-y-auto">
+                          {filteredEines.length > 0 ? (
+                            filteredEines.map((eina) => (
+                              <button
+                                key={eina.id}
+                                type="button"
+                                onClick={() => handleSelectEina(eina)}
+                                className="w-full text-left px-3 py-2 text-xs hover:bg-surface-container border-b border-surface-container-high last:border-b-0 flex items-center justify-between gap-2 transition-colors cursor-pointer"
+                              >
+                                <div className="min-w-0 flex-1">
+                                  <div className="flex items-center gap-1.5 flex-wrap">
+                                    <span className="font-bold text-primary">
+                                      {eina.nom}
+                                    </span>
+                                    {eina.model && (
+                                      <span className="text-[10px] text-on-surface-variant">
+                                        ({eina.model})
+                                      </span>
+                                    )}
+                                  </div>
+                                  <span className="inline-block mt-0.5 text-[9px] text-on-surface-variant font-mono">
+                                    SN: {eina.numero_serie}
+                                  </span>
+                                </div>
+                                <span
+                                  className={`text-[9px] font-mono font-bold px-2 py-0.5 rounded-full shrink-0 ${
+                                    eina.estat === "DISPONIBLE"
+                                      ? "bg-secondary-container/20 text-on-secondary-container"
+                                      : "bg-surface-container-high text-on-surface-variant"
+                                  }`}
+                                >
+                                  {eina.estat}
+                                </span>
+                              </button>
+                            ))
+                          ) : (
+                            <div className="p-3 text-center text-xs text-on-surface-variant">
+                              Cap eina disponible coincideix amb la cerca.
+                            </div>
+                          )}
+                        </div>
+                      )}
                     </div>
+
                     <button
                       type="button"
                       onClick={addEina}
-                      disabled={!currentEina}
-                      className="px-md py-sm rounded-lg bg-primary hover:bg-primary-container disabled:opacity-50 text-on-primary text-xs font-body-strong transition-colors flex items-center gap-1 h-[38px]"
+                      disabled={!selectedEina && !currentEina}
+                      className="px-md py-sm rounded-lg bg-primary hover:bg-primary-container disabled:opacity-50 text-on-primary text-xs font-body-strong transition-colors flex items-center gap-1 h-[36px] cursor-pointer shrink-0"
                     >
                       <Plus className="w-4 h-4" /> Vincular Eina
                     </button>
                   </div>
 
-                  {selectedEinaIds.length > 0 && (
+                  {selectedEinaIds.length > 0 ? (
                     <div className="pt-sm border-t border-outline-variant/30">
                       <h4 className="font-label-caps text-on-surface-variant uppercase mb-xs">
-                        Eines assignades a la intervenció:
+                        Eines assignades a la intervenció ({selectedEinaIds.length}):
                       </h4>
                       <ul className="space-y-xs">
                         {selectedEinaIds.map((einaId) => {
@@ -533,10 +855,10 @@ export function CrearOTModal({ onClose, onSuccess }: CrearOTModalProps) {
                             >
                               <div className="flex items-center gap-sm">
                                 <Wrench className="w-3.5 h-3.5 text-secondary" />
-                                <span className="font-body-strong text-on-surface text-xs">
+                                <span className="font-body-strong text-primary text-xs">
                                   {einaDef?.nom || "Eina"}{" "}
-                                  <span className="text-on-surface-variant font-normal">
-                                    (SN: {einaDef?.numero_serie})
+                                  <span className="text-on-surface-variant font-normal font-mono">
+                                    (SN: {einaDef?.numero_serie || "S/N"})
                                   </span>
                                 </span>
                               </div>
@@ -544,6 +866,7 @@ export function CrearOTModal({ onClose, onSuccess }: CrearOTModalProps) {
                                 type="button"
                                 onClick={() => removeEina(einaId)}
                                 className="text-error hover:bg-error-container/30 p-1 rounded transition-colors"
+                                title="Desvincular eina"
                               >
                                 <Trash2 className="w-3.5 h-3.5" />
                               </button>
@@ -551,6 +874,10 @@ export function CrearOTModal({ onClose, onSuccess }: CrearOTModalProps) {
                           );
                         })}
                       </ul>
+                    </div>
+                  ) : (
+                    <div className="p-3 text-center text-xs text-on-surface-variant border border-dashed border-outline-variant/50 rounded-lg">
+                      Cap eina en custòdia assignada a aquesta ordre.
                     </div>
                   )}
                 </div>
