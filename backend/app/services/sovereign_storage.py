@@ -113,7 +113,9 @@ class SovereignStorageGateway:
         if not emp:
             raise HTTPException(status_code=404, detail="Empresa no trobada.")
 
-        raw_disc = (getattr(emp, "disc_dur_url", None) or "").strip()
+        raw_disc = (
+            getattr(emp, "disc_dur_url", None) or getattr(emp, "node_ia_url", None) or ""
+        ).strip()
 
         # Si el camp està buit en entorn de test o desenvolupament local, o si és Sevalormante:
         if not raw_disc or raw_disc.startswith("Carpeta Local:"):

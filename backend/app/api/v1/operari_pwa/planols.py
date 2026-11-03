@@ -10,8 +10,9 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db_with_tenant_context
+from app.core.network_utils import resolve_effective_node_url
 from app.core.security import require_roles
-from app.models.models import CapaAnotacio, CapaVectorial, PlanolBase
+from app.models.models import CapaAnotacio, CapaVectorial, Empresa, PlanolBase
 from app.services.sovereign_storage import SovereignStorageGateway
 
 router = APIRouter(
@@ -272,14 +273,18 @@ async def consultar_planol_arxiu_extern_empresa(
     cerca: str | None = None,
     db: AsyncSession = Depends(get_db_with_tenant_context),
 ) -> Any:
-    """Consulta un plànol o document tècnic extra al disc dur del client (sobirania total).
+    """Consulta un plànol o document tècnic extra al disc dur o ordinador local de l'empresa.
 
-    El servidor central de Sevalor actua com a passarel·la sense emmagatzematge permanent.
+    El servidor central de Sevalor només emmagatzema les feines actives del dia. Si l'ordinador central
+    de l'empresa (node_ia_url o disc_dur_url) està apagat o desconnectat, retorna HTTP 503 amb codi NODE_EMPRESA_OFFLINE.
     """
     ref_query = (referencia or cerca or "general").strip()
     empresa_id = request.state.empresa_id
     if not empresa_id or empresa_id == "undefined":
         raise HTTPException(status_code=401, detail="Context d'empresa no trobat")
+
+    emp_res = await db.execute(select(Empresa).where(Empresa.id == uuid.UUID(empresa_id)))
+    emp = emp_res.scalars().first()
 
     msg_offline = (
         "L'ordinador central de la teva empresa està apagat o desconnectat. "
@@ -287,35 +292,67 @@ async def consultar_planol_arxiu_extern_empresa(
         "Avisa a administració perquè encenguin l'equip central."
     )
 
-    try:
-        mode, base_target, secret = await SovereignStorageGateway.resoldre_desti_disc_empresa(
-            db, empresa_id
+    if not emp or not emp.node_ia_actiu or not (emp.node_ia_url or emp.disc_dur_url):
+        return JSONResponse(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            content={
+                "code": "NODE_EMPRESA_OFFLINE",
+                "detail": {
+                    "code": "NODE_EMPRESA_OFFLINE",
+                    "message": msg_offline,
+                },
+            },
         )
-        if mode == "LOCAL_FS":
-            import glob
 
-            candidats = glob.glob(f"{base_target}/**/{ref_query}*", recursive=True)
-            if candidats:
-                f = candidats[0]
-                return {
-                    "status": "ok",
-                    "fitxer": os.path.basename(f),
-                    "ruta": f,
-                    "mode": "LOCAL_FS",
-                }
+    remote_url = emp.node_ia_url or emp.disc_dur_url
+    if remote_url and (remote_url.startswith("http://") or remote_url.startswith("https://")):
+        raw_url = remote_url.rstrip("/")
+        effective_url = resolve_effective_node_url(raw_url) or raw_url
+        base_url = effective_url.rstrip("/")
+        try:
+            async with httpx.AsyncClient(timeout=2.0) as client:
+                for cand in [
+                    f"{base_url}/docs/planols/{ref_query}",
+                    f"{base_url}/fitxers/05_planols_i_enginyeria/{ref_query}",
+                ]:
+                    resp = await client.get(cand)
+                    if resp.status_code == 200:
+                        return resp.json()
+        except Exception:
+            pass
+
+        return JSONResponse(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            content={
+                "code": "NODE_EMPRESA_OFFLINE",
+                "detail": {
+                    "code": "NODE_EMPRESA_OFFLINE",
+                    "message": msg_offline,
+                },
+            },
+        )
+
+    # Si té disc local físic muntat (/media/..., /mnt/...)
+    disc_local = emp.disc_dur_url
+    if disc_local and (
+        disc_local.startswith("/") or (len(disc_local) > 2 and disc_local[1] == ":")
+    ):
+        import glob
+
+        candidats = glob.glob(f"{disc_local}/**/{ref_query}*", recursive=True)
+        if candidats:
+            f = candidats[0]
             return {
                 "status": "ok",
-                "items": os.listdir(base_target)[:10] if os.path.exists(base_target) else [],
+                "fitxer": os.path.basename(f),
+                "ruta": f,
                 "mode": "LOCAL_FS",
             }
-        elif mode == "HTTP_VAULT":
-            url = f"{base_target}/fitxers/05_planols_i_enginyeria/{ref_query}"
-            async with httpx.AsyncClient(timeout=3.0) as client:
-                resp = await client.get(url, headers={"X-Vault-Token": secret or ""})
-                if resp.status_code == 200:
-                    return resp.json()
-    except Exception:
-        pass
+        return {
+            "status": "ok",
+            "items": os.listdir(disc_local)[:10] if os.path.exists(disc_local) else [],
+            "mode": "LOCAL_FS",
+        }
 
     return JSONResponse(
         status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
