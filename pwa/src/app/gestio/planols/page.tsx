@@ -133,6 +133,7 @@ export default function GestioPlanolsPage() {
   const [isPanning, setIsPanning] = useState(false);
   const [panStart, setPanStart] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const [draggedItem, setDraggedItem] = useState<DraggedItem | null>(null);
+  const draggedItemRef = useRef<DraggedItem | null>(null);
   const [justDragged, setJustDragged] = useState(false);
   const innerCanvasRef = useRef<HTMLDivElement>(null);
 
@@ -221,6 +222,7 @@ export default function GestioPlanolsPage() {
     setPuntsLiniaEnCurs([]);
     setZoom(1);
     setPan({ x: 0, y: 0 });
+    draggedItemRef.current = null;
     setDraggedItem(null);
     setIsPanning(false);
   }, [planolSeleccionat?.id]);
@@ -356,10 +358,13 @@ export default function GestioPlanolsPage() {
       return;
     }
 
+    // Cancel·lar qualsevol desplaçament de càmera actiu
+    setIsPanning(false);
+
     // Activar aquesta capa
     setCapaActivaId(capaId);
 
-    setDraggedItem({
+    const newItem: DraggedItem = {
       capaId,
       featureIndex,
       type,
@@ -369,14 +374,18 @@ export default function GestioPlanolsPage() {
       currentX: initX,
       currentY: initY,
       hasMoved: false,
-    });
+    };
+    draggedItemRef.current = newItem;
+    setDraggedItem(newItem);
   };
 
   useEffect(() => {
-    if (!draggedItem && !isPanning) return;
+    const isDragging = !!draggedItem;
+    if (!isDragging && !isPanning) return;
 
     const handleMouseMove = (e: MouseEvent) => {
-      if (draggedItem) {
+      const activeDrag = draggedItemRef.current;
+      if (activeDrag) {
         if (!innerCanvasRef.current) return;
         const rect = innerCanvasRef.current.getBoundingClientRect();
         const rawX = ((e.clientX - rect.left) / rect.width) * 100;
@@ -384,45 +393,40 @@ export default function GestioPlanolsPage() {
         const clampedX = Math.round(Math.max(0, Math.min(100, rawX)) * 10) / 10;
         const clampedY = Math.round(Math.max(0, Math.min(100, rawY)) * 10) / 10;
 
-        setDraggedItem((prev) =>
-          prev
-            ? {
-                ...prev,
-                currentX: clampedX,
-                currentY: clampedY,
-                hasMoved: true,
-              }
-            : null
-        );
+        activeDrag.currentX = clampedX;
+        activeDrag.currentY = clampedY;
+        activeDrag.hasMoved = true;
+
+        setDraggedItem({ ...activeDrag });
 
         // Actualització optimista en temps real
         setCapes((prevCapes) =>
           prevCapes.map((c) => {
-            if (c.id !== draggedItem.capaId) return c;
+            if (c.id !== activeDrag.capaId) return c;
             const feats = [...(c.geometries_geojson?.features || [])];
-            const targetFeat = feats[draggedItem.featureIndex];
+            const targetFeat = feats[activeDrag.featureIndex];
             if (!targetFeat) return c;
 
             const updatedFeat = { ...targetFeat };
-            if (draggedItem.type === "point") {
+            if (activeDrag.type === "point") {
               updatedFeat.geometry = {
                 ...updatedFeat.geometry,
                 type: "Point",
                 coordinates: [clampedX, clampedY],
               };
             } else if (
-              draggedItem.type === "vertex" &&
-              typeof draggedItem.vertexIndex === "number"
+              activeDrag.type === "vertex" &&
+              typeof activeDrag.vertexIndex === "number"
             ) {
-              const coords = [...(updatedFeat.geometry.coordinates || [])];
-              coords[draggedItem.vertexIndex] = [clampedX, clampedY];
+              const coords = [...(updatedFeat.geometry?.coordinates || [])];
+              coords[activeDrag.vertexIndex] = [clampedX, clampedY];
               updatedFeat.geometry = {
                 ...updatedFeat.geometry,
                 type: "LineString",
                 coordinates: coords,
               };
             }
-            feats[draggedItem.featureIndex] = updatedFeat;
+            feats[activeDrag.featureIndex] = updatedFeat;
             return {
               ...c,
               geometries_geojson: {
@@ -441,23 +445,25 @@ export default function GestioPlanolsPage() {
     };
 
     const handleMouseUp = () => {
-      if (draggedItem) {
-        if (draggedItem.hasMoved) {
+      const activeDrag = draggedItemRef.current;
+      if (activeDrag) {
+        if (activeDrag.hasMoved) {
           setJustDragged(true);
           setTimeout(() => setJustDragged(false), 200);
 
           setCapes((currentCapes) => {
-            const updatedCapa = currentCapes.find((c) => c.id === draggedItem.capaId);
+            const updatedCapa = currentCapes.find((c) => c.id === activeDrag.capaId);
             if (updatedCapa) {
               desarCanvisCapa(updatedCapa);
               setMissatgeExit(
-                `Element mogut a [X: ${draggedItem.currentX}%, Y: ${draggedItem.currentY}%]`
+                `${activeDrag.type === "vertex" ? "Vèrtex de traçat" : "Element"} mogut a [X: ${activeDrag.currentX}%, Y: ${activeDrag.currentY}%]`
               );
               setTimeout(() => setMissatgeExit(null), 3000);
             }
             return currentCapes;
           });
         }
+        draggedItemRef.current = null;
         setDraggedItem(null);
       }
       if (isPanning) {
@@ -474,7 +480,7 @@ export default function GestioPlanolsPage() {
       window.removeEventListener("mousemove", handleMouseMove);
       window.removeEventListener("mouseup", handleMouseUp);
     };
-  }, [draggedItem, isPanning, panStart]);
+  }, [draggedItem !== null, isPanning, panStart]);
 
   const handleZoomIn = () => {
     setZoom((z) => Math.min(3.5, Math.round((z + 0.25) * 100) / 100));
@@ -1317,7 +1323,7 @@ export default function GestioPlanolsPage() {
                     ref={canvasRef}
                     onWheel={handleWheel}
                     onMouseDown={(e) => {
-                      if (einaDibuix === "punter" && e.button === 0 && !draggedItem) {
+                      if (einaDibuix === "punter" && e.button === 0 && !draggedItemRef.current) {
                         setIsPanning(true);
                         setPanStart({ x: e.clientX - pan.x, y: e.clientY - pan.y });
                       }
@@ -1487,7 +1493,7 @@ export default function GestioPlanolsPage() {
                                           strokeLinecap="round"
                                           strokeLinejoin="round"
                                         />
-                                        {feat.geometry.coordinates.map(
+                                        {(feat.geometry.coordinates || []).map(
                                           (c: number[], cIdx: number) => {
                                             const isVertexDragged =
                                               draggedItem?.capaId === capa.id &&
@@ -1496,33 +1502,66 @@ export default function GestioPlanolsPage() {
                                               draggedItem?.vertexIndex === cIdx;
 
                                             return (
-                                              <circle
-                                                key={cIdx}
-                                                cx={c[0]}
-                                                cy={c[1]}
-                                                r={isVertexDragged ? 2.0 : 1.0}
-                                                fill={isVertexDragged ? "#38bdf8" : "#ffffff"}
-                                                stroke={capa.color_hex}
-                                                strokeWidth={isVertexDragged ? 0.8 : 0.4}
-                                                onMouseDown={(e) => {
-                                                  if (einaDibuix === "punter") {
-                                                    startDrag(
-                                                      e,
-                                                      capa.id,
-                                                      fIdx,
-                                                      "vertex",
-                                                      c[0],
-                                                      c[1],
-                                                      cIdx
-                                                    );
+                                              <g key={`feat-line-${fIdx}-v-${cIdx}`}>
+                                                {/* Anell d'arrossegament actiu en temps real */}
+                                                {isVertexDragged && (
+                                                  <circle
+                                                    cx={c[0]}
+                                                    cy={c[1]}
+                                                    r={3.8}
+                                                    fill="none"
+                                                    stroke="#38bdf8"
+                                                    strokeWidth="0.8"
+                                                    strokeDasharray="1,1"
+                                                    className="pointer-events-none animate-pulse"
+                                                  />
+                                                )}
+
+                                                {/* Cercle visual del vèrtex */}
+                                                <circle
+                                                  cx={c[0]}
+                                                  cy={c[1]}
+                                                  r={isVertexDragged ? 2.4 : 1.4}
+                                                  fill={isVertexDragged ? "#38bdf8" : "#ffffff"}
+                                                  stroke={capa.color_hex}
+                                                  strokeWidth={isVertexDragged ? 0.9 : 0.5}
+                                                  className="pointer-events-none"
+                                                />
+                                                <circle
+                                                  cx={c[0]}
+                                                  cy={c[1]}
+                                                  r={0.5}
+                                                  fill={isVertexDragged ? "#ffffff" : capa.color_hex}
+                                                  className="pointer-events-none"
+                                                />
+
+                                                {/* Àrea d'interacció ampliada (Halo invisible per agafar fàcilment) */}
+                                                <circle
+                                                  cx={c[0]}
+                                                  cy={c[1]}
+                                                  r={3.8}
+                                                  fill="transparent"
+                                                  stroke="transparent"
+                                                  onMouseDown={(e) => {
+                                                    if (einaDibuix === "punter") {
+                                                      startDrag(
+                                                        e,
+                                                        capa.id,
+                                                        fIdx,
+                                                        "vertex",
+                                                        c[0],
+                                                        c[1],
+                                                        cIdx
+                                                      );
+                                                    }
+                                                  }}
+                                                  className={
+                                                    einaDibuix === "punter" && !capa.es_immutable
+                                                      ? "pointer-events-auto cursor-grab active:cursor-grabbing hover:opacity-100"
+                                                      : "pointer-events-none"
                                                   }
-                                                }}
-                                                className={
-                                                  einaDibuix === "punter" && !capa.es_immutable
-                                                    ? "pointer-events-auto cursor-grab hover:scale-150 transition-transform active:cursor-grabbing"
-                                                    : "pointer-events-none"
-                                                }
-                                              />
+                                                />
+                                              </g>
                                             );
                                           }
                                         )}
