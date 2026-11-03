@@ -146,6 +146,27 @@ async def alta_client(
     db.add(nou_client)
     await db.commit()
 
+    try:
+        from app.services.sovereign_storage import SovereignStorageGateway
+
+        await SovereignStorageGateway.desar_entitat_json(
+            db=db,
+            empresa_id=empresa_id,
+            categoria="clients",
+            item_id=nou_client.id,
+            dades={
+                "id": str(nou_client.id),
+                "codi": nou_client.codi,
+                "rao_social": nou_client.rao_social,
+                "nif": nou_client.nif,
+                "telefon": nou_client.telefon,
+                "email": nou_client.email,
+                "adreca_fiscal": nou_client.adreca_fiscal,
+            },
+        )
+    except Exception:
+        pass
+
     return nou_client
 
 

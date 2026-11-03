@@ -28,8 +28,10 @@ from app.models.models import (
     FaqCorporativaRag,
     MemorandumTecnicCopilot,
     OrdreTreball,
+    Usuari,
     Vehicle,
 )
+from app.services.sovereign_storage import SovereignStorageGateway
 from app.services.subagents.dispatcher import copilot_dispatcher
 
 router = APIRouter(
@@ -396,7 +398,6 @@ async def execute_tool_get_vehicle_info(
     return await copilot_dispatcher.subagent_flota.tool_get_vehicle_info(db, empresa_id, matricula)
 
 
-
 async def execute_tool_get_closest_vehicle(
     db: AsyncSession, empresa_id: uuid.UUID, lat: float, lng: float
 ) -> dict:
@@ -638,9 +639,15 @@ async def cridar_lm_studio(
 ) -> Optional[str]:
     """Cridar el node d'IA local dedicat de l'empresa. Zero egress a Hetzner."""
     raw_target = (
-        (empresa.node_ia_url.strip() if (empresa and empresa.node_ia_actiu and getattr(empresa, "feature_copilot_ia", True) and empresa.node_ia_url) else None)
-        or (node_ia_url.strip() if (node_ia_url and node_ia_url.strip()) else None)
-    )
+        empresa.node_ia_url.strip()
+        if (
+            empresa
+            and empresa.node_ia_actiu
+            and getattr(empresa, "feature_copilot_ia", True)
+            and empresa.node_ia_url
+        )
+        else None
+    ) or (node_ia_url.strip() if (node_ia_url and node_ia_url.strip()) else None)
     lm_url = resolve_effective_node_url(raw_target)
     if not lm_url:
         return None
@@ -707,7 +714,12 @@ async def cridar_lm_studio_amb_tools(
     # NORMA CONSTITUCIONAL SUPREMA: La IA només corre si l'empresa té ordinador dedicat.
     res = await db.execute(select(Empresa).where(Empresa.id == empresa_id))
     empresa = res.scalar_one_or_none()
-    if not empresa or not empresa.node_ia_actiu or not empresa.node_ia_url or not empresa.node_ia_url.strip():
+    if (
+        not empresa
+        or not empresa.node_ia_actiu
+        or not empresa.node_ia_url
+        or not empresa.node_ia_url.strip()
+    ):
         logger.info(
             f"Empresa {empresa_id} sense ordinador dedicat actiu. Zero egress a Hetzner (Constitució §2.V)."
         )
@@ -1125,7 +1137,6 @@ class ConsultaXatIn(BaseModel):
     context_id: Optional[str] = None
 
 
-
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
@@ -1381,6 +1392,29 @@ async def peritar_incidencia_multimodal(
     db.add(memo)
     await db.commit()
 
+    # Sincronitzar el memoràndum tècnic al disc dur del client (autoaprenentatge)
+    try:
+        await SovereignStorageGateway.desar_entitat_json(
+            db=db,
+            empresa_id=empresa_id,
+            categoria="copilot_memorandums",
+            item_id=str(memo.id),
+            dades={
+                "id": str(memo.id),
+                "ordre_treball_id": str(memo.ordre_treball_id) if memo.ordre_treball_id else None,
+                "incidencia_id": str(memo.incidencia_id) if memo.incidencia_id else None,
+                "transcripcio_audio": memo.transcripcio_audio,
+                "dictamen_pericial": memo.dictamen_pericial,
+                "motiu_dictamen": memo.motiu_dictamen,
+                "estimacio_temps_extra_minuts": memo.estimacio_temps_extra_minuts,
+                "estimacio_materials_extra": memo.estimacio_materials_extra,
+                "cost_estimat_total": float(memo.cost_estimat_total),
+                "estat": memo.estat,
+            },
+        )
+    except Exception as exc:
+        logger.warning("No s'ha pogut desar el memoràndum al disc del client: %s", exc)
+
     return {
         "id": str(memo.id),
         "estat": memo.estat,
@@ -1406,7 +1440,15 @@ async def validar_memorandum_enginyer(
     """Validació humana de l'Enginyer sobre el Memoràndum Tècnic d'Incidència (RF-10 HITL)."""
     empresa_id = aplicar_tenant_context(claims)
     usuari_id_str = claims.get("sub")
-    validador_id = uuid.UUID(usuari_id_str) if usuari_id_str else None
+    validador_id = None
+    if usuari_id_str:
+        try:
+            cand_uuid = uuid.UUID(usuari_id_str)
+            res_u = await db.execute(select(Usuari.id).where(Usuari.id == cand_uuid))
+            if res_u.scalar_one_or_none():
+                validador_id = cand_uuid
+        except Exception:
+            validador_id = None
 
     q = select(MemorandumTecnicCopilot).where(
         MemorandumTecnicCopilot.id == memo_id,
@@ -1441,6 +1483,28 @@ async def validar_memorandum_enginyer(
     memo.data_validacio = datetime.now(timezone.utc)
 
     await db.commit()
+
+    # Actualitzar l'estat del memoràndum al disc dur del client
+    try:
+        await SovereignStorageGateway.desar_entitat_json(
+            db=db,
+            empresa_id=empresa_id,
+            categoria="copilot_memorandums",
+            item_id=str(memo.id),
+            dades={
+                "id": str(memo.id),
+                "ordre_treball_id": str(memo.ordre_treball_id) if memo.ordre_treball_id else None,
+                "dictamen_pericial": memo.dictamen_pericial,
+                "motiu_dictamen": memo.motiu_dictamen,
+                "cost_estimat_total": float(memo.cost_estimat_total),
+                "estat": memo.estat,
+                "validat_per_enginyer": memo.validat_per_enginyer,
+                "observacions_enginyer": memo.observacions_enginyer,
+                "enginyer_validador_id": str(validador_id) if validador_id else None,
+            },
+        )
+    except Exception as exc:
+        logger.warning("No s'ha pogut actualitzar el memoràndum al disc del client: %s", exc)
 
     return {
         "id": str(memo.id),
@@ -1610,6 +1674,29 @@ async def reconciliar_post_obra(
         auditoria.pressupost_corregit_proposta = pressupost_corregit
 
     await db.commit()
+
+    # Sincronitzar l'auditoria post-obra al disc dur del client (autoaprenentatge mermes i preus)
+    try:
+        await SovereignStorageGateway.desar_entitat_json(
+            db=db,
+            empresa_id=empresa_id,
+            categoria="copilot_mermes_preus",
+            item_id=str(auditoria.id),
+            dades={
+                "id": str(auditoria.id),
+                "ordre_treball_id": str(auditoria.ordre_treball_id),
+                "desviacio_hores": float(auditoria.desviacio_hores),
+                "desviacio_materials": auditoria.desviacio_materials,
+                "marge_previst_percentatge": float(auditoria.marge_previst_percentatge),
+                "marge_real_liquidat_percentatge": float(auditoria.marge_real_liquidat_percentatge),
+                "alerta_merma_operativa": auditoria.alerta_merma_operativa,
+                "detall_merma": auditoria.detall_merma,
+                "bloqueig_consum_excessiu": auditoria.bloqueig_consum_excessiu,
+                "estat": auditoria.estat,
+            },
+        )
+    except Exception as exc:
+        logger.warning("No s'ha pogut desar l'auditoria al disc del client: %s", exc)
 
     return {
         "auditoria_id": str(auditoria.id),
@@ -1805,7 +1892,7 @@ async def consultar_xat_tecnic(
 
     usuari_nom = claims.get("nom") or claims.get("email")
 
-    return await copilot_dispatcher.dispatch(
+    resposta = await copilot_dispatcher.dispatch(
         pregunta=dades.pregunta,
         db=db,
         empresa_id=empresa_id,
@@ -1818,6 +1905,28 @@ async def consultar_xat_tecnic(
         agent_prompt_system=empresa.agent_prompt_system if empresa else None,
     )
 
+    # Persistir la conversa/feedback al disc dur del client per a l'autoaprenentatge
+    try:
+        await SovereignStorageGateway.desar_entitat_json(
+            db=db,
+            empresa_id=empresa_id,
+            categoria="copilot_feedback",
+            item_id=str(uuid.uuid4()),
+            dades={
+                "data": datetime.now(timezone.utc).isoformat(),
+                "usuari_id": str(usuari_id) if usuari_id else None,
+                "rol": rol_usuari,
+                "pregunta": dades.pregunta,
+                "resposta": resposta.get("resposta")
+                if isinstance(resposta, dict)
+                else str(resposta),
+                "context_id": dades.context_id,
+            },
+        )
+    except Exception as exc:
+        logger.warning("No s'ha pogut registrar la conversa al disc del client: %s", exc)
+
+    return resposta
 
 
 @router.get("/ia-status")
@@ -1842,9 +1951,7 @@ async def obtenir_estat_ia() -> Dict[str, Any]:
                 return {
                     "estat": "ONLINE",
                     "url": lm_url,
-                    "model_actiu": getattr(
-                        settings, "LM_STUDIO_MODEL", "qwen2.5-vl-7b-instruct"
-                    ),
+                    "model_actiu": getattr(settings, "LM_STUDIO_MODEL", "qwen2.5-vl-7b-instruct"),
                     "models_disponibles": models,
                     "latencia_ms": elapsed_ms,
                 }
@@ -1917,6 +2024,24 @@ async def afegir_document_rag(
     )
     db.add(nou_doc)
     await db.commit()
+
+    # Sincronitzar el protocol/FAQ interna al disc dur del client
+    try:
+        await SovereignStorageGateway.desar_entitat_json(
+            db=db,
+            empresa_id=empresa_id,
+            categoria="protocols_interns",
+            item_id=str(nou_doc.id),
+            dades={
+                "id": str(nou_doc.id),
+                "titol": nou_doc.pregunta,
+                "contingut": nou_doc.resposta,
+                "tags": nou_doc.paraules_clau,
+                "creat_el": datetime.now(timezone.utc).isoformat(),
+            },
+        )
+    except Exception as exc:
+        logger.warning("No s'ha pogut desar el protocol al disc del client: %s", exc)
 
     return {"estat": "OK", "missatge": "Document afegit a la base de coneixement de la IA."}
 

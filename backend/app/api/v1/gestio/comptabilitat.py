@@ -12,6 +12,7 @@ from app.core.db import get_db_with_tenant_context
 from app.core.security import require_financial_access
 from app.models.models import Client, Empresa, FacturaCapcalera
 from app.services.outbox_aeat import registrar_enviament_outbox
+from app.services.sovereign_storage import SovereignStorageGateway
 from app.services.verifactu import generar_factura_pdf
 
 router = APIRouter(
@@ -115,12 +116,11 @@ async def crear_factura(
         - payload.import_retencio
     )
 
-    # Ruta per al PDF (en testing, usar /tmp/docs per evitar permisos)
-    base_docs = "/tmp/docs" if os.getenv("TESTING") == "1" else "/docs"
-    ruta_pdf_dir = f"{base_docs}/{empresa_id}/factures"
-    os.makedirs(ruta_pdf_dir, exist_ok=True)
+    # Ruta temporal per al PDF de generació
+    temp_dir = "/tmp/sevalor_factures_temp"
+    os.makedirs(temp_dir, exist_ok=True)
     nom_pdf = f"FACTURA_{payload.serie}_{payload.numero_factura:05d}_{data_emissio}.pdf"
-    ruta_pdf = os.path.join(ruta_pdf_dir, nom_pdf)
+    ruta_pdf_temp = os.path.join(temp_dir, f"{uuid.uuid4()}_{nom_pdf}")
 
     # Generar PDF Veri*factu (inclou SELECT FOR UPDATE, hash encadenat, QR)
     resultat_pdf = await generar_factura_pdf(
@@ -139,11 +139,51 @@ async def crear_factura(
         quota_iva=payload.quota_iva,
         import_total=import_total,
         data_emissio=data_emissio,
-        ruta_desti=ruta_pdf,
+        ruta_desti=ruta_pdf_temp,
     )
 
     hash_actual = resultat_pdf["hash_sha256"]
     hash_ant = resultat_pdf["hash_anterior"]
+
+    # Enviar PDF directament al disc dur del client (Passarel·la Sobirana)
+    with open(ruta_pdf_temp, "rb") as f:
+        pdf_bytes = f.read()
+
+    ruta_pdf_sobirana = await SovereignStorageGateway.pujar_fitxer_binari(
+        db=db,
+        empresa_id=empresa_id,
+        categoria="factures_pdf",
+        nom_fitxer=nom_pdf,
+        content=pdf_bytes,
+        content_type="application/pdf",
+    )
+
+    # Netejar de la memòria d'Hetzner (Zero-Storage Retention)
+    try:
+        os.remove(ruta_pdf_temp)
+    except OSError:
+        pass
+
+    # Sincronitzar la fitxa JSON de la factura al disc dur del client
+    await SovereignStorageGateway.desar_entitat_json(
+        db=db,
+        empresa_id=empresa_id,
+        categoria="factures_pdf",
+        item_id=f"FACTURA_{payload.serie}_{payload.numero_factura:05d}",
+        dades={
+            "serie": payload.serie,
+            "numero_factura": payload.numero_factura,
+            "client_nom": client_nom,
+            "client_nif": client_nif,
+            "base_imposable": payload.base_imposable,
+            "quota_iva": payload.quota_iva,
+            "liquid_exigible": import_total,
+            "data_emissio": data_emissio,
+            "hash_sha256": hash_actual,
+            "hash_anterior": hash_ant,
+            "pdf_path": ruta_pdf_sobirana,
+        },
+    )
 
     nova_factura = FacturaCapcalera(
         empresa_id=uuid.UUID(empresa_id),
@@ -158,7 +198,7 @@ async def crear_factura(
         data_emissio=data_emissio_dt,
         hash_anterior=hash_ant,
         hash_sha256=hash_actual,
-        pdf_path=ruta_pdf,
+        pdf_path=ruta_pdf_sobirana,
         estat_cobrament="PENDENT",
         estat_enviament="PENDENT",
     )
@@ -173,11 +213,38 @@ async def crear_factura(
         serie=payload.serie,
         numero=payload.numero_factura,
         hash_sha256=hash_actual,
-        ruta_pdf=ruta_pdf,
+        ruta_pdf=ruta_pdf_sobirana,
         db_session=db,
     )
 
     return nova_factura
+
+
+@router.get("/factures/{factura_id}/pdf")
+async def descarregar_factura_pdf(
+    factura_id: uuid.UUID,
+    request: Request,
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+):
+    """Serveix el PDF de la factura des del disc dur del client."""
+    empresa_id = request.state.empresa_id
+    if not empresa_id or empresa_id == "undefined":
+        raise HTTPException(status_code=401)
+
+    stmt = select(FacturaCapcalera).where(
+        FacturaCapcalera.id == factura_id, FacturaCapcalera.empresa_id == uuid.UUID(empresa_id)
+    )
+    factura = (await db.execute(stmt)).scalars().first()
+    if not factura or not factura.pdf_path:
+        raise HTTPException(status_code=404, detail="Factura PDF no trobada")
+
+    return await SovereignStorageGateway.servir_fitxer(
+        db=db,
+        empresa_id=empresa_id,
+        fitxer_path=factura.pdf_path,
+        media_type="application/pdf",
+        disposition="inline",
+    )
 
 
 import xml.etree.ElementTree as ET  # noqa: E402

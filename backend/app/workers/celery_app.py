@@ -49,9 +49,15 @@ celery_app.conf.update(
         "app.workers.tasks.generar_informe_setmanal": {"queue": "queue_documents"},
         "app.workers.tasks.purgar_tokens_expirats": {"queue": "queue_periodic"},
         "app.workers.tasks.revisar_contractes_manteniment": {"queue": "queue_periodic"},
+        "app.workers.tasks.buidar_buffer_diari_cap_a_disc_client": {"queue": "queue_periodic"},
     },
     # ── T047-T050 + T041 + Contractes: Celery Beat Schedules ───────────────────────────────
     beat_schedule={
+        # Purga de Buffers Temporals d'Hetzner cap al Disc del Client (Zero-Storage Guarantee)
+        "buidar-buffer-diari-cap-a-disc-client": {
+            "task": "app.workers.tasks.buidar_buffer_diari_cap_a_disc_client",
+            "schedule": crontab(hour=3, minute=30),
+        },
         # Contractes: Revisar contractes de manteniment i generar OTs - cada dia a les 04:00 UTC
         "revisar-contractes-manteniment-diaria": {
             "task": "app.workers.tasks.revisar_contractes_manteniment",

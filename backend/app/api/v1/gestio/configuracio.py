@@ -22,6 +22,7 @@ from app.core.db import get_db, set_tenant_context
 from app.core.network_utils import resolve_effective_node_url
 from app.core.security import get_current_user_claims
 from app.models.models import Empresa, SlotJornada, Usuari
+from app.services.sovereign_storage import SovereignStorageGateway
 
 router = APIRouter(prefix="/gestio/configuracio", tags=["Configuració & Marca"])
 limiter = Limiter(key_func=get_remote_address, enabled=os.getenv("TESTING") != "1")
@@ -184,10 +185,16 @@ class EmpresaUpdateRequest(BaseModel):
 
 
 class NodeIaConfigRequest(BaseModel):
-    node_ia_url: Optional[str] = Field(None, max_length=255, description="URL de l'ordinador dedicat (ex: http://127.0.0.1:1234)")
-    disc_dur_url: Optional[str] = Field(None, max_length=255, description="URL o ruta del disc dur dedicat d'arxiu històric")
+    node_ia_url: Optional[str] = Field(
+        None, max_length=255, description="URL de l'ordinador dedicat (ex: http://127.0.0.1:1234)"
+    )
+    disc_dur_url: Optional[str] = Field(
+        None, max_length=255, description="URL o ruta del disc dur dedicat d'arxiu històric"
+    )
     node_ia_actiu: bool = Field(False, description="Activa o desactiva l'ordinador dedicat local")
-    agent_prompt_system: Optional[str] = Field(None, description="Directrius específiques del negoci per a l'assistent")
+    agent_prompt_system: Optional[str] = Field(
+        None, description="Directrius específiques del negoci per a l'assistent"
+    )
 
 
 class MarcaUpdateRequest(BaseModel):
@@ -694,9 +701,7 @@ async def crear_usuari_administratiu(
     current_role = res_role.scalar()
     await db.execute(text("RESET ROLE;"))
     try:
-        res_email = await db.execute(
-            select(Usuari).where(func.lower(Usuari.email) == email_clean)
-        )
+        res_email = await db.execute(select(Usuari).where(func.lower(Usuari.email) == email_clean))
         usuari_existent_email = res_email.scalars().first()
     finally:
         if current_role:
@@ -894,9 +899,9 @@ async def restablir_contrasenya_usuari(
         raise HTTPException(status_code=404, detail="Usuari no trobat")
 
     nova_contrasenya = generar_contrasenya_forta(12)
-    usuari.password_hash = bcrypt.hashpw(
-        nova_contrasenya.encode("utf-8"), bcrypt.gensalt()
-    ).decode("utf-8")
+    usuari.password_hash = bcrypt.hashpw(nova_contrasenya.encode("utf-8"), bcrypt.gensalt()).decode(
+        "utf-8"
+    )
     if not usuari.secret_2fa:
         usuari.secret_2fa = generar_secret_totp_base32()
 
@@ -1255,7 +1260,10 @@ async def obtenir_configuracio_node_ia(
         "node_ia_actiu": empresa.node_ia_actiu,
         "agent_prompt_system": empresa.agent_prompt_system,
         "vertical": empresa.vertical,
-        "te_ordinador_dedicat": bool((empresa.node_ia_url or getattr(empresa, "disc_dur_url", None)) and empresa.node_ia_actiu),
+        "te_ordinador_dedicat": bool(
+            (empresa.node_ia_url or getattr(empresa, "disc_dur_url", None))
+            and empresa.node_ia_actiu
+        ),
     }
 
 
@@ -1283,6 +1291,18 @@ async def actualitzar_configuracio_node_ia(
     empresa.node_ia_actiu = payload.node_ia_actiu
     if payload.agent_prompt_system is not None:
         empresa.agent_prompt_system = payload.agent_prompt_system.strip()
+        # Persistir el prompt de sistema al disc dur dedicat de l'empresa
+        try:
+            await SovereignStorageGateway.pujar_fitxer_binari(
+                db=db,
+                empresa_id=empresa.id,
+                categoria="copilot_prompt",
+                nom_fitxer="system_prompt.txt",
+                content=empresa.agent_prompt_system.encode("utf-8"),
+                content_type="text/plain; charset=utf-8",
+            )
+        except Exception:
+            pass
 
     await db.commit()
 
@@ -1327,7 +1347,9 @@ async def provar_connexio_node_ia(
             latencia_ms = int((time_lib.time() - start_time) * 1000)
             if resp.status_code == 200:
                 data = resp.json()
-                models_list = [m.get("id") for m in data.get("data", [])] if isinstance(data, dict) else []
+                models_list = (
+                    [m.get("id") for m in data.get("data", [])] if isinstance(data, dict) else []
+                )
                 return {
                     "estat": "OPERATIU",
                     "latencia_ms": latencia_ms,

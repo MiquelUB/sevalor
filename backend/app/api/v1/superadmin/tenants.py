@@ -36,6 +36,7 @@ from app.models.models import (
     Usuari,
 )
 from app.services.easypanel_service import EasypanelService
+from app.services.sovereign_storage import inicialitzar_arbre_carpetes_disc
 
 logger = logging.getLogger("superadmin.tenants")
 
@@ -497,7 +498,9 @@ async def verificar_node_ia(
                         }
                     else:
                         last_error_motiu = "HTTP_ERROR"
-                        last_error_msg = f"El servei ha respost amb codi d'error HTTP {resp.status_code}."
+                        last_error_msg = (
+                            f"El servei ha respost amb codi d'error HTTP {resp.status_code}."
+                        )
                 except (httpx.ConnectTimeout, httpx.ReadTimeout):
                     last_error_motiu = "TIMEOUT"
                     last_error_msg = (
@@ -544,26 +547,28 @@ async def verificar_disc_dur(
     # Suport per a ruta local física al disc dur (ex. /media/..., /mnt/..., /data/...)
     if raw_url.startswith("/") or (len(raw_url) > 2 and raw_url[1] == ":"):
         t0 = time.perf_counter()
-        if os.path.exists(raw_url) and os.path.isdir(raw_url):
-            fitxers = 0
-            try:
-                for _r, _d, files in os.walk(raw_url):
-                    fitxers += len(files)
-                    if fitxers > 500:
-                        break
-            except OSError:
-                pass
-            lat = int((time.perf_counter() - t0) * 1000)
-            return {
-                "status": "OK",
-                "motiu": "DISC_OPERATIU",
-                "missatge": f"Carpeta de disc dur verificada ({fitxers} fitxers accessibles, {lat} ms).",
-                "endpoint_resolt": raw_url,
-                "tipus_resposta": "Carpeta de Disc Dur Dedicat",
-                "codi_http": 200,
-                "latencia_ms": lat,
-                "url_efectiva": raw_url,
-            }
+        os.makedirs(raw_url, exist_ok=True)
+        creades = inicialitzar_arbre_carpetes_disc(raw_url)
+        fitxers = 0
+        try:
+            for _r, _d, files in os.walk(raw_url):
+                fitxers += len(files)
+                if fitxers > 500:
+                    break
+        except OSError:
+            pass
+        lat = int((time.perf_counter() - t0) * 1000)
+        return {
+            "status": "OK",
+            "motiu": "DISC_OPERATIU",
+            "missatge": f"Disc dur del client operatiu amb estructura sobirana inicialitzada ({len(creades)} carpetes, {lat} ms).",
+            "endpoint_resolt": raw_url,
+            "tipus_resposta": "Carpeta de Disc Dur Dedicat",
+            "codi_http": 200,
+            "latencia_ms": lat,
+            "url_efectiva": raw_url,
+            "carpetes_creades": len(creades),
+        }
 
     if not (raw_url.startswith("http://") or raw_url.startswith("https://")):
         return {
@@ -952,6 +957,16 @@ async def crear_nou_tenant(
         payload.node_ia_url.strip() if (payload.node_ia_url and copilot_actiu) else None
     )
     disc_dur_url_final = payload.disc_dur_url.strip() if payload.disc_dur_url else None
+    if disc_dur_url_final and (
+        disc_dur_url_final.startswith("/")
+        or (len(disc_dur_url_final) > 2 and disc_dur_url_final[1] == ":")
+    ):
+        try:
+            os.makedirs(disc_dur_url_final, exist_ok=True)
+            inicialitzar_arbre_carpetes_disc(disc_dur_url_final)
+        except OSError:
+            pass
+
     node_ia_actiu_final = bool((node_ia_url_final or disc_dur_url_final) and copilot_actiu)
     agent_prompt_final = (
         payload.agent_prompt_system.strip()
@@ -1754,7 +1769,9 @@ async def _crear_handoff_impersonacio(empresa: Empresa, token: str) -> Optional[
         "token": token,
         "empresa_id": str(empresa.id),
         "empresa_nom": empresa.nom or "",
-        "return_url": f"https://{admin_host}/superadmin/empreses/{empresa.id}" if admin_host else "",
+        "return_url": f"https://{admin_host}/superadmin/empreses/{empresa.id}"
+        if admin_host
+        else "",
     }
     try:
         await client.set(
@@ -1773,7 +1790,9 @@ class SetBossPasswordRequest(BaseModel):
     password: str = Field(..., min_length=8)
 
 
-@router.api_route("/{empresa_id}/activacio-boss", methods=["GET", "POST"], response_model=Dict[str, Any])
+@router.api_route(
+    "/{empresa_id}/activacio-boss", methods=["GET", "POST"], response_model=Dict[str, Any]
+)
 async def regenerar_activacio_boss(
     empresa_id: str,
     db: AsyncSession = Depends(get_db_with_tenant_context),
@@ -1786,14 +1805,18 @@ async def regenerar_activacio_boss(
     emp_uuid = emp.id
 
     boss_res = await db.execute(
-        select(Usuari).where(
+        select(Usuari)
+        .where(
             Usuari.empresa_id == emp_uuid,
             Usuari.rol == "BOSS",
-        ).order_by(Usuari.created_at.asc())
+        )
+        .order_by(Usuari.created_at.asc())
     )
     boss = boss_res.scalars().first()
     if not boss:
-        raise HTTPException(status_code=404, detail="No s'ha trobat cap usuari BOSS per a aquesta empresa")
+        raise HTTPException(
+            status_code=404, detail="No s'ha trobat cap usuari BOSS per a aquesta empresa"
+        )
 
     expire = datetime.now(timezone.utc) + timedelta(hours=24)
     payload_jwt = {
@@ -1802,7 +1825,9 @@ async def regenerar_activacio_boss(
         "exp": expire,
     }
     jwt_token = jwt.encode(payload_jwt, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
-    domini_base = emp.domini_custom or (f"{emp.subdomini}.projectexinoxano.cat" if emp.subdomini else "sevalor.app")
+    domini_base = emp.domini_custom or (
+        f"{emp.subdomini}.projectexinoxano.cat" if emp.subdomini else "sevalor.app"
+    )
     enllac = f"https://{domini_base}/activacio?token={jwt_token}"
 
     return {
@@ -1836,14 +1861,18 @@ async def establir_password_boss(
     emp_uuid = emp.id
 
     boss_res = await db.execute(
-        select(Usuari).where(
+        select(Usuari)
+        .where(
             Usuari.empresa_id == emp_uuid,
             Usuari.rol == "BOSS",
-        ).order_by(Usuari.created_at.asc())
+        )
+        .order_by(Usuari.created_at.asc())
     )
     boss = boss_res.scalars().first()
     if not boss:
-        raise HTTPException(status_code=404, detail="No s'ha trobat cap usuari BOSS per a aquesta empresa")
+        raise HTTPException(
+            status_code=404, detail="No s'ha trobat cap usuari BOSS per a aquesta empresa"
+        )
 
     hashed = bcrypt.hashpw(payload.password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
     boss.password_hash = hashed

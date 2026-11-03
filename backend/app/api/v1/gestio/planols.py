@@ -5,7 +5,6 @@ from datetime import datetime
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
-from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -13,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.db import get_db_with_tenant_context
 from app.core.security import require_roles
 from app.models.models import CapaAnotacio, CapaVectorial, CarpetaPlanol, PlanolBase
+from app.services.sovereign_storage import SovereignStorageGateway
 from app.workers.tasks import generar_informe_planol_pdf
 
 router = APIRouter(
@@ -250,23 +250,14 @@ async def pujar_planol_fitxer(
     clean_filename = re.sub(r"[^\w\-.]", "_", filename)
     saved_filename = f"{safe_id}_{clean_filename}"
 
-    dest_dir = None
-    for base in [os.environ.get("HETZNER_DOCS_PATH", "/docs"), os.path.join(os.getcwd(), "docs")]:
-        try:
-            cand = os.path.join(base, str(empresa_id), "planols")
-            os.makedirs(cand, exist_ok=True)
-            dest_dir = cand
-            break
-        except (PermissionError, OSError):
-            continue
-
-    if not dest_dir:
-        dest_dir = os.path.join("/tmp", f"sevalor_docs_{empresa_id}_planols")
-        os.makedirs(dest_dir, exist_ok=True)
-
-    dest_file = os.path.join(dest_dir, saved_filename)
-    with open(dest_file, "wb") as f:
-        f.write(content)
+    dest_file = await SovereignStorageGateway.pujar_fitxer_binari(
+        db=db,
+        empresa_id=empresa_id,
+        categoria="planols",
+        nom_fitxer=saved_filename,
+        content=content,
+        content_type=fitxer.content_type or "application/octet-stream",
+    )
 
     final_titol = (titol or base_name.replace("_", " ")).strip()
     if not codi_referencia or not codi_referencia.strip():
@@ -429,13 +420,7 @@ async def descarregar_fitxer_planol(
     if not planol or not planol.fitxer_path:
         raise HTTPException(status_code=404, detail="Fitxer de plànol no trobat")
 
-    fpath = planol.fitxer_path
-    if not os.path.isabs(fpath):
-        fpath = os.path.abspath(fpath)
-    if not os.path.exists(fpath):
-        raise HTTPException(status_code=404, detail="Fitxer de plànol no trobat al disc")
-
-    filename = os.path.basename(fpath)
+    filename = os.path.basename(planol.fitxer_path)
     ext = os.path.splitext(filename)[1].lower()
     media_types = {
         ".pdf": "application/pdf",
@@ -450,12 +435,15 @@ async def descarregar_fitxer_planol(
         ".kml": "application/vnd.google-earth.kml+xml",
     }
     media_type = media_types.get(ext, "application/octet-stream")
-    content_disposition_type = "inline" if ext in [".pdf", ".png", ".jpg", ".jpeg", ".svg"] else "attachment"
-    return FileResponse(
-        path=fpath,
-        filename=filename,
+    content_disposition_type = (
+        "inline" if ext in [".pdf", ".png", ".jpg", ".jpeg", ".svg"] else "attachment"
+    )
+    return await SovereignStorageGateway.servir_fitxer(
+        db=db,
+        empresa_id=empresa_id,
+        fitxer_path=planol.fitxer_path,
         media_type=media_type,
-        content_disposition_type=content_disposition_type,
+        disposition=content_disposition_type,
     )
 
 

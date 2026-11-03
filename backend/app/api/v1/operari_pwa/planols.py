@@ -4,15 +4,15 @@ from typing import Any, Dict, List
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db_with_tenant_context
-from app.core.network_utils import resolve_effective_node_url
 from app.core.security import require_roles
-from app.models.models import CapaAnotacio, CapaVectorial, Empresa, PlanolBase
+from app.models.models import CapaAnotacio, CapaVectorial, PlanolBase
+from app.services.sovereign_storage import SovereignStorageGateway
 
 router = APIRouter(
     prefix="/operari/planols",
@@ -94,7 +94,11 @@ async def crear_capa_operari(
     if not planol_res.scalars().first():
         raise HTTPException(status_code=404, detail="Plànol no trobat")
 
-    geojson = payload.geometries_geojson or payload.dades_geojson or {"type": "FeatureCollection", "features": []}
+    geojson = (
+        payload.geometries_geojson
+        or payload.dades_geojson
+        or {"type": "FeatureCollection", "features": []}
+    )
 
     nova_capa = CapaVectorial(
         empresa_id=uuid.UUID(empresa_id),
@@ -222,7 +226,7 @@ async def descarregar_fitxer_planol_operari(
     request: Request,
     db: AsyncSession = Depends(get_db_with_tenant_context),
 ):
-    """Serveix el fitxer del plànol per a la PWA d'operari."""
+    """Serveix el fitxer del plànol des del disc dur del client per a la PWA d'operari."""
     empresa_id = request.state.empresa_id
     if not empresa_id or empresa_id == "undefined":
         raise HTTPException(status_code=401, detail="Context d'empresa no trobat")
@@ -234,13 +238,7 @@ async def descarregar_fitxer_planol_operari(
     if not planol or not planol.fitxer_path:
         raise HTTPException(status_code=404, detail="Fitxer de plànol no trobat")
 
-    fpath = planol.fitxer_path
-    if not os.path.isabs(fpath):
-        fpath = os.path.abspath(fpath)
-    if not os.path.exists(fpath):
-        raise HTTPException(status_code=404, detail="Fitxer de plànol no trobat al disc")
-
-    filename = os.path.basename(fpath)
+    filename = os.path.basename(planol.fitxer_path)
     ext = os.path.splitext(filename)[1].lower()
     media_types = {
         ".pdf": "application/pdf",
@@ -255,12 +253,15 @@ async def descarregar_fitxer_planol_operari(
         ".kml": "application/vnd.google-earth.kml+xml",
     }
     media_type = media_types.get(ext, "application/octet-stream")
-    content_disposition_type = "inline" if ext in [".pdf", ".png", ".jpg", ".jpeg", ".svg"] else "attachment"
-    return FileResponse(
-        path=fpath,
-        filename=filename,
+    content_disposition_type = (
+        "inline" if ext in [".pdf", ".png", ".jpg", ".jpeg", ".svg"] else "attachment"
+    )
+    return await SovereignStorageGateway.servir_fitxer(
+        db=db,
+        empresa_id=empresa_id,
+        fitxer_path=planol.fitxer_path,
         media_type=media_type,
-        content_disposition_type=content_disposition_type,
+        disposition=content_disposition_type,
     )
 
 
@@ -271,18 +272,14 @@ async def consultar_planol_arxiu_extern_empresa(
     cerca: str | None = None,
     db: AsyncSession = Depends(get_db_with_tenant_context),
 ) -> Any:
-    """Consulta un plànol o document tècnic extra (ex: caldera no inclosa a l'OT d'avui) al disc local de l'empresa.
+    """Consulta un plànol o document tècnic extra al disc dur del client (sobirania total).
 
-    El servidor de Sevalor només emmagatzema les feines actives del dia. Si l'ordinador central de
-    l'empresa (node_ia_url) està apagat o desconnectat, retorna HTTP 503 amb codi NODE_EMPRESA_OFFLINE.
+    El servidor central de Sevalor actua com a passarel·la sense emmagatzematge permanent.
     """
     ref_query = (referencia or cerca or "general").strip()
     empresa_id = request.state.empresa_id
     if not empresa_id or empresa_id == "undefined":
         raise HTTPException(status_code=401, detail="Context d'empresa no trobat")
-
-    emp_res = await db.execute(select(Empresa).where(Empresa.id == uuid.UUID(empresa_id)))
-    emp = emp_res.scalars().first()
 
     msg_offline = (
         "L'ordinador central de la teva empresa està apagat o desconnectat. "
@@ -290,29 +287,33 @@ async def consultar_planol_arxiu_extern_empresa(
         "Avisa a administració perquè encenguin l'equip central."
     )
 
-    if not emp or not emp.node_ia_actiu or not emp.node_ia_url:
-        return JSONResponse(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            content={
-                "code": "NODE_EMPRESA_OFFLINE",
-                "detail": {
-                    "code": "NODE_EMPRESA_OFFLINE",
-                    "message": msg_offline,
-                },
-            },
-        )
-
-    raw_url = emp.node_ia_url.rstrip("/")
-    if not raw_url.startswith("http"):
-        raw_url = f"http://{raw_url}"
-    effective_url = resolve_effective_node_url(raw_url) or raw_url
-    base_url = effective_url.rstrip("/")
-
     try:
-        async with httpx.AsyncClient(timeout=2.0) as client:
-            resp = await client.get(f"{base_url}/docs/planols/{ref_query}")
-            if resp.status_code == 200:
-                return resp.json()
+        mode, base_target, secret = await SovereignStorageGateway.resoldre_desti_disc_empresa(
+            db, empresa_id
+        )
+        if mode == "LOCAL_FS":
+            import glob
+
+            candidats = glob.glob(f"{base_target}/**/{ref_query}*", recursive=True)
+            if candidats:
+                f = candidats[0]
+                return {
+                    "status": "ok",
+                    "fitxer": os.path.basename(f),
+                    "ruta": f,
+                    "mode": "LOCAL_FS",
+                }
+            return {
+                "status": "ok",
+                "items": os.listdir(base_target)[:10] if os.path.exists(base_target) else [],
+                "mode": "LOCAL_FS",
+            }
+        elif mode == "HTTP_VAULT":
+            url = f"{base_target}/fitxers/05_planols_i_enginyeria/{ref_query}"
+            async with httpx.AsyncClient(timeout=3.0) as client:
+                resp = await client.get(url, headers={"X-Vault-Token": secret or ""})
+                if resp.status_code == 200:
+                    return resp.json()
     except Exception:
         pass
 
@@ -344,4 +345,3 @@ async def llistar_planols_operari_direct(
 ) -> List[CapaAnotacioOperariResponse]:
     """Endpoint directe /api/v1/planols/operari per a compatibilitat PWA."""
     return await llistar_capes_operari(request, db)
-

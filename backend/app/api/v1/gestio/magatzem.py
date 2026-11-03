@@ -150,10 +150,9 @@ async def llistar_articles(
     articles_ids = [a.id for a in articles]
     estocs_map = {}
     if articles_ids:
-        stmt_estocs = (
-            select(EstocMagatzem.article_id, func.sum(EstocMagatzem.quantitat_fisica))
-            .where(EstocMagatzem.article_id.in_(articles_ids))
-        )
+        stmt_estocs = select(
+            EstocMagatzem.article_id, func.sum(EstocMagatzem.quantitat_fisica)
+        ).where(EstocMagatzem.article_id.in_(articles_ids))
         if magatzem_id:
             stmt_estocs = stmt_estocs.where(EstocMagatzem.magatzem_id == magatzem_id)
         stmt_estocs = stmt_estocs.group_by(EstocMagatzem.article_id)
@@ -236,6 +235,27 @@ async def alta_article(
     db.add(nou_article)
     await db.commit()
 
+    try:
+        from app.services.sovereign_storage import SovereignStorageGateway
+
+        await SovereignStorageGateway.desar_entitat_json(
+            db=db,
+            empresa_id=empresa_id,
+            categoria="magatzem_articles",
+            item_id=nou_article.id,
+            dades={
+                "id": str(nou_article.id),
+                "referencia_inventari": nou_article.referencia_inventari,
+                "nom": nou_article.nom,
+                "unitat_mesura": nou_article.unitat_mesura,
+                "familia": nou_article.familia,
+                "preu_cost": float(nou_article.preu_cost or 0.0),
+                "preu_venda": float(nou_article.preu_venda or 0.0),
+            },
+        )
+    except Exception:
+        pass
+
     if nou_article.proveidor_id:
         stmt_prov_n = select(Proveidor.rao_social).where(Proveidor.id == nou_article.proveidor_id)
         prov_nom_res = (await db.execute(stmt_prov_n)).scalar_one_or_none()
@@ -245,7 +265,6 @@ async def alta_article(
     setattr(nou_article, "estoc_real", 0.0)
 
     return nou_article
-
 
 
 from app.models.models import EinaCustodia  # noqa: E402
@@ -339,9 +358,7 @@ async def llistar_magatzems(
         Magatzem.empresa_id == emp_uuid, Magatzem.tipus == "FURGONETA"
     )
     mags_furg = {
-        m.vehicle_id: m
-        for m in (await db.execute(stmt_mags_furg)).scalars().all()
-        if m.vehicle_id
+        m.vehicle_id: m for m in (await db.execute(stmt_mags_furg)).scalars().all() if m.vehicle_id
     }
 
     hi_ha_nous = False
@@ -799,7 +816,8 @@ async def processar_document_ocr(
             "telefon": "",
             "email": "",
         },
-        "numero_document": ocr_result.get("numero_albara") or f"ALB-{date.today().strftime('%Y%m%d')}-01",
+        "numero_document": ocr_result.get("numero_albara")
+        or f"ALB-{date.today().strftime('%Y%m%d')}-01",
         "tipus_document": "ALBARA",
         "data_document": ocr_result.get("data_albara") or date.today().isoformat(),
         "linies": ocr_result.get("linies") or [],
@@ -899,7 +917,9 @@ async def confirmar_document(
             quantitat_total_albarans += sum([float(m.quantitat) for m in moviments_albara])
 
         # Com que les eines no generen MovimentEstoc, només sumem les quantitats de MATERIALS de la factura per quadrar-ho
-        quantitat_factura = sum([float(lin.quantitat) for lin in payload.linies if lin.tipus != "EINA"])
+        quantitat_factura = sum(
+            [float(lin.quantitat) for lin in payload.linies if lin.tipus != "EINA"]
+        )
 
         if abs(quantitat_total_albarans - quantitat_factura) > 0.01:
             raise HTTPException(
@@ -908,7 +928,10 @@ async def confirmar_document(
             )
 
         base_imposable = sum(
-            [(lin.quantitat * lin.preu) * (1 - (lin.descompte_percent / 100)) for lin in payload.linies]
+            [
+                (lin.quantitat * lin.preu) * (1 - (lin.descompte_percent / 100))
+                for lin in payload.linies
+            ]
         )
         quota_iva = base_imposable * 0.21
 
@@ -980,7 +1003,11 @@ async def confirmar_document(
                 # Les eines no sumen al moviment d'estoc de materials ni al preu PMP.
                 continue
 
-            ref_neta = linia.referencia.strip()[:50] if linia.referencia else f"REF-{uuid.uuid4().hex[:8].upper()}"
+            ref_neta = (
+                linia.referencia.strip()[:50]
+                if linia.referencia
+                else f"REF-{uuid.uuid4().hex[:8].upper()}"
+            )
             stmt_art = select(Article).where(
                 Article.empresa_id == empresa_id,
                 Article.referencia_inventari == ref_neta,
@@ -1104,13 +1131,16 @@ async def modificar_article(
     art_dict = {c.name: getattr(art_db, c.name) for c in art_db.__table__.columns}
     art_dict["estoc_real"] = float(estoc_real)
     if art_db.proveidor_id:
-        prov_nom = (await db.execute(select(Proveidor.rao_social).where(Proveidor.id == art_db.proveidor_id))).scalar()
+        prov_nom = (
+            await db.execute(
+                select(Proveidor.rao_social).where(Proveidor.id == art_db.proveidor_id)
+            )
+        ).scalar()
         art_dict["proveidor_nom"] = prov_nom
     else:
         art_dict["proveidor_nom"] = None
 
     return art_dict
-
 
 
 @router.get("/eines", response_model=List[EinaResponse])

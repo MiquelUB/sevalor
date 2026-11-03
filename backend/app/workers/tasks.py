@@ -728,3 +728,47 @@ def revisar_contractes_manteniment():
                 logger.error(f"Error generant OTs preventives per l'empresa {emp_id}: {e}")
 
     asyncio.run(process())
+
+
+@celery_app.task(name="app.workers.tasks.buidar_buffer_diari_cap_a_disc_client")
+def buidar_buffer_diari_cap_a_disc_client():
+    """Tasca periòdica de Passarel·la Sobirana (Zero-Storage Guarantee d'Hetzner).
+
+    Recorre els directoris temporals (/tmp/sevalor_*, /tmp/docs, /tmp/data)
+    i purga qualsevol fitxer temporal residual un cop tramitat.
+    Garanteix 0 MB d'acumulació permanent de dades al servidor central d'Hetzner.
+    """
+    import glob
+
+    purged_bytes = 0
+    purged_files = 0
+
+    candidats = [
+        "/tmp/sevalor_factures_temp",
+        "/tmp/docs",
+        "/tmp/data",
+    ]
+    for pattern in ["/tmp/sevalor_docs_*", "/tmp/sevalor_cache_*"]:
+        candidats.extend(glob.glob(pattern))
+
+    for target in candidats:
+        if os.path.exists(target):
+            try:
+                for root, _, files in os.walk(target):
+                    for f in files:
+                        fp = os.path.join(root, f)
+                        try:
+                            purged_bytes += os.path.getsize(fp)
+                            os.remove(fp)
+                            purged_files += 1
+                        except OSError:
+                            pass
+            except Exception as e:
+                logger.error("Error purgant buffer %s: %s", target, e)
+
+    logger.info(
+        "Purga sobirana completada: %d fitxers, %d bytes alliberats a Hetzner.",
+        purged_files,
+        purged_bytes,
+    )
+    return {"purged_files": purged_files, "purged_bytes": purged_bytes}

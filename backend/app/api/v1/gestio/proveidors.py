@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.db import get_db_with_tenant_context
 from app.core.security import get_current_user_claims, require_roles
 from app.models.models import Proveidor, RegistreEsdevenimentsSIF
+from app.services.sovereign_storage import SovereignStorageGateway
 
 router = APIRouter(
     prefix="/gestio/proveidors",
@@ -131,6 +132,24 @@ async def alta_proveidor(
 
     db.add(nou_proveidor)
     await db.commit()
+
+    # Sincronitzar la fitxa JSON del proveïdor al disc dur del client
+    await SovereignStorageGateway.desar_entitat_json(
+        db=db,
+        empresa_id=empresa_id,
+        categoria="proveidors",
+        item_id=str(nou_proveidor.id),
+        dades={
+            "id": str(nou_proveidor.id),
+            "codi": nou_proveidor.codi,
+            "rao_social": nou_proveidor.rao_social,
+            "nif": nou_proveidor.nif,
+            "telefon": nou_proveidor.telefon,
+            "email": nou_proveidor.email,
+            "especialitat": nou_proveidor.especialitat,
+            "actiu": nou_proveidor.actiu,
+        },
+    )
 
     return nou_proveidor
 
@@ -269,6 +288,24 @@ async def editar_proveidor(
     prov.especialitat = proveidor.especialitat
 
     await db.commit()
+
+    # Sincronitzar la fitxa JSON actualitzada al disc dur del client
+    await SovereignStorageGateway.desar_entitat_json(
+        db=db,
+        empresa_id=empresa_id,
+        categoria="proveidors",
+        item_id=str(prov.id),
+        dades={
+            "id": str(prov.id),
+            "codi": prov.codi,
+            "rao_social": prov.rao_social,
+            "nif": prov.nif,
+            "telefon": prov.telefon,
+            "email": prov.email,
+            "especialitat": prov.especialitat,
+            "actiu": prov.actiu,
+        },
+    )
 
     iban_ocult = "****" + prov.iban_xifrat_simetric[-4:] if prov.iban_xifrat_simetric else None
 

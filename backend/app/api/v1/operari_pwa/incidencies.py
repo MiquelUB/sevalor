@@ -1,4 +1,3 @@
-import os
 import uuid
 from typing import List, Optional
 
@@ -10,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.db import get_db_with_tenant_context
 from app.core.security import require_roles
 from app.models.models import Incidencia
+from app.services.sovereign_storage import SovereignStorageGateway
 
 router = APIRouter(
     prefix="/operari",
@@ -124,24 +124,33 @@ async def reportar_incidencia(
         if obs:
             text_observacions = str(obs)
 
-        base_dir = f"/tmp/data/{empresa_id}/incidencies"
-        os.makedirs(base_dir, exist_ok=True)
-
         audio_file = form.get("audio")
         if audio_file and hasattr(audio_file, "read"):
             filename = getattr(audio_file, "filename", "audio.webm")
-            audio_path = f"{base_dir}/{uuid.uuid4()}_{filename}"
+            clean_filename = f"{uuid.uuid4()}_{filename}"
             content = await audio_file.read()
-            with open(audio_path, "wb") as f:
-                f.write(content)
+            audio_path = await SovereignStorageGateway.pujar_fitxer_binari(
+                db=db,
+                empresa_id=empresa_id,
+                categoria="incidencies_audios",
+                nom_fitxer=clean_filename,
+                content=content,
+                content_type="audio/webm",
+            )
 
         foto_file = form.get("foto")
         if foto_file and hasattr(foto_file, "read"):
             filename = getattr(foto_file, "filename", "foto.webp")
-            foto_path = f"{base_dir}/{uuid.uuid4()}_{filename}"
+            clean_filename = f"{uuid.uuid4()}_{filename}"
             content = await foto_file.read()
-            with open(foto_path, "wb") as f:
-                f.write(content)
+            foto_path = await SovereignStorageGateway.pujar_fitxer_binari(
+                db=db,
+                empresa_id=empresa_id,
+                categoria="incidencies_fotos",
+                nom_fitxer=clean_filename,
+                content=content,
+                content_type="image/webp",
+            )
 
     nova_inci = Incidencia(
         empresa_id=uuid.UUID(empresa_id),
@@ -157,6 +166,25 @@ async def reportar_incidencia(
 
     db.add(nova_inci)
     await db.commit()
+
+    # Sincronitzar la fitxa JSON de la incidència al disc dur del client
+    await SovereignStorageGateway.desar_entitat_json(
+        db=db,
+        empresa_id=empresa_id,
+        categoria="incidencies_registres",
+        item_id=str(nova_inci.id),
+        dades={
+            "id": str(nova_inci.id),
+            "ordre_treball_id": str(ordre_treball_id) if ordre_treball_id else None,
+            "vehicle_id": str(vehicle_id) if vehicle_id else None,
+            "operari_id": str(usuari_id),
+            "ambit": ambit,
+            "estat": estat,
+            "audio_path": audio_path,
+            "foto_path": foto_path,
+            "text_observacions": text_observacions,
+        },
+    )
 
     # Disparar transcripció i avaluació (Fase 3 Copilot)
     if audio_path:
