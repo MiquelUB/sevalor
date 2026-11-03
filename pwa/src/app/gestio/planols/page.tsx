@@ -29,6 +29,10 @@ import {
   ShieldCheck,
   Palette,
   Check,
+  ZoomIn,
+  ZoomOut,
+  Maximize2,
+  Move,
 } from "lucide-react";
 import { useGestio } from "@/lib/gestio-context";
 import { apiFetch, getAuthToken, extractTenantId, getApiBaseUrl } from "@/lib/api";
@@ -100,6 +104,18 @@ const DISCIPLINES_DEFECTE = [
   { id: "INCIDENCIA", label: "Anotacions i Incidències", color: "#ef4444" },
 ];
 
+interface DraggedItem {
+  capaId: string;
+  featureIndex: number;
+  type: "point" | "vertex";
+  vertexIndex?: number;
+  startX: number;
+  startY: number;
+  currentX: number;
+  currentY: number;
+  hasMoved: boolean;
+}
+
 export default function GestioPlanolsPage() {
   const { rolActiu } = useGestio();
   const [carpetes, setCarpetes] = useState<Carpeta[]>([]);
@@ -110,6 +126,15 @@ export default function GestioPlanolsPage() {
   const [planolSeleccionat, setPlanolSeleccionat] = useState<Planol | null>(null);
   const [filtreCerca, setFiltreCerca] = useState("");
   const [opacitatPlanimetria, setOpacitatPlanimetria] = useState(85);
+
+  // Zoom & Pan & Arrossegament de punts/icones (FR-015)
+  const [zoom, setZoom] = useState<number>(1);
+  const [pan, setPan] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+  const [isPanning, setIsPanning] = useState(false);
+  const [panStart, setPanStart] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+  const [draggedItem, setDraggedItem] = useState<DraggedItem | null>(null);
+  const [justDragged, setJustDragged] = useState(false);
+  const innerCanvasRef = useRef<HTMLDivElement>(null);
 
   // Capes vectorials del plànol seleccionat
   const [capes, setCapes] = useState<CapaVectorialUI[]>([]);
@@ -194,6 +219,10 @@ export default function GestioPlanolsPage() {
       setCapaActivaId(null);
     }
     setPuntsLiniaEnCurs([]);
+    setZoom(1);
+    setPan({ x: 0, y: 0 });
+    setDraggedItem(null);
+    setIsPanning(false);
   }, [planolSeleccionat?.id]);
 
   const toggleVisibilitatCapa = async (capaId: string) => {
@@ -307,13 +336,174 @@ export default function GestioPlanolsPage() {
     }
   };
 
-  const handleCanvasClick = (e: React.MouseEvent<HTMLDivElement>) => {
-    if (einaDibuix === "punter") return;
-    if (!canvasRef.current) return;
+  const startDrag = (
+    e: React.MouseEvent,
+    capaId: string,
+    featureIndex: number,
+    type: "point" | "vertex",
+    initX: number,
+    initY: number,
+    vertexIndex?: number
+  ) => {
+    if (einaDibuix !== "punter") return;
+    e.stopPropagation();
+    e.preventDefault();
 
-    const rect = canvasRef.current.getBoundingClientRect();
-    const x = Math.round(((e.clientX - rect.left) / rect.width) * 1000) / 10;
-    const y = Math.round(((e.clientY - rect.top) / rect.height) * 1000) / 10;
+    const capa = capes.find((c) => c.id === capaId);
+    if (capa?.es_immutable) {
+      setError("Aquesta capa és immutable i els seus punts no es poden moure.");
+      setTimeout(() => setError(null), 3500);
+      return;
+    }
+
+    // Activar aquesta capa
+    setCapaActivaId(capaId);
+
+    setDraggedItem({
+      capaId,
+      featureIndex,
+      type,
+      vertexIndex,
+      startX: initX,
+      startY: initY,
+      currentX: initX,
+      currentY: initY,
+      hasMoved: false,
+    });
+  };
+
+  useEffect(() => {
+    if (!draggedItem && !isPanning) return;
+
+    const handleMouseMove = (e: MouseEvent) => {
+      if (draggedItem) {
+        if (!innerCanvasRef.current) return;
+        const rect = innerCanvasRef.current.getBoundingClientRect();
+        const rawX = ((e.clientX - rect.left) / rect.width) * 100;
+        const rawY = ((e.clientY - rect.top) / rect.height) * 100;
+        const clampedX = Math.round(Math.max(0, Math.min(100, rawX)) * 10) / 10;
+        const clampedY = Math.round(Math.max(0, Math.min(100, rawY)) * 10) / 10;
+
+        setDraggedItem((prev) =>
+          prev
+            ? {
+                ...prev,
+                currentX: clampedX,
+                currentY: clampedY,
+                hasMoved: true,
+              }
+            : null
+        );
+
+        // Actualització optimista en temps real
+        setCapes((prevCapes) =>
+          prevCapes.map((c) => {
+            if (c.id !== draggedItem.capaId) return c;
+            const feats = [...(c.geometries_geojson?.features || [])];
+            const targetFeat = feats[draggedItem.featureIndex];
+            if (!targetFeat) return c;
+
+            const updatedFeat = { ...targetFeat };
+            if (draggedItem.type === "point") {
+              updatedFeat.geometry = {
+                ...updatedFeat.geometry,
+                type: "Point",
+                coordinates: [clampedX, clampedY],
+              };
+            } else if (
+              draggedItem.type === "vertex" &&
+              typeof draggedItem.vertexIndex === "number"
+            ) {
+              const coords = [...(updatedFeat.geometry.coordinates || [])];
+              coords[draggedItem.vertexIndex] = [clampedX, clampedY];
+              updatedFeat.geometry = {
+                ...updatedFeat.geometry,
+                type: "LineString",
+                coordinates: coords,
+              };
+            }
+            feats[draggedItem.featureIndex] = updatedFeat;
+            return {
+              ...c,
+              geometries_geojson: {
+                ...c.geometries_geojson,
+                features: feats,
+              },
+            };
+          })
+        );
+      } else if (isPanning) {
+        setPan({
+          x: e.clientX - panStart.x,
+          y: e.clientY - panStart.y,
+        });
+      }
+    };
+
+    const handleMouseUp = () => {
+      if (draggedItem) {
+        if (draggedItem.hasMoved) {
+          setJustDragged(true);
+          setTimeout(() => setJustDragged(false), 200);
+
+          setCapes((currentCapes) => {
+            const updatedCapa = currentCapes.find((c) => c.id === draggedItem.capaId);
+            if (updatedCapa) {
+              desarCanvisCapa(updatedCapa);
+              setMissatgeExit(
+                `Element mogut a [X: ${draggedItem.currentX}%, Y: ${draggedItem.currentY}%]`
+              );
+              setTimeout(() => setMissatgeExit(null), 3000);
+            }
+            return currentCapes;
+          });
+        }
+        setDraggedItem(null);
+      }
+      if (isPanning) {
+        setIsPanning(false);
+        setJustDragged(true);
+        setTimeout(() => setJustDragged(false), 200);
+      }
+    };
+
+    window.addEventListener("mousemove", handleMouseMove);
+    window.addEventListener("mouseup", handleMouseUp);
+
+    return () => {
+      window.removeEventListener("mousemove", handleMouseMove);
+      window.removeEventListener("mouseup", handleMouseUp);
+    };
+  }, [draggedItem, isPanning, panStart]);
+
+  const handleZoomIn = () => {
+    setZoom((z) => Math.min(3.5, Math.round((z + 0.25) * 100) / 100));
+  };
+
+  const handleZoomOut = () => {
+    setZoom((z) => Math.max(0.5, Math.round((z - 0.25) * 100) / 100));
+  };
+
+  const handleResetZoom = () => {
+    setZoom(1);
+    setPan({ x: 0, y: 0 });
+  };
+
+  const handleWheel = (e: React.WheelEvent) => {
+    e.preventDefault();
+    const delta = e.deltaY > 0 ? -0.15 : 0.15;
+    setZoom((prev) => Math.max(0.5, Math.min(3.5, Math.round((prev + delta) * 100) / 100)));
+  };
+
+  const handleCanvasClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (einaDibuix === "punter" || justDragged || isPanning) return;
+    if (!innerCanvasRef.current) return;
+
+    const rect = innerCanvasRef.current.getBoundingClientRect();
+    const rawX = ((e.clientX - rect.left) / rect.width) * 100;
+    const rawY = ((e.clientY - rect.top) / rect.height) * 100;
+    const x = Math.round(Math.max(0, Math.min(100, rawX)) * 10) / 10;
+    const y = Math.round(Math.max(0, Math.min(100, rawY)) * 10) / 10;
 
     const act = capes.find((c) => c.id === capaActivaId);
     if (!act) {
@@ -1125,194 +1315,336 @@ export default function GestioPlanolsPage() {
                   {/* Canvas Viewport */}
                   <div
                     ref={canvasRef}
+                    onWheel={handleWheel}
+                    onMouseDown={(e) => {
+                      if (einaDibuix === "punter" && e.button === 0 && !draggedItem) {
+                        setIsPanning(true);
+                        setPanStart({ x: e.clientX - pan.x, y: e.clientY - pan.y });
+                      }
+                    }}
                     onClick={handleCanvasClick}
                     className={`relative flex-1 min-h-[460px] rounded-xl overflow-hidden border border-outline-variant/40 bg-[#09131d] shadow-inner select-none ${
-                      einaDibuix === "punter" ? "cursor-default" : "cursor-crosshair"
+                      isPanning
+                        ? "cursor-grabbing"
+                        : einaDibuix === "punter"
+                        ? "cursor-grab"
+                        : "cursor-crosshair"
                     }`}
                   >
-                    {/* Immutable Base Blueprint Layer */}
-                    <div
-                      className="absolute inset-0 w-full h-full pointer-events-none transition-opacity duration-200"
-                      style={{ opacity: opacitatPlanimetria / 100 }}
-                    >
-                      {/* Technical CAD Grid Background */}
-                      <div
-                        className="absolute inset-0 w-full h-full opacity-25"
-                        style={{
-                          backgroundImage:
-                            "radial-gradient(circle, #38bdf8 1px, transparent 1px), linear-gradient(to right, #0369a1 1px, transparent 1px), linear-gradient(to bottom, #0369a1 1px, transparent 1px)",
-                          backgroundSize: "20px 20px, 100px 100px, 100px 100px",
-                        }}
-                      />
-
-                      {planolSeleccionat && (
-                        <div className="w-full h-full flex items-center justify-center">
-                          {planolSeleccionat.tipus_fitxer === "PDF" ? (
-                            <object
-                              data={`${getApiBaseUrl()}/gestio/planols/${planolSeleccionat.id}/fitxer#toolbar=0&navpanes=0`}
-                              type="application/pdf"
-                              className="w-full h-full pointer-events-none opacity-90"
-                            >
-                              <div className="flex flex-col items-center justify-center h-full text-slate-400 text-xs">
-                                <FileText className="w-12 h-12 text-primary/50 mb-2" />
-                                <span>{planolSeleccionat.titol}</span>
-                              </div>
-                            </object>
-                          ) : ["PNG", "JPG", "JPEG", "WEBP"].includes(
-                              planolSeleccionat.tipus_fitxer
-                            ) ? (
-                            <img
-                              src={`${getApiBaseUrl()}/gestio/planols/${planolSeleccionat.id}/fitxer`}
-                              alt={planolSeleccionat.titol}
-                              className="max-w-full max-h-full object-contain pointer-events-none"
-                            />
-                          ) : (
-                            <div className="flex flex-col items-center justify-center p-8 text-center text-slate-300">
-                              <div className="p-4 rounded-2xl bg-primary/10 border border-primary/30 mb-3">
-                                <Activity className="w-10 h-10 text-primary animate-pulse" />
-                              </div>
-                              <h4 className="text-sm font-bold text-white mb-1">
-                                Planimetria Vectorial CAD: {planolSeleccionat.titol}
-                              </h4>
-                              <p className="text-xs text-slate-400 font-mono">
-                                Ref: {planolSeleccionat.codi_referencia} · Format:{" "}
-                                {planolSeleccionat.tipus_fitxer} · Projecció:{" "}
-                                {planolSeleccionat.projeccio || "ETRS89 UTM 31N"}
-                              </p>
-                              <p className="text-[11px] text-emerald-400 mt-2 font-mono flex items-center gap-1">
-                                <ShieldCheck className="w-3.5 h-3.5" /> Fitxer base original preservat
-                                intacte (No destructiu)
-                              </p>
-                            </div>
-                          )}
-                        </div>
-                      )}
+                    {/* Floating Zoom & Pan Controls (FR-015) */}
+                    <div className="absolute top-3 right-3 z-30 flex items-center gap-1 p-1 rounded-xl bg-surface-container-lowest/90 backdrop-blur-md border border-outline-variant/40 shadow-xl pointer-events-auto">
+                      <button
+                        type="button"
+                        onClick={handleZoomOut}
+                        className="w-7 h-7 rounded-lg hover:bg-surface-container text-on-surface flex items-center justify-center font-bold text-xs transition-colors"
+                        title="Reduir Zoom (-)"
+                      >
+                        <ZoomOut className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleResetZoom}
+                        className="px-2 py-0.5 rounded-lg hover:bg-surface-container text-primary font-mono text-xs font-bold transition-colors"
+                        title="Restablir Zoom (100%)"
+                      >
+                        {Math.round(zoom * 100)}%
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleZoomIn}
+                        className="w-7 h-7 rounded-lg hover:bg-surface-container text-on-surface flex items-center justify-center font-bold text-xs transition-colors"
+                        title="Augmentar Zoom (+)"
+                      >
+                        <ZoomIn className="w-3.5 h-3.5" />
+                      </button>
+                      <div className="w-px h-3.5 bg-outline-variant/40 mx-0.5" />
+                      <button
+                        type="button"
+                        onClick={handleResetZoom}
+                        className="w-7 h-7 rounded-lg hover:bg-surface-container text-on-surface-variant hover:text-on-surface flex items-center justify-center transition-colors"
+                        title="Centrar i ajustar plànol (Fit)"
+                      >
+                        <Maximize2 className="w-3.5 h-3.5" />
+                      </button>
                     </div>
 
-                    {/* Vector Layers SVG Overlay */}
-                    <svg
-                      className="absolute inset-0 w-full h-full pointer-events-none select-none"
-                      viewBox="0 0 100 100"
-                      preserveAspectRatio="none"
-                    >
-                      {/* Capes visibles */}
-                      {capes
-                        .filter((c) => c.visible)
-                        .map((capa) => {
-                          const features = capa.geometries_geojson?.features || [];
-                          return (
-                            <g
-                              key={capa.id}
-                              opacity={(capa.opacitat_percent || 100) / 100}
-                            >
-                              {features.map((feat, fIdx) => {
-                                if (feat.geometry?.type === "LineString") {
-                                  const pts = (feat.geometry.coordinates || [])
-                                    .map((coord: number[]) => `${coord[0]},${coord[1]}`)
-                                    .join(" ");
-                                  return (
-                                    <g key={feat.properties?.id || `feat-line-${fIdx}`}>
-                                      <polyline
-                                        points={pts}
-                                        fill="none"
-                                        stroke={capa.color_hex}
-                                        strokeWidth={
-                                          capa.gruix_linia ? capa.gruix_linia * 0.35 : 1.2
-                                        }
-                                        strokeLinecap="round"
-                                        strokeLinejoin="round"
-                                      />
-                                      {feat.geometry.coordinates.map(
-                                        (c: number[], cIdx: number) => (
-                                          <circle
-                                            key={cIdx}
-                                            cx={c[0]}
-                                            cy={c[1]}
-                                            r={0.9}
-                                            fill="#ffffff"
-                                            stroke={capa.color_hex}
-                                            strokeWidth="0.4"
-                                          />
-                                        )
-                                      )}
-                                    </g>
-                                  );
-                                }
-                                if (feat.geometry?.type === "Point") {
-                                  const [px, py] = feat.geometry.coordinates || [0, 0];
-                                  const nomElement =
-                                    feat.properties?.nom ||
-                                    feat.properties?.etiqueta ||
-                                    "Element";
-                                  return (
-                                    <g key={feat.properties?.id || `feat-pt-${fIdx}`}>
-                                      <circle
-                                        cx={px}
-                                        cy={py}
-                                        r={1.8}
-                                        fill={capa.color_hex}
-                                        stroke="#ffffff"
-                                        strokeWidth="0.5"
-                                      />
-                                      <circle cx={px} cy={py} r={0.6} fill="#ffffff" />
-                                      <text
-                                        x={px + 2}
-                                        y={py - 1.2}
-                                        fill="#ffffff"
-                                        fontSize="2.4"
-                                        fontWeight="bold"
-                                        filter="drop-shadow(0px 1px 2px rgba(0,0,0,0.9))"
-                                      >
-                                        {nomElement}
-                                      </text>
-                                    </g>
-                                  );
-                                }
-                                return null;
-                              })}
-                            </g>
-                          );
-                        })}
+                    {/* Floating Pan & Scale Badge */}
+                    {(zoom !== 1 || pan.x !== 0 || pan.y !== 0) && (
+                      <div className="absolute top-3 left-3 z-30 flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-surface-container-lowest/90 backdrop-blur-md border border-outline-variant/40 text-[10px] font-mono text-primary shadow pointer-events-auto">
+                        <Move className="w-3 h-3 text-secondary" />
+                        <span>
+                          Zoom {Math.round(zoom * 100)}% · Pan [{Math.round(pan.x)}, {Math.round(pan.y)}px]
+                        </span>
+                        <button
+                          type="button"
+                          onClick={handleResetZoom}
+                          className="ml-1 text-on-surface-variant hover:text-primary underline font-bold"
+                        >
+                          Centrar
+                        </button>
+                      </div>
+                    )}
 
-                      {/* Dibuix en curs */}
-                      {puntsLiniaEnCurs.length > 0 && (
-                        <g>
-                          <polyline
-                            points={puntsLiniaEnCurs.map((p) => `${p.x},${p.y}`).join(" ")}
-                            fill="none"
-                            stroke={capaActiva?.color_hex || "#38bdf8"}
-                            strokeWidth="1.2"
-                            strokeDasharray="2,2"
-                          />
-                          {puntsLiniaEnCurs.map((p, idx) => (
-                            <circle
-                              key={idx}
-                              cx={p.x}
-                              cy={p.y}
-                              r={1.2}
-                              fill="#ffffff"
+                    {/* Scaled and Panned Container */}
+                    <div
+                      ref={innerCanvasRef}
+                      style={{
+                        transform: `scale(${zoom}) translate(${pan.x / zoom}px, ${pan.y / zoom}px)`,
+                        transformOrigin: "center center",
+                        transition: isPanning || draggedItem ? "none" : "transform 0.15s ease-out",
+                      }}
+                      className="w-full h-full relative"
+                    >
+                      {/* Immutable Base Blueprint Layer */}
+                      <div
+                        className="absolute inset-0 w-full h-full pointer-events-none transition-opacity duration-200"
+                        style={{ opacity: opacitatPlanimetria / 100 }}
+                      >
+                        {/* Technical CAD Grid Background */}
+                        <div
+                          className="absolute inset-0 w-full h-full opacity-25"
+                          style={{
+                            backgroundImage:
+                              "radial-gradient(circle, #38bdf8 1px, transparent 1px), linear-gradient(to right, #0369a1 1px, transparent 1px), linear-gradient(to bottom, #0369a1 1px, transparent 1px)",
+                            backgroundSize: "20px 20px, 100px 100px, 100px 100px",
+                          }}
+                        />
+
+                        {planolSeleccionat && (
+                          <div className="w-full h-full flex items-center justify-center">
+                            {planolSeleccionat.tipus_fitxer === "PDF" ? (
+                              <object
+                                data={`${getApiBaseUrl()}/gestio/planols/${planolSeleccionat.id}/fitxer#toolbar=0&navpanes=0`}
+                                type="application/pdf"
+                                className="w-full h-full pointer-events-none opacity-90"
+                              >
+                                <div className="flex flex-col items-center justify-center h-full text-slate-400 text-xs">
+                                  <FileText className="w-12 h-12 text-primary/50 mb-2" />
+                                  <span>{planolSeleccionat.titol}</span>
+                                </div>
+                              </object>
+                            ) : ["PNG", "JPG", "JPEG", "WEBP"].includes(
+                                planolSeleccionat.tipus_fitxer
+                              ) ? (
+                              <img
+                                src={`${getApiBaseUrl()}/gestio/planols/${planolSeleccionat.id}/fitxer`}
+                                alt={planolSeleccionat.titol}
+                                className="max-w-full max-h-full object-contain pointer-events-none"
+                              />
+                            ) : (
+                              <div className="flex flex-col items-center justify-center p-8 text-center text-slate-300">
+                                <div className="p-4 rounded-2xl bg-primary/10 border border-primary/30 mb-3">
+                                  <Activity className="w-10 h-10 text-primary animate-pulse" />
+                                </div>
+                                <h4 className="text-sm font-bold text-white mb-1">
+                                  Planimetria Vectorial CAD: {planolSeleccionat.titol}
+                                </h4>
+                                <p className="text-xs text-slate-400 font-mono">
+                                  Ref: {planolSeleccionat.codi_referencia} · Format:{" "}
+                                  {planolSeleccionat.tipus_fitxer} · Projecció:{" "}
+                                  {planolSeleccionat.projeccio || "ETRS89 UTM 31N"}
+                                </p>
+                                <p className="text-[11px] text-emerald-400 mt-2 font-mono flex items-center gap-1">
+                                  <ShieldCheck className="w-3.5 h-3.5" /> Fitxer base original preservat
+                                  intacte (No destructiu)
+                                </p>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Vector Layers SVG Overlay */}
+                      <svg
+                        className="absolute inset-0 w-full h-full pointer-events-none select-none"
+                        viewBox="0 0 100 100"
+                        preserveAspectRatio="none"
+                      >
+                        {/* Capes visibles */}
+                        {capes
+                          .filter((c) => c.visible)
+                          .map((capa) => {
+                            const features = capa.geometries_geojson?.features || [];
+                            return (
+                              <g
+                                key={capa.id}
+                                opacity={(capa.opacitat_percent || 100) / 100}
+                              >
+                                {features.map((feat, fIdx) => {
+                                  if (feat.geometry?.type === "LineString") {
+                                    const pts = (feat.geometry.coordinates || [])
+                                      .map((coord: number[]) => `${coord[0]},${coord[1]}`)
+                                      .join(" ");
+                                    return (
+                                      <g key={feat.properties?.id || `feat-line-${fIdx}`}>
+                                        <polyline
+                                          points={pts}
+                                          fill="none"
+                                          stroke={capa.color_hex}
+                                          strokeWidth={
+                                            capa.gruix_linia ? capa.gruix_linia * 0.35 : 1.2
+                                          }
+                                          strokeLinecap="round"
+                                          strokeLinejoin="round"
+                                        />
+                                        {feat.geometry.coordinates.map(
+                                          (c: number[], cIdx: number) => {
+                                            const isVertexDragged =
+                                              draggedItem?.capaId === capa.id &&
+                                              draggedItem?.featureIndex === fIdx &&
+                                              draggedItem?.type === "vertex" &&
+                                              draggedItem?.vertexIndex === cIdx;
+
+                                            return (
+                                              <circle
+                                                key={cIdx}
+                                                cx={c[0]}
+                                                cy={c[1]}
+                                                r={isVertexDragged ? 2.0 : 1.0}
+                                                fill={isVertexDragged ? "#38bdf8" : "#ffffff"}
+                                                stroke={capa.color_hex}
+                                                strokeWidth={isVertexDragged ? 0.8 : 0.4}
+                                                onMouseDown={(e) => {
+                                                  if (einaDibuix === "punter") {
+                                                    startDrag(
+                                                      e,
+                                                      capa.id,
+                                                      fIdx,
+                                                      "vertex",
+                                                      c[0],
+                                                      c[1],
+                                                      cIdx
+                                                    );
+                                                  }
+                                                }}
+                                                className={
+                                                  einaDibuix === "punter" && !capa.es_immutable
+                                                    ? "pointer-events-auto cursor-grab hover:scale-150 transition-transform active:cursor-grabbing"
+                                                    : "pointer-events-none"
+                                                }
+                                              />
+                                            );
+                                          }
+                                        )}
+                                      </g>
+                                    );
+                                  }
+                                  if (feat.geometry?.type === "Point") {
+                                    const [px, py] = feat.geometry.coordinates || [0, 0];
+                                    const nomElement =
+                                      feat.properties?.nom ||
+                                      feat.properties?.etiqueta ||
+                                      "Element";
+                                    const isPointDragged =
+                                      draggedItem?.capaId === capa.id &&
+                                      draggedItem?.featureIndex === fIdx &&
+                                      draggedItem?.type === "point";
+
+                                    return (
+                                      <g
+                                        key={feat.properties?.id || `feat-pt-${fIdx}`}
+                                        onMouseDown={(e) => {
+                                          if (einaDibuix === "punter") {
+                                            startDrag(e, capa.id, fIdx, "point", px, py);
+                                          }
+                                        }}
+                                        className={
+                                          einaDibuix === "punter" && !capa.es_immutable
+                                            ? "pointer-events-auto cursor-grab hover:opacity-95 active:cursor-grabbing"
+                                            : "pointer-events-none"
+                                        }
+                                      >
+                                        {/* Anell d'arrossegament actiu */}
+                                        {isPointDragged && (
+                                          <circle
+                                            cx={px}
+                                            cy={py}
+                                            r={3.8}
+                                            fill="none"
+                                            stroke="#38bdf8"
+                                            strokeWidth="0.8"
+                                            strokeDasharray="1,1"
+                                          />
+                                        )}
+                                        <circle
+                                          cx={px}
+                                          cy={py}
+                                          r={isPointDragged ? 2.6 : 1.9}
+                                          fill={capa.color_hex}
+                                          stroke="#ffffff"
+                                          strokeWidth={isPointDragged ? 0.9 : 0.5}
+                                        />
+                                        <circle cx={px} cy={py} r={0.6} fill="#ffffff" />
+                                        <text
+                                          x={px + 2.2}
+                                          y={py - 1.2}
+                                          fill="#ffffff"
+                                          fontSize="2.4"
+                                          fontWeight="bold"
+                                          filter="drop-shadow(0px 1px 2px rgba(0,0,0,0.95))"
+                                          className="select-none pointer-events-none"
+                                        >
+                                          {nomElement}
+                                        </text>
+                                      </g>
+                                    );
+                                  }
+                                  return null;
+                                })}
+                              </g>
+                            );
+                          })}
+
+                        {/* Dibuix en curs */}
+                        {puntsLiniaEnCurs.length > 0 && (
+                          <g>
+                            <polyline
+                              points={puntsLiniaEnCurs.map((p) => `${p.x},${p.y}`).join(" ")}
+                              fill="none"
                               stroke={capaActiva?.color_hex || "#38bdf8"}
-                              strokeWidth="0.5"
+                              strokeWidth="1.2"
+                              strokeDasharray="2,2"
                             />
-                          ))}
-                        </g>
-                      )}
-                    </svg>
+                            {puntsLiniaEnCurs.map((p, idx) => (
+                              <circle
+                                key={idx}
+                                cx={p.x}
+                                cy={p.y}
+                                r={1.2}
+                                fill="#ffffff"
+                                stroke={capaActiva?.color_hex || "#38bdf8"}
+                                strokeWidth="0.5"
+                              />
+                            ))}
+                          </g>
+                        )}
+                      </svg>
+                    </div>
 
                     {/* Canvas Bottom Instruction Banner */}
                     <div className="absolute bottom-2 left-2 right-2 flex items-center justify-between pointer-events-none text-[11px] font-mono">
                       <div className="px-2.5 py-1 rounded-lg bg-black/70 backdrop-blur-md text-white border border-white/10 flex items-center gap-2">
-                        {einaDibuix === "punter" && (
-                          <span>🔍 Fes clic a les capes per inspeccionar traçats.</span>
-                        )}
-                        {einaDibuix === "canonada" && (
+                        {draggedItem ? (
+                          <span className="text-sky-300 font-bold flex items-center gap-1.5">
+                            <Move className="w-3.5 h-3.5 animate-spin" />
+                            <span>
+                              Movent {draggedItem.type === "point" ? "icona" : "vèrtex"} a X:{" "}
+                              {draggedItem.currentX}% · Y: {draggedItem.currentY}% (Deixa anar per fixar)
+                            </span>
+                          </span>
+                        ) : isPanning ? (
+                          <span className="text-sky-300">🖐️ Desplaçant plànol...</span>
+                        ) : einaDibuix === "punter" ? (
+                          <span>
+                            ✋ <b>Punter:</b> Arrossega les icones o vèrtexs per moure&apos;ls. Arrossega el fons per desplaçar el plànol. Roda del ratolí per fer zoom.
+                          </span>
+                        ) : einaDibuix === "canonada" ? (
                           <span>
                             ✏️ Fes clic per afegir vèrtexs. Clica &quot;Desar Traçat&quot; en acabar.
                           </span>
-                        )}
-                        {einaDibuix === "punt" && (
+                        ) : einaDibuix === "punt" ? (
                           <span>📍 Clica al punt exacte per posicionar l&apos;element.</span>
-                        )}
+                        ) : null}
                       </div>
 
                       {capaActiva ? (
