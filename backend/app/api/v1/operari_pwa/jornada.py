@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
@@ -19,8 +19,20 @@ router = APIRouter(
 
 
 class JornadaInici(BaseModel):
-    latitud: float
-    longitud: float
+    latitud: Optional[float] = None
+    longitud: Optional[float] = None
+    lat: Optional[float] = None
+    lon: Optional[float] = None
+
+    def model_post_init(self, __context: Any) -> None:
+        if self.latitud is None and self.lat is not None:
+            self.latitud = self.lat
+        if self.longitud is None and self.lon is not None:
+            self.longitud = self.lon
+        if self.latitud is None:
+            self.latitud = 0.0
+        if self.longitud is None:
+            self.longitud = 0.0
 
 
 class JornadaResponse(BaseModel):
@@ -69,6 +81,22 @@ async def iniciar_jornada(
 
     db.add(jornada)
     await db.commit()
+
+    from app.services.sovereign_storage import SovereignStorageGateway
+
+    await SovereignStorageGateway.desar_entitat_json(
+        db=db,
+        empresa_id=empresa_id,
+        categoria="jornades",
+        item_id=str(jornada.id),
+        dades={
+            "id": str(jornada.id),
+            "usuari_id": str(jornada.usuari_id),
+            "estat": jornada.estat,
+            "hora_inici": jornada.hora_inici.isoformat() if jornada.hora_inici else None,
+            "geolocalitzacio_inici": jornada.geolocalitzacio_inici,
+        },
+    )
 
     return jornada
 
@@ -138,12 +166,36 @@ async def finalitzar_jornada(
 
     await db.commit()
 
+    from app.services.sovereign_storage import SovereignStorageGateway
+
+    await SovereignStorageGateway.desar_entitat_json(
+        db=db,
+        empresa_id=empresa_id,
+        categoria="jornades",
+        item_id=str(jornada.id),
+        dades={
+            "id": str(jornada.id),
+            "usuari_id": str(jornada.usuari_id),
+            "estat": jornada.estat,
+            "hora_inici": jornada.hora_inici.isoformat() if jornada.hora_inici else None,
+            "hora_fi": jornada.hora_fi.isoformat() if jornada.hora_fi else None,
+            "geolocalitzacio_inici": jornada.geolocalitzacio_inici,
+            "geolocalitzacio_fi": jornada.geolocalitzacio_fi,
+        },
+    )
+
     return jornada
 
 
 class AssignarVehicleRequest(BaseModel):
     vehicle_id: uuid.UUID
-    km_actuals: int
+    km_actuals: int = 0
+    km_inicials: Optional[int] = None
+    fotos_check_in: Optional[list[str]] = None
+
+    def model_post_init(self, __context: Any) -> None:
+        if self.km_actuals == 0 and self.km_inicials is not None:
+            self.km_actuals = self.km_inicials
 
 
 @router.post("/{jornada_id}/vehicle")
@@ -194,6 +246,23 @@ async def assignar_vehicle_a_jornada(
     usuari.vehicle_assignat_id = vehicle.id  # type: ignore
 
     await db.commit()
+
+    from app.services.sovereign_storage import SovereignStorageGateway
+
+    await SovereignStorageGateway.desar_entitat_json(
+        db=db,
+        empresa_id=empresa_id,
+        categoria="vehicles",
+        item_id=str(vehicle.id),
+        dades={
+            "id": str(vehicle.id),
+            "matricula": vehicle.matricula,
+            "model": vehicle.model,
+            "odometre_acumulat": vehicle.odometre_acumulat,
+            "ultim_operari_id": str(usuari_id),
+            "jornada_id": str(jornada_id),
+        },
+    )
 
     return {
         "status": "OK",

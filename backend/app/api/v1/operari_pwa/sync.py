@@ -9,7 +9,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db_with_tenant_context
 from app.core.security import get_current_user_claims
-from app.models.models import CapaVectorial, Incidencia, OrdreTreball
+from app.models.models import (
+    CapaVectorial,
+    Incidencia,
+    OrdreTreball,
+    RegistreJornadaLaboral,
+    TiquetCarburant,
+    Vehicle,
+)
+from app.services.sovereign_storage import SovereignStorageGateway
 
 router = APIRouter(prefix="/sync", tags=["PWA Sync"])
 logger = logging.getLogger(__name__)
@@ -45,9 +53,98 @@ async def bulk_sync_push(
         try:
             if accio.accio == "FITXAR_JORNADA":
                 logger.info(f"Processant FITXAR_JORNADA per {accio.id}")
+                lat = float(accio.payload.get("latitud", 0.0))
+                lng = float(accio.payload.get("longitud", 0.0))
+                tipus_fitxatge = accio.payload.get("tipus", "INICI")
+                j_id_str = accio.payload.get("jornada_id")
+
+                if tipus_fitxatge == "FI" and j_id_str:
+                    j_res = await db.execute(
+                        select(RegistreJornadaLaboral).where(
+                            RegistreJornadaLaboral.id == uuid.UUID(str(j_id_str)),
+                            RegistreJornadaLaboral.empresa_id == uuid.UUID(claims["empresa_id"]),
+                        )
+                    )
+                    jornada = j_res.scalars().first()
+                    if jornada:
+                        from datetime import datetime, timezone
+
+                        jornada.hora_fi = datetime.now(timezone.utc)
+                        jornada.geolocalitzacio_fi = f"{lat},{lng}"
+                        jornada.estat = "COMPLERT"
+                        await db.flush()
+                        await SovereignStorageGateway.desar_entitat_json(
+                            db=db,
+                            empresa_id=claims["empresa_id"],
+                            categoria="jornades",
+                            item_id=str(jornada.id),
+                            dades={
+                                "id": str(jornada.id),
+                                "usuari_id": str(jornada.usuari_id),
+                                "estat": jornada.estat,
+                                "geolocalitzacio_inici": jornada.geolocalitzacio_inici,
+                                "geolocalitzacio_fi": jornada.geolocalitzacio_fi,
+                            },
+                        )
+                else:
+                    nova_jornada = RegistreJornadaLaboral(
+                        empresa_id=uuid.UUID(claims["empresa_id"]),
+                        usuari_id=uuid.UUID(claims["sub"]),
+                        geolocalitzacio_inici=f"{lat},{lng}",
+                        estat="EN_CURS",
+                    )
+                    db.add(nova_jornada)
+                    await db.flush()
+                    await SovereignStorageGateway.desar_entitat_json(
+                        db=db,
+                        empresa_id=claims["empresa_id"],
+                        categoria="jornades",
+                        item_id=str(nova_jornada.id),
+                        dades={
+                            "id": str(nova_jornada.id),
+                            "usuari_id": str(nova_jornada.usuari_id),
+                            "estat": nova_jornada.estat,
+                            "geolocalitzacio_inici": nova_jornada.geolocalitzacio_inici,
+                        },
+                    )
 
             elif accio.accio == "CREAR_TIQUET":
                 logger.info(f"Processant CREAR_TIQUET per {accio.id}")
+                v_id = accio.payload.get("vehicle_id")
+                if not v_id:
+                    v_res = await db.execute(
+                        select(Vehicle).where(Vehicle.empresa_id == uuid.UUID(claims["empresa_id"]))
+                    )
+                    v_obj = v_res.scalars().first()
+                    v_id = v_obj.id if v_obj else None
+
+                if v_id:
+                    nou_tiquet = TiquetCarburant(
+                        empresa_id=uuid.UUID(claims["empresa_id"]),
+                        operari_id=uuid.UUID(claims["sub"]),
+                        vehicle_id=uuid.UUID(str(v_id)),
+                        tiquet_foto_path=accio.payload.get("tiquet_foto_path", "offline_sync.webp"),
+                        odometre_foto_path=accio.payload.get("odometre_foto_path"),
+                        litres=accio.payload.get("litres"),
+                        import_=accio.payload.get("import_euros", accio.payload.get("import_total")),
+                        odometre_valor=accio.payload.get("odometre_valor"),
+                        estat_ocr="PENDENT_AUDITORIA",
+                    )
+                    db.add(nou_tiquet)
+                    await db.flush()
+                    await SovereignStorageGateway.desar_entitat_json(
+                        db=db,
+                        empresa_id=claims["empresa_id"],
+                        categoria="tiquets_despesa",
+                        item_id=str(nou_tiquet.id),
+                        dades={
+                            "id": str(nou_tiquet.id),
+                            "operari_id": str(nou_tiquet.operari_id),
+                            "vehicle_id": str(nou_tiquet.vehicle_id),
+                            "import_euros": float(nou_tiquet.import_) if nou_tiquet.import_ is not None else None,
+                            "estat_ocr": nou_tiquet.estat_ocr,
+                        },
+                    )
 
             elif accio.accio == "REPORTAR_INCIDENCIA":
                 logger.info(f"Processant REPORTAR_INCIDENCIA per {accio.id}")
@@ -69,6 +166,22 @@ async def bulk_sync_push(
                     foto_path=foto_path,
                 )
                 db.add(nova_incidencia)
+                await db.flush()
+                await SovereignStorageGateway.desar_entitat_json(
+                    db=db,
+                    empresa_id=claims["empresa_id"],
+                    categoria="incidencies_registres",
+                    item_id=str(nova_incidencia.id),
+                    dades={
+                        "id": str(nova_incidencia.id),
+                        "operari_id": str(nova_incidencia.operari_id),
+                        "ambit": nova_incidencia.ambit,
+                        "estat": nova_incidencia.estat,
+                        "text_observacions": text_obs,
+                        "audio_path": audio_path,
+                        "foto_path": foto_path,
+                    },
+                )
 
             elif accio.accio == "FINALITZAR_ORDRE":
                 logger.info(f"Processant FINALITZAR_ORDRE per {accio.id}")

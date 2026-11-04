@@ -71,6 +71,21 @@ async def crear_fulla_picking_operari(
     db.add(fulla)
     await db.commit()
 
+    from app.services.sovereign_storage import SovereignStorageGateway
+
+    await SovereignStorageGateway.desar_entitat_json(
+        db=db,
+        empresa_id=empresa_id,
+        categoria="picking",
+        item_id=str(fulla.id),
+        dades={
+            "id": str(fulla.id),
+            "ordre_treball_id": str(fulla.ordre_treball_id),
+            "vehicle_id": str(fulla.vehicle_id) if fulla.vehicle_id else None,
+            "estat_picking": fulla.estat_picking,
+        },
+    )
+
     return FullaPickingResponse(
         id=fulla.id,
         ordre_treball_id=fulla.ordre_treball_id,
@@ -171,6 +186,25 @@ async def actualitzar_linia_picking_operari(
     pick_in = float(linia.quantitat_carregada_pick_in or 0.0)
     pick_out = float(linia.quantitat_retornada_pick_out or 0.0)
     consum_real = max(0.0, pick_in - pick_out)
+
+    from app.services.sovereign_storage import SovereignStorageGateway
+
+    await SovereignStorageGateway.desar_entitat_json(
+        db=db,
+        empresa_id=empresa_id,
+        categoria="picking",
+        item_id=f"linia_{linia.id}",
+        dades={
+            "id": str(linia.id),
+            "picking_id": str(linia.picking_id),
+            "article_id": str(linia.article_id),
+            "quantitat_prevista": float(linia.quantitat_prevista),
+            "quantitat_carregada_pick_in": pick_in,
+            "quantitat_retornada_pick_out": pick_out,
+            "quantitat_mermada": float(linia.quantitat_mermada or 0.0),
+            "consum_real": consum_real,
+        },
+    )
 
     return BalancLiniaResponse(
         id=linia.id,

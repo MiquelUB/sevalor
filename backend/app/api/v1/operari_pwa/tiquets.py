@@ -1,4 +1,3 @@
-import os
 import secrets
 import uuid
 from datetime import datetime
@@ -127,6 +126,26 @@ async def registrar_tiquet_carburant(
     db.add(nou_tiquet)
     await db.commit()
 
+    from app.services.sovereign_storage import SovereignStorageGateway
+
+    await SovereignStorageGateway.desar_entitat_json(
+        db=db,
+        empresa_id=empresa_id,
+        categoria="tiquets_despesa",
+        item_id=str(nou_tiquet.id),
+        dades={
+            "id": str(nou_tiquet.id),
+            "operari_id": str(nou_tiquet.operari_id),
+            "vehicle_id": str(nou_tiquet.vehicle_id) if nou_tiquet.vehicle_id else None,
+            "tiquet_foto_path": nou_tiquet.tiquet_foto_path,
+            "odometre_foto_path": nou_tiquet.odometre_foto_path,
+            "litres": float(nou_tiquet.litres) if nou_tiquet.litres is not None else None,
+            "import_euros": float(nou_tiquet.import_) if nou_tiquet.import_ is not None else None,
+            "odometre_valor": nou_tiquet.odometre_valor,
+            "estat_ocr": nou_tiquet.estat_ocr,
+        },
+    )
+
     return TiquetCarburantResponse(
         id=nou_tiquet.id,
         vehicle_id=nou_tiquet.vehicle_id,
@@ -174,18 +193,20 @@ async def pujar_tiquet_ocr(
                 detail="No hi ha cap vehicle registrat al tenant. Doneu-ne d'alta un primer.",
             )
 
-    # Desa el fitxer (Simulació guardat sobiran)
-    base_dir = os.getenv("SOVEREIGN_DATA_PATH", "/tmp/data")
-    save_dir = f"{base_dir}/{empresa_id}/docs/tiquets"
-    os.makedirs(save_dir, exist_ok=True)
+    from app.services.sovereign_storage import SovereignStorageGateway
 
     file_ext = file.filename.split(".")[-1] if file.filename else "jpg"
     safe_name = f"ocr_{secrets.token_hex(8)}.{file_ext}"
-    file_path = f"{save_dir}/{safe_name}"
-
     file_bytes = await file.read()
-    with open(file_path, "wb") as f:
-        f.write(file_bytes)
+
+    file_path = await SovereignStorageGateway.pujar_fitxer_binari(
+        db=db,
+        empresa_id=empresa_id,
+        categoria="tiquets_despesa",
+        nom_fitxer=safe_name,
+        content=file_bytes,
+        content_type=file.content_type or "image/jpeg",
+    )
 
     from app.services.ocr_service import processar_tiquet_ocr
 
@@ -205,6 +226,22 @@ async def pujar_tiquet_ocr(
 
     db.add(nou_tiquet)
     await db.commit()
+
+    await SovereignStorageGateway.desar_entitat_json(
+        db=db,
+        empresa_id=empresa_id,
+        categoria="tiquets_despesa",
+        item_id=str(nou_tiquet.id),
+        dades={
+            "id": str(nou_tiquet.id),
+            "operari_id": str(nou_tiquet.operari_id),
+            "vehicle_id": str(nou_tiquet.vehicle_id) if nou_tiquet.vehicle_id else None,
+            "tiquet_foto_path": file_path,
+            "litres": float(nou_tiquet.litres) if nou_tiquet.litres is not None else None,
+            "import_euros": float(nou_tiquet.import_) if nou_tiquet.import_ is not None else None,
+            "estat_ocr": nou_tiquet.estat_ocr,
+        },
+    )
 
     return {
         "status": "OK",

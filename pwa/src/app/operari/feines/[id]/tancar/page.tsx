@@ -16,21 +16,41 @@ export default function TancarFeinaPage() {
   const feinaId = params.id as string;
 
   const handleSaveSignature = async (base64Signature: string) => {
-    await db.sync_queue.add({
-      action: "TANCAR_ORDRE",
-      payload: {
-        ordre_id: feinaId,
-        signatura_base64: base64Signature,
-        nom_signant: nomSignant.trim() || undefined,
-        dni_signant: dniSignant.trim() || undefined,
-        data_tancament: new Date().toISOString(),
-      },
-      status: "pending",
-      createdAt: Date.now(),
-    });
+    try {
+      if (typeof navigator !== "undefined" && navigator.onLine) {
+        const res = await fetch(`/api/v1/operari/feines/${feinaId}/finalitzar`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({
+            signatura_base64: base64Signature,
+            observacions: nomSignant ? `Receptor: ${nomSignant} (${dniSignant})` : undefined,
+            hores: 1.0,
+          }),
+        });
+        if (!res.ok) {
+          const errData = await res.json().catch(() => ({}));
+          throw new Error(errData.detail || "Error en finalitzar l'ordre al servidor.");
+        }
+      } else {
+        await db.sync_queue.add({
+          action: "TANCAR_ORDRE",
+          payload: {
+            ordre_id: feinaId,
+            signatura_base64: base64Signature,
+            nom_signant: nomSignant.trim() || undefined,
+            dni_signant: dniSignant.trim() || undefined,
+            data_tancament: new Date().toISOString(),
+          },
+          status: "pending",
+          createdAt: Date.now(),
+        });
+      }
 
-    setSignatureSaved(true);
-    alert("Signatura desada. Sincronització pendent a la cua.");
+      setSignatureSaved(true);
+    } catch (e: any) {
+      alert(e.message || "Error en desar la signatura");
+    }
   };
 
   const handleFinalize = () => {

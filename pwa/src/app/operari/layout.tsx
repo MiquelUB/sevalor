@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import CopilotWidget from "@/components/CopilotWidget";
 import NotificationCenter from "@/components/operari/NotificationCenter";
+import ControlHorariBar from "@/components/operari/ControlHorariBar";
 
 export default function OperariLayout({
   children,
@@ -144,6 +145,9 @@ export default function OperariLayout({
 
         {/* Notificacions Offline/Sync */}
         <NotificationCenter />
+
+        {/* Barra de Control Horari en Viu (FR-004) */}
+        {!isLoginPage && <ControlHorariBar />}
 
         {/* Contingut de la Pàgina */}
         <div className="flex-1 flex flex-col">{children}</div>

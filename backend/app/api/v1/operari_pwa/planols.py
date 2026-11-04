@@ -67,7 +67,7 @@ async def llistar_planols_disponibles_operari(
             "codi_referencia": p.codi_referencia,
             "tipus_fitxer": p.tipus_fitxer,
             "es_georeferenciat": p.es_georeferenciat,
-            "projeccio": p.projeccio,
+            "projeccio": getattr(p, "projeccio", None),
         }
         for p in planols
     ]
@@ -116,6 +116,25 @@ async def crear_capa_operari(
     )
     db.add(nova_capa)
     await db.commit()
+
+    await SovereignStorageGateway.desar_entitat_json(
+        db=db,
+        empresa_id=empresa_id,
+        categoria="planols_capes",
+        item_id=str(nova_capa.id),
+        dades={
+            "id": str(nova_capa.id),
+            "planol_base_id": str(nova_capa.planol_base_id),
+            "nom": nova_capa.nom,
+            "disciplina": nova_capa.disciplina,
+            "color_hex": nova_capa.color_hex,
+            "gruix_linia": nova_capa.gruix_linia,
+            "es_immutable": nova_capa.es_immutable,
+            "visible": nova_capa.visible,
+            "version_id": nova_capa.version_id,
+            "geometries_geojson": nova_capa.geometries_geojson,
+        },
+    )
 
     return CapaVectorialResponse(
         id=nova_capa.id,
@@ -184,6 +203,26 @@ async def editar_capa_operari_per_planol(
 
     capa.version_id += 1
     await db.commit()
+
+    await SovereignStorageGateway.desar_entitat_json(
+        db=db,
+        empresa_id=empresa_id,
+        categoria="planols_capes",
+        item_id=str(capa.id),
+        dades={
+            "id": str(capa.id),
+            "planol_base_id": str(capa.planol_base_id),
+            "nom": capa.nom,
+            "disciplina": capa.disciplina,
+            "color_hex": capa.color_hex,
+            "gruix_linia": capa.gruix_linia,
+            "es_immutable": capa.es_immutable,
+            "visible": capa.visible,
+            "version_id": capa.version_id,
+            "geometries_geojson": capa.geometries_geojson,
+        },
+    )
+
     return capa
 
 

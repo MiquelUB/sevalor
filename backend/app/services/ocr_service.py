@@ -291,7 +291,7 @@ async def processar_albara_ocr(file_bytes: bytes, node_ia_url: Optional[str] = N
         # Intent B: Format columnar / tabular de documents PDF (PyMuPDF word clustering)
         if not linies and len(file_bytes) > 0:
             try:
-                import fitz
+                import fitz  # type: ignore[import-untyped]
                 doc_pdf = fitz.open(stream=file_bytes, filetype="pdf")
                 num_re = r"\d+(?:\.\d{3})*(?:,\d+)?"
                 num_pattern = re.compile(
@@ -403,7 +403,7 @@ async def processar_albara_ocr(file_bytes: bytes, node_ia_url: Optional[str] = N
         # Si és un PDF, provar de renderitzar la primera pàgina a imatge JPEG per a l'IA multimodal
         if file_bytes.startswith(b"%PDF"):
             try:
-                import fitz
+                import fitz  # type: ignore[import-untyped]
                 doc = fitz.open(stream=file_bytes, filetype="pdf")
                 if len(doc) > 0:
                     pix = doc[0].get_pixmap(dpi=150)

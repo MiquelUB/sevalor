@@ -1,9 +1,8 @@
 import math
-import os
 import sys
 import uuid
 from datetime import date
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from pydantic import BaseModel, ConfigDict
@@ -296,8 +295,16 @@ async def iniciar_trajecte(
 class ComencarFeinaRequest(BaseModel):
     lat: Optional[float] = None
     lng: Optional[float] = None
+    lon: Optional[float] = None
     desviacio_justificada: bool = False
+    justificacio_gps: Optional[str] = None
     foto_evidencia_desviacio: Optional[str] = None
+
+    def model_post_init(self, __context: Any) -> None:
+        if self.lng is None and self.lon is not None:
+            self.lng = self.lon
+        if self.justificacio_gps and not self.desviacio_justificada:
+            self.desviacio_justificada = True
 
 
 @router.put("/feines/{feina_id}/comencar")
@@ -347,9 +354,12 @@ async def pujar_foto_qualitat(
     request: Request,
     tipus: str = Form(..., description="INICIAL, INTERMEDIA o FINAL"),
     foto: Optional[UploadFile] = File(None),
+    fitxer: Optional[UploadFile] = File(None),
     db: AsyncSession = Depends(get_db_with_tenant_context),
 ):
-    """Protocol obligatori de 3 fotos de control de qualitat (Spec 013 RF-13)."""
+    """Protocol obligatori de 3 fotos de control de qualitat al disc dur del client (Spec 013 RF-13)."""
+    from app.services.sovereign_storage import SovereignStorageGateway
+
     empresa_id = request.state.empresa_id
     if not empresa_id or empresa_id == "undefined":
         raise HTTPException(status_code=401)
@@ -360,18 +370,18 @@ async def pujar_foto_qualitat(
             status_code=422, detail="El tipus de foto ha de ser INICIAL, INTERMEDIA o FINAL"
         )
 
-    dir_feina = f"/tmp/data/{empresa_id}/feines/{feina_id}"
-    os.makedirs(dir_feina, exist_ok=True)
+    nom_fitxer = f"ot_{feina_id}_foto_{tipus_upper.lower()}.webp"
+    file_obj = foto or fitxer
+    content = await file_obj.read() if file_obj else b"WEBP_EVIDENCE_PLACEHOLDER"
 
-    file_path = f"{dir_feina}/foto_{tipus_upper.lower()}.webp"
-    if foto:
-        content = await foto.read()
-        with open(file_path, "wb") as f:
-            f.write(content)
-    else:
-        # Crea evidència de fitxer si no s'adjunta binari multipart
-        with open(file_path, "wb") as f:
-            f.write(b"WEBP_EVIDENCE_PLACEHOLDER")
+    file_path = await SovereignStorageGateway.pujar_fitxer_binari(
+        db=db,
+        empresa_id=empresa_id,
+        categoria="ots_actives",
+        nom_fitxer=nom_fitxer,
+        content=content,
+        content_type="image/webp",
+    )
 
     return {"feina_id": str(feina_id), "tipus": tipus_upper, "path": file_path, "status": "GUARDAT"}
 
@@ -380,26 +390,43 @@ async def pujar_foto_qualitat(
 async def consultar_fotos_qualitat(
     feina_id: uuid.UUID, request: Request, db: AsyncSession = Depends(get_db_with_tenant_context)
 ):
-    """Consulta l'estat del protocol de 3 fotos (Spec 013 RF-13, RF-14)."""
+    """Consulta l'estat del protocol de 3 fotos al disc dur del client (Spec 013 RF-13, RF-14)."""
+    from app.services.sovereign_storage import SovereignStorageGateway
+
     empresa_id = request.state.empresa_id
     if not empresa_id or empresa_id == "undefined":
         raise HTTPException(status_code=401)
 
-    dir_feina = f"/tmp/data/{empresa_id}/feines/{feina_id}"
     fotos_pujades = {}
     for t in ["inicial", "intermedia", "final"]:
-        p = f"{dir_feina}/foto_{t}.webp"
-        fotos_pujades[t] = os.path.exists(p)
+        nom_fitxer = f"ot_{feina_id}_foto_{t}.webp"
+        fotos_pujades[t] = await SovereignStorageGateway.existeix_fitxer_categoria(
+            db=db,
+            empresa_id=empresa_id,
+            categoria="ots_actives",
+            nom_fitxer=nom_fitxer,
+        )
 
     complet = all(fotos_pujades.values())
     return {"feina_id": str(feina_id), "fotos": fotos_pujades, "protocol_complet": complet}
 
 
+class FinalitzarFeinaRequest(BaseModel):
+    hores: Optional[float] = None
+    observacions: Optional[str] = None
+    signatura_base64: Optional[str] = None
+
+
 @router.put("/feines/{feina_id}/finalitzar")
 async def finalitzar_feina(
-    feina_id: uuid.UUID, request: Request, db: AsyncSession = Depends(get_db_with_tenant_context)
+    feina_id: uuid.UUID,
+    request: Request,
+    payload: Optional[FinalitzarFeinaRequest] = None,
+    db: AsyncSession = Depends(get_db_with_tenant_context),
 ):
     """Finalitza la feina. Bloquejat si no s'han capturat les 3 fotos (Spec 013 RF-14, RF-17)."""
+    from app.services.sovereign_storage import SovereignStorageGateway
+
     empresa_id = request.state.empresa_id
     if not empresa_id or empresa_id == "undefined":
         raise HTTPException(status_code=401)
@@ -413,10 +440,16 @@ async def finalitzar_feina(
     if not feina:
         raise HTTPException(status_code=404, detail="Feina no trobada")
 
-    dir_feina = f"/tmp/data/{empresa_id}/feines/{feina_id}"
     faltants = []
     for t in ["inicial", "intermedia", "final"]:
-        if not os.path.exists(f"{dir_feina}/foto_{t}.webp"):
+        nom_fitxer = f"ot_{feina_id}_foto_{t}.webp"
+        exists = await SovereignStorageGateway.existeix_fitxer_categoria(
+            db=db,
+            empresa_id=empresa_id,
+            categoria="ots_actives",
+            nom_fitxer=nom_fitxer,
+        )
+        if not exists:
             faltants.append(t.capitalize())
 
     if faltants:
@@ -427,6 +460,32 @@ async def finalitzar_feina(
 
     feina.estat = "COMPLERT"
     await db.commit()
+
+    # Desar l'OT tancada a la carpeta d'històric del disc dur del client
+    await SovereignStorageGateway.desar_entitat_json(
+        db=db,
+        empresa_id=empresa_id,
+        categoria="ots_historic",
+        item_id=str(feina.id),
+        dades={
+            "id": str(feina.id),
+            "codi": feina.codi,
+            "titol": feina.titol,
+            "estat": feina.estat,
+            "adreca": feina.adreca,
+            "client_id": str(feina.client_id) if feina.client_id else None,
+            "cap_de_colla_id": str(feina.cap_de_colla_id) if feina.cap_de_colla_id else None,
+            "fotos_qa": [
+                f"ot_{feina_id}_foto_inicial.webp",
+                f"ot_{feina_id}_foto_intermedia.webp",
+                f"ot_{feina_id}_foto_final.webp",
+            ],
+            "hores": payload.hores if payload else None,
+            "observacions": payload.observacions if payload else None,
+            "signatura_present": bool(payload and payload.signatura_base64),
+        },
+    )
+
     return {
         "feina_id": str(feina.id),
         "estat": "COMPLERT",

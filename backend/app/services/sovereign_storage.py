@@ -14,7 +14,7 @@ import re
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, cast
 
 import httpx
 from fastapi import HTTPException, status
@@ -228,7 +228,8 @@ class SovereignStorageGateway:
             async with httpx.AsyncClient(timeout=8.0) as client:
                 resp = await client.get(url, headers={"X-Vault-Token": secret or ""})
                 if resp.status_code == 200:
-                    return resp.json()
+                    raw_data = resp.json()
+                    return cast(list[dict[str, Any]], raw_data) if isinstance(raw_data, list) else []
                 return []
         except httpx.RequestError:
             raise HTTPException(
@@ -290,6 +291,35 @@ class SovereignStorageGateway:
                     "message": "No s'ha pogut guardar el fitxer perquè el disc dur del client està desconnectat.",
                 },
             )
+
+    @classmethod
+    async def existeix_fitxer_categoria(
+        cls,
+        db: AsyncSession,
+        empresa_id: str | uuid.UUID,
+        categoria: str,
+        nom_fitxer: str,
+    ) -> bool:
+        """Comprova si un fitxer binari existeix dins la carpeta corresponent del disc dur del client."""
+        subcarpeta = MAPA_CARPETES_CLIENT.get(categoria, categoria)
+        try:
+            nom_net = sanititzar_nom(nom_fitxer)
+        except ValueError:
+            return False
+
+        mode, base_target, secret = await cls.resoldre_desti_disc_empresa(db, empresa_id)
+
+        if mode == "LOCAL_FS":
+            target = (Path(base_target) / subcarpeta / nom_net).resolve()
+            return target.is_file()
+
+        url = f"{base_target}/fitxers/{subcarpeta}/{nom_net}"
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                resp = await client.get(url, headers={"X-Vault-Token": secret or ""})
+                return resp.status_code == 200
+        except httpx.RequestError:
+            return False
 
     @classmethod
     async def servir_fitxer(

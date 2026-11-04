@@ -20,10 +20,23 @@ import {
   MapPin,
   Layers,
   ExternalLink,
+  Camera,
+  ShieldCheck,
+  Lock,
+  AlertTriangle,
 } from "lucide-react";
+import CameraCapture from "@/components/CameraCapture";
 import { apiFetch } from "@/lib/api";
 import { db } from "@/lib/offline/db";
 import { encryptWithPin, decryptWithPin } from "@/lib/crypto";
+
+type TipusFotoQA = "INICIAL" | "INTERMEDIA" | "FINAL";
+
+interface EstatFotosQA {
+  fotos_pujades: TipusFotoQA[];
+  protocol_complet: boolean;
+  falten: TipusFotoQA[];
+}
 
 interface Asset {
   id: string;
@@ -79,6 +92,132 @@ export default function LlistaMaquinesPage() {
   const [showPinModal, setShowPinModal] = useState(false);
   const [offlinePin, setOfflinePin] = useState("");
   const [offlineError, setOfflineError] = useState<string | null>(null);
+
+  // Geovalla i inici de feina (FR-005)
+  const [iniciantFeina, setIniciantFeina] = useState(false);
+  const [requereixJustificacioGPS, setRequereixJustificacioGPS] = useState(false);
+  const [justificacioGps, setJustificacioGps] = useState("");
+  const [gpsFeedback, setGpsFeedback] = useState<string | null>(null);
+  const [gpsError, setGpsError] = useState<string | null>(null);
+
+  // Semàfor 3 Fotos QA (FR-007)
+  const [estatFotos, setEstatFotos] = useState<EstatFotosQA>({
+    fotos_pujades: [],
+    protocol_complet: false,
+    falten: ["INICIAL", "INTERMEDIA", "FINAL"],
+  });
+  const [tipusFotoActiva, setTipusFotoActiva] = useState<TipusFotoQA | null>(null);
+  const [uploadingFoto, setUploadingFoto] = useState(false);
+
+  const carregarEstatFotos = async () => {
+    if (typeof navigator !== "undefined" && !navigator.onLine) return;
+    try {
+      const res = await fetch(`/api/v1/operari/feines/${id}/fotos`, {
+        credentials: "include",
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const fotosDict = data.fotos || {};
+        const pujades: TipusFotoQA[] = [];
+        if (fotosDict.inicial) pujades.push("INICIAL");
+        if (fotosDict.intermedia) pujades.push("INTERMEDIA");
+        if (fotosDict.final) pujades.push("FINAL");
+
+        const tot: TipusFotoQA[] = ["INICIAL", "INTERMEDIA", "FINAL"];
+        const falten = tot.filter((t) => !pujades.includes(t));
+        setEstatFotos({
+          fotos_pujades: pujades,
+          protocol_complet: Boolean(data.protocol_complet || pujades.length === 3),
+          falten,
+        });
+      }
+    } catch {
+      // mode offline
+    }
+  };
+
+  const obtenirGPS = (): Promise<{ latitud: number; longitud: number }> =>
+    new Promise((resolve, reject) => {
+      if (!navigator.geolocation) {
+        reject(new Error("Geolocalització no disponible"));
+        return;
+      }
+      navigator.geolocation.getCurrentPosition(
+        (pos) => resolve({ latitud: pos.coords.latitude, longitud: pos.coords.longitude }),
+        () => reject(new Error("No s'ha pogut obtenir el senyal GPS")),
+        { enableHighAccuracy: true, timeout: 10000 }
+      );
+    });
+
+  const handleComencarFeina = async () => {
+    setIniciantFeina(true);
+    setGpsError(null);
+    setGpsFeedback(null);
+    try {
+      const coords = await obtenirGPS();
+      const res = await fetch(`/api/v1/operari/feines/${id}/comencar`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          lat: coords.latitud,
+          lng: coords.longitud,
+          lon: coords.longitud,
+          desviacio_justificada: Boolean(justificacioGps.trim()),
+          justificacio_gps: justificacioGps.trim() || undefined,
+        }),
+      });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        const detail = err.detail || "Error en iniciar la feina";
+        if (res.status === 400 && detail.includes("50m")) {
+          setRequereixJustificacioGPS(true);
+        }
+        throw new Error(detail);
+      }
+
+      setOrdre((prev) => (prev ? { ...prev, estat: "EN_CURS" } : null));
+      setRequereixJustificacioGPS(false);
+      setGpsFeedback("Arribada GPS confirmada. Feina en curs!");
+    } catch (e: unknown) {
+      setGpsError(e instanceof Error ? e.message : "Error GPS");
+    } finally {
+      setIniciantFeina(false);
+    }
+  };
+
+  const handleCaptureFotoQA = async (blob: Blob) => {
+    if (!tipusFotoActiva) return;
+    const tipus = tipusFotoActiva;
+    setTipusFotoActiva(null);
+    setUploadingFoto(true);
+    setGpsError(null);
+
+    try {
+      const formData = new FormData();
+      formData.append("tipus", tipus);
+      formData.append("foto", blob, `ot_${id}_foto_${tipus.toLowerCase()}.webp`);
+      formData.append("fitxer", blob, `ot_${id}_foto_${tipus.toLowerCase()}.webp`);
+
+      const res = await fetch(`/api/v1/operari/feines/${id}/fotos`, {
+        method: "POST",
+        credentials: "include",
+        body: formData,
+      });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || "Error pujant la fotografia QA.");
+      }
+
+      await carregarEstatFotos();
+    } catch (e: unknown) {
+      setGpsError(e instanceof Error ? e.message : "Error pujant la fotografia");
+    } finally {
+      setUploadingFoto(false);
+    }
+  };
 
   const loadFeina = async (pin?: string) => {
     setLoading(true);
@@ -158,6 +297,7 @@ export default function LlistaMaquinesPage() {
             planol_tipus_fitxer: data.planol_tipus_fitxer || null,
           };
           setOrdre(mapped);
+          await carregarEstatFotos();
 
           // Guardar xifrat a IndexedDB si tenim el PIN
           const sessionPin = sessionStorage.getItem("sevalor_session_pin");
@@ -233,6 +373,13 @@ export default function LlistaMaquinesPage() {
 
   return (
     <div className="flex-1 flex flex-col bg-surface dark:bg-slate-950 text-on-surface dark:text-slate-100 transition-colors p-4 space-y-4">
+      {tipusFotoActiva && (
+        <CameraCapture
+          onCapture={handleCaptureFotoQA}
+          onCancel={() => setTipusFotoActiva(null)}
+        />
+      )}
+
       {/* Stitch Top Sub-navigation Header */}
       <div className="flex items-center justify-between bg-surface-container-lowest dark:bg-slate-900 p-3 rounded-xl border border-outline-variant/20 dark:border-slate-800 shadow-sm">
         <div className="flex items-center gap-2.5">
@@ -359,6 +506,130 @@ export default function LlistaMaquinesPage() {
                   <span className="font-medium">{ordre.adreca}</span>
                 </div>
               )}
+
+              {ordre.estat !== "TANCADA" && (
+                <div className="pt-2 border-t border-surface-container dark:border-slate-800 space-y-2">
+                  <button
+                    type="button"
+                    data-testid="btn-comencar-feina-gps"
+                    disabled={iniciantFeina}
+                    onClick={handleComencarFeina}
+                    className="w-full min-h-[46px] bg-primary text-white font-bold text-xs uppercase tracking-wider rounded-lg flex items-center justify-center gap-2 active:scale-95 transition-transform disabled:opacity-50"
+                  >
+                    <MapPin className="w-4 h-4" />
+                    {iniciantFeina
+                      ? "Verificant Geovalla 50m..."
+                      : ordre.estat === "EN_CURS"
+                      ? "Re-validar Posició GPS (En Curs)"
+                      : "Començar Feina (Arribada GPS)"}
+                  </button>
+
+                  {requereixJustificacioGPS && (
+                    <div
+                      data-testid="geofence-justification-box"
+                      className="p-3 rounded-lg bg-error-container/25 border border-error space-y-2"
+                    >
+                      <p className="text-[11px] font-bold text-error uppercase">
+                        Fora del radi de 50m de l&apos;obra (FR-005)
+                      </p>
+                      <textarea
+                        value={justificacioGps}
+                        onChange={(e) => setJustificacioGps(e.target.value)}
+                        placeholder="Motiu de la desviació (ex: accés bloquejat, aparcament a 100m...)"
+                        className="w-full p-2 text-xs rounded bg-surface-container-lowest border border-outline-variant text-on-surface"
+                        rows={2}
+                      />
+                      <button
+                        type="button"
+                        onClick={handleComencarFeina}
+                        className="w-full py-2 bg-error text-white font-bold text-xs uppercase rounded active:scale-95 transition-transform"
+                      >
+                        Confirmar Inici amb Justificació
+                      </button>
+                    </div>
+                  )}
+
+                  {gpsFeedback && (
+                    <p className="text-xs font-semibold text-secondary bg-secondary-container/20 p-2 rounded">
+                      {gpsFeedback}
+                    </p>
+                  )}
+                  {gpsError && (
+                    <p className="text-xs font-semibold text-error bg-error-container/25 p-2 rounded">
+                      {gpsError}
+                    </p>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Semàfor de 3 Fotografies QA (FR-007) */}
+          <div className="bg-surface-container-lowest dark:bg-slate-900 p-4 rounded-xl border border-outline-variant/25 dark:border-slate-800 shadow-sm space-y-3">
+            <div className="flex items-center justify-between">
+              <div>
+                <h3 className="text-xs font-extrabold uppercase tracking-wider text-primary dark:text-slate-100 flex items-center gap-1.5">
+                  <ShieldCheck className="w-4 h-4 text-primary" />
+                  Protocol QA de 3 Fotografies
+                </h3>
+                <p className="text-[11px] text-on-surface-variant dark:text-slate-400">
+                  Captura obligatòria en viu amb càmera abans de tancar
+                </p>
+              </div>
+              <span
+                data-testid="qa-photos-counter"
+                className={`text-xs font-mono font-bold px-2 py-0.5 rounded-full ${
+                  estatFotos.protocol_complet
+                    ? "bg-secondary-container/20 text-secondary border border-secondary"
+                    : "bg-surface-container text-on-surface-variant"
+                }`}
+              >
+                {estatFotos.fotos_pujades.length} / 3
+              </span>
+            </div>
+
+            <div className="grid grid-cols-1 gap-2">
+              {[
+                { codi: "INICIAL" as TipusFotoQA, label: "1. Foto Inicial", desc: "Abans d'actuar a la instal·lació" },
+                { codi: "INTERMEDIA" as TipusFotoQA, label: "2. Foto Intermèdia", desc: "Durant el muntatge o reparació" },
+                { codi: "FINAL" as TipusFotoQA, label: "3. Foto Final", desc: "Resultat acabat i verificat" },
+              ].map((item) => {
+                const feta = estatFotos.fotos_pujades.includes(item.codi);
+                return (
+                  <div
+                    key={item.codi}
+                    data-testid={`qa-slot-${item.codi}`}
+                    className={`p-3 rounded-lg border flex items-center justify-between ${
+                      feta
+                        ? "bg-secondary-container/10 border-secondary-container/40"
+                        : "bg-surface-container-low dark:bg-slate-800/50 border-outline-variant/30"
+                    }`}
+                  >
+                    <div>
+                      <p className="font-bold text-xs text-on-surface dark:text-slate-200 flex items-center gap-1.5">
+                        {feta && <CheckCircle2 className="w-3.5 h-3.5 text-secondary" />}
+                        {item.label}
+                      </p>
+                      <p className="text-[10px] text-on-surface-variant dark:text-slate-400">{item.desc}</p>
+                    </div>
+
+                    <button
+                      type="button"
+                      data-testid={`btn-foto-${item.codi}`}
+                      disabled={uploadingFoto}
+                      onClick={() => setTipusFotoActiva(item.codi)}
+                      className={`min-h-[38px] px-3 py-1.5 rounded-lg font-bold text-xs uppercase flex items-center gap-1.5 active:scale-95 transition-all shadow-sm ${
+                        feta
+                          ? "bg-surface-container-high text-on-surface dark:bg-slate-700 dark:text-white"
+                          : "bg-primary text-white"
+                      }`}
+                    >
+                      <Camera className="w-3.5 h-3.5" />
+                      <span>{feta ? "Repetir" : "Capturar"}</span>
+                    </button>
+                  </div>
+                );
+              })}
             </div>
           </div>
 
@@ -389,13 +660,27 @@ export default function LlistaMaquinesPage() {
               </Link>
             )}
 
-            <Link
-              href={`/operari/feines/${ordre.id}/tancar`}
-              className="py-3 px-3 rounded-xl bg-primary hover:bg-primary-container text-white text-xs font-bold flex flex-col items-center justify-center gap-1.5 shadow-sm transition-all text-center active:scale-95"
-            >
-              <CheckCircle2 className="w-4 h-4" />
-              <span>Tancar Feina</span>
-            </Link>
+            {estatFotos.protocol_complet ? (
+              <Link
+                href={`/operari/feines/${ordre.id}/tancar`}
+                data-testid="btn-anar-tancar-feina"
+                className="py-3 px-3 rounded-xl bg-primary hover:bg-primary-container text-white text-xs font-bold flex flex-col items-center justify-center gap-1.5 shadow-sm transition-all text-center active:scale-95"
+              >
+                <CheckCircle2 className="w-4 h-4" />
+                <span>Tancar Feina</span>
+              </Link>
+            ) : (
+              <button
+                type="button"
+                data-testid="btn-anar-tancar-feina"
+                disabled
+                title={`Falten ${estatFotos.falten.length} fotos QA per poder tancar`}
+                className="py-3 px-2 rounded-xl bg-surface-container-high dark:bg-slate-800 text-on-surface-variant dark:text-slate-500 text-[11px] font-bold flex flex-col items-center justify-center gap-1 opacity-60 cursor-not-allowed text-center"
+              >
+                <Lock className="w-4 h-4" />
+                <span>Falten {estatFotos.falten.length} Fotos</span>
+              </button>
+            )}
           </div>
 
           {/* Vehicle Assignat */}

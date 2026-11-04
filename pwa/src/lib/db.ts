@@ -36,10 +36,45 @@ export interface LocalIncidencia {
   estat_sync: "PENDENT" | "SINCRONITZAT";
 }
 
+export interface LocalFitxatgeJornada {
+  id: string;
+  empresa_id: string;
+  usuari_id: string;
+  jornada_remota_id?: string;
+  estat: "EN_CURS" | "COMPLERT";
+  hora_inici: string;
+  hora_fi?: string;
+  latitud_inici: number;
+  longitud_inici: number;
+  latitud_fi?: number;
+  longitud_fi?: number;
+  estat_sync: "PENDENT" | "SINCRONITZAT" | "ERROR";
+}
+
+export interface LocalLiniaPicking {
+  id: string;
+  empresa_id: string;
+  picking_id?: string;
+  article_id: string;
+  nom: string;
+  referencia: string;
+  quantitat_prevista: number;
+  quantitat_carregada_pick_in: number;
+  quantitat_retornada_pick_out: number;
+  unitat: string;
+  estat_sync: "PENDENT" | "SINCRONITZAT";
+}
+
 export interface SyncQueueItem {
   id: string;
   bloc_uuid: string;
-  acció: "CREAR_TIQUET" | "REPORTAR_INCIDENCIA" | "INICIAR_TRAJECTE" | "FINALITZAR_ORDRE";
+  acció:
+    | "FITXAR_JORNADA"
+    | "ACTUALITZAR_PICKING"
+    | "CREAR_TIQUET"
+    | "REPORTAR_INCIDENCIA"
+    | "INICIAR_TRAJECTE"
+    | "FINALITZAR_ORDRE";
   payload: any;
   timestamp: number;
   intents: number;
@@ -49,6 +84,8 @@ export class SevalorLocalDatabase extends Dexie {
   ordres!: Table<OrdreTreballLocal, string>;
   tiquets!: Table<LocalTiquetDespesa, string>;
   incidencies!: Table<LocalIncidencia, string>;
+  fichajes!: Table<LocalFitxatgeJornada, string>;
+  picking!: Table<LocalLiniaPicking, string>;
   sync_queue!: Table<SyncQueueItem, string>;
 
   constructor() {
@@ -57,6 +94,14 @@ export class SevalorLocalDatabase extends Dexie {
       ordres: "id, empresa_id, estat_local, data_programada",
       tiquets: "id, empresa_id, categoria, estat_sync",
       incidencies: "id, empresa_id, tipus, estat_sync",
+      sync_queue: "id, bloc_uuid, timestamp, intents",
+    });
+    this.version(3).stores({
+      ordres: "id, empresa_id, estat_local, data_programada",
+      tiquets: "id, empresa_id, categoria, estat_sync",
+      incidencies: "id, empresa_id, tipus, estat_sync",
+      fichajes: "id, empresa_id, usuari_id, estat, estat_sync",
+      picking: "id, empresa_id, article_id, estat_sync",
       sync_queue: "id, bloc_uuid, timestamp, intents",
     });
   }
