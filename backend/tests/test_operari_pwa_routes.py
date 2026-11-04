@@ -484,3 +484,88 @@ async def test_superadmin_segregation_on_marca(admin_session):
         # Haurà de retornar 403 Forbidden per mandat Zero-Trust
         assert res.status_code == 403
         assert "Zero-Trust Segregation" in res.json().get("detail", "")
+
+
+@pytest.mark.asyncio
+async def test_operari_identificacio_and_public_cae_endpoint(admin_session):
+    """Verifica l'endpoint autenticat /operari/identificacio i el públic /public/identificacio/{id}."""
+    emp_id = uuid.uuid4()
+    operari_id = uuid.uuid4()
+    nif_empresa = "B" + str(uuid.uuid4())[:8].upper()
+    nif_operari = "47" + str(uuid.uuid4())[:6].upper() + "Z"
+
+    empresa = Empresa(
+        id=emp_id,
+        nom="Instal·lacions Elèctriques del Nord SL",
+        nif=nif_empresa,
+        subdomini="nord-" + str(uuid.uuid4())[:6],
+        pla_subscripcio="PRO",
+        estat_pagament="ACTIU",
+        adreca="Carrer Major, 12, Girona",
+    )
+    admin_session.add(empresa)
+    await admin_session.flush()
+
+    usuari = Usuari(
+        id=operari_id,
+        empresa_id=emp_id,
+        nif=nif_operari,
+        nom="Marc",
+        cognoms="Soler Roca",
+        rol="OPERARI",
+        pin_hash="pin_hash_1234",
+    )
+    admin_session.add(usuari)
+    await admin_session.flush()
+
+    token = _crear_token_operari(str(operari_id), str(emp_id), rol="OPERARI")
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "X-Empresa-ID": str(emp_id),
+    }
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        # 1. Sense autenticació a /operari/identificacio -> 401
+        res_no_auth = await ac.get("/api/v1/operari/identificacio")
+        assert res_no_auth.status_code == 401
+
+        # 2. Amb autenticació a /operari/identificacio -> 200
+        res_me = await ac.get("/api/v1/operari/identificacio", headers=headers)
+        assert res_me.status_code == 200
+        data_me = res_me.json()
+        assert data_me["operari_id"] == str(operari_id)
+        assert data_me["nom_complet"] == "Marc Soler Roca"
+        assert data_me["nif"] == nif_operari
+        assert data_me["empresa"]["nom"] == "Instal·lacions Elèctriques del Nord SL"
+        assert f"/api/v1/public/identificacio/{operari_id}" in data_me["public_url"]
+        assert len(data_me["validacions"]) >= 5
+        titols = [v["titol"] for v in data_me["validacions"]]
+        assert "Alta Seguretat Social" in titols
+        assert "Certificat Mèdic d'Aptitud" in titols
+        assert "Assegurança RC Empresarial" in titols
+
+        # 3. Endpoint públic JSON per a l'escaneig de QR
+        res_pub_json = await ac.get(f"/api/v1/public/identificacio/{operari_id}?format=json")
+        assert res_pub_json.status_code == 200
+        data_pub = res_pub_json.json()
+        assert data_pub["operari_id"] == str(operari_id)
+        assert data_pub["nom_complet"] == "Marc Soler Roca"
+        assert data_pub["nif"] == nif_operari
+        assert data_pub["empresa"]["nom"] == "Instal·lacions Elèctriques del Nord SL"
+        assert len(data_pub["validacions"]) >= 5
+
+        # 4. Endpoint públic HTML (visualització oficial per a inspectoria)
+        res_pub_html = await ac.get(f"/api/v1/public/identificacio/{operari_id}")
+        assert res_pub_html.status_code == 200
+        assert "text/html" in res_pub_html.headers.get("content-type", "")
+        html = res_pub_html.text
+        assert "Marc Soler Roca" in html
+        assert nif_operari in html
+        assert "Instal·lacions Elèctriques del Nord SL" in html
+        assert "Acreditació CAE Verificada" in html
+
+        # 5. Operari inexistent -> 404
+        bad_id = uuid.uuid4()
+        res_bad = await ac.get(f"/api/v1/public/identificacio/{bad_id}")
+        assert res_bad.status_code == 404
+

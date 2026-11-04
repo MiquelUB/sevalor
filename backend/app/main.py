@@ -38,6 +38,7 @@ from app.api.v1.operari_auth import router as operari_auth_router
 from app.api.v1.operari_pwa.copilot import router as operari_copilot_router
 from app.api.v1.operari_pwa.feines import llistar_les_meves_feines
 from app.api.v1.operari_pwa.feines import router as feines_pwa_router
+from app.api.v1.operari_pwa.identificacio import router as identificacio_router
 from app.api.v1.operari_pwa.incidencies import router as incidencies_router
 from app.api.v1.operari_pwa.jornada import router as jornada_router
 from app.api.v1.operari_pwa.picking import materials_operari_router
@@ -182,6 +183,7 @@ app.include_router(operari_planols_router, prefix=settings.API_V1_STR)
 app.include_router(materials_operari_router, prefix=settings.API_V1_STR)
 app.include_router(planols_operari_router, prefix=settings.API_V1_STR)
 app.include_router(operari_copilot_router, prefix=settings.API_V1_STR)
+app.include_router(identificacio_router, prefix=settings.API_V1_STR)
 
 compat_pwa_router = APIRouter(prefix="/operari_pwa", tags=["Operari PWA Compat"])
 compat_pwa_router.add_api_route("/feines", llistar_les_meves_feines, methods=["GET"])
