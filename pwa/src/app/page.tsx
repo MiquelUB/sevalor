@@ -107,7 +107,7 @@ export default function TenantGatewayPage() {
 
   const handleResumeSession = () => {
     const rol = currentUser?.rol?.toUpperCase();
-    if (rol === "OPERARI" || rol === "CAPATAZ") {
+    if (rol === "OPERARI" || rol === "CAPATAZ" || rol === "CAP_DE_COLLA") {
       router.push("/operari/feines");
     } else if (
       rol === "BOSS" ||

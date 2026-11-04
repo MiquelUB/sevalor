@@ -113,3 +113,34 @@ async def test_login_tenant_isolation(setup_operari_test, admin_session):
         # Ha de donar 401 genèric perquè el NIF no existeix dins d'aquell tenant!
         assert res.status_code == 401
         assert res.json()["detail"] == "Credencials invàlides"
+
+
+@pytest.mark.asyncio
+async def test_login_cap_de_colla(admin_session):
+    empresa_id = str(uuid.uuid4())
+    cap_id = str(uuid.uuid4())
+    nif = "CAP" + str(uuid.uuid4())[:6]
+    pin_real = "9274"
+    pin_hash = hash_pin(pin_real)
+
+    admin_session.add(Empresa(
+        id=uuid.UUID(empresa_id), nom='Test Colla', nif='EMP' + str(uuid.uuid4())[:5], subdomini='testcolla-' + str(uuid.uuid4())[:5], pla_subscripcio='STARTER', estat_pagament='ACTIU'
+    ))
+    await admin_session.flush()
+
+    admin_session.add(Usuari(
+        id=uuid.UUID(cap_id), empresa_id=uuid.UUID(empresa_id), nif=nif, nom='Pau Baixa', rol='CAP_DE_COLLA', pin_hash=pin_hash, pin_bloquejat=False, intents_pin_fallits=0
+    ))
+    await admin_session.flush()
+
+    headers = {"X-Empresa-ID": empresa_id}
+    payload = {"nif": nif, "pin": pin_real}
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        res = await ac.post("/api/v1/operari_auth/login", json=payload, headers=headers)
+        assert res.status_code == 200, res.text
+        resp_data = res.json()
+        assert resp_data["usuari"]["rol"] == "CAP_DE_COLLA"
+        assert resp_data["usuari"]["nom"] == "Pau Baixa"
+        assert "access_token" in resp_data
+

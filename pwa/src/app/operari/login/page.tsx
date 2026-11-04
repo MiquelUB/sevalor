@@ -141,6 +141,9 @@ export default function OperariLoginPage() {
 
       if (response && response.access_token) {
         setAuthToken(response.access_token);
+        if (response.usuari) {
+          localStorage.setItem("sevalor_user", JSON.stringify(response.usuari));
+        }
         const isHttps = typeof window !== "undefined" && window.location.protocol === "https:";
         const secureFlag = isHttps ? "; Secure" : "";
         document.cookie = `sevalor_access_token=${response.access_token}; path=/; max-age=86400; SameSite=Lax${secureFlag}`;

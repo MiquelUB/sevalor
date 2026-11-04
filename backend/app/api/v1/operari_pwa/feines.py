@@ -25,7 +25,7 @@ from app.models.models import (
 router = APIRouter(
     prefix="/operari",
     tags=["Operari Feines"],
-    dependencies=[Depends(require_roles(["OPERARI", "CAPATAZ"]))],
+    dependencies=[Depends(require_roles(["OPERARI", "CAPATAZ", "CAP_DE_COLLA"]))],
 )
 
 

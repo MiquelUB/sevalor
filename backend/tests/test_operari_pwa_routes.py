@@ -108,6 +108,75 @@ async def test_feines_and_alias_route(admin_session):
 
 
 @pytest.mark.asyncio
+async def test_feines_cap_de_colla_role(admin_session):
+    """Verifica que un usuari amb rol CAP_DE_COLLA pugui consultar /operari/feines."""
+    emp_id = uuid.uuid4()
+    cap_id = uuid.uuid4()
+    nif = "B" + str(uuid.uuid4())[:8].upper()
+
+    empresa = Empresa(
+        id=emp_id,
+        nom="Empresa Colla Test",
+        nif=nif,
+        subdomini="colla-" + str(uuid.uuid4())[:6],
+        pla_subscripcio="PRO",
+        estat_pagament="ACTIU",
+    )
+    admin_session.add(empresa)
+    await admin_session.flush()
+
+    usuari = Usuari(
+        id=cap_id,
+        empresa_id=emp_id,
+        nif=nif + "C",
+        nom="Pau Baixa",
+        rol="CAP_DE_COLLA",
+        pin_hash="dummy_hash",
+    )
+    admin_session.add(usuari)
+    await admin_session.flush()
+
+    client = Client(
+        id=uuid.uuid4(),
+        empresa_id=emp_id,
+        codi="CLI-COLLA-01",
+        rao_social="Client Colla",
+        nif="B99887766",
+    )
+    admin_session.add(client)
+    await admin_session.flush()
+
+    ot = OrdreTreball(
+        id=uuid.uuid4(),
+        empresa_id=emp_id,
+        codi="OT-COLLA-1",
+        client_id=client.id,
+        titol="Instal·lació elèctrica nau industrial",
+        estat="ASSIGNADA",
+        adreca="Polígon Industrial 5",
+        data_planificacio=date.today(),
+        cap_de_colla_id=cap_id,
+    )
+    admin_session.add(ot)
+    await admin_session.flush()
+
+    token = _crear_token_operari(str(cap_id), str(emp_id), rol="CAP_DE_COLLA")
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "X-Empresa-ID": str(emp_id),
+    }
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        res = await ac.get("/api/v1/operari/feines", headers=headers)
+        assert res.status_code == 200
+        data = res.json()
+        assert len(data) == 1
+        assert data[0]["codi"] == "OT-COLLA-1"
+        assert data[0]["client_nom"] == "Client Colla"
+
+
+
+@pytest.mark.asyncio
 async def test_materials_and_alias_route(admin_session):
     """Verifica que tant /operari/materials com /materials/operari retornin els materials de picking."""
     emp_id = uuid.uuid4()

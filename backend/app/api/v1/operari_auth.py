@@ -96,7 +96,7 @@ async def login_operari(
         # Fallback exclusiu per a l'entorn de testing quan no s'envia X-Empresa-ID
         stmt_nif = select(Usuari.empresa_id).where(
             func.upper(Usuari.nif) == login_data.nif.upper(),
-            Usuari.rol.in_(["OPERARI", "CAP_DE_COLLA", "ADMIN", "SUPERADMIN"]),
+            Usuari.rol.in_(["OPERARI", "CAPATAZ", "CAP_DE_COLLA", "ADMIN", "SUPERADMIN"]),
         )
         res_nif = await db.execute(stmt_nif)
         empresa_uuid = res_nif.scalar()
@@ -113,7 +113,7 @@ async def login_operari(
     stmt = select(Usuari).where(
         Usuari.empresa_id == empresa_uuid,
         func.upper(Usuari.nif) == login_data.nif.upper(),
-        Usuari.rol.in_(["OPERARI", "CAP_DE_COLLA", "ADMIN", "SUPERADMIN"]),
+        Usuari.rol.in_(["OPERARI", "CAPATAZ", "CAP_DE_COLLA", "ADMIN", "SUPERADMIN"]),
     )
 
     result = await db.execute(stmt)
