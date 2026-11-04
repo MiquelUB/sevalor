@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db_with_tenant_context
 from app.core.security import get_current_user_id, require_roles
-from app.models.models import Incidencia
+from app.models.models import Incidencia, OrdreTreball
 from app.services.sovereign_storage import SovereignStorageGateway
 
 router = APIRouter(
@@ -26,6 +26,10 @@ class IncidenciaCreate(BaseModel):
     audio_path: Optional[str] = None
     foto_path: Optional[str] = None
     text_observacions: Optional[str] = None
+
+
+class IncidenciaResoldre(BaseModel):
+    observacions: Optional[str] = None
 
 
 class IncidenciaResponse(IncidenciaCreate):
@@ -179,3 +183,42 @@ async def reportar_incidencia(
         )
 
     return nova_inci
+
+
+@router.patch("/incidencies/{incidencia_id}/resoldre", response_model=IncidenciaResponse)
+async def resoldre_incidencia(
+    request: Request,
+    incidencia_id: uuid.UUID,
+    payload: Optional[IncidenciaResoldre] = None,
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+):
+    empresa_id = request.state.empresa_id
+    if not empresa_id or empresa_id == "undefined":
+        raise HTTPException(status_code=401)
+
+    stmt = select(Incidencia).where(
+        Incidencia.id == incidencia_id,
+        Incidencia.empresa_id == uuid.UUID(empresa_id),
+    )
+    res = await db.execute(stmt)
+    inc = res.scalars().first()
+    if not inc:
+        raise HTTPException(status_code=404, detail="Incidència no trobada")
+
+    inc.estat = "VERD"
+    if payload and payload.observacions:
+        nova_obs = (inc.text_observacions or "") + f" [RESOLTA: {payload.observacions}]"
+        inc.text_observacions = nova_obs.strip()
+
+    if inc.ordre_treball_id:
+        ot_stmt = select(OrdreTreball).where(
+            OrdreTreball.id == inc.ordre_treball_id,
+            OrdreTreball.empresa_id == uuid.UUID(empresa_id),
+        )
+        ot_res = await db.execute(ot_stmt)
+        ot = ot_res.scalars().first()
+        if ot and ot.estat == "BLOQUEJADA":
+            ot.estat = "EN_CURS"
+
+    await db.commit()
+    return inc

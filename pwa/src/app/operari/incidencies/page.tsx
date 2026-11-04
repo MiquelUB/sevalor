@@ -31,6 +31,7 @@ export default function OperariIncidenciesPage() {
   const [audioGravat, setAudioGravat] = useState(false);
   const [audioBlob, setAudioBlob] = useState<Blob | null>(null);
   const [fotoPujada, setFotoPujada] = useState(false);
+  const [fotoBlob, setFotoBlob] = useState<Blob | null>(null);
   const [enviant, setEnviant] = useState(false);
   const [enviatExit, setEnviatExit] = useState(false);
   const [errorValidacio, setErrorValidacio] = useState<string | null>(null);
@@ -95,19 +96,35 @@ export default function OperariIncidenciesPage() {
     const isOnline = typeof navigator !== "undefined" && navigator.onLine;
 
     try {
-      if (isOnline && audioBlob) {
-        const formData = new FormData();
-        formData.append("ambit", tipus);
-        formData.append("estat", "VERMELL");
-        if (descripcio.trim()) {
-          formData.append("text_observacions", descripcio.trim());
-        }
-        formData.append("audio", audioBlob, "incidencia.webm");
+      if (isOnline) {
+        if (audioBlob || fotoBlob) {
+          const formData = new FormData();
+          formData.append("ambit", tipus);
+          formData.append("estat", "VERMELL");
+          if (descripcio.trim()) {
+            formData.append("text_observacions", descripcio.trim());
+          }
+          if (audioBlob) {
+            formData.append("audio", audioBlob, "incidencia.webm");
+          }
+          if (fotoBlob) {
+            formData.append("foto", fotoBlob, "incidencia.webp");
+          }
 
-        await apiFetch("/operari/incidencies", {
-          method: "POST",
-          body: formData,
-        });
+          await apiFetch("/operari/incidencies", {
+            method: "POST",
+            body: formData,
+          });
+        } else {
+          await apiFetch("/operari/incidencies", {
+            method: "POST",
+            body: JSON.stringify({
+              ambit: tipus,
+              estat: "VERMELL",
+              text_observacions: descripcio.trim(),
+            }),
+          });
+        }
       } else {
         const payload = {
           ambit: tipus,
@@ -185,6 +202,7 @@ export default function OperariIncidenciesPage() {
                 setAudioGravat(false);
                 setAudioBlob(null);
                 setFotoPujada(false);
+                setFotoBlob(null);
               }}
               className="mt-2 px-4 py-2.5 bg-primary text-white text-xs font-bold rounded-xl"
             >
@@ -235,7 +253,8 @@ export default function OperariIncidenciesPage() {
               <CameraInput
                 captured={fotoPujada}
                 label="Càmera en Viu"
-                onCapture={() => {
+                onCapture={(blob) => {
+                  setFotoBlob(blob);
                   setFotoPujada(true);
                   setErrorValidacio(null);
                 }}

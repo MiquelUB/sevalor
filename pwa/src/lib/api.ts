@@ -118,10 +118,14 @@ export async function apiFetch<T = any>(
   }
   const url = `${baseUrl}${cleanPath}`;
 
+  const isFormData = typeof FormData !== "undefined" && options.body instanceof FormData;
   const headers: Record<string, string> = {
-    "Content-Type": "application/json",
+    ...(isFormData ? {} : { "Content-Type": "application/json" }),
     ...((options.headers as Record<string, string>) || {}),
   };
+  if (isFormData && headers["Content-Type"]) {
+    delete headers["Content-Type"];
+  }
 
   // Tenant header si existeix
   const tenantId = extractTenantId();

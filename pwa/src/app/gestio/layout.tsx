@@ -49,6 +49,7 @@ function GestioLayoutContent({ children }: { children: React.ReactNode }) {
     { label: "Magatzem", href: "/gestio/magatzem", icon: "inventory_2", badge: "STK" },
     { label: "Vehicles", href: "/gestio/flota", icon: "local_shipping", badge: "FLT" },
     { label: "Operaris", href: "/gestio/operaris", icon: "engineering", badge: "RRHH" },
+    { label: "Incidències", href: "/gestio/incidencies", icon: "warning", badge: "SOS" },
     { label: "Plànols", href: "/gestio/planols", icon: "map", badge: "CAD" },
     { label: "Proveïdors & CAE", href: "/gestio/proveidors", icon: "factory", badge: "PRV" },
     { label: "Contractes", href: "/gestio/contractes", icon: "description", badge: "CTR" },

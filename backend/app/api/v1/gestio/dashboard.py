@@ -1,5 +1,5 @@
 import uuid
-from typing import Any, Dict
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import func, or_, select, union
@@ -9,6 +9,7 @@ from app.core.db import get_db_with_tenant_context
 from app.core.security import require_roles
 from app.models.models import (
     Article,
+    Client,
     EstocMagatzem,
     Incidencia,
     OrdreTreball,
@@ -127,3 +128,130 @@ async def get_dashboard_hud(
         "critical_stock": critical_stock,
         "vehicles_with_alerts": vehicles_with_alerts,
     }
+
+
+@router.get("/incidencies-drawer", response_model=List[Dict[str, Any]])
+async def get_incidencies_drawer(
+    request: Request,
+    estat: Optional[str] = None,
+    totes: bool = False,
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+):
+    """Llistat reactiu d'incidències de camp obertes per al calaix lateral de la Torre de Control (Spec 01 T046)."""
+    empresa_id = getattr(request.state, "empresa_id", None) or request.headers.get("X-Empresa-ID")
+    if not empresa_id or empresa_id == "undefined":
+        raise HTTPException(status_code=401, detail="No identificat")
+
+    emp_uuid = uuid.UUID(empresa_id)
+
+    stmt = (
+        select(
+            Incidencia,
+            Usuari.nom.label("operari_nom"),
+            Usuari.cognoms.label("operari_cognoms"),
+            OrdreTreball.codi.label("ot_codi"),
+            OrdreTreball.titol.label("ot_titol"),
+            Client.rao_social.label("ot_client_nom"),
+        )
+        .outerjoin(Usuari, Incidencia.operari_id == Usuari.id)
+        .outerjoin(OrdreTreball, Incidencia.ordre_treball_id == OrdreTreball.id)
+        .outerjoin(Client, OrdreTreball.client_id == Client.id)
+        .where(Incidencia.empresa_id == emp_uuid)
+    )
+
+    if estat:
+        stmt = stmt.where(Incidencia.estat == estat)
+    elif not totes:
+        stmt = stmt.where(~Incidencia.estat.in_(["TANCADA", "RESOLTA", "VERD"]))
+
+    stmt = stmt.order_by(Incidencia.created_at.desc())
+
+    result = await db.execute(stmt)
+    rows = result.all()
+
+    items = []
+    for inc, op_nom, op_cognoms, ot_codi, ot_titol, ot_client in rows:
+        nom_complet = f"{op_nom or ''} {op_cognoms or ''}".strip() or "Operari de camp"
+        items.append({
+            "id": str(inc.id),
+            "ordre_treball_id": str(inc.ordre_treball_id) if inc.ordre_treball_id else None,
+            "vehicle_id": str(inc.vehicle_id) if inc.vehicle_id else None,
+            "operari_id": str(inc.operari_id) if inc.operari_id else None,
+            "operari_nom": nom_complet,
+            "ordre_treball_codi": ot_codi,
+            "ordre_treball_titol": ot_titol,
+            "client_nom": ot_client,
+            "ambit": inc.ambit,
+            "estat": inc.estat,
+            "grau": "URGENT_BLOQUEJANT" if inc.estat == "VERMELL" else "MODERADA",
+            "audio_path": inc.audio_path,
+            "foto_path": inc.foto_path,
+            "text_observacions": inc.text_observacions,
+            "created_at": inc.created_at.isoformat() if inc.created_at else None,
+            "updated_at": inc.updated_at.isoformat() if inc.updated_at else None,
+        })
+    return items
+
+
+@router.patch("/incidencies/{incidencia_id}/resoldre")
+async def resoldre_incidencia_dashboard(
+    request: Request,
+    incidencia_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+):
+    """Commuta una incidència a VERD des de la Torre de Control i reactiva la feina si cal."""
+    empresa_id = getattr(request.state, "empresa_id", None) or request.headers.get("X-Empresa-ID")
+    if not empresa_id or empresa_id == "undefined":
+        raise HTTPException(status_code=401, detail="No identificat")
+
+    emp_uuid = uuid.UUID(empresa_id)
+
+    stmt = select(Incidencia).where(
+        Incidencia.id == incidencia_id,
+        Incidencia.empresa_id == emp_uuid,
+    )
+    res = await db.execute(stmt)
+    inc = res.scalars().first()
+    if not inc:
+        raise HTTPException(status_code=404, detail="Incidència no trobada")
+
+    inc.estat = "VERD"
+    if inc.ordre_treball_id:
+        ot_stmt = select(OrdreTreball).where(
+            OrdreTreball.id == inc.ordre_treball_id,
+            OrdreTreball.empresa_id == emp_uuid,
+        )
+        ot_res = await db.execute(ot_stmt)
+        ot = ot_res.scalars().first()
+        if ot and ot.estat == "BLOQUEJADA":
+            ot.estat = "EN_CURS"
+
+    await db.commit()
+    return {"status": "OK", "id": str(inc.id), "estat": inc.estat}
+
+
+@router.patch("/incidencies/{incidencia_id}/aprova-hitl")
+async def aprova_hitl_incidencia(
+    request: Request,
+    incidencia_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+):
+    """Validació humana (HITL) del pressupost d'imprevistos (Spec 01 T048)."""
+    empresa_id = getattr(request.state, "empresa_id", None) or request.headers.get("X-Empresa-ID")
+    if not empresa_id or empresa_id == "undefined":
+        raise HTTPException(status_code=401, detail="No identificat")
+
+    emp_uuid = uuid.UUID(empresa_id)
+
+    stmt = select(Incidencia).where(
+        Incidencia.id == incidencia_id,
+        Incidencia.empresa_id == emp_uuid,
+    )
+    res = await db.execute(stmt)
+    inc = res.scalars().first()
+    if not inc:
+        raise HTTPException(status_code=404, detail="Incidència no trobada")
+
+    inc.estat = "VERD"
+    await db.commit()
+    return {"status": "OK", "id": str(inc.id), "aprovacio_hitl_supervisor": True, "estat": inc.estat}

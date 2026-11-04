@@ -1,4 +1,5 @@
 import { db, SyncQueueItem } from './db';
+import { apiFetch } from '../api';
 
 /**
  * Processa la cua de sincronització pendent enviant els payloads al backend.
@@ -41,9 +42,8 @@ export async function processSyncQueue(): Promise<void> {
         try {
             await Promise.all(lightItems.map(item => db.sync_queue.update(item.id!, { status: 'syncing' })));
             
-            const response = await fetch(`/api/v1/operari_pwa/sync/push`, {
+            await apiFetch('/operari_pwa/sync/push', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     accions: lightItems.map(item => ({
                         id: String(item.id),
@@ -53,10 +53,6 @@ export async function processSyncQueue(): Promise<void> {
                     }))
                 })
             });
-
-            if (!response.ok) {
-                throw new Error(`Error sincronitzant batch lleuger: ${response.statusText}`);
-            }
 
             await Promise.all(lightItems.map(item => db.sync_queue.delete(item.id!)));
             console.log(`[SyncQueue] Batch de ${lightItems.length} elements lleugers completat.`);
@@ -74,9 +70,8 @@ export async function processSyncQueue(): Promise<void> {
         try {
             await db.sync_queue.update(item.id!, { status: 'syncing' });
 
-            const response = await fetch(`/api/v1/operari_pwa/sync/push`, {
+            await apiFetch('/operari_pwa/sync/push', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     accions: [{
                         id: String(item.id),
@@ -86,15 +81,6 @@ export async function processSyncQueue(): Promise<void> {
                     }]
                 })
             });
-
-            if (!response.ok) {
-                if (response.status === 409) {
-                    console.warn(`[SyncQueue] Conflicte (409) a l'ítem pesat ${item.id}. S'ignorarà.`);
-                    await db.sync_queue.delete(item.id!);
-                    continue;
-                }
-                throw new Error(`Error de xarxa: ${response.statusText}`);
-            }
 
             await db.sync_queue.delete(item.id!);
         } catch (error: any) {

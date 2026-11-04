@@ -14,6 +14,7 @@ import { CrearOTModal } from "@/components/gestio/CrearOTModal";
 import { EditarOTModal } from "@/components/gestio/EditarOTModal";
 import GestioMap, { Feina, Operari } from "@/components/gestio/Map";
 import { QuadrillesTauler } from "@/components/gestio/QuadrillesTauler";
+import { IncidenciesDrawer } from "@/components/gestio/IncidenciesDrawer";
 
 export default function GestioDashboardPage() {
   const [vistaActiva, setVistaActiva] = useState<"FEINA" | "RESULTATS">("FEINA");
@@ -37,6 +38,7 @@ export default function GestioDashboardPage() {
 
   const [showModalOT, setShowModalOT] = useState(false);
   const [showModalEditarOT, setShowModalEditarOT] = useState(false);
+  const [showIncidenciesDrawer, setShowIncidenciesDrawer] = useState(false);
   const [editingFeinaId, setEditingFeinaId] = useState<string | null>(null);
   const [hud, setHud] = useState({
     active_jobs: 0,
@@ -524,21 +526,24 @@ export default function GestioDashboardPage() {
             </Link>
 
             {/* Incidències obertes */}
-            <Link
-              href="/gestio/notificacions"
-              className="bg-surface-container-lowest p-lg rounded-xl shadow-sm border-b-2 border-error flex flex-col justify-between hover:shadow-md transition-all"
+            <div
+              onClick={() => setShowIncidenciesDrawer(true)}
+              className="bg-surface-container-lowest p-lg rounded-xl shadow-sm border-b-2 border-error flex flex-col justify-between hover:shadow-md transition-all cursor-pointer group"
             >
               <div className="flex justify-between items-start">
                 <span className="font-label-caps text-on-surface-variant uppercase">
                   Incidències obertes
                 </span>
-                <span className="material-symbols-outlined text-error bg-error-container/30 p-xs rounded-lg">
+                <span className="material-symbols-outlined text-error bg-error-container/30 p-xs rounded-lg group-hover:scale-105 transition-transform">
                   warning
                 </span>
               </div>
               <div className="mt-md">
-                <div className="font-display-lg text-display-lg text-error">
-                  {hud.open_incidents}
+                <div className="font-display-lg text-display-lg text-error flex items-baseline justify-between">
+                  <span>{hud.open_incidents}</span>
+                  <span className="text-xs font-body-strong text-primary group-hover:underline">
+                    Obrir calaix →
+                  </span>
                 </div>
                 <p className="text-xs text-on-error-container mt-xs font-medium">
                   {hud.open_incidents > 0
@@ -546,7 +551,7 @@ export default function GestioDashboardPage() {
                     : "Cap incidència crítica activa"}
                 </p>
               </div>
-            </Link>
+            </div>
 
             {/* Estat Flota */}
             <Link
@@ -607,6 +612,18 @@ export default function GestioDashboardPage() {
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-sm">
+              <button
+                type="button"
+                onClick={() => setShowIncidenciesDrawer(true)}
+                className={`px-lg py-sm rounded-lg text-sm font-body-strong shadow-sm flex items-center gap-xs transition-all cursor-pointer ${
+                  hud.open_incidents > 0
+                    ? "bg-error text-white hover:opacity-90"
+                    : "bg-surface-container-high hover:bg-surface-container-highest text-on-surface"
+                }`}
+              >
+                <span className="material-symbols-outlined text-[18px]">warning</span>
+                <span>Incidències ({hud.open_incidents})</span>
+              </button>
               <button
                 onClick={() => setShowModalOT(true)}
                 className="px-lg py-sm rounded-lg bg-secondary-container hover:bg-secondary text-on-secondary-container hover:text-white text-sm font-body-strong shadow-md flex items-center gap-xs transition-all cursor-pointer"
@@ -994,6 +1011,15 @@ export default function GestioDashboardPage() {
           }}
         />
       )}
+
+      <IncidenciesDrawer
+        isOpen={showIncidenciesDrawer}
+        onClose={() => {
+          setShowIncidenciesDrawer(false);
+          carregarDades();
+        }}
+        onIncidenciaUpdated={carregarDades}
+      />
     </div>
   );
 }
