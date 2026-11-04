@@ -1888,6 +1888,13 @@ async def consultar_xat_tecnic(
     q_emp = select(Empresa).where(Empresa.id == empresa_id)
     res_emp = await db.execute(q_emp)
     empresa = res_emp.scalar_one_or_none()
+
+    if not empresa or not empresa.feature_copilot_ia:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="El mòdul Copilot IA està desactivat per a aquesta empresa",
+        )
+
     vertical = empresa.vertical if empresa else "SEVALOR"
 
     usuari_nom = claims.get("nom") or claims.get("email")

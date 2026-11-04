@@ -66,8 +66,15 @@ function GestioLayoutContent({ children }: { children: React.ReactNode }) {
     feature_copilot_ia?: boolean;
   } | null>(null);
 
+  const isLoginPage =
+    !pathname ||
+    pathname === "/gestio/login" ||
+    pathname.startsWith("/gestio/login") ||
+    pathname === "/login" ||
+    pathname.startsWith("/login");
+
   useEffect(() => {
-    if (pathname === "/gestio/login") return;
+    if (isLoginPage) return;
 
     let tokenIsImpersonation = false;
     if (typeof window !== "undefined") {
@@ -118,7 +125,7 @@ function GestioLayoutContent({ children }: { children: React.ReactNode }) {
       .catch(() => setEmpresa(null));
   }, [pathname]);
 
-  if (pathname === "/gestio/login") {
+  if (isLoginPage) {
     return <div className="min-h-screen bg-surface">{children}</div>;
   }
 
@@ -167,7 +174,7 @@ function GestioLayoutContent({ children }: { children: React.ReactNode }) {
         <nav className="flex-1 space-y-xs overflow-y-auto custom-scrollbar py-xs">
           {navLinks
             .filter((link) => {
-              if (link.href === "/gestio/copilot" && empresa && empresa.feature_copilot_ia === false) {
+              if (link.href === "/gestio/copilot" && (!usuari || empresa?.feature_copilot_ia === false)) {
                 return false;
               }
               return true;
@@ -321,13 +328,15 @@ function GestioLayoutContent({ children }: { children: React.ReactNode }) {
                 )}
               </button>
 
-              <Link
-                href="/gestio/copilot"
-                className="p-2 rounded-lg hover:bg-surface-container-high text-on-surface-variant hover:text-primary transition-colors"
-                title="Copilot IA & Ajuda Tècnica"
-              >
-                <span className="material-symbols-outlined text-[22px]">help</span>
-              </Link>
+              {Boolean(usuari) && empresa?.feature_copilot_ia !== false && (
+                <Link
+                  href="/gestio/copilot"
+                  className="p-2 rounded-lg hover:bg-surface-container-high text-on-surface-variant hover:text-primary transition-colors"
+                  title="Copilot IA & Ajuda Tècnica"
+                >
+                  <span className="material-symbols-outlined text-[22px]">help</span>
+                </Link>
+              )}
 
               <Link
                 href="/gestio/notificacions"
@@ -411,7 +420,7 @@ function GestioLayoutContent({ children }: { children: React.ReactNode }) {
         </main>
       </div>
 
-      <CopilotWidget />
+      {Boolean(usuari) && empresa?.feature_copilot_ia !== false && <CopilotWidget />}
 
       {/* MODAL SPOTLIGHT META-SEARCH (<200 ms) */}
       {spotlightObert && (

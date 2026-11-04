@@ -1,10 +1,13 @@
 "use client";
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
+import { usePathname } from "next/navigation";
 import { Sparkles, X, Send, ExternalLink, Bot, MessageSquare, Camera, Image as ImageIcon } from "lucide-react";
-import { apiFetch } from "@/lib/api";
+import { apiFetch, getAuthToken } from "@/lib/api";
 
 export default function CopilotWidget({ isMobile = false }: { isMobile?: boolean }) {
-  const [hasCopilotIa, setHasCopilotIa] = useState<boolean | null>(null);
+  const pathname = usePathname();
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
+  const [hasCopilotIa, setHasCopilotIa] = useState<boolean>(false);
   const [obert, setObert] = useState(false);
   const [missatgeXat, setMissatgeXat] = useState("");
   const [conversaXat, setConversaXat] = useState<any[]>([
@@ -14,17 +17,46 @@ export default function CopilotWidget({ isMobile = false }: { isMobile?: boolean
   const [imatgeB64, setImatgeB64] = useState<string | null>(null);
   const [executantAccio, setExecutantAccio] = useState(false);
 
-  React.useEffect(() => {
+  // El Copilot MAI es pot renderitzar a pàgines de login ni sense autenticació prèvia
+  const isAuthPage =
+    !pathname ||
+    pathname === "/" ||
+    pathname.includes("/login") ||
+    pathname.startsWith("/login");
+
+  useEffect(() => {
+    if (isAuthPage) {
+      setIsAuthenticated(false);
+      setHasCopilotIa(false);
+      setObert(false);
+      return;
+    }
+
+    const token = getAuthToken();
+    if (!token) {
+      setIsAuthenticated(false);
+      setHasCopilotIa(false);
+      setObert(false);
+      return;
+    }
+
     apiFetch<any>("/auth/me")
       .then((res) => {
-        if (res && res.feature_copilot_ia === false) {
-          setHasCopilotIa(false);
-        } else {
+        if (res && res.id && res.feature_copilot_ia !== false) {
+          setIsAuthenticated(true);
           setHasCopilotIa(true);
+        } else {
+          setIsAuthenticated(false);
+          setHasCopilotIa(false);
+          setObert(false);
         }
       })
-      .catch(() => setHasCopilotIa(true));
-  }, []);
+      .catch(() => {
+        setIsAuthenticated(false);
+        setHasCopilotIa(false);
+        setObert(false);
+      });
+  }, [pathname, isAuthPage]);
 
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -103,7 +135,7 @@ export default function CopilotWidget({ isMobile = false }: { isMobile?: boolean
     }
   };
 
-  if (hasCopilotIa === false) return null;
+  if (isAuthPage || !isAuthenticated || !hasCopilotIa) return null;
 
   return (
     <>

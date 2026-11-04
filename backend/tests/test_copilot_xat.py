@@ -16,7 +16,7 @@ async def test_copilot_xat(admin_session, headers, boss_token):
     decoded = jwt.decode(token_jwt, options={"verify_signature": False})
 
     admin_session.add(Empresa(
-        id=uuid.UUID(empresa_id), nom='Test Copilot', nif=boss_nif, subdomini='copi-' + str(uuid.uuid4())[:5], pla_subscripcio='STARTER', estat_pagament='ACTIU'
+        id=uuid.UUID(empresa_id), nom='Test Copilot', nif=boss_nif, subdomini='copi-' + str(uuid.uuid4())[:5], pla_subscripcio='STARTER', estat_pagament='ACTIU', feature_copilot_ia=True
     ))
     admin_session.add(Usuari(id=uuid.UUID(decoded["sub"]), empresa_id=uuid.UUID(empresa_id), nom="Boss", cognoms="Boss", nif="BOSS1", rol="BOSS", estat="ACTIU"))
 
@@ -77,3 +77,76 @@ async def test_copilot_xat(admin_session, headers, boss_token):
         data_status = res_status.json()
         assert data_status["estat"] in ("ONLINE", "OFFLINE")
         assert "url" in data_status
+
+
+@pytest.mark.asyncio
+async def test_copilot_zero_leakage_sense_login_i_amb_feature_desactivada(
+    admin_session, headers, boss_token
+):
+    """Verifica que el Copilot mai és accessible sense sessió vàlida (401) ni quan el feature flag està desactivat (403)."""
+    token_jwt, empresa_id = boss_token
+    emp_uuid = uuid.UUID(empresa_id)
+
+    # 1. Crida anònima sense autenticació (com estaria a la pantalla de login)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        res_gestio_anonim = await ac.post(
+            "/api/v1/gestio/copilot/xat",
+            json={"pregunta": "Dades de facturació i clients?"},
+        )
+        assert res_gestio_anonim.status_code == 401, "No autenticat ha de donar 401"
+
+        res_operari_anonim = await ac.post(
+            "/api/v1/operari/copilot/xat",
+            json={"pregunta": "Dades de clients?"},
+        )
+        assert res_operari_anonim.status_code == 401, "No autenticat ha de donar 401"
+
+    # 2. Configurar empresa amb feature_copilot_ia = False
+    emp = await admin_session.get(Empresa, emp_uuid)
+    if not emp:
+        emp = Empresa(
+            id=emp_uuid,
+            nom="Empresa No Copilot",
+            nif=f"B{emp_uuid.hex[:8].upper()}",
+            subdomini=f"nocopi-{emp_uuid.hex[:4]}",
+            pla_subscripcio="STARTER",
+            estat_pagament="ACTIU",
+            feature_copilot_ia=False,
+        )
+        admin_session.add(emp)
+    else:
+        emp.feature_copilot_ia = False
+
+    decoded = jwt.decode(token_jwt, options={"verify_signature": False})
+    user_uuid = uuid.UUID(decoded["sub"])
+    usr = await admin_session.get(Usuari, user_uuid)
+    if not usr:
+        usr = Usuari(
+            id=user_uuid,
+            empresa_id=emp_uuid,
+            nom="Boss",
+            cognoms="Test",
+            nif="BOSSTEST",
+            rol="BOSS",
+            estat="ACTIU",
+        )
+        admin_session.add(usr)
+
+    await admin_session.flush()
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        res_disabled_gestio = await ac.post(
+            "/api/v1/gestio/copilot/xat",
+            json={"pregunta": "Comprovem accés bloquejat"},
+            headers=headers,
+        )
+        assert res_disabled_gestio.status_code == 403
+        assert "desactivat" in res_disabled_gestio.json().get("detail", "").lower()
+
+        res_disabled_operari = await ac.post(
+            "/api/v1/operari/copilot/xat",
+            json={"pregunta": "Comprovem accés bloquejat"},
+            headers=headers,
+        )
+        assert res_disabled_operari.status_code == 403
+        assert "desactivat" in res_disabled_operari.json().get("detail", "").lower()

@@ -26,7 +26,12 @@ export default function OperariLayout({
   children: React.ReactNode;
 }) {
   const pathname = usePathname();
-  const isLoginPage = pathname === "/operari/login";
+  const isLoginPage =
+    !pathname ||
+    pathname === "/operari/login" ||
+    pathname.startsWith("/operari/login") ||
+    pathname === "/login" ||
+    pathname.startsWith("/login");
 
   // Gestió de Dark / Light Mode (Mandat de la Constitució i el disseny de la PWA)
   const [isDark, setIsDark] = useState<boolean>(false);
