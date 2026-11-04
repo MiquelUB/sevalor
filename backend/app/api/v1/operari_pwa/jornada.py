@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db_with_tenant_context
-from app.core.security import require_roles
+from app.core.security import get_current_user_id, require_roles
 from app.models.models import RegistreJornadaLaboral
 
 router = APIRouter(
@@ -50,17 +50,7 @@ async def iniciar_jornada(
     if not empresa_id or empresa_id == "undefined":
         raise HTTPException(status_code=401, detail="No identificat")
 
-    # L'usuari ha de ser extret del token JWT (el Subject)
-    import jwt
-
-    from app.core.config import settings
-
-    auth_header = request.headers.get("Authorization")
-    token = auth_header.split(" ")[1]  # type: ignore
-    decoded = jwt.decode(
-        token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM], options={"verify_aud": False}
-    )
-    usuari_id = decoded.get("sub")
+    usuari_id = get_current_user_id(request)
 
     # Validar si ja té una jornada en curs
     stmt = select(RegistreJornadaLaboral).where(
@@ -110,16 +100,7 @@ async def get_jornada_activa(
     if not empresa_id or empresa_id == "undefined":
         raise HTTPException(status_code=401)
 
-    auth_header = request.headers.get("Authorization")
-    token = auth_header.split(" ")[1]  # type: ignore
-    import jwt
-
-    from app.core.config import settings
-
-    decoded = jwt.decode(
-        token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM], options={"verify_aud": False}
-    )
-    usuari_id = decoded.get("sub")
+    usuari_id = get_current_user_id(request)
 
     stmt = select(RegistreJornadaLaboral).where(
         RegistreJornadaLaboral.empresa_id == uuid.UUID(empresa_id),
@@ -211,16 +192,7 @@ async def assignar_vehicle_a_jornada(
     if not empresa_id or empresa_id == "undefined":
         raise HTTPException(status_code=401)
 
-    auth_header = request.headers.get("Authorization")
-    token = auth_header.split(" ")[1]  # type: ignore
-    import jwt
-
-    from app.core.config import settings
-
-    decoded = jwt.decode(
-        token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM], options={"verify_aud": False}
-    )
-    usuari_id = decoded.get("sub")
+    usuari_id = get_current_user_id(request)
 
     # Obtenir vehicle
     from app.models.models import Usuari, Vehicle

@@ -7,7 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db_with_tenant_context
-from app.core.security import require_roles
+from app.core.security import get_current_user_id, require_roles
 from app.models.models import Incidencia
 from app.services.sovereign_storage import SovereignStorageGateway
 
@@ -41,16 +41,7 @@ async def llistar_incidencies_operari(
     if not empresa_id or empresa_id == "undefined":
         raise HTTPException(status_code=401)
 
-    auth_header = request.headers.get("Authorization")
-    token = auth_header.split(" ")[1]  # type: ignore
-    import jwt
-
-    from app.core.config import settings
-
-    decoded = jwt.decode(
-        token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM], options={"verify_aud": False}
-    )
-    usuari_id = decoded.get("sub")
+    usuari_id = get_current_user_id(request)
 
     stmt = (
         select(Incidencia)
@@ -73,16 +64,7 @@ async def reportar_incidencia(
     if not empresa_id or empresa_id == "undefined":
         raise HTTPException(status_code=401)
 
-    auth_header = request.headers.get("Authorization")
-    token = auth_header.split(" ")[1]  # type: ignore
-    import jwt
-
-    from app.core.config import settings
-
-    decoded = jwt.decode(
-        token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM], options={"verify_aud": False}
-    )
-    usuari_id = decoded.get("sub")
+    usuari_id = get_current_user_id(request)
 
     content_type = request.headers.get("content-type", "")
 

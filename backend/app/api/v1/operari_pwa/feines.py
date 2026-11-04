@@ -10,7 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db_with_tenant_context
-from app.core.security import require_roles
+from app.core.security import get_current_user_id, require_roles
 from app.models.models import (
     Article,
     Client,
@@ -94,24 +94,7 @@ class FeinaOperariResponse(BaseModel):
 
 
 def _get_usuari_id(request: Request) -> str:
-    import jwt
-
-    from app.core.config import settings
-
-    auth_header = request.headers.get("Authorization")
-    if not auth_header or not auth_header.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Token no proporcionat")
-    token = auth_header.split(" ")[1]
-    try:
-        decoded = jwt.decode(
-            token,
-            settings.SECRET_KEY,
-            algorithms=[settings.ALGORITHM],
-            options={"verify_aud": False},
-        )
-        return decoded.get("sub")  # type: ignore
-    except Exception:
-        raise HTTPException(status_code=401, detail="Token invàlid")
+    return get_current_user_id(request)
 
 
 @router.get("/feines", response_model=List[FeinaOperariResponse])

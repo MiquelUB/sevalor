@@ -67,6 +67,21 @@ def get_current_user_claims(request: Request) -> Dict[str, Any]:
         ) from exc
 
 
+def get_current_user_id(request: Request) -> str:
+    """Retorna l'identificador (sub / UUID) de l'usuari autenticat a la petició."""
+    user_id = getattr(request.state, "user_id", None)
+    if user_id:
+        return str(user_id)
+    claims = get_current_user_claims(request)
+    sub = claims.get("sub")
+    if not sub:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Usuari no identificat al token d'accés.",
+        )
+    return str(sub)
+
+
 def require_roles(allowed_roles: List[str]) -> Callable:
     """Dependència FastAPI per restringir endpoints a rols específics (Tasca 4.4: Veto d'Enginyer)."""
 

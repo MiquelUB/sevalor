@@ -162,6 +162,44 @@ async def test_fase1_control_horari_gps_inici(
 
 
 @pytest.mark.asyncio
+async def test_fase1_control_horari_inici_amb_cookie_sense_auth_header(
+    setup_fases_operari: dict, admin_session: AsyncSession
+):
+    """Verifica que el endpoint /jornada/inici i /jornada/activa funcionen exclusivament amb la cookie de sessió
+
+    (sevalor_access_token) sense cap capçalera 'Authorization', evitant AttributeError: 'NoneType' object has no attribute 'split'.
+    """
+    data = setup_fases_operari
+    transport = ASGITransport(app=app)
+
+    async with AsyncClient(
+        transport=transport,
+        base_url="http://test",
+        follow_redirects=True,
+        cookies={"sevalor_access_token": data["jwt_token"]},
+    ) as client:
+        # 1. Comprovar jornada activa abans d'iniciar (retorna 404 perquè no n'hi ha cap en curs)
+        res_activa_pre = await client.get("/api/v1/operari/jornada/activa")
+        assert res_activa_pre.status_code == 404
+
+        # 2. Iniciar jornada exclusivament amb la cookie
+        res_inici = await client.post(
+            "/api/v1/operari/jornada/inici",
+            json={"latitud": 41.3879, "longitud": 2.1699},
+        )
+        assert res_inici.status_code == 201, res_inici.text
+        resp_json = res_inici.json()
+        assert resp_json["estat"] == "EN_CURS"
+        jornada_id = resp_json["id"]
+
+        # 3. Comprovar jornada activa després d'iniciar (retorna 200 amb les dades de la jornada)
+        res_activa_post = await client.get("/api/v1/operari/jornada/activa")
+        assert res_activa_post.status_code == 200
+        assert res_activa_post.json()["id"] == jornada_id
+        assert res_activa_post.json()["estat"] == "EN_CURS"
+
+
+@pytest.mark.asyncio
 async def test_fase2_geovalla_comencar_feina(setup_fases_operari: dict):
     """Fase 2: Validar geovalla de 50m (FR-005): rebuig si està a més de 50m sense justificació, èxit amb justificació."""
     data = setup_fases_operari

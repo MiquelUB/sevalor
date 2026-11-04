@@ -1,8 +1,9 @@
 "use client";
 
 import React, { useEffect, useState, useCallback } from "react";
-import { Play, Square, MapPin, Clock, Truck, AlertCircle } from "lucide-react";
+import { Play, Square, MapPin, Clock, Truck, AlertCircle, ChevronDown, ChevronUp } from "lucide-react";
 import { localDB } from "@/lib/db";
+import { getAuthToken } from "@/lib/api";
 import MorningBriefing from "./MorningBriefing";
 import EveningCheckoutModal from "./EveningCheckoutModal";
 
@@ -22,6 +23,7 @@ export default function ControlHorariBar() {
   const [elapsed, setElapsed] = useState<string>("00:00:00");
   const [loading, setLoading] = useState<boolean>(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [isCollapsed, setIsCollapsed] = useState<boolean>(true);
 
   // Modals de Torn
   const [isMorningOpen, setIsMorningOpen] = useState(false);
@@ -36,7 +38,12 @@ export default function ControlHorariBar() {
       }
       // Si no hi ha a localStorage, comprovar al servidor si hi ha torn obert
       if (navigator.onLine) {
+        const token = getAuthToken();
+        const headers: Record<string, string> = {};
+        if (token) headers["Authorization"] = `Bearer ${token}`;
+
         const res = await fetch("/api/v1/operari/jornada/activa", {
+          headers,
           credentials: "include",
         });
         if (res.ok) {
@@ -117,45 +124,97 @@ export default function ControlHorariBar() {
 
   return (
     <>
-      <div className="bg-surface-container-low dark:bg-slate-900 border-b border-outline-variant/25 dark:border-slate-800 px-4 py-2.5 text-on-surface dark:text-slate-100">
+      <div className={`bg-surface-container-low dark:bg-slate-900 border-b border-outline-variant/25 dark:border-slate-800 px-4 ${jornada && isCollapsed ? "py-1.5" : "py-2.5"} text-on-surface dark:text-slate-100 transition-all duration-200`}>
         <div className="flex items-center justify-between gap-2 max-w-md mx-auto">
           {jornada ? (
-            <>
-              <div className="flex items-center gap-2.5 min-w-0">
-                <span className="w-2.5 h-2.5 rounded-full bg-secondary animate-pulse shrink-0" />
-                <div className="truncate">
-                  <div className="flex items-center gap-1.5">
+            isCollapsed ? (
+              <div className="flex items-center justify-between w-full">
+                <div className="flex items-center gap-2">
+                  <span className="w-2 h-2 rounded-full bg-secondary animate-pulse shrink-0" />
+                  <div className="flex items-center gap-1.5 font-mono text-xs font-bold text-on-surface dark:text-slate-100">
                     <Clock className="w-3.5 h-3.5 text-secondary shrink-0" />
-                    <span
-                      data-testid="jornada-timer"
-                      className="font-mono font-bold text-sm tracking-tight text-on-surface dark:text-slate-100"
-                    >
-                      {elapsed}
-                    </span>
-                    {jornada.vehicle_id && (
-                      <span className="inline-flex items-center gap-1 text-[10px] font-bold uppercase px-1.5 py-0.5 rounded bg-secondary-container text-on-secondary-container">
-                        <Truck className="w-3 h-3" /> Flota OK
-                      </span>
-                    )}
+                    <span data-testid="jornada-timer">{elapsed}</span>
                   </div>
-                  <p className="text-[11px] text-on-surface-variant dark:text-slate-400 flex items-center gap-1 truncate">
-                    <MapPin className="w-3 h-3 text-primary shrink-0" />
-                    Torn actiu ({jornada.lat_inici.toFixed(4)}, {jornada.lon_inici.toFixed(4)})
-                  </p>
+                  {jornada.vehicle_id && (
+                    <span className="text-[9px] font-bold uppercase px-1.5 py-0.5 rounded bg-secondary-container text-on-secondary-container">
+                      Flota OK
+                    </span>
+                  )}
+                  <span className="text-[10px] text-on-surface-variant dark:text-slate-400 font-medium hidden sm:inline">
+                    Torn en curs
+                  </span>
+                </div>
+
+                <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    data-testid="btn-finalitzar-jornada"
+                    disabled={loading}
+                    onClick={handleFinalitzarJornada}
+                    className="min-h-[32px] px-2.5 py-1 rounded-md bg-error text-on-error font-bold text-[10px] uppercase tracking-wider flex items-center gap-1 active:scale-95 transition-transform disabled:opacity-50 shadow-sm"
+                  >
+                    <Square className="w-2.5 h-2.5 fill-current" />
+                    <span>Tancar Torn</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setIsCollapsed(false)}
+                    title="Mostrar detalls del torn"
+                    className="p-1 rounded text-on-surface-variant hover:text-on-surface"
+                  >
+                    <ChevronDown className="w-4 h-4" />
+                  </button>
                 </div>
               </div>
+            ) : (
+              <>
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <span className="w-2.5 h-2.5 rounded-full bg-secondary animate-pulse shrink-0" />
+                  <div className="truncate">
+                    <div className="flex items-center gap-1.5">
+                      <Clock className="w-3.5 h-3.5 text-secondary shrink-0" />
+                      <span
+                        data-testid="jornada-timer"
+                        className="font-mono font-bold text-sm tracking-tight text-on-surface dark:text-slate-100"
+                      >
+                        {elapsed}
+                      </span>
+                      {jornada.vehicle_id && (
+                        <span className="inline-flex items-center gap-1 text-[10px] font-bold uppercase px-1.5 py-0.5 rounded bg-secondary-container text-on-secondary-container">
+                          <Truck className="w-3 h-3" /> Flota OK
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-[11px] text-on-surface-variant dark:text-slate-400 flex items-center gap-1 truncate">
+                      <MapPin className="w-3 h-3 text-primary shrink-0" />
+                      Torn actiu ({jornada.lat_inici.toFixed(4)}, {jornada.lon_inici.toFixed(4)})
+                    </p>
+                  </div>
+                </div>
 
-              <button
-                type="button"
-                data-testid="btn-finalitzar-jornada"
-                disabled={loading}
-                onClick={handleFinalitzarJornada}
-                className="min-h-[42px] px-3.5 py-2 rounded-lg bg-error text-on-error font-bold text-xs uppercase tracking-wider flex items-center gap-1.5 active:scale-95 transition-transform disabled:opacity-50 shrink-0 shadow-sm"
-              >
-                <Square className="w-3.5 h-3.5 fill-current" />
-                {loading ? "GPS..." : "Tancar Torn"}
-              </button>
-            </>
+                <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    data-testid="btn-finalitzar-jornada"
+                    disabled={loading}
+                    onClick={handleFinalitzarJornada}
+                    className="min-h-[38px] px-3 py-1.5 rounded-lg bg-error text-on-error font-bold text-xs uppercase tracking-wider flex items-center gap-1.5 active:scale-95 transition-transform disabled:opacity-50 shrink-0 shadow-sm"
+                  >
+                    <Square className="w-3.5 h-3.5 fill-current" />
+                    {loading ? "GPS..." : "Tancar Torn"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setIsCollapsed(true)}
+                    title="Amagar per no ocupar espai a la pantalla"
+                    className="p-1.5 rounded-lg text-on-surface-variant hover:text-on-surface flex items-center gap-0.5 text-[10px] font-bold"
+                  >
+                    <ChevronUp className="w-3.5 h-3.5" />
+                    <span>Amagar</span>
+                  </button>
+                </div>
+              </>
+            )
           ) : (
             <>
               <div className="flex items-center gap-2">

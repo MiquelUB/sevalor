@@ -13,6 +13,7 @@ import {
   ChevronRight,
 } from "lucide-react";
 import { localDB } from "@/lib/db";
+import { getAuthToken } from "@/lib/api";
 
 interface VehicleItem {
   id: string;
@@ -66,7 +67,10 @@ export default function MorningBriefing({
     async function carregarVehicles() {
       if (navigator.onLine) {
         try {
-          const res = await fetch("/api/v1/operari/vehicles", { credentials: "include" });
+          const token = getAuthToken();
+          const headers: Record<string, string> = {};
+          if (token) headers["Authorization"] = `Bearer ${token}`;
+          const res = await fetch("/api/v1/operari/vehicles", { headers, credentials: "include" });
           if (res.ok) {
             const data: VehicleItem[] = await res.json();
             setVehicles(data);
@@ -104,9 +108,13 @@ export default function MorningBriefing({
       let novaJornadaId = crypto.randomUUID();
 
       if (navigator.onLine) {
+        const token = getAuthToken();
+        const headers: Record<string, string> = { "Content-Type": "application/json" };
+        if (token) headers["Authorization"] = `Bearer ${token}`;
+
         const res = await fetch("/api/v1/operari/jornada/inici", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers,
           credentials: "include",
           body: JSON.stringify({
             latitud: coords.latitud,
@@ -173,9 +181,13 @@ export default function MorningBriefing({
       if (selectedVehicleId.trim()) {
         const kmVal = kmInicials ? parseInt(kmInicials, 10) : 0;
         if (navigator.onLine && jornadaId) {
+          const token = getAuthToken();
+          const headers: Record<string, string> = { "Content-Type": "application/json" };
+          if (token) headers["Authorization"] = `Bearer ${token}`;
+
           const res = await fetch(`/api/v1/operari/jornada/${jornadaId}/vehicle`, {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers,
             credentials: "include",
             body: JSON.stringify({
               vehicle_id: selectedVehicleId.trim(),
@@ -207,7 +219,10 @@ export default function MorningBriefing({
 
       // Carregar feines del dia per al Pas 3
       if (navigator.onLine) {
-        const resFeines = await fetch("/api/v1/operari/feines", { credentials: "include" });
+        const token = getAuthToken();
+        const headers: Record<string, string> = {};
+        if (token) headers["Authorization"] = `Bearer ${token}`;
+        const resFeines = await fetch("/api/v1/operari/feines", { headers, credentials: "include" });
         if (resFeines.ok) {
           const dadesFeines = await resFeines.json();
           setFeinesDia(dadesFeines || []);
@@ -230,7 +245,11 @@ export default function MorningBriefing({
     setError(null);
     try {
       if (navigator.onLine) {
+        const token = getAuthToken();
+        const headers: Record<string, string> = {};
+        if (token) headers["Authorization"] = `Bearer ${token}`;
         const resMat = await fetch("/api/v1/operari/picking/materials", {
+          headers,
           credentials: "include",
         });
         if (resMat.ok) {

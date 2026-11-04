@@ -3,6 +3,7 @@
 import React, { useState } from "react";
 import { FileCheck2, Gauge, Square, X, AlertCircle, ShieldAlert } from "lucide-react";
 import { localDB } from "@/lib/db";
+import { getAuthToken } from "@/lib/api";
 import { JornadaActivaState } from "./ControlHorariBar";
 
 interface EveningCheckoutModalProps {
@@ -53,9 +54,13 @@ export default function EveningCheckoutModal({
       const nowIso = new Date().toISOString();
 
       if (navigator.onLine) {
+        const token = getAuthToken();
+        const headers: Record<string, string> = { "Content-Type": "application/json" };
+        if (token) headers["Authorization"] = `Bearer ${token}`;
+
         const res = await fetch(`/api/v1/operari/jornada/${jornada.id}/fi`, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers,
           credentials: "include",
           body: JSON.stringify({
             latitud: coords.latitud,
