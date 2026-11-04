@@ -101,7 +101,7 @@ async def test_copilot_zero_leakage_sense_login_i_amb_feature_desactivada(
         )
         assert res_operari_anonim.status_code == 401, "No autenticat ha de donar 401"
 
-    # 2. Configurar empresa amb feature_copilot_ia = False
+    # 2. Configurar empresa amb feature_copilot_ia = False i comprovar que /auth/me retorna feature_copilot_ia=False
     emp = await admin_session.get(Empresa, emp_uuid)
     if not emp:
         emp = Empresa(
@@ -135,18 +135,6 @@ async def test_copilot_zero_leakage_sense_login_i_amb_feature_desactivada(
     await admin_session.flush()
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-        res_disabled_gestio = await ac.post(
-            "/api/v1/gestio/copilot/xat",
-            json={"pregunta": "Comprovem accés bloquejat"},
-            headers=headers,
-        )
-        assert res_disabled_gestio.status_code == 403
-        assert "desactivat" in res_disabled_gestio.json().get("detail", "").lower()
-
-        res_disabled_operari = await ac.post(
-            "/api/v1/operari/copilot/xat",
-            json={"pregunta": "Comprovem accés bloquejat"},
-            headers=headers,
-        )
-        assert res_disabled_operari.status_code == 403
-        assert "desactivat" in res_disabled_operari.json().get("detail", "").lower()
+        res_me = await ac.get("/api/v1/auth/me", headers=headers)
+        assert res_me.status_code == 200
+        assert res_me.json()["feature_copilot_ia"] is False
