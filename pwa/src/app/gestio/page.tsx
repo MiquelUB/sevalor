@@ -7,6 +7,9 @@ import {
   MapPin,
   FileText,
   Navigation,
+  Package,
+  Wrench,
+  Eye,
 } from "lucide-react";
 import Link from "next/link";
 import { apiFetch } from "@/lib/api";
@@ -15,6 +18,7 @@ import { EditarOTModal } from "@/components/gestio/EditarOTModal";
 import GestioMap, { Feina, Operari } from "@/components/gestio/Map";
 import { QuadrillesTauler } from "@/components/gestio/QuadrillesTauler";
 import { IncidenciesDrawer } from "@/components/gestio/IncidenciesDrawer";
+import { Fulla360OTDrawer } from "@/components/gestio/Fulla360OTDrawer";
 
 export default function GestioDashboardPage() {
   const [vistaActiva, setVistaActiva] = useState<"FEINA" | "RESULTATS">("FEINA");
@@ -59,6 +63,8 @@ export default function GestioDashboardPage() {
   const [filtreClientResultats, setFiltreClientResultats] = useState<string>("TOTS");
   const [filtreEstatResultats, setFiltreEstatResultats] = useState<string>("TOTS");
   const [expandedRowId, setExpandedRowId] = useState<string | null>(null);
+  const [expandedSistemaRowId, setExpandedSistemaRowId] = useState<string | null>(null);
+  const [selectedOTFulla360, setSelectedOTFulla360] = useState<Feina | null>(null);
 
   const carregarDades = () => {
     setLoading(true);
@@ -72,6 +78,11 @@ export default function GestioDashboardPage() {
         const oList = Array.isArray(operarisData) ? operarisData : operarisData?.operaris || [];
         setFeines(fList);
         setOperaris(oList.filter((o: any) => o.estat === "ACTIU"));
+
+        if (selectedOTFulla360) {
+          const fresh = fList.find((f: any) => f.id === selectedOTFulla360.id);
+          if (fresh) setSelectedOTFulla360(fresh);
+        }
 
         if (hudData) {
           setHud(hudData);
@@ -348,6 +359,19 @@ export default function GestioDashboardPage() {
                                   type="button"
                                   onClick={(e) => {
                                     e.stopPropagation();
+                                    setSelectedOTFulla360(feina);
+                                  }}
+                                  className="p-xs hover:bg-emerald-500/10 rounded text-emerald-600 dark:text-emerald-400 hover:text-emerald-700 transition-colors cursor-pointer"
+                                  title="Obrir Fulla 360°"
+                                >
+                                  <span className="material-symbols-outlined text-[18px]">
+                                    visibility
+                                  </span>
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
                                     handleEditarFeina(feina.id);
                                   }}
                                   className="p-xs hover:bg-surface-container-highest rounded text-on-surface-variant hover:text-primary transition-colors cursor-pointer"
@@ -385,7 +409,7 @@ export default function GestioDashboardPage() {
                           </tr>
                           {isExpanded && (
                             <tr className="bg-surface-container-low/40">
-                              <td colSpan={8} className="px-xl py-lg">
+                              <td colSpan={8} className="px-xl py-lg space-y-md">
                                 <div className="grid grid-cols-1 md:grid-cols-3 gap-lg">
                                   <div className="bg-surface-container-lowest p-md rounded-xl border border-outline-variant/30">
                                     <span className="font-label-caps text-on-surface-variant uppercase block mb-xs">
@@ -430,6 +454,115 @@ export default function GestioDashboardPage() {
                                       </Link>
                                     </div>
                                   </div>
+                                </div>
+
+                                {/* Materials Assignats (Picking) i Eines en Custòdia */}
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-lg mt-md">
+                                  {/* Materials Assignats */}
+                                  <div className="bg-surface-container-lowest p-md rounded-xl border border-outline-variant/30">
+                                    <div className="flex items-center justify-between mb-sm">
+                                      <span className="font-label-caps text-on-surface-variant uppercase flex items-center gap-1.5 text-[11px]">
+                                        <Package className="w-4 h-4 text-primary" />
+                                        <span>Material Assignat (Fulla de Picking)</span>
+                                      </span>
+                                      <span className="font-mono text-[10px] font-bold px-2 py-0.5 rounded-full bg-primary/10 text-primary">
+                                        {feina.linies_picking?.length || 0} {feina.linies_picking?.length === 1 ? "article" : "articles"}
+                                      </span>
+                                    </div>
+                                    {!feina.linies_picking || feina.linies_picking.length === 0 ? (
+                                      <div className="p-4 text-center border border-dashed border-outline-variant/40 rounded-lg">
+                                        <p className="text-xs text-on-surface-variant italic">
+                                          Cap material reservat a la fulla de picking d&apos;aquesta ordre.
+                                        </p>
+                                      </div>
+                                    ) : (
+                                      <div className="border border-outline-variant/20 rounded-lg overflow-hidden max-h-48 overflow-y-auto">
+                                        <table className="w-full text-left text-xs">
+                                          <thead className="bg-surface-container-low text-on-surface-variant text-[10px] font-label-caps uppercase sticky top-0">
+                                            <tr>
+                                              <th className="py-2 px-3">Ref / Article</th>
+                                              <th className="py-2 px-3 text-right">Quantitat</th>
+                                            </tr>
+                                          </thead>
+                                          <tbody className="divide-y divide-outline-variant/10">
+                                            {feina.linies_picking.map((mat, idx) => (
+                                              <tr key={mat.id || idx} className="hover:bg-surface-container-low/40">
+                                                <td className="py-1.5 px-3">
+                                                  <span className="font-mono text-[11px] font-bold text-primary mr-1.5">
+                                                    [{mat.referencia_inventari || "REF"}]
+                                                  </span>
+                                                  <span className="text-on-surface font-medium truncate">
+                                                    {mat.article_nom}
+                                                  </span>
+                                                </td>
+                                                <td className="py-1.5 px-3 text-right font-data-tabular font-bold text-secondary">
+                                                  {mat.quantitat_prevista} {mat.unitat_mesura || "uts"}
+                                                </td>
+                                              </tr>
+                                            ))}
+                                          </tbody>
+                                        </table>
+                                      </div>
+                                    )}
+                                  </div>
+
+                                  {/* Eines en Custòdia */}
+                                  <div className="bg-surface-container-lowest p-md rounded-xl border border-outline-variant/30">
+                                    <div className="flex items-center justify-between mb-sm">
+                                      <span className="font-label-caps text-on-surface-variant uppercase flex items-center gap-1.5 text-[11px]">
+                                        <Wrench className="w-4 h-4 text-secondary" />
+                                        <span>Eines i Equips en Custòdia</span>
+                                      </span>
+                                      <span className="font-mono text-[10px] font-bold px-2 py-0.5 rounded-full bg-secondary-container/15 text-secondary">
+                                        {feina.eines?.length || 0} {feina.eines?.length === 1 ? "eina" : "eines"}
+                                      </span>
+                                    </div>
+                                    {!feina.eines || feina.eines.length === 0 ? (
+                                      <div className="p-4 text-center border border-dashed border-outline-variant/40 rounded-lg">
+                                        <p className="text-xs text-on-surface-variant italic">
+                                          Cap eina ni maquinària en custòdia assignada a aquesta ordre.
+                                        </p>
+                                      </div>
+                                    ) : (
+                                      <div className="border border-outline-variant/20 rounded-lg overflow-hidden divide-y divide-outline-variant/10 max-h-48 overflow-y-auto">
+                                        {feina.eines.map((e, idx) => (
+                                          <div key={e.id || idx} className="py-2 px-3 flex items-center justify-between text-xs hover:bg-surface-container-low/40">
+                                            <div className="min-w-0 flex-1 truncate pr-2">
+                                              <span className="font-bold text-on-surface">
+                                                {e.nom}
+                                              </span>
+                                              {e.model && (
+                                                <span className="text-[11px] text-on-surface-variant ml-1">
+                                                  ({e.model})
+                                                </span>
+                                              )}
+                                              <span className="text-[10px] font-mono text-outline block">
+                                                SN: {e.numero_serie}
+                                              </span>
+                                            </div>
+                                            <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded-full bg-blue-100 text-blue-800 dark:bg-blue-950/60 dark:text-blue-300 shrink-0">
+                                              {e.estat || "CUSTODIADA"}
+                                            </span>
+                                          </div>
+                                        ))}
+                                      </div>
+                                    )}
+                                  </div>
+                                </div>
+
+                                {/* Botó d'acció per obrir la Fulla 360° en panell lateral */}
+                                <div className="pt-sm border-t border-outline-variant/20 flex items-center justify-between">
+                                  <span className="text-xs text-on-surface-variant font-mono">
+                                    Dossier tècnic complet de la feina
+                                  </span>
+                                  <button
+                                    type="button"
+                                    onClick={() => setSelectedOTFulla360(feina)}
+                                    className="px-3 py-1.5 rounded-lg bg-primary hover:bg-primary-container text-white text-xs font-bold transition-all flex items-center gap-1 cursor-pointer shadow-sm"
+                                  >
+                                    <Eye className="w-3.5 h-3.5" />
+                                    <span>Veure Fulla 360° Completa</span>
+                                  </button>
                                 </div>
                               </td>
                             </tr>
@@ -679,6 +812,8 @@ export default function GestioDashboardPage() {
                     selectedFeinaId={selectedFeinaId}
                     onSelectFeina={setSelectedFeinaId}
                     showSidebar={false}
+                    onOpenFulla360={(feina) => setSelectedOTFulla360(feina)}
+                    onEditFeina={handleEditarFeina}
                   />
                 )}
               </div>
@@ -899,89 +1034,282 @@ export default function GestioDashboardPage() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-surface-container">
-                    {feines.slice(0, 15).map((feina) => (
-                      <tr
-                        key={feina.id}
-                        draggable
-                        onDragStart={(e) => {
-                          e.dataTransfer.setData("feinaId", feina.id);
-                          e.dataTransfer.setData("versio", (feina.versio || 1).toString());
-                        }}
-                        className="hover:bg-surface-container-low/60 transition-colors cursor-grab active:cursor-grabbing"
-                        title="Arrossega cap a una quadrilla per reassignar"
-                      >
-                        <td className="py-3 px-4 font-data-tabular font-bold text-primary text-xs">
-                          {feina.codi}
-                        </td>
-                        <td className="py-3 px-4 font-body-strong text-on-surface">
-                          <div>{feina.titol}</div>
-                          {feina.descripcio && (
-                            <div className="text-xs text-on-surface-variant font-normal line-clamp-1">
-                              {feina.descripcio}
-                            </div>
-                          )}
-                        </td>
-                        <td className="py-3 px-4 text-xs font-medium text-on-surface-variant">
-                          {feina.client_nom || "-"}
-                        </td>
-                        <td className="py-3 px-4 text-xs">
-                          {feina.cap_de_colla_nom ? (
-                            <span className="font-body-strong text-on-surface flex items-center gap-1">
-                              <Users className="w-3.5 h-3.5 text-primary" />
-                              {feina.cap_de_colla_nom}
-                            </span>
-                          ) : (
-                            <span className="text-secondary text-[11px] font-medium italic">
-                              Pendent d&apos;assignar
-                            </span>
-                          )}
-                        </td>
-                        <td className="py-3 px-4">
-                          <span
-                            className={`text-[11px] font-label-caps px-2.5 py-0.5 rounded-full ${
-                              feina.estat === "PENDENT"
-                                ? "bg-secondary-container/20 text-on-secondary-container"
-                                : feina.estat === "ASSIGNADA" || feina.estat === "PROGRAMADA"
-                                ? "bg-primary/10 text-primary"
-                                : "bg-green-100 text-green-700"
-                            }`}
+                    {feines.slice(0, 20).map((feina) => {
+                      const isExpanded = expandedSistemaRowId === feina.id;
+                      return (
+                        <React.Fragment key={feina.id}>
+                          <tr
+                            draggable
+                            onDragStart={(e) => {
+                              e.dataTransfer.setData("feinaId", feina.id);
+                              e.dataTransfer.setData("versio", (feina.versio || 1).toString());
+                            }}
+                            onClick={() => setExpandedSistemaRowId(isExpanded ? null : feina.id)}
+                            className="hover:bg-surface-container-low/60 transition-colors cursor-pointer"
+                            title="Fes clic per veure la fulla 360° o arrossega per reassignar"
                           >
-                            {feina.estat}
-                          </span>
-                        </td>
-                        <td className="py-3 px-4 text-xs text-on-surface-variant flex items-center gap-1.5">
-                          <Calendar className="w-3.5 h-3.5 text-outline" />
-                          {feina.data_planificacio || "-"}
-                        </td>
-                        <td className="py-3 px-4 text-xs text-on-surface-variant">
-                          <div className="flex items-center gap-1 truncate max-w-xs">
-                            <MapPin className="w-3.5 h-3.5 text-secondary shrink-0" />
-                            <span className="truncate">{feina.adreca}</span>
-                          </div>
-                        </td>
-                        <td className="py-3 px-4 text-right">
-                          <div className="flex items-center justify-end gap-1.5">
-                            <button
-                              type="button"
-                              onClick={() => handleEditarFeina(feina.id)}
-                              className="px-2.5 py-1.5 text-xs font-body-strong rounded-lg bg-surface-container-high hover:bg-primary hover:text-white text-on-surface inline-flex items-center gap-1 transition-colors cursor-pointer"
-                              title="Editar ordre de treball"
-                            >
-                              <span className="material-symbols-outlined text-[15px]">edit</span>
-                              <span>Editar</span>
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => handleFocusFeinaAlMapa(feina.id)}
-                              className="px-2.5 py-1.5 text-xs font-body-strong rounded-lg bg-primary/10 hover:bg-primary hover:text-white text-primary inline-flex items-center gap-1 transition-colors cursor-pointer"
-                            >
-                              <Navigation className="w-3 h-3" />
-                              <span>Veure al mapa</span>
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
+                            <td className="py-3 px-4 font-data-tabular font-bold text-primary text-xs">
+                              {feina.codi}
+                            </td>
+                            <td className="py-3 px-4 font-body-strong text-on-surface">
+                              <div>{feina.titol}</div>
+                              {feina.descripcio && (
+                                <div className="text-xs text-on-surface-variant font-normal line-clamp-1">
+                                  {feina.descripcio}
+                                </div>
+                              )}
+                            </td>
+                            <td className="py-3 px-4 text-xs font-medium text-on-surface-variant">
+                              {feina.client_nom || "-"}
+                            </td>
+                            <td className="py-3 px-4 text-xs">
+                              {feina.cap_de_colla_nom ? (
+                                <span className="font-body-strong text-on-surface flex items-center gap-1">
+                                  <Users className="w-3.5 h-3.5 text-primary" />
+                                  {feina.cap_de_colla_nom}
+                                </span>
+                              ) : (
+                                <span className="text-secondary text-[11px] font-medium italic">
+                                  Pendent d&apos;assignar
+                                </span>
+                              )}
+                            </td>
+                            <td className="py-3 px-4">
+                              <span
+                                className={`text-[11px] font-label-caps px-2.5 py-0.5 rounded-full ${
+                                  feina.estat === "PENDENT"
+                                    ? "bg-secondary-container/20 text-on-secondary-container"
+                                    : feina.estat === "ASSIGNADA" || feina.estat === "PROGRAMADA"
+                                    ? "bg-primary/10 text-primary"
+                                    : "bg-green-100 text-green-700"
+                                }`}
+                              >
+                                {feina.estat}
+                              </span>
+                            </td>
+                            <td className="py-3 px-4 text-xs text-on-surface-variant flex items-center gap-1.5">
+                              <Calendar className="w-3.5 h-3.5 text-outline" />
+                              {feina.data_planificacio || "-"}
+                            </td>
+                            <td className="py-3 px-4 text-xs text-on-surface-variant">
+                              <div className="flex items-center gap-1 truncate max-w-xs">
+                                <MapPin className="w-3.5 h-3.5 text-secondary shrink-0" />
+                                <span className="truncate">{feina.adreca}</span>
+                              </div>
+                            </td>
+                            <td className="py-3 px-4 text-right">
+                              <div className="flex items-center justify-end gap-1.5">
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setSelectedOTFulla360(feina);
+                                  }}
+                                  className="px-2.5 py-1.5 text-xs font-body-strong rounded-lg bg-emerald-500/10 hover:bg-emerald-600 hover:text-white text-emerald-700 dark:text-emerald-400 inline-flex items-center gap-1 transition-colors cursor-pointer"
+                                  title="Fulla 360° de l'ordre de treball"
+                                >
+                                  <span className="material-symbols-outlined text-[15px]">visibility</span>
+                                  <span>Fulla 360°</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleEditarFeina(feina.id);
+                                  }}
+                                  className="px-2.5 py-1.5 text-xs font-body-strong rounded-lg bg-surface-container-high hover:bg-primary hover:text-white text-on-surface inline-flex items-center gap-1 transition-colors cursor-pointer"
+                                  title="Editar ordre de treball"
+                                >
+                                  <span className="material-symbols-outlined text-[15px]">edit</span>
+                                  <span>Editar</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleFocusFeinaAlMapa(feina.id);
+                                  }}
+                                  className="px-2.5 py-1.5 text-xs font-body-strong rounded-lg bg-primary/10 hover:bg-primary hover:text-white text-primary inline-flex items-center gap-1 transition-colors cursor-pointer"
+                                  title="Veure al mapa"
+                                >
+                                  <Navigation className="w-3 h-3" />
+                                  <span>Mapa</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  className="p-1 rounded text-on-surface-variant hover:bg-surface-container"
+                                  title="Expandir detalls 360"
+                                >
+                                  <span className="material-symbols-outlined text-[16px]">
+                                    {isExpanded ? "expand_less" : "expand_more"}
+                                  </span>
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                          {isExpanded && (
+                            <tr className="bg-surface-container-low/40">
+                              <td colSpan={8} className="px-xl py-lg space-y-md">
+                                <div className="grid grid-cols-1 md:grid-cols-3 gap-lg">
+                                  <div className="bg-surface-container-lowest p-md rounded-xl border border-outline-variant/30">
+                                    <span className="font-label-caps text-on-surface-variant uppercase block mb-xs">
+                                      Descripció Tècnica
+                                    </span>
+                                    <p className="text-sm text-on-surface">
+                                      {feina.descripcio || "Sense observacions addicionals registrades."}
+                                    </p>
+                                  </div>
+                                  <div className="bg-surface-container-lowest p-md rounded-xl border border-outline-variant/30">
+                                    <span className="font-label-caps text-on-surface-variant uppercase block mb-xs">
+                                      Localització i Client
+                                    </span>
+                                    <p className="text-sm font-body-strong text-primary">
+                                      {feina.client_nom || "Client no especificat"}
+                                    </p>
+                                    <p className="text-xs text-on-surface-variant mt-1">
+                                      {feina.adreca || "Sense adreça"}
+                                    </p>
+                                  </div>
+                                  <div className="bg-surface-container-lowest p-md rounded-xl border border-outline-variant/30 flex flex-col justify-between">
+                                    <div>
+                                      <span className="font-label-caps text-on-surface-variant uppercase block mb-xs">
+                                        Assignació Operativa
+                                      </span>
+                                      <p className="text-sm font-body-strong text-on-surface">
+                                        Responsable: {feina.cap_de_colla_nom || "Pendent d'assignar"}
+                                      </p>
+                                    </div>
+                                    <div className="flex gap-sm mt-md">
+                                      <Link
+                                        href="/gestio/comptabilitat"
+                                        className="flex-1 py-xs px-sm bg-surface-container-high hover:bg-surface-container-highest text-primary font-body-strong text-xs rounded-lg transition-colors text-center"
+                                      >
+                                        Facturació SIF
+                                      </Link>
+                                      <Link
+                                        href="/gestio/planols"
+                                        className="flex-1 py-xs px-sm bg-secondary-container/15 hover:bg-secondary-container/25 text-secondary font-body-strong text-xs rounded-lg transition-colors text-center"
+                                      >
+                                        Plànols GIS
+                                      </Link>
+                                    </div>
+                                  </div>
+                                </div>
+
+                                {/* Materials Assignats (Picking) i Eines en Custòdia */}
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-lg mt-md">
+                                  {/* Materials Assignats */}
+                                  <div className="bg-surface-container-lowest p-md rounded-xl border border-outline-variant/30">
+                                    <div className="flex items-center justify-between mb-sm">
+                                      <span className="font-label-caps text-on-surface-variant uppercase flex items-center gap-1.5 text-[11px]">
+                                        <Package className="w-4 h-4 text-primary" />
+                                        <span>Material Assignat (Fulla de Picking)</span>
+                                      </span>
+                                      <span className="font-mono text-[10px] font-bold px-2 py-0.5 rounded-full bg-primary/10 text-primary">
+                                        {feina.linies_picking?.length || 0} {feina.linies_picking?.length === 1 ? "article" : "articles"}
+                                      </span>
+                                    </div>
+                                    {!feina.linies_picking || feina.linies_picking.length === 0 ? (
+                                      <div className="p-4 text-center border border-dashed border-outline-variant/40 rounded-lg">
+                                        <p className="text-xs text-on-surface-variant italic">
+                                          Cap material reservat a la fulla de picking d&apos;aquesta ordre.
+                                        </p>
+                                      </div>
+                                    ) : (
+                                      <div className="border border-outline-variant/20 rounded-lg overflow-hidden max-h-48 overflow-y-auto">
+                                        <table className="w-full text-left text-xs">
+                                          <thead className="bg-surface-container-low text-on-surface-variant text-[10px] font-label-caps uppercase sticky top-0">
+                                            <tr>
+                                              <th className="py-2 px-3">Ref / Article</th>
+                                              <th className="py-2 px-3 text-right">Quantitat</th>
+                                            </tr>
+                                          </thead>
+                                          <tbody className="divide-y divide-outline-variant/10">
+                                            {feina.linies_picking.map((mat, idx) => (
+                                              <tr key={mat.id || idx} className="hover:bg-surface-container-low/40">
+                                                <td className="py-1.5 px-3">
+                                                  <span className="font-mono text-[11px] font-bold text-primary mr-1.5">
+                                                    [{mat.referencia_inventari || "REF"}]
+                                                  </span>
+                                                  <span className="text-on-surface font-medium truncate">
+                                                    {mat.article_nom}
+                                                  </span>
+                                                </td>
+                                                <td className="py-1.5 px-3 text-right font-data-tabular font-bold text-secondary">
+                                                  {mat.quantitat_prevista} {mat.unitat_mesura || "uts"}
+                                                </td>
+                                              </tr>
+                                            ))}
+                                          </tbody>
+                                        </table>
+                                      </div>
+                                    )}
+                                  </div>
+
+                                  {/* Eines en Custòdia */}
+                                  <div className="bg-surface-container-lowest p-md rounded-xl border border-outline-variant/30">
+                                    <div className="flex items-center justify-between mb-sm">
+                                      <span className="font-label-caps text-on-surface-variant uppercase flex items-center gap-1.5 text-[11px]">
+                                        <Wrench className="w-4 h-4 text-secondary" />
+                                        <span>Eines i Equips en Custòdia</span>
+                                      </span>
+                                      <span className="font-mono text-[10px] font-bold px-2 py-0.5 rounded-full bg-secondary-container/15 text-secondary">
+                                        {feina.eines?.length || 0} {feina.eines?.length === 1 ? "eina" : "eines"}
+                                      </span>
+                                    </div>
+                                    {!feina.eines || feina.eines.length === 0 ? (
+                                      <div className="p-4 text-center border border-dashed border-outline-variant/40 rounded-lg">
+                                        <p className="text-xs text-on-surface-variant italic">
+                                          Cap eina ni maquinària en custòdia assignada a aquesta ordre.
+                                        </p>
+                                      </div>
+                                    ) : (
+                                      <div className="border border-outline-variant/20 rounded-lg overflow-hidden divide-y divide-outline-variant/10 max-h-48 overflow-y-auto">
+                                        {feina.eines.map((e, idx) => (
+                                          <div key={e.id || idx} className="py-2 px-3 flex items-center justify-between text-xs hover:bg-surface-container-low/40">
+                                            <div className="min-w-0 flex-1 truncate pr-2">
+                                              <span className="font-bold text-on-surface">
+                                                {e.nom}
+                                              </span>
+                                              {e.model && (
+                                                <span className="text-[11px] text-on-surface-variant ml-1">
+                                                  ({e.model})
+                                                </span>
+                                              )}
+                                              <span className="text-[10px] font-mono text-outline block">
+                                                SN: {e.numero_serie}
+                                              </span>
+                                            </div>
+                                            <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded-full bg-blue-100 text-blue-800 dark:bg-blue-950/60 dark:text-blue-300 shrink-0">
+                                              {e.estat || "CUSTODIADA"}
+                                            </span>
+                                          </div>
+                                        ))}
+                                      </div>
+                                    )}
+                                  </div>
+                                </div>
+
+                                {/* Botó d'acció per obrir la Fulla 360° en panell lateral */}
+                                <div className="pt-sm border-t border-outline-variant/20 flex items-center justify-between">
+                                  <span className="text-xs text-on-surface-variant font-mono">
+                                    Dossier tècnic complet de la feina
+                                  </span>
+                                  <button
+                                    type="button"
+                                    onClick={() => setSelectedOTFulla360(feina)}
+                                    className="px-3 py-1.5 rounded-lg bg-primary hover:bg-primary-container text-white text-xs font-bold transition-all flex items-center gap-1 cursor-pointer shadow-sm"
+                                  >
+                                    <Eye className="w-3.5 h-3.5" />
+                                    <span>Veure Fulla 360° Completa</span>
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+                          )}
+                        </React.Fragment>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
@@ -1019,6 +1347,17 @@ export default function GestioDashboardPage() {
           carregarDades();
         }}
         onIncidenciaUpdated={carregarDades}
+      />
+
+      <Fulla360OTDrawer
+        isOpen={!!selectedOTFulla360}
+        feina={selectedOTFulla360}
+        onClose={() => setSelectedOTFulla360(null)}
+        onEdit={(id) => handleEditarFeina(id)}
+        onFocusMapa={(id) => {
+          setVistaActiva("FEINA");
+          setTimeout(() => handleFocusFeinaAlMapa(id), 100);
+        }}
       />
     </div>
   );

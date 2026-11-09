@@ -27,5 +27,5 @@ Treballador: Pau Baixa
 Telèfon (Login): 699874458
 NIF: 63256987X
 Rol: CAP_DE_COLLA
-PIN d'accés (4 dígits): 5665
+PIN d'accés (4 dígits): 6030
 Adreça web (PWA): https://sevalormante.projectexinoxano.cat/operari/login

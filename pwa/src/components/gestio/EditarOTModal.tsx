@@ -915,8 +915,8 @@ export function EditarOTModal({ feinaId, onClose, onSuccess }: EditarOTModalProp
 
                 {/* Subformulari afegir article amb cerca autocompletable i selecció de família */}
                 <div className="p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 space-y-3">
-                  {/* Fila 1: Filtre de Família & Input de Cerca Autocompletable */}
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  {/* Fila 1: Filtre de Família & Cerca o Selecció Directa d'Article */}
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                     {/* Selector de Família */}
                     <div>
                       <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1 flex items-center gap-1">
@@ -941,11 +941,11 @@ export function EditarOTModal({ feinaId, onClose, onSuccess }: EditarOTModalProp
                     </div>
 
                     {/* Cerca Autocompletable */}
-                    <div className="sm:col-span-2 relative" ref={articleComboboxRef}>
+                    <div className="md:col-span-2 relative" ref={articleComboboxRef}>
                       <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1 flex items-center justify-between">
                         <span className="flex items-center gap-1">
                           <Search className="w-3.5 h-3.5 text-primary" />
-                          <span>Cerca d&apos;Article (Autocompletar)</span>
+                          <span>Cerca d&apos;Article (Codi, Nom o Referència)</span>
                         </span>
                         {selectedArticle && (
                           <span className="text-[11px] font-mono font-bold text-emerald-600 dark:text-emerald-400">
@@ -965,6 +965,14 @@ export function EditarOTModal({ feinaId, onClose, onSuccess }: EditarOTModalProp
                             setSelectedArticleId("");
                             setIsArticleDropdownOpen(true);
                           }}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") {
+                              e.preventDefault();
+                              if (filteredArticles.length > 0) {
+                                handleSelectArticle(filteredArticles[0]);
+                              }
+                            }
+                          }}
                           placeholder="Escriu per cercar per referència, nom o família..."
                           className="w-full pl-9 pr-8 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary font-medium"
                         />
@@ -982,7 +990,7 @@ export function EditarOTModal({ feinaId, onClose, onSuccess }: EditarOTModalProp
 
                       {/* Dropdown d'autocompletat */}
                       {isArticleDropdownOpen && (
-                        <div className="absolute top-full left-0 right-0 mt-1 z-30 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl shadow-2xl overflow-hidden max-h-60 overflow-y-auto">
+                        <div className="absolute top-full left-0 right-0 mt-1 z-50 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl shadow-2xl overflow-hidden max-h-52 overflow-y-auto">
                           {filteredArticles.length > 0 ? (
                             filteredArticles.map((art) => (
                               <button
@@ -1029,25 +1037,51 @@ export function EditarOTModal({ feinaId, onClose, onSuccess }: EditarOTModalProp
                     </div>
                   </div>
 
-                  {/* Fila 2: Detalls de l'article seleccionat i botó d'afegir */}
+                  {/* Selector Directe Alternatiu d'Articles per facilitar selecció ràpida */}
+                  <div className="pt-2 border-t border-slate-100 dark:border-slate-800">
+                    <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-400 mb-1">
+                      O selecciona directament del catàleg ({articlesCatalog.filter(a => filtreFamilia === "TOTES" || (a.familia || "").toUpperCase() === filtreFamilia.toUpperCase()).length} articles disponibles):
+                    </label>
+                    <select
+                      value={selectedArticleId}
+                      onChange={(e) => {
+                        const art = articlesCatalog.find((a) => a.id === e.target.value);
+                        if (art) handleSelectArticle(art);
+                      }}
+                      className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary"
+                    >
+                      <option value="">-- Tria un article per afegir a la fulla de picking --</option>
+                      {articlesCatalog
+                        .filter(
+                          (a) =>
+                            filtreFamilia === "TOTES" ||
+                            (a.familia || "").toUpperCase() === filtreFamilia.toUpperCase()
+                        )
+                        .map((a) => (
+                          <option key={a.id} value={a.id}>
+                            [{a.referencia_inventari}] {a.nom} — {a.estoc_real ?? 0} {a.unitat_mesura} disp.
+                          </option>
+                        ))}
+                    </select>
+                  </div>
+
+                  {/* Fila 2: Detalls de l'article seleccionat i assignació de quantitat */}
                   {selectedArticle && (
-                    <div className="pt-2 border-t border-slate-100 dark:border-slate-800 flex flex-col sm:flex-row items-end gap-3 animate-in fade-in duration-100">
-                      <div className="flex-1 w-full p-2.5 rounded-lg bg-primary/5 dark:bg-primary/10 border border-primary/20 flex items-center justify-between">
-                        <div className="min-w-0">
-                          <p className="text-[11px] text-slate-500 dark:text-slate-400 font-mono">
-                            Article seleccionat:
-                          </p>
-                          <p className="text-xs font-bold text-slate-900 dark:text-white truncate">
-                            [{selectedArticle.referencia_inventari}] {selectedArticle.nom}
-                          </p>
-                        </div>
-                        <span className="shrink-0 text-xs font-mono font-bold text-emerald-600 dark:text-emerald-400 ml-2">
-                          {selectedArticle.estoc_real ?? 0} {selectedArticle.unitat_mesura} disp.
+                    <div className="pt-3 border-t border-slate-100 dark:border-slate-800 flex flex-col sm:flex-row items-stretch sm:items-end gap-3 bg-slate-50/60 dark:bg-slate-800/30 p-3 rounded-xl border border-slate-200/60 dark:border-slate-700/60 animate-in fade-in duration-100">
+                      <div className="flex-1 min-w-0">
+                        <p className="text-[10px] text-slate-500 dark:text-slate-400 font-mono uppercase font-bold">
+                          Article seleccionat:
+                        </p>
+                        <p className="text-xs font-bold text-slate-900 dark:text-white truncate">
+                          [{selectedArticle.referencia_inventari}] {selectedArticle.nom}
+                        </p>
+                        <span className="inline-block mt-1 text-xs font-mono font-bold text-emerald-600 dark:text-emerald-400">
+                          Estoc disponible: {selectedArticle.estoc_real ?? 0} {selectedArticle.unitat_mesura}
                         </span>
                       </div>
 
-                      <div className="w-full sm:w-28">
-                        <label className="block text-[11px] font-bold text-slate-700 dark:text-slate-300 mb-1">
+                      <div className="w-full sm:w-36 space-y-1">
+                        <label className="block text-[11px] font-bold text-slate-700 dark:text-slate-300">
                           Quantitat ({selectedArticle.unitat_mesura})
                         </label>
                         <input
@@ -1056,7 +1090,13 @@ export function EditarOTModal({ feinaId, onClose, onSuccess }: EditarOTModalProp
                           min="0.001"
                           value={quantitatPickingInput}
                           onChange={(e) => setQuantitatPickingInput(parseFloat(e.target.value) || 0)}
-                          className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary font-mono"
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") {
+                              e.preventDefault();
+                              handleAfegirMaterial();
+                            }
+                          }}
+                          className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary font-mono font-bold text-center"
                         />
                       </div>
 
@@ -1064,10 +1104,10 @@ export function EditarOTModal({ feinaId, onClose, onSuccess }: EditarOTModalProp
                         type="button"
                         onClick={handleAfegirMaterial}
                         disabled={quantitatPickingInput <= 0}
-                        className="w-full sm:w-auto px-4 py-2 rounded-xl bg-primary hover:bg-primary-container text-white text-xs font-bold transition-all flex items-center justify-center gap-1 cursor-pointer disabled:opacity-40"
+                        className="w-full sm:w-auto px-4 py-2.5 rounded-xl bg-primary hover:bg-primary-container text-white text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-40 shrink-0 shadow-sm"
                       >
-                        <Plus className="w-3.5 h-3.5" />
-                        <span>Afegir Material</span>
+                        <Plus className="w-4 h-4" />
+                        <span>Afegir a la Fulla</span>
                       </button>
                     </div>
                   )}
@@ -1075,29 +1115,31 @@ export function EditarOTModal({ feinaId, onClose, onSuccess }: EditarOTModalProp
 
                 {/* Taula de materials reservats */}
                 {liniesPicking.length > 0 ? (
-                  <div className="border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden">
-                    <table className="w-full text-left text-xs">
+                  <div className="border border-slate-200 dark:border-slate-800 rounded-xl overflow-x-auto shadow-xs">
+                    <table className="w-full min-w-[540px] text-left text-xs">
                       <thead className="bg-slate-50 dark:bg-slate-800/60 text-slate-600 dark:text-slate-300 border-b border-slate-200 dark:border-slate-800">
                         <tr>
                           <th className="py-2.5 px-3 font-semibold">Ref / Article</th>
-                          <th className="py-2.5 px-3 font-semibold text-center">Quantitat Prevista</th>
-                          <th className="py-2.5 px-3 font-semibold text-right">Estoc Magatzem</th>
-                          <th className="py-2.5 px-3 text-right">Acció</th>
+                          <th className="py-2.5 px-3 font-semibold text-center w-36">Quantitat Prevista</th>
+                          <th className="py-2.5 px-3 font-semibold text-right w-36">Estoc Magatzem</th>
+                          <th className="py-2.5 px-3 text-right w-16">Acció</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
                         {liniesPicking.map((linia) => (
                           <tr key={linia.article_id} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/40">
                             <td className="py-2.5 px-3">
-                              <span className="font-mono text-[11px] font-bold text-primary mr-1.5">
-                                {linia.referencia_inventari}
-                              </span>
-                              <span className="text-slate-800 dark:text-slate-200">
-                                {linia.article_nom}
-                              </span>
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                <span className="font-mono text-[11px] font-bold text-primary shrink-0">
+                                  [{linia.referencia_inventari}]
+                                </span>
+                                <span className="text-slate-800 dark:text-slate-200 font-medium truncate max-w-xs block">
+                                  {linia.article_nom}
+                                </span>
+                              </div>
                             </td>
                             <td className="py-2.5 px-3 text-center">
-                              <div className="inline-flex items-center gap-1.5">
+                              <div className="inline-flex items-center justify-center gap-1.5">
                                 <input
                                   type="number"
                                   step="any"
@@ -1109,16 +1151,16 @@ export function EditarOTModal({ feinaId, onClose, onSuccess }: EditarOTModalProp
                                       parseFloat(e.target.value) || 0
                                     )
                                   }
-                                  className="w-20 px-2 py-1 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-mono text-center focus:outline-none focus:ring-1 focus:ring-primary"
+                                  className="w-20 px-2 py-1 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-mono font-bold text-center focus:outline-none focus:ring-1 focus:ring-primary"
                                 />
-                                <span className="text-[11px] font-mono text-slate-500">
+                                <span className="text-[11px] font-mono text-slate-500 shrink-0">
                                   {linia.unitat_mesura}
                                 </span>
                               </div>
                             </td>
                             <td className="py-2.5 px-3 text-right">
                               <span
-                                className={`text-[11px] font-mono px-2 py-0.5 rounded-full ${
+                                className={`text-[11px] font-mono px-2 py-0.5 rounded-full inline-block ${
                                   linia.estoc_disponible < linia.quantitat_prevista
                                     ? "bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300"
                                     : "bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300"
@@ -1195,6 +1237,14 @@ export function EditarOTModal({ feinaId, onClose, onSuccess }: EditarOTModalProp
                             setSelectedEina(null);
                             setSelectedEinaInputId("");
                             setIsEinaDropdownOpen(true);
+                          }}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") {
+                              e.preventDefault();
+                              if (filteredEines.length > 0) {
+                                handleSelectEina(filteredEines[0]);
+                              }
+                            }
                           }}
                           placeholder="Escriu nom, model o número de sèrie per autocompletar..."
                           className="w-full pl-9 pr-8 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary font-medium"

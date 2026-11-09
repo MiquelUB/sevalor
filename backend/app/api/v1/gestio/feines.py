@@ -1,6 +1,7 @@
+import collections
 import uuid
 from datetime import date, datetime
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict, Field
@@ -137,6 +138,57 @@ async def llistar_feines(
     result = await db.execute(stmt)
     rows = result.all()
 
+    # Precarregar Fulles de picking i Eines en batch per a totes les OTs retornades
+    ot_ids = [ordre.id for ordre, _, _, _ in rows]
+    picking_by_ot: Dict[uuid.UUID, List[LiniaPickingItem]] = collections.defaultdict(list)
+    eines_by_ot: Dict[uuid.UUID, List[EinaItem]] = collections.defaultdict(list)
+
+    if ot_ids:
+        # 1. Carregar Fulles de picking i línies d'articles en batch
+        pk_stmt = (
+            select(FullaPicking.ordre_treball_id, LiniaPicking, Article)
+            .join(LiniaPicking, LiniaPicking.picking_id == FullaPicking.id)
+            .join(Article, LiniaPicking.article_id == Article.id)
+            .where(
+                FullaPicking.ordre_treball_id.in_(ot_ids),
+                FullaPicking.empresa_id == uuid.UUID(empresa_id),
+            )
+        )
+        pk_res = (await db.execute(pk_stmt)).all()
+        for ot_id, lp, art in pk_res:
+            picking_by_ot[ot_id].append(
+                LiniaPickingItem(
+                    id=lp.id,
+                    article_id=art.id,
+                    article_nom=art.nom,
+                    referencia_inventari=art.referencia_inventari,
+                    quantitat_prevista=float(lp.quantitat_prevista or 0.0),
+                    unitat_mesura=art.unitat_mesura or "UNITAT",
+                    estoc_disponible=0.0,
+                )
+            )
+
+        # 2. Carregar Eines en custòdia vinculades a les OTs en batch
+        eines_stmt = (
+            select(EinaCustodia)
+            .where(
+                EinaCustodia.ordre_treball_id.in_(ot_ids),
+                EinaCustodia.empresa_id == uuid.UUID(empresa_id),
+            )
+        )
+        eines_res = (await db.execute(eines_stmt)).scalars().all()
+        for e in eines_res:
+            if e.ordre_treball_id:
+                eines_by_ot[e.ordre_treball_id].append(
+                    EinaItem(
+                        id=e.id,
+                        nom=e.nom,
+                        model=getattr(e, "model", None),
+                        numero_serie=e.numero_serie,
+                        estat=e.estat,
+                    )
+                )
+
     feines = []
     for ordre, client, operari, planol in rows:
         f_resp = FeinaResponse.model_validate(ordre)
@@ -153,6 +205,12 @@ async def llistar_feines(
         if planol:
             f_resp.planol_titol = planol.titol
             f_resp.planol_codi = planol.codi_referencia
+
+        # Assignar materials de picking i eines en custòdia reals
+        f_resp.linies_picking = picking_by_ot.get(ordre.id, [])
+        f_resp.eines = eines_by_ot.get(ordre.id, [])
+        f_resp.eina_ids = [e.id for e in f_resp.eines]
+
         feines.append(f_resp)
 
     return feines

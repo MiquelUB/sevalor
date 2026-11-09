@@ -27,8 +27,28 @@ import {
   Eye,
   UserCheck,
   Navigation,
+  Package,
+  Wrench,
 } from "lucide-react";
 import { geocodificarAdreca } from "@/lib/geocoding";
+
+export interface LiniaPickingItem {
+  id?: string;
+  article_id: string;
+  article_nom?: string;
+  referencia_inventari?: string;
+  quantitat_prevista: number;
+  unitat_mesura?: string;
+  estoc_disponible?: number;
+}
+
+export interface EinaItem {
+  id: string;
+  nom: string;
+  model?: string | null;
+  numero_serie: string;
+  estat: string;
+}
 
 export interface Feina {
   id: string;
@@ -44,6 +64,8 @@ export interface Feina {
   client_nom?: string | null;
   descripcio?: string | null;
   data_planificacio?: string | null;
+  linies_picking?: LiniaPickingItem[];
+  eines?: EinaItem[];
 }
 
 export interface Operari {
@@ -73,6 +95,8 @@ interface MapProps {
   onSelectFeina?: (id: string | null) => void;
   isEmbed?: boolean;
   showSidebar?: boolean;
+  onOpenFulla360?: (feina: Feina) => void;
+  onEditFeina?: (feinaId: string) => void;
 }
 
 // Funció matemàtica de conversió lat/lng a rajoles Web Mercator (EPSG:3857)
@@ -99,6 +123,8 @@ export default function GestioMap({
   onSelectFeina,
   isEmbed = false,
   showSidebar = false,
+  onOpenFulla360,
+  onEditFeina,
 }: MapProps) {
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState<boolean>(showSidebar);
@@ -1146,8 +1172,81 @@ export default function GestioMap({
                 )}
               </div>
 
+              {/* Informació de Materials de Picking i Eines */}
+              {selectedFeina.linies_picking && selectedFeina.linies_picking.length > 0 && (
+                <div className="p-2.5 bg-slate-800/80 rounded-lg border border-slate-700 mt-2">
+                  <div className="text-[10px] text-slate-400 uppercase font-bold flex items-center justify-between mb-1">
+                    <span className="flex items-center gap-1">
+                      <Package className="w-3 h-3 text-emerald-400" />
+                      <span>Material Assignat (Picking)</span>
+                    </span>
+                    <span className="text-emerald-400 font-mono font-bold">
+                      {selectedFeina.linies_picking.length} {selectedFeina.linies_picking.length === 1 ? "art." : "arts."}
+                    </span>
+                  </div>
+                  <div className="text-[11px] text-slate-300 space-y-0.5">
+                    {selectedFeina.linies_picking.slice(0, 3).map((l, i) => (
+                      <div key={i} className="truncate">
+                        • <span className="text-emerald-300 font-mono">[{l.referencia_inventari || "REF"}]</span> {l.article_nom} ({l.quantitat_prevista} {l.unitat_mesura})
+                      </div>
+                    ))}
+                    {selectedFeina.linies_picking.length > 3 && (
+                      <div className="text-[10px] text-slate-400 italic">
+                        +{selectedFeina.linies_picking.length - 3} més a la fulla 360°...
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {selectedFeina.eines && selectedFeina.eines.length > 0 && (
+                <div className="p-2.5 bg-slate-800/80 rounded-lg border border-slate-700 mt-2">
+                  <div className="text-[10px] text-slate-400 uppercase font-bold flex items-center justify-between mb-1">
+                    <span className="flex items-center gap-1">
+                      <Wrench className="w-3 h-3 text-blue-400" />
+                      <span>Eines en Custòdia</span>
+                    </span>
+                    <span className="text-blue-400 font-mono font-bold">
+                      {selectedFeina.eines.length} {selectedFeina.eines.length === 1 ? "eina" : "eines"}
+                    </span>
+                  </div>
+                  <div className="text-[11px] text-slate-300 space-y-0.5">
+                    {selectedFeina.eines.slice(0, 3).map((e, i) => (
+                      <div key={i} className="truncate">
+                        • {e.nom} <span className="text-slate-400 font-mono">({e.numero_serie})</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Botons d'acció ràpida: Fulla 360 i Editar */}
+              {(onOpenFulla360 || onEditFeina) && (
+                <div className="flex gap-2 pt-2 border-t border-slate-800">
+                  {onOpenFulla360 && (
+                    <button
+                      type="button"
+                      onClick={() => onOpenFulla360(selectedFeina)}
+                      className="flex-1 py-1.5 px-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-[11px] font-bold text-center transition-colors flex items-center justify-center gap-1 cursor-pointer"
+                    >
+                      <Eye className="w-3.5 h-3.5" />
+                      <span>Fulla 360°</span>
+                    </button>
+                  )}
+                  {onEditFeina && (
+                    <button
+                      type="button"
+                      onClick={() => onEditFeina(selectedFeina.id)}
+                      className="flex-1 py-1.5 px-2 rounded-lg bg-slate-700 hover:bg-slate-600 text-white text-[11px] font-bold text-center transition-colors flex items-center justify-center gap-1 cursor-pointer"
+                    >
+                      <span>Editar OT</span>
+                    </button>
+                  )}
+                </div>
+              )}
+
               {/* Reassignació Ràpida Drop & Go des del Popover */}
-              <div className="pt-2">
+              <div className="pt-2 border-t border-slate-800">
                 <label className="text-[10px] text-slate-400 uppercase font-bold block mb-1">
                   Reassignar Feina a un altre Operari:
                 </label>
