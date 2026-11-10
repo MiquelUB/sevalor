@@ -200,31 +200,6 @@ async def llistar_flota(
     return vehicles
 
 
-@router.get("/{vehicle_id}", response_model=VehicleResponse)
-async def obtenir_vehicle(
-    request: Request,
-    vehicle_id: uuid.UUID,
-    db: AsyncSession = Depends(get_db_with_tenant_context),
-):
-    empresa_id = request.state.empresa_id
-    if not empresa_id or empresa_id == "undefined":
-        raise HTTPException(status_code=401, detail="No identificat")
-
-    stmt = (
-        select(Vehicle, Usuari.nom, Usuari.cognoms)
-        .outerjoin(Usuari, Vehicle.conductor_habitual_id == Usuari.id)
-        .where(Vehicle.id == vehicle_id, Vehicle.empresa_id == uuid.UUID(empresa_id))
-    )
-    result = await db.execute(stmt)
-    row = result.first()
-    if not row:
-        raise HTTPException(status_code=404, detail="Vehicle no trobat")
-
-    veh, u_nom, u_cognoms = row
-    c_nom = f"{u_nom or ''} {u_cognoms or ''}".strip() or None
-    return _build_vehicle_response(veh, c_nom)
-
-
 @router.post("", response_model=VehicleResponse, status_code=status.HTTP_201_CREATED)
 async def alta_vehicle(
     request: Request, vehicle: VehicleCreate, db: AsyncSession = Depends(get_db_with_tenant_context)
@@ -572,6 +547,31 @@ async def llistar_vehicles_propers(
     resultats.sort(key=lambda x: x.distancia_km if x.distancia_km is not None else float("inf"))
 
     return resultats[:limit]
+
+
+@router.get("/{vehicle_id}", response_model=VehicleResponse)
+async def obtenir_vehicle(
+    request: Request,
+    vehicle_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+):
+    empresa_id = request.state.empresa_id
+    if not empresa_id or empresa_id == "undefined":
+        raise HTTPException(status_code=401, detail="No identificat")
+
+    stmt = (
+        select(Vehicle, Usuari.nom, Usuari.cognoms)
+        .outerjoin(Usuari, Vehicle.conductor_habitual_id == Usuari.id)
+        .where(Vehicle.id == vehicle_id, Vehicle.empresa_id == uuid.UUID(empresa_id))
+    )
+    result = await db.execute(stmt)
+    row = result.first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Vehicle no trobat")
+
+    veh, u_nom, u_cognoms = row
+    c_nom = f"{u_nom or ''} {u_cognoms or ''}".strip() or None
+    return _build_vehicle_response(veh, c_nom)
 
 
 @router.post("/{vehicle_id}/documents", status_code=201)
