@@ -367,9 +367,33 @@ async def pujar_document_flota(
     file_bytes = await file.read()
     kind = filetype.guess(file_bytes)
     is_pdf = file_bytes.startswith(b"%PDF") or (bool(file.filename) and file.filename.lower().endswith(".pdf"))
-    if not kind and not is_pdf:
-        raise HTTPException(status_code=400, detail="Tipus de fitxer invàlid. Cal una imatge o document PDF.")
-    file_ext = kind.extension if kind else "pdf"
+    filename_lower = (file.filename or "").lower()
+    is_text = False
+    if filename_lower.endswith((".md", ".txt", ".markdown", ".csv")):
+        is_text = True
+    else:
+        try:
+            file_bytes.decode("utf-8")
+            is_text = True
+        except Exception:
+            is_text = False
+
+    if not kind and not is_pdf and not is_text:
+        raise HTTPException(
+            status_code=400,
+            detail="Tipus de fitxer invàlid. Cal una imatge, document PDF o fitxer de text/markdown (.md).",
+        )
+
+    if kind:
+        file_ext = kind.extension
+    elif is_pdf:
+        file_ext = "pdf"
+    elif filename_lower.endswith(".md"):
+        file_ext = "md"
+    elif filename_lower.endswith(".markdown"):
+        file_ext = "markdown"
+    else:
+        file_ext = "txt"
 
     docs_dir = f"/docs/{empresa_id}/flota/{vehicle_id}"
     try:
@@ -692,9 +716,23 @@ async def ocr_document_vehicle(request: Request, file: UploadFile = File(...)):
         raise HTTPException(status_code=400, detail="Fitxer buit")
 
     kind = filetype.guess(file_bytes)
-    is_pdf = file_bytes.startswith(b"%PDF") or (file.filename and file.filename.lower().endswith(".pdf"))
-    if not kind and not is_pdf:
-        raise HTTPException(status_code=400, detail="Tipus de fitxer invàlid. Cal una imatge o document PDF.")
+    is_pdf = file_bytes.startswith(b"%PDF") or (bool(file.filename) and file.filename.lower().endswith(".pdf"))
+    filename_lower = (file.filename or "").lower()
+    is_text = False
+    if filename_lower.endswith((".md", ".txt", ".markdown", ".csv")):
+        is_text = True
+    else:
+        try:
+            file_bytes.decode("utf-8")
+            is_text = True
+        except Exception:
+            is_text = False
+
+    if not kind and not is_pdf and not is_text:
+        raise HTTPException(
+            status_code=400,
+            detail="Tipus de fitxer invàlid. Cal una imatge, document PDF o fitxer de text/markdown (.md).",
+        )
 
     resultat = await processar_ocr_document_vehicle(file_bytes)
     return resultat

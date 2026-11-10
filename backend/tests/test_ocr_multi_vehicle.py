@@ -114,9 +114,62 @@ async def test_ocr_multi_document_fusion():
     print("Tots els tests d'OCR Multi-Vehicle han passat al 100%!")
 
 
+@pytest.mark.asyncio
+async def test_ocr_fitxers_markdown_reals():
+    """Verifica l'extracció directa dels 4 fitxers .md reals de proves de l'usuari."""
+    import os
+
+    folder = "demo_docs/Banc_Documents_Sevalor_Complet/demo_docs/02_flota_vehicles/docs_1"
+    itv_path = os.path.join(folder, " TARJETA DE INSPECCIÓN TÉCNICA DE VEHÍCULOS.md")
+    informe_path = os.path.join(folder, "INFORME D'INSPECCIÓ TÈCNICA DE VEHICLES (ITV).md")
+    permis_path = os.path.join(folder, "PERMISO DE CIRCULACIÓN.md")
+    seguro_path = os.path.join(folder, "Seguro vehicle.md")
+
+    if os.path.exists(itv_path):
+        res_itv = await processar_ocr_document_vehicle(open(itv_path, "rb").read())
+        assert res_itv["matricula"] == "4829-LWT"
+        assert res_itv["bastidor"] == "WF0YXXTTGYNJ58291"
+        assert res_itv["marca"] == "Ford"
+        assert res_itv["model"] == "TRANSIT CUSTOM"
+        assert res_itv["tipus"] == "DIESEL"
+        assert res_itv["distintiu_ambiental"] == "C"
+        assert res_itv["odometre_acumulat"] == 64320
+        assert res_itv["estat_itv"] == "FAVORABLE"
+        assert res_itv["data_proxima_itv"] == "2028-03-12"
+        assert res_itv["tipus_document"] == "ITV"
+
+    if os.path.exists(informe_path):
+        res_inf = await processar_ocr_document_vehicle(open(informe_path, "rb").read())
+        assert res_inf["matricula"] == "4829-LWT"
+        assert res_inf["bastidor"] == "WF0YXXTTGYNJ58291"
+        assert res_inf["marca"] == "Ford"
+        assert res_inf["estat_itv"] == "FAVORABLE"
+        assert res_inf["data_proxima_itv"] == "2028-03-12"
+
+    if os.path.exists(permis_path):
+        res_perm = await processar_ocr_document_vehicle(open(permis_path, "rb").read())
+        assert res_perm["matricula"] == "4829-LWT"
+        assert res_perm["bastidor"] == "WF0YXXTTGYNJ58291"
+        assert res_perm["marca"] == "Ford"
+        assert res_perm["tipus"] == "DIESEL"
+        assert res_perm["tipus_document"] == "PERMIS_CIRCULACIO"
+
+    if os.path.exists(seguro_path):
+        res_seg = await processar_ocr_document_vehicle(open(seguro_path, "rb").read())
+        assert res_seg["matricula"] == "4829-LWT"
+        assert res_seg["bastidor"] == "WF0YXXTTGYNJ58291"
+        assert res_seg["companyia_asseguradora"] == "Allianz"
+        assert res_seg["polissa_asseguranca"] == "048-99283741-02"
+        assert res_seg["data_caducitat_asseguranca"] == "2027-03-14"
+        assert res_seg["tipus_document"] == "ASSEGURANCA"
+
+    print("Extracció dels fitxers .md reals validada al 100%!")
+
+
 if __name__ == "__main__":
     import asyncio
     asyncio.run(test_ocr_targeta_itv_vehicle())
     asyncio.run(test_ocr_polissa_asseguranca())
     asyncio.run(test_ocr_multi_document_fusion())
+    asyncio.run(test_ocr_fitxers_markdown_reals())
     print("ALL TESTS PASSED CLEANLY.")

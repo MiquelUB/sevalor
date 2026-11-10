@@ -535,9 +535,14 @@ async def processar_ocr_document_vehicle(file_input: bytes | str, node_ia_url: O
                 resultat["bastidor"] = vin_m.group(1).upper()
 
         # 3. Marca i Model
-        marca_m = re.search(r"(?:Marca|Marca\/Model|Marca\s*i\s*Model)[\s:]*([^\n\r]+)", text, re.IGNORECASE)
+        marca_m = re.search(
+            r"(?:(?:\([A-Z0-9\.]+\)|[A-Z0-9\.]+\s*)?Marca\s*(?:[\/\&\|\-]\s*(?:Model|Modelo)|y\s*Modelo|i\s*Model)?|(?:\([A-Z0-9\.]+\)|[A-Z0-9\.]+\s*)?Marca)[\s:]*([^\n\r]+)",
+            text,
+            re.IGNORECASE,
+        )
         if marca_m:
             raw_marca_line = marca_m.group(1).strip()
+            raw_marca_line = re.sub(r"^(?:y|i|\/)?\s*(?:Model|Modelo)[\s:]*", "", raw_marca_line, flags=re.IGNORECASE).strip()
             for m_cand in MARQUES_VEHICLES_CONEGUDES:
                 if raw_marca_line.upper().startswith(m_cand):
                     resultat["marca"] = m_cand.title()
@@ -547,22 +552,28 @@ async def processar_ocr_document_vehicle(file_input: bytes | str, node_ia_url: O
                     break
             if not resultat["marca"]:
                 parts = raw_marca_line.split()
-                resultat["marca"] = parts[0].capitalize()
-                if len(parts) > 1 and not resultat["model"]:
-                    resultat["model"] = " ".join(parts[1:])
+                if parts:
+                    resultat["marca"] = parts[0].capitalize()
+                    if len(parts) > 1 and not resultat["model"]:
+                        resultat["model"] = " ".join(parts[1:])
 
         model_m = re.search(
-            r"(?:Model|Modelo|Versi[oó]|Versi[oó]n|Model\s*&\s*Versi[oó])[\s:]*([^\n\r]+)",
+            r"(?:(?:\([A-Z0-9\.]+\)|[A-Z0-9\.]+\s*)?(?:Denominaci[oó]n\s*comercial|Denominaci[oó]\s*comercial|Model\s*&\s*Versi[oó]|Modelo|Model|Versi[oó]n|Versi[oó]))[\s:]*([^\n\r]+)",
             text,
             re.IGNORECASE,
         )
         if model_m:
-            resultat["model"] = model_m.group(1).strip().splitlines()[0]
+            cand_model = model_m.group(1).strip().splitlines()[0]
+            cand_model = re.sub(r"^[oO]\s*:\s*", "", cand_model).strip()
+            if resultat.get("marca") and cand_model.upper().startswith(resultat["marca"].upper()):
+                cand_model = cand_model[len(resultat["marca"]):].strip(" -/,")
+            if cand_model:
+                resultat["model"] = cand_model
 
         # 4. Tipus de Propulsió (Combustible)
         comb_m = re.search(r"(?:Combustible|Carburant|Propulsi[oó]|Propulsion|Motor)[\s:]*([^\n\r]+)", text, re.IGNORECASE)
         comb_str = (comb_m.group(1) if comb_m else "") + " " + text
-        if re.search(r"\b(di[eè]sel|gasoil|gas[oó]leo)\b", comb_str, re.IGNORECASE):
+        if re.search(r"\b(di[eè]sel|gasoil|gas[oó]leo|ga\b)\b", comb_str, re.IGNORECASE):
             resultat["tipus"] = "DIESEL"
         elif re.search(r"\b(gasolina|benzina)\b", comb_str, re.IGNORECASE):
             resultat["tipus"] = "GASOLINA"
@@ -612,7 +623,7 @@ async def processar_ocr_document_vehicle(file_input: bytes | str, node_ia_url: O
 
         # 7. Data Pròxima ITV
         prox_m = re.search(
-            r"(?:Pr[oò]xima\s*ITV|Propera\s*ITV|Venciment\s*ITV|Proper\s*venciment|Validesa\s*fins|Pr[oó]xima\s*inspecci[oó]n|Caducitat\s*ITV)[\s:]*(\d{1,2}[/-]\d{1,2}[/-]\d{4}|\d{4}[/-]\d{1,2}[/-]\d{1,2})",
+            r"(?:Pr[oò]xima\s*ITV|Propera\s*ITV|Venciment\s*ITV|Proper\s*venciment|Validesa\s*fins|V[aá]lida\s*hasta|V[aá]lida\s*fins|Pr[oó]xima\s*inspecci[oó]n|Caducitat\s*ITV|Data\s*(?:de\s*)?caducitat\s*(?:propera\s*)?itv)[\s:]*(\d{1,2}[/-]\d{1,2}[/-]\d{4}|\d{4}[/-]\d{1,2}[/-]\d{1,2})",
             text,
             re.IGNORECASE,
         )
@@ -629,7 +640,7 @@ async def processar_ocr_document_vehicle(file_input: bytes | str, node_ia_url: O
             resultat["data_inspeccio_itv"] = _normalitzar_data_iso(insp_m.group(1))
 
         matr_m = re.search(
-            r"(?:Data\s*Matriculaci[oó]|Data\s*1[aª]\s*matriculaci[oó]|Fecha\s*matriculaci[oó]n)[\s:]*(\d{1,2}[/-]\d{1,2}[/-]\d{4}|\d{4}[/-]\d{1,2}[/-]\d{1,2})",
+            r"(?:(?:\([A-Z0-9\.]+\)|[A-Z0-9\.]+\s*)?(?:Data\s*Matriculaci[oó]|Data\s*1[aª]\s*matriculaci[oó]|Fecha\s*matriculaci[oó]n|Fecha\s*1[aª]\s*matriculaci[oó]n|Fecha\s*de\s*primera\s*matr[íi]cula))[\s:]*(\d{1,2}[/-]\d{1,2}[/-]\d{4}|\d{4}[/-]\d{1,2}[/-]\d{1,2})",
             text,
             re.IGNORECASE,
         )
@@ -637,11 +648,15 @@ async def processar_ocr_document_vehicle(file_input: bytes | str, node_ia_url: O
             resultat["data_matriculacio"] = _normalitzar_data_iso(matr_m.group(1))
 
         # 9. Odòmetre / Quilometratge
-        km_m = re.search(r"(?:Km|Kil[oò]metres|Kilometros|Od[oò]metre|Odometro|Lectura\s*km)[\s:]*([0-9\.\, ]+)", text, re.IGNORECASE)
+        km_m = re.search(
+            r"(?:Lectura\s*km|Quilometratge|Kilometraje|Od[oò]metre|Odometro|Lectura\s*od[oò]metre|(?:(?<!desde\s)(?<!des de\s)\bKm\b))[\s:]*([0-9\.\, ]+)",
+            text,
+            re.IGNORECASE,
+        )
         if km_m:
             try:
                 clean_km = re.sub(r"[^\d]", "", km_m.group(1))
-                if clean_km:
+                if clean_km and int(clean_km) > 0 and not ("desde km" in text.lower() and int(clean_km) == 0):
                     resultat["odometre_acumulat"] = int(clean_km)
             except ValueError:
                 pass
@@ -671,7 +686,7 @@ async def processar_ocr_document_vehicle(file_input: bytes | str, node_ia_url: O
                     break
 
         pol_m = re.search(
-            r"(?:(?:N[úu]m\.?|N[úu]mero|Nº)\s*de\s*)?P[oòó]li(?:ss|[sz])a(?:\s*(?:n[úu]m\.?|nº))?[\s:]+([A-Z0-9\-_/]{4,})",
+            r"(?:(?:N[úu]m\.?|N[úu]mero|Nº)\s*(?:de\s*)?)?P[oòó]li(?:ss|[sz])a(?:\s*(?:n[úu]m\.?|nº))?[\s:]+([A-Z0-9\-_/]{4,})",
             text,
             re.IGNORECASE,
         )
@@ -679,7 +694,7 @@ async def processar_ocr_document_vehicle(file_input: bytes | str, node_ia_url: O
             resultat["polissa_asseguranca"] = pol_m.group(1).strip()
 
         cad_m = re.search(
-            r"(?:Venciment\s*(?:asseguran[cç]a)?|Caducitat\s*(?:asseguran[cç]a)?|Vencimiento|Validesa\s*fins|Efecte\s*fins|Data\s*(?:de\s*)?venciment|Data\s*(?:de\s*)?caducitat)[\s:]*(\d{1,2}[/-]\d{1,2}[/-]\d{4}|\d{4}[/-]\d{1,2}[/-]\d{1,2})",
+            r"(?:Vencimiento\s*(?:de\s*la\s*anualidad)?|Venciment\s*(?:de\s*l'anualitat)?|Venciment\s*(?:asseguran[cç]a)?|Caducitat\s*(?:asseguran[cç]a)?|Vencimiento|Validesa\s*fins|Efecte\s*fins|Data\s*(?:de\s*)?venciment|Data\s*(?:de\s*)?caducitat)[\s:]*(\d{1,2}[/-]\d{1,2}[/-]\d{4}|\d{4}[/-]\d{1,2}[/-]\d{1,2})",
             text,
             re.IGNORECASE,
         )
@@ -716,16 +731,18 @@ async def processar_ocr_document_vehicle(file_input: bytes | str, node_ia_url: O
                 resultat["carnet_necessari"] = "B"
 
         # 13. Titular
-        titular_m = re.search(r"(?:Titular|Nom|Nombre)[\s:]*([A-Za-z0-9À-ÿ\s\.,\-]+)", text, re.IGNORECASE)
+        titular_m = re.search(r"(?:(?:\([A-Z0-9\.]+\)|[A-Z0-9\.]+\s*)?(?:Apellidos\s*o\s*raz[oó]n\s*social|Tomador\s*\/\s*Asegurado|Tomador|Asegurado|Titular|Nom|Nombre))[\s:]*([A-Za-z0-9À-ÿ\s\.,\-]+)", text, re.IGNORECASE)
         if titular_m:
             cand_tit = titular_m.group(1).strip().splitlines()[0]
             if len(cand_tit) > 3 and not any(cand_tit.lower().startswith(x) for x in ("ford", "renault", "iveco", "data", "nif")):
                 resultat["titular"] = cand_tit
 
         # 14. Tipus de document detectat
-        if re.search(r"ITV|FITXA\s*T[EÈ]CNICA|INSPECCI[OÓ]|TARGETA\s*ITV", text, re.IGNORECASE):
+        if re.search(r"PERMISO\s*DE\s*CIRCULACI[OÓ]N|PERM[IÍ]S\s*DE\s*CIRCULACI[OÓ]", text, re.IGNORECASE):
+            resultat["tipus_document"] = "PERMIS_CIRCULACIO"
+        elif re.search(r"ITV|FITXA\s*T[EÈ]CNICA|INSPECCI[OÓ]|TARGETA\s*ITV", text, re.IGNORECASE):
             resultat["tipus_document"] = "ITV"
-        elif re.search(r"P[OÒÓ]LI(?:SS|[SZ])A|ASSEGURAN[CÇ]A|ASEGURADORA|PRIMA|TOMADOR", text, re.IGNORECASE):
+        elif re.search(r"P[OÒÓ]LI(?:SS|[SZ])A|ASSEGURAN[CÇ]A|ASEGURADORA|PRIMA|TOMADOR|SEGURO\s*DE\s*VEH[IÍ]CULOS", text, re.IGNORECASE):
             resultat["tipus_document"] = "ASSEGURANCA"
         elif re.search(r"REPARACI[OÓ]|TALLER|MANTENIMENT|CANVI\s*D'OLI", text, re.IGNORECASE):
             resultat["tipus_document"] = "MANTENIMENT"

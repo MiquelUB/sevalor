@@ -472,7 +472,7 @@ export default function GestioFlotaPage() {
               type="file"
               multiple
               className="hidden"
-              accept="image/*,.pdf,application/pdf"
+              accept="image/*,.pdf,application/pdf,.md,.txt,text/markdown,text/plain"
               onChange={handleOcrUpload}
             />
             {hasCopilotIa && (
@@ -491,7 +491,7 @@ export default function GestioFlotaPage() {
                 }}
                 disabled={ocrLoading}
                 className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-mono font-bold bg-indigo-600 text-white hover:bg-indigo-700 shadow-sm cursor-pointer transition-all ${ocrLoading ? 'opacity-50 pointer-events-none' : ''}`}
-                title="Clica o arrossega un o diversos documents: Targeta ITV, Pòlissa Assegurança, Reparació (PDF o Imatges)"
+                title="Clica o arrossega un o diversos documents: Targeta ITV, Pòlissa Assegurança, Reparació (PDF, Markdown .md o Imatges)"
               >
                 {ocrLoading ? <span className="animate-spin text-lg leading-none">⚙</span> : <span className="text-lg leading-none">✨</span>}
                 <span>{ocrLoading ? 'Processant IA...' : 'Alta OCR Multi-Document'}</span>
@@ -916,105 +916,6 @@ export default function GestioFlotaPage() {
               )}
 
               {/* Botons d'acció */}
-
-              <div className="grid grid-cols-2 gap-3">
-                <div className="space-y-1">
-                  <label className="font-bold text-slate-700 dark:text-slate-300">Assegurança (Companyia):</label>
-                  <input
-                    type="text"
-                    placeholder="Ex: Mapfre, Allianz"
-                    value={novaCompanyiaAsseguranca}
-                    onChange={(e) => setNovaCompanyiaAsseguranca(e.target.value)}
-                    className="w-full p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-slate-100 font-mono text-xs focus:outline-none"
-                  />
-                </div>
-                <div className="space-y-1">
-                  <label className="font-bold text-slate-700 dark:text-slate-300">Caducitat Assegurança:</label>
-                  <input
-                    type="date"
-                    value={novaDataAsseguranca}
-                    onChange={(e) => setNovaDataAsseguranca(e.target.value)}
-                    className="w-full p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-slate-100 font-mono text-xs focus:outline-none"
-                  />
-                </div>
-                
-                <div className="space-y-1 col-span-2">
-                  <label className="font-bold text-slate-700 dark:text-slate-300 flex justify-between">
-                    <span>Pòlissa (Núm) i Document Assegurança:</span>
-                  </label>
-                  <div className="flex gap-2">
-                    <input
-                      type="text"
-                      placeholder="Ex: POL-9938221"
-                      value={novaPolissaAsseguranca}
-                      onChange={(e) => setNovaPolissaAsseguranca(e.target.value)}
-                      className="w-1/2 p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-slate-100 font-mono text-[10px] focus:outline-none"
-                    />
-                    <input
-                      type="file"
-                      onChange={(e) => setArxiuAsseguranca(e.target.files?.[0] || null)}
-                      className="w-1/2 p-1.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-slate-100 font-mono text-[10px] file:mr-2 file:py-1 file:px-2 file:rounded-lg file:border-0 file:text-[10px] file:bg-emerald-600 file:text-white"
-                    />
-                  </div>
-                </div>
-              </div>
-              
-              <div className="grid grid-cols-3 gap-3">
-                <div className="space-y-1 col-span-3">
-                  <label className="font-bold text-slate-700 dark:text-slate-300">Documentació ITV (Opcional):</label>
-                  <input
-                    type="file"
-                    onChange={(e) => setArxiuITV(e.target.files?.[0] || null)}
-                    className="w-full p-1.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-slate-100 font-mono text-[10px] file:mr-2 file:py-1 file:px-2 file:rounded-lg file:border-0 file:text-[10px] file:bg-emerald-600 file:text-white"
-                  />
-                </div>
-                <div className="space-y-1">
-                  <label className="font-bold text-slate-700 dark:text-slate-300">Estat ITV actual:</label>
-                  <select
-                    value={nouEstatItv}
-                    onChange={(e) => setNouEstatItv(e.target.value)}
-                    className="w-full p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-slate-100 font-mono text-xs focus:outline-none"
-                  >
-                    <option value="FAVORABLE">Favorable Neta</option>
-                    <option value="FAVORABLE_LEUS">Favorable amb Def. Lleus</option>
-                    <option value="DESFAVORABLE">Desfavorable</option>
-                    <option value="NEGATIVA">Negativa</option>
-                  </select>
-                </div>
-                <div className="space-y-1">
-                  <label className="font-bold text-slate-700 dark:text-slate-300">Data propera ITV:</label>
-                  <input
-                    type="date"
-                    value={novaDataItv}
-                    onChange={(e) => setNovaDataItv(e.target.value)}
-                    className="w-full p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-slate-100 font-mono text-xs focus:outline-none"
-                  />
-                </div>
-                <div className="space-y-1 col-span-3">
-                  <label className="font-bold text-slate-700 dark:text-slate-300">Última Reparació / Canvi Oli:</label>
-                  <input
-                    type="file"
-                    onChange={(e) => setArxiuReparacio(e.target.files?.[0] || null)}
-                    className="w-full p-1.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-slate-100 font-mono text-[10px] file:mr-2 file:py-1 file:px-2 file:rounded-lg file:border-0 file:text-[10px] file:bg-emerald-600 file:text-white"
-                  />
-                </div>
-                <div className="space-y-1">
-                  <label className="font-bold text-slate-700 dark:text-slate-300">Carnet Requerit:</label>
-                  <select
-                    value={nouCarnet}
-                    onChange={(e) => setNouCarnet(e.target.value)}
-                    className="w-full p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-slate-100 font-mono text-xs focus:outline-none"
-                  >
-                    <option value="B">B (Turismes/Furgonetes)</option>
-                    <option value="B+E">B+E (Remolc)</option>
-                    <option value="C">C (Camions rígids)</option>
-                    <option value="C+E">C+E (Tràilers)</option>
-                    <option value="AM">AM / A1 (Motos)</option>
-                    <option value="N/A">Maquinària exempta</option>
-                  </select>
-                </div>
-              </div>
-
               <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-200 dark:border-slate-800">
                 <button
                   type="button"
@@ -1151,7 +1052,7 @@ export default function GestioFlotaPage() {
                   type="file"
                   multiple
                   className="hidden"
-                  accept="image/*,.pdf,application/pdf"
+                  accept="image/*,.pdf,application/pdf,.md,.txt,text/markdown,text/plain"
                   onChange={handleOcrUpload}
                 />
                 <div className="flex items-center justify-center gap-2 text-indigo-600 dark:text-indigo-400 font-mono text-xs font-bold">
@@ -1163,7 +1064,7 @@ export default function GestioFlotaPage() {
                   ) : (
                     <>
                       <FileText className="w-4 h-4 text-indigo-500" />
-                      <span>Arrossega o clica per afegir més documents (ITV, Assegurança, Factura)</span>
+                      <span>Arrossega o clica per afegir documents (ITV, Assegurança, Factura en PDF, Markdown .md o imatges)</span>
                     </>
                   )}
                 </div>
@@ -1352,6 +1253,7 @@ export default function GestioFlotaPage() {
                     />
                     <input
                       type="file"
+                      accept="image/*,.pdf,application/pdf,.md,.txt,text/markdown,text/plain"
                       onChange={(e) => setArxiuAsseguranca(e.target.files?.[0] || null)}
                       className="w-1/2 p-1.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-slate-100 font-mono text-[10px] file:mr-2 file:py-1 file:px-2 file:rounded-lg file:border-0 file:text-[10px] file:bg-emerald-600 file:text-white"
                     />
@@ -1371,6 +1273,7 @@ export default function GestioFlotaPage() {
                   </label>
                   <input
                     type="file"
+                    accept="image/*,.pdf,application/pdf,.md,.txt,text/markdown,text/plain"
                     onChange={(e) => setArxiuITV(e.target.files?.[0] || null)}
                     className="w-full p-1.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-slate-100 font-mono text-[10px] file:mr-2 file:py-1 file:px-2 file:rounded-lg file:border-0 file:text-[10px] file:bg-emerald-600 file:text-white"
                   />
@@ -1408,6 +1311,7 @@ export default function GestioFlotaPage() {
                   </label>
                   <input
                     type="file"
+                    accept="image/*,.pdf,application/pdf,.md,.txt,text/markdown,text/plain"
                     onChange={(e) => setArxiuReparacio(e.target.files?.[0] || null)}
                     className="w-full p-1.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-slate-100 font-mono text-[10px] file:mr-2 file:py-1 file:px-2 file:rounded-lg file:border-0 file:text-[10px] file:bg-emerald-600 file:text-white"
                   />
