@@ -110,12 +110,13 @@ class SovereignStorageGateway:
         emp_uuid = uuid.UUID(str(empresa_id))
         res = await db.execute(select(Empresa).where(Empresa.id == emp_uuid))
         emp = res.scalars().first()
+        base_vaults = os.getenv("CLIENT_DISKS_MOUNT_ROOT", "/tmp/sevalor_client_disks")
         if not emp:
-            raise HTTPException(status_code=404, detail="Empresa no trobada.")
+            raw_disc = os.path.join(base_vaults, f"disc_{emp_uuid}")
+            inicialitzar_arbre_carpetes_disc(raw_disc)
+            return ("LOCAL_FS", str(Path(raw_disc).resolve()), None)
 
-        raw_disc = (
-            getattr(emp, "disc_dur_url", None) or getattr(emp, "node_ia_url", None) or ""
-        ).strip()
+        raw_disc = (getattr(emp, "disc_dur_url", None) or "").strip()
 
         # Si el camp està buit en entorn de test o desenvolupament local, o si és Sevalormante:
         if not raw_disc or raw_disc.startswith("Carpeta Local:"):
@@ -126,7 +127,6 @@ class SovereignStorageGateway:
                     raw_disc = default_sevalormante
             if not raw_disc or raw_disc.startswith("Carpeta Local:"):
                 # En entorn de test o quan es configura una ruta base de discos de clients
-                base_vaults = os.getenv("CLIENT_DISKS_MOUNT_ROOT", "/tmp/sevalor_client_disks")
                 raw_disc = os.path.join(base_vaults, f"disc_{emp.subdomini or str(emp.id)}")
 
         if raw_disc.startswith("http://") or raw_disc.startswith("https://"):

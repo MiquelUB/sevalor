@@ -534,11 +534,41 @@ class Vehicle(Base):
     carnet_necessari: Mapped[str] = mapped_column(String(10), default="B", server_default="B")
     historial_reparacions: Mapped[Optional[str]] = mapped_column(Text)
 
-    # Spec 006: Rènting i controls operatius
+    # Spec 006: Rènting, Lísing, Lloguer i controls operatius
     regim_adquisicio: Mapped[str] = mapped_column(
         String(30), default="PROPIETAT", server_default="PROPIETAT"
     )
     renting_limit_km: Mapped[Optional[int]] = mapped_column(Integer)
+    odometre_inici_contracte: Mapped[int] = mapped_column(
+        Integer, default=0, server_default=text("0")
+    )
+    data_inici_contracte: Mapped[Optional[date]] = mapped_column(Date)
+    data_fi_contracte: Mapped[Optional[date]] = mapped_column(Date)
+    quota_mensual_eur: Mapped[float] = mapped_column(
+        Numeric(10, 2), default=0.00, server_default=text("0.00")
+    )
+    tarifa_diaria_eur: Mapped[float] = mapped_column(
+        Numeric(10, 2), default=0.00, server_default=text("0.00")
+    )
+    preu_km_exces_eur: Mapped[float] = mapped_column(
+        Numeric(6, 4), default=0.0000, server_default=text("0.0000")
+    )
+    valor_residual_eur: Mapped[Optional[float]] = mapped_column(Numeric(10, 2))
+    fianca_eur: Mapped[Optional[float]] = mapped_column(Numeric(10, 2))
+
+    # Manteniment, garantia, anomalies i alertes legals (FR-011 / US4 / Spec 006)
+    data_fi_garantia_oficial: Mapped[Optional[date]] = mapped_column(Date)
+    interval_canvi_oli_km: Mapped[Optional[int]] = mapped_column(
+        Integer, default=15000, server_default=text("15000")
+    )
+    ultim_canvi_oli_km: Mapped[Optional[int]] = mapped_column(
+        Integer, default=0, server_default=text("0")
+    )
+    anomalia_consum_descartada: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=text("false")
+    )
+    data_itv_negativa: Mapped[Optional[date]] = mapped_column(Date)
+    data_ultima_descarrega_tacograf: Mapped[Optional[date]] = mapped_column(Date)
     tacograf_necessari: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default=text("false")
     )

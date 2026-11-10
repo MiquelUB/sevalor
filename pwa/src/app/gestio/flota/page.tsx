@@ -58,9 +58,30 @@ interface VehicleItem {
   alerta_itv_cadena?: string;
   regim_adquisicio: string;
   renting_limit_km?: number | null;
+  odometre_inici_contracte?: number;
+  data_inici_contracte?: string | null;
+  data_fi_contracte?: string | null;
+  quota_mensual_eur?: number;
+  tarifa_diaria_eur?: number;
+  preu_km_exces_eur?: number;
+  valor_residual_eur?: number | null;
+  fianca_eur?: number | null;
+  km_recorreguts_contracte?: number;
+  dies_restants_contracte?: number | null;
+  ocupacio_temps_percent?: number | null;
+  desviacio_ritme_percent?: number | null;
+  cost_fix_meritat_eur?: number;
+  cost_penalitzacio_km_eur?: number;
+  despesa_combustible_acumulada_eur?: number;
+  despesa_manteniment_acumulada_eur?: number;
+  manteniment_computable_tco_eur?: number;
+  cost_total_acumulat_eur?: number;
+  cost_per_km_eur?: number;
+  alerta_contracte_venciment?: boolean;
   renting_ocupacio_percent?: number | null;
   renting_alerta?: boolean;
   renting_nivell_alerta?: string | null;
+  alerta_renting_km?: string | null;
   consum_format?: string;
   consum_l_100km: number | null;
   consum_mitjana_historica: number | null;
@@ -124,6 +145,14 @@ export default function GestioFlotaPage() {
   const [nouOdometre, setNouOdometre] = useState<number>(0);
   const [nouRegim, setNouRegim] = useState<string>("PROPIETAT");
   const [nouLimitKm, setNouLimitKm] = useState<number | string>("");
+  const [nouOdometreInici, setNouOdometreInici] = useState<number | string>(0);
+  const [novaDataIniciContracte, setNovaDataIniciContracte] = useState<string>("");
+  const [novaDataFiContracte, setNovaDataFiContracte] = useState<string>("");
+  const [novaQuotaMensual, setNovaQuotaMensual] = useState<number | string>("");
+  const [novaTarifaDiaria, setNovaTarifaDiaria] = useState<number | string>("");
+  const [nouPreuKmExces, setNouPreuKmExces] = useState<number | string>("");
+  const [nouValorResidual, setNouValorResidual] = useState<number | string>("");
+  const [novaFianca, setNovaFianca] = useState<number | string>("");
   const [nouConductorId, setNouConductorId] = useState<string>("");
   const [nouConsumReal, setNouConsumReal] = useState<number | string>("");
   const [nouConsumMitjana, setNouConsumMitjana] = useState<number | string>("");
@@ -156,6 +185,14 @@ export default function GestioFlotaPage() {
   const [editOdometre, setEditOdometre] = useState<number>(0);
   const [editRegim, setEditRegim] = useState<string>("PROPIETAT");
   const [editLimitKm, setEditLimitKm] = useState<number | string>("");
+  const [editOdometreInici, setEditOdometreInici] = useState<number | string>(0);
+  const [editDataIniciContracte, setEditDataIniciContracte] = useState<string>("");
+  const [editDataFiContracte, setEditDataFiContracte] = useState<string>("");
+  const [editQuotaMensual, setEditQuotaMensual] = useState<number | string>("");
+  const [editTarifaDiaria, setEditTarifaDiaria] = useState<number | string>("");
+  const [editPreuKmExces, setEditPreuKmExces] = useState<number | string>("");
+  const [editValorResidual, setEditValorResidual] = useState<number | string>("");
+  const [editFianca, setEditFianca] = useState<number | string>("");
   const [editConsumL100km, setEditConsumL100km] = useState<number | string>("");
   const [editConsumMitjana, setEditConsumMitjana] = useState<number | string>("");
   const [editConsumAdblue, setEditConsumAdblue] = useState<number | string>(0);
@@ -198,7 +235,7 @@ export default function GestioFlotaPage() {
         }
         if (data.regim_adquisicio) {
           setNouRegim(data.regim_adquisicio);
-          if ((data.regim_adquisicio === "RENTING" || data.regim_adquisicio === "LLOGUER") && data.renting_limit_km) {
+          if (["RENTING", "LEASING", "LLOGUER"].includes(data.regim_adquisicio) && data.renting_limit_km) {
             setNouLimitKm(Number(data.renting_limit_km));
           } else {
             setNouLimitKm("");
@@ -428,6 +465,14 @@ export default function GestioFlotaPage() {
     setNouOdometre(0);
     setNouRegim("PROPIETAT");
     setNouLimitKm("");
+    setNouOdometreInici(0);
+    setNovaDataIniciContracte("");
+    setNovaDataFiContracte("");
+    setNovaQuotaMensual("");
+    setNovaTarifaDiaria("");
+    setNouPreuKmExces("");
+    setNouValorResidual("");
+    setNovaFianca("");
     setNouConductorId("");
     setNouConsumReal("");
     setNouConsumMitjana("");
@@ -464,7 +509,15 @@ export default function GestioFlotaPage() {
           odometre_acumulat: nouOdometre,
           conductor_habitual_id: nouConductorId || null,
           regim_adquisicio: nouRegim,
-          renting_limit_km: (nouRegim === "RENTING" || nouRegim === "LLOGUER") && nouLimitKm !== "" ? Number(nouLimitKm) : null,
+          renting_limit_km: ["RENTING", "LEASING", "LLOGUER"].includes(nouRegim) && nouLimitKm !== "" ? Number(nouLimitKm) : null,
+          odometre_inici_contracte: Number(nouOdometreInici) || 0,
+          data_inici_contracte: novaDataIniciContracte || null,
+          data_fi_contracte: novaDataFiContracte || null,
+          quota_mensual_eur: novaQuotaMensual !== "" ? Number(novaQuotaMensual) : 0,
+          tarifa_diaria_eur: novaTarifaDiaria !== "" ? Number(novaTarifaDiaria) : 0,
+          preu_km_exces_eur: nouPreuKmExces !== "" ? Number(nouPreuKmExces) : 0,
+          valor_residual_eur: nouValorResidual !== "" ? Number(nouValorResidual) : null,
+          fianca_eur: novaFianca !== "" ? Number(novaFianca) : null,
           consum_l_100km: nouTipus === "REMOLC" ? null : (nouConsumReal !== "" ? Number(nouConsumReal) : null),
           consum_mitjana_historica: nouTipus === "REMOLC" ? null : (nouConsumMitjana !== "" ? Number(nouConsumMitjana) : null),
           consum_adblue_litres: nouTipus === "DIESEL" && nouConsumAdblue !== "" ? Number(nouConsumAdblue) : 0,
@@ -539,11 +592,19 @@ export default function GestioFlotaPage() {
     setEditModel(veh.model || "");
     setEditTipus(veh.tipus || "DIESEL");
     setEditDistintiu(veh.distintiu_ambiental || "C");
-    setEditEstat(veh.estat || "OPERATIU");
+    setEditEstat(veh.estat === "ASSIGNAT" ? "OPERATIU" : (veh.estat || "OPERATIU"));
     setEditConductorId(veh.conductor_habitual_id || "");
     setEditOdometre(veh.odometre_acumulat || 0);
     setEditRegim(veh.regim_adquisicio || "PROPIETAT");
     setEditLimitKm(veh.renting_limit_km !== null && veh.renting_limit_km !== undefined ? veh.renting_limit_km : "");
+    setEditOdometreInici(veh.odometre_inici_contracte !== null && veh.odometre_inici_contracte !== undefined ? veh.odometre_inici_contracte : 0);
+    setEditDataIniciContracte(veh.data_inici_contracte || "");
+    setEditDataFiContracte(veh.data_fi_contracte || "");
+    setEditQuotaMensual(veh.quota_mensual_eur !== null && veh.quota_mensual_eur !== undefined && veh.quota_mensual_eur > 0 ? veh.quota_mensual_eur : "");
+    setEditTarifaDiaria(veh.tarifa_diaria_eur !== null && veh.tarifa_diaria_eur !== undefined && veh.tarifa_diaria_eur > 0 ? veh.tarifa_diaria_eur : "");
+    setEditPreuKmExces(veh.preu_km_exces_eur !== null && veh.preu_km_exces_eur !== undefined && veh.preu_km_exces_eur > 0 ? veh.preu_km_exces_eur : "");
+    setEditValorResidual(veh.valor_residual_eur !== null && veh.valor_residual_eur !== undefined ? veh.valor_residual_eur : "");
+    setEditFianca(veh.fianca_eur !== null && veh.fianca_eur !== undefined ? veh.fianca_eur : "");
     setEditConsumL100km(veh.consum_l_100km !== null && veh.consum_l_100km !== undefined ? veh.consum_l_100km : "");
     setEditConsumMitjana(veh.consum_mitjana_historica !== null && veh.consum_mitjana_historica !== undefined ? veh.consum_mitjana_historica : "");
     setEditConsumAdblue(veh.consum_adblue_litres !== null && veh.consum_adblue_litres !== undefined ? veh.consum_adblue_litres : 0);
@@ -588,7 +649,15 @@ export default function GestioFlotaPage() {
           conductor_habitual_id: editConductorId || null,
           odometre_acumulat: Number(editOdometre) || 0,
           regim_adquisicio: editRegim,
-          renting_limit_km: (editRegim === "RENTING" || editRegim === "LLOGUER") && editLimitKm !== "" ? Number(editLimitKm) : null,
+          renting_limit_km: ["RENTING", "LEASING", "LLOGUER"].includes(editRegim) && editLimitKm !== "" ? Number(editLimitKm) : null,
+          odometre_inici_contracte: Number(editOdometreInici) || 0,
+          data_inici_contracte: editDataIniciContracte || null,
+          data_fi_contracte: editDataFiContracte || null,
+          quota_mensual_eur: editQuotaMensual !== "" ? Number(editQuotaMensual) : 0,
+          tarifa_diaria_eur: editTarifaDiaria !== "" ? Number(editTarifaDiaria) : 0,
+          preu_km_exces_eur: editPreuKmExces !== "" ? Number(editPreuKmExces) : 0,
+          valor_residual_eur: editValorResidual !== "" ? Number(editValorResidual) : null,
+          fianca_eur: editFianca !== "" ? Number(editFianca) : null,
           consum_l_100km: editTipus === "REMOLC" ? null : (editConsumL100km !== "" ? Number(editConsumL100km) : null),
           consum_mitjana_historica: editTipus === "REMOLC" ? null : (editConsumMitjana !== "" ? Number(editConsumMitjana) : null),
           consum_adblue_litres: editTipus === "DIESEL" && editConsumAdblue !== "" ? Number(editConsumAdblue) : 0,
@@ -639,7 +708,13 @@ export default function GestioFlotaPage() {
   // Filtrar vehicles (amb coalescència segura per evitar null.toLowerCase() crashes)
   const vehiclesFiltrats = vehicles.filter((v) => {
     if (filtreTipus !== "TOTS" && v.tipus !== filtreTipus) return false;
-    if (filtreEstat !== "TOTS" && v.estat !== filtreEstat) return false;
+    if (filtreEstat !== "TOTS") {
+      if (filtreEstat === "OPERATIU") {
+        if (v.estat !== "OPERATIU" && v.estat !== "ASSIGNAT") return false;
+      } else if (v.estat !== filtreEstat) {
+        return false;
+      }
+    }
     if (!cerca || !cerca.trim()) return true;
     const q = cerca.toLowerCase().trim();
     return (
@@ -893,13 +968,13 @@ export default function GestioFlotaPage() {
                         <p className="text-[10px] text-slate-500">{v.model}</p>
                       </td>
 
-                      {/* 4. Règim d'Adquisició & Llindars Rènting / Lloguer */}
+                      {/* 4. Règim d'Adquisició & Llindars Rènting / Lísing / Lloguer */}
                       <td className="p-3.5 text-center">
-                        {v.regim_adquisicio === "RENTING" || (v.regim_adquisicio === "LLOGUER" && v.renting_limit_km) ? (
-                          <div className="space-y-1 inline-block text-left w-28">
+                        {(v.regim_adquisicio === "RENTING" || v.regim_adquisicio === "LEASING" || v.regim_adquisicio === "LLOGUER") && v.renting_limit_km ? (
+                          <div className="space-y-1 inline-block text-left w-36">
                             <div className="flex items-center justify-between text-[10px]">
                               <span className="text-slate-500 font-bold">
-                                {v.regim_adquisicio === "RENTING" ? "Rènting" : "Lloguer"}
+                                {v.regim_adquisicio === "RENTING" ? "Rènting" : v.regim_adquisicio === "LEASING" ? "Lísing" : "Lloguer"}
                               </span>
                               <span
                                 className={`font-bold ${
@@ -930,32 +1005,63 @@ export default function GestioFlotaPage() {
                                 style={{ width: `${Math.min(100, v.renting_ocupacio_percent || 0)}%` }}
                               ></div>
                             </div>
+                            {v.km_recorreguts_contracte !== undefined && v.renting_limit_km ? (
+                              <p className="text-[9px] text-slate-400 font-mono">
+                                {v.km_recorreguts_contracte.toLocaleString()} / {v.renting_limit_km.toLocaleString()} km
+                              </p>
+                            ) : null}
+                            {(v.cost_total_acumulat_eur || 0) > 0 && (
+                              <p className="text-[9px] text-indigo-600 dark:text-indigo-400 font-mono font-semibold">
+                                TCO: {v.cost_total_acumulat_eur?.toLocaleString()} € ({v.cost_per_km_eur?.toFixed(2)} €/km)
+                              </p>
+                            )}
                             {v.renting_alerta && (
                               <p className="text-[9px] font-bold text-amber-500">
-                                Límit {v.renting_nivell_alerta} assolit!
+                                {v.renting_nivell_alerta === "RITME_EXCES_KM" ? "Ritme excessiu km" : `Límit ${v.renting_nivell_alerta} assolit!`}
+                              </p>
+                            )}
+                            {v.alerta_contracte_venciment && (
+                              <p className="text-[9px] font-bold text-rose-500">
+                                Venciment ({v.dies_restants_contracte}d)!
                               </p>
                             )}
                           </div>
                         ) : (
-                          <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 text-[10px] font-mono font-medium">
-                            <span
-                              className={`w-1.5 h-1.5 rounded-full ${
-                                v.regim_adquisicio === "PROPIETAT"
-                                  ? "bg-emerald-500"
+                          <div className="inline-flex flex-col items-center gap-1">
+                            <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 text-[10px] font-mono font-medium">
+                              <span
+                                className={`w-1.5 h-1.5 rounded-full ${
+                                  v.regim_adquisicio === "PROPIETAT"
+                                    ? "bg-emerald-500"
+                                    : v.regim_adquisicio === "LLOGUER"
+                                    ? "bg-blue-500"
+                                    : v.regim_adquisicio === "LEASING"
+                                    ? "bg-indigo-500"
+                                    : "bg-purple-500"
+                                }`}
+                              ></span>
+                              <span>
+                                {v.regim_adquisicio === "PROPIETAT"
+                                  ? "Compra"
                                   : v.regim_adquisicio === "LLOGUER"
-                                  ? "bg-blue-500"
-                                  : "bg-purple-500"
-                              }`}
-                            ></span>
-                            <span>
-                              {v.regim_adquisicio === "PROPIETAT"
-                                ? "Compra"
-                                : v.regim_adquisicio === "LLOGUER"
-                                ? "Lloguer"
-                                : v.regim_adquisicio === "SUBSTITUCIO"
-                                ? "Substitució"
-                                : v.regim_adquisicio}
-                            </span>
+                                  ? "Lloguer"
+                                  : v.regim_adquisicio === "LEASING"
+                                  ? "Lísing"
+                                  : v.regim_adquisicio === "SUBSTITUCIO"
+                                  ? "Substitució"
+                                  : v.regim_adquisicio}
+                              </span>
+                            </div>
+                            {(v.cost_total_acumulat_eur || 0) > 0 && (
+                              <span className="text-[9px] text-indigo-600 dark:text-indigo-400 font-mono font-semibold">
+                                TCO: {v.cost_total_acumulat_eur?.toLocaleString()} €
+                              </span>
+                            )}
+                            {v.alerta_contracte_venciment && (
+                              <span className="text-[9px] font-bold text-rose-500">
+                                Venciment ({v.dies_restants_contracte}d)!
+                              </span>
+                            )}
                           </div>
                         )}
                       </td>
@@ -978,7 +1084,7 @@ export default function GestioFlotaPage() {
                       <td className="p-3.5 text-center">
                         <span
                           className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${
-                            v.estat === "OPERATIU"
+                            v.estat === "OPERATIU" || v.estat === "ASSIGNAT"
                               ? "bg-emerald-100 text-emerald-800 border-emerald-300 dark:bg-emerald-950 dark:text-emerald-400 dark:border-emerald-800"
                               : v.estat === "LEVE"
                               ? "bg-lime-100 text-lime-800 border-lime-300 dark:bg-lime-950 dark:text-lime-300 dark:border-lime-800"
@@ -991,7 +1097,7 @@ export default function GestioFlotaPage() {
                               : "bg-slate-100 text-slate-700 border-slate-300 dark:bg-slate-800 dark:text-slate-400"
                           }`}
                         >
-                          {v.estat === "LEVE" ? "Operatiu (Defectes Lleus)" : v.estat}
+                          {v.estat === "LEVE" ? "Operatiu (Defectes Lleus)" : v.estat === "ASSIGNAT" ? "OPERATIU" : v.estat}
                         </span>
                       </td>
 
@@ -1488,35 +1594,36 @@ export default function GestioFlotaPage() {
                     onChange={(e) => {
                       const val = e.target.value;
                       setNouRegim(val);
-                      if (val !== "RENTING" && val !== "LLOGUER") {
+                      if (!["RENTING", "LEASING", "LLOGUER"].includes(val)) {
                         setNouLimitKm("");
                       }
                     }}
                     className="w-full p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-slate-100 font-mono text-xs focus:outline-none"
                   >
                     <option value="PROPIETAT">Compra en Propietat (Sense límit de km)</option>
-                    <option value="RENTING">Rènting / Lísing (Amb límit contractual)</option>
-                    <option value="LLOGUER">Lloguer / Arrendament (Flota llogada)</option>
-                    <option value="SUBSTITUCIO">Vehicle de Substitució Temporal (Sense límit)</option>
+                    <option value="RENTING">Rènting (Arrendament operatiu OPEX)</option>
+                    <option value="LEASING">Lísing (Arrendament financer amb opció compra)</option>
+                    <option value="LLOGUER">Lloguer (Flota temporal / Rent-a-Car)</option>
+                    <option value="SUBSTITUCIO">Vehicle de Substitució Temporal</option>
                   </select>
                 </div>
 
                 <div className="space-y-1">
                   <label className="font-bold text-slate-700 dark:text-slate-300 flex items-center justify-between">
                     <span>Límit Contractual (km):</span>
-                    {nouRegim === "RENTING" || nouRegim === "LLOGUER" ? (
+                    {["RENTING", "LEASING", "LLOGUER"].includes(nouRegim) ? (
                       <span className="text-[10px] text-amber-600 dark:text-amber-400 font-medium">
-                        {nouRegim === "RENTING" ? "Requerit per Rènting" : "Opcional per Lloguer"}
+                        {nouRegim === "RENTING" ? "Requerit per Rènting" : "Opcional"}
                       </span>
                     ) : (
                       <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-medium">No aplica</span>
                     )}
                   </label>
-                  {nouRegim === "RENTING" || nouRegim === "LLOGUER" ? (
+                  {["RENTING", "LEASING", "LLOGUER"].includes(nouRegim) ? (
                     <input
                       type="number"
                       min={1000}
-                      placeholder={nouRegim === "RENTING" ? "Ex: 120000" : "Ex: 30000 o buit"}
+                      placeholder="Ex: 120000"
                       value={nouLimitKm}
                       onChange={(e) => setNouLimitKm(e.target.value ? Number(e.target.value) : "")}
                       className="w-full p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-slate-100 font-mono text-xs focus:outline-none focus:ring-1 focus:ring-emerald-500"
@@ -1529,6 +1636,114 @@ export default function GestioFlotaPage() {
                   )}
                 </div>
               </div>
+
+              {/* SECCIÓ DETALLS DE CONTRACTE & FINANCES */}
+              {["RENTING", "LEASING", "LLOGUER"].includes(nouRegim) && (
+                <div className="p-3.5 rounded-xl bg-amber-50/60 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800 space-y-3">
+                  <div className="flex items-center gap-1.5 font-bold text-xs text-amber-800 dark:text-amber-300">
+                    <span>Paràmetres Contractuals i Financers ({nouRegim}):</span>
+                  </div>
+                  <div className="grid grid-cols-3 gap-3">
+                    <div className="space-y-1">
+                      <label className="font-bold text-slate-700 dark:text-slate-300">Data Inici Contracte:</label>
+                      <input
+                        type="date"
+                        value={novaDataIniciContracte}
+                        onChange={(e) => setNovaDataIniciContracte(e.target.value)}
+                        className="w-full p-2 rounded-lg bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-slate-100 font-mono text-xs focus:outline-none"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="font-bold text-slate-700 dark:text-slate-300">Data Fi Contracte:</label>
+                      <input
+                        type="date"
+                        value={novaDataFiContracte}
+                        onChange={(e) => setNovaDataFiContracte(e.target.value)}
+                        className="w-full p-2 rounded-lg bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-slate-100 font-mono text-xs focus:outline-none"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="font-bold text-slate-700 dark:text-slate-300">Odòmetre a l'Inici (km):</label>
+                      <input
+                        type="number"
+                        min={0}
+                        placeholder="0"
+                        value={nouOdometreInici}
+                        onChange={(e) => setNouOdometreInici(e.target.value ? Number(e.target.value) : 0)}
+                        className="w-full p-2 rounded-lg bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-slate-100 font-mono text-xs focus:outline-none"
+                      />
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-3 gap-3">
+                    {["RENTING", "LEASING"].includes(nouRegim) ? (
+                      <div className="space-y-1">
+                        <label className="font-bold text-slate-700 dark:text-slate-300">Quota Mensual (€):</label>
+                        <input
+                          type="number"
+                          step="0.01"
+                          min={0}
+                          placeholder="Ex: 450.00"
+                          value={novaQuotaMensual}
+                          onChange={(e) => setNovaQuotaMensual(e.target.value)}
+                          className="w-full p-2 rounded-lg bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-slate-100 font-mono text-xs focus:outline-none"
+                        />
+                      </div>
+                    ) : (
+                      <div className="space-y-1">
+                        <label className="font-bold text-slate-700 dark:text-slate-300">Tarifa Diària (€/dia):</label>
+                        <input
+                          type="number"
+                          step="0.01"
+                          min={0}
+                          placeholder="Ex: 35.00"
+                          value={novaTarifaDiaria}
+                          onChange={(e) => setNovaTarifaDiaria(e.target.value)}
+                          className="w-full p-2 rounded-lg bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-slate-100 font-mono text-xs focus:outline-none"
+                        />
+                      </div>
+                    )}
+                    <div className="space-y-1">
+                      <label className="font-bold text-slate-700 dark:text-slate-300">Preu km Excés (€/km):</label>
+                      <input
+                        type="number"
+                        step="0.0001"
+                        min={0}
+                        placeholder="Ex: 0.0800"
+                        value={nouPreuKmExces}
+                        onChange={(e) => setNouPreuKmExces(e.target.value)}
+                        className="w-full p-2 rounded-lg bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-slate-100 font-mono text-xs focus:outline-none"
+                      />
+                    </div>
+                    {nouRegim === "LEASING" ? (
+                      <div className="space-y-1">
+                        <label className="font-bold text-slate-700 dark:text-slate-300">Valor Residual Opció Compra (€):</label>
+                        <input
+                          type="number"
+                          step="0.01"
+                          min={0}
+                          placeholder="Ex: 3500.00"
+                          value={nouValorResidual}
+                          onChange={(e) => setNouValorResidual(e.target.value)}
+                          className="w-full p-2 rounded-lg bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-slate-100 font-mono text-xs focus:outline-none"
+                        />
+                      </div>
+                    ) : nouRegim === "LLOGUER" ? (
+                      <div className="space-y-1">
+                        <label className="font-bold text-slate-700 dark:text-slate-300">Fiança Dipositada (€):</label>
+                        <input
+                          type="number"
+                          step="0.01"
+                          min={0}
+                          placeholder="Ex: 300.00"
+                          value={novaFianca}
+                          onChange={(e) => setNovaFianca(e.target.value)}
+                          className="w-full p-2 rounded-lg bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-slate-100 font-mono text-xs focus:outline-none"
+                        />
+                      </div>
+                    ) : null}
+                  </div>
+                </div>
+              )}
 
               {/* SECCIÓ DE TELEMETRIA I CONSUM (Spec 006 RF-16) */}
               <div className="p-3.5 rounded-xl bg-slate-100/60 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-800 space-y-3">
@@ -1899,20 +2114,21 @@ export default function GestioFlotaPage() {
                       onChange={(e) => {
                         const val = e.target.value;
                         setEditRegim(val);
-                        if (val !== "RENTING" && val !== "LLOGUER") setEditLimitKm("");
+                        if (val !== "RENTING" && val !== "LLOGUER" && val !== "LEASING") setEditLimitKm("");
                       }}
                       className="w-full p-2 rounded-lg bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-slate-100 font-mono text-xs focus:outline-none"
                     >
                       <option value="PROPIETAT">Compra en Propietat</option>
-                      <option value="RENTING">Rènting / Lísing</option>
-                      <option value="LLOGUER">Lloguer</option>
+                      <option value="RENTING">Rènting</option>
+                      <option value="LEASING">Lísing (Arrendament Financer)</option>
+                      <option value="LLOGUER">Lloguer Temporer</option>
                       <option value="SUBSTITUCIO">Vehicle de Substitució</option>
                     </select>
                   </div>
                   <div className="space-y-1">
                     <label className="font-bold text-slate-700 dark:text-slate-300 flex items-center justify-between">
                       <span>Límit Contractual km:</span>
-                      {editRegim === "RENTING" || editRegim === "LLOGUER" ? (
+                      {editRegim === "RENTING" || editRegim === "LLOGUER" || editRegim === "LEASING" ? (
                         <span className="text-[10px] text-amber-600 font-medium">Requerit/Opcional</span>
                       ) : (
                         <span className="text-[10px] text-emerald-600 font-medium">Exempt</span>
@@ -1920,14 +2136,137 @@ export default function GestioFlotaPage() {
                     </label>
                     <input
                       type="number"
-                      disabled={editRegim !== "RENTING" && editRegim !== "LLOGUER"}
-                      placeholder={editRegim === "RENTING" || editRegim === "LLOGUER" ? "Ex: 120000" : "Exempt"}
+                      disabled={editRegim !== "RENTING" && editRegim !== "LLOGUER" && editRegim !== "LEASING"}
+                      placeholder={editRegim === "RENTING" || editRegim === "LLOGUER" || editRegim === "LEASING" ? "Ex: 120000" : "Exempt"}
                       value={editLimitKm}
                       onChange={(e) => setEditLimitKm(e.target.value ? Number(e.target.value) : "")}
                       className="w-full p-2 rounded-lg bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-slate-100 font-mono text-xs focus:outline-none disabled:opacity-50"
                     />
                   </div>
                 </div>
+
+                {/* Sub-panell de Paràmetres Financers i Contractuals si Rènting/Lísing/Lloguer */}
+                {(editRegim === "RENTING" || editRegim === "LEASING" || editRegim === "LLOGUER") && (
+                  <div className="mt-3 p-3.5 rounded-xl bg-indigo-50/60 dark:bg-indigo-950/20 border border-indigo-200 dark:border-indigo-900/50 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-bold text-indigo-700 dark:text-indigo-400">
+                        {editRegim === "RENTING"
+                          ? "Condicions Específiques de Rènting"
+                          : editRegim === "LEASING"
+                          ? "Condicions de Lísing Financer (Arrendament)"
+                          : "Condicions de Contracte de Lloguer"}
+                      </span>
+                      <span className="text-[10px] px-2 py-0.5 rounded-full bg-indigo-100 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 font-medium">
+                        Diferenciació Financera Activa
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-3 gap-3">
+                      <div className="space-y-1">
+                        <label className="font-bold text-slate-700 dark:text-slate-300">
+                          Odòmetre Inici Contracte (km):
+                        </label>
+                        <input
+                          type="number"
+                          min={0}
+                          placeholder="Ex: 45000"
+                          value={editOdometreInici}
+                          onChange={(e) => setEditOdometreInici(e.target.value)}
+                          className="w-full p-2 rounded-lg bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-slate-100 font-mono text-xs focus:outline-none"
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <label className="font-bold text-slate-700 dark:text-slate-300">Data Inici Contracte:</label>
+                        <input
+                          type="date"
+                          value={editDataIniciContracte}
+                          onChange={(e) => setEditDataIniciContracte(e.target.value)}
+                          className="w-full p-2 rounded-lg bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-slate-100 font-mono text-xs focus:outline-none"
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <label className="font-bold text-slate-700 dark:text-slate-300">Data Fi Contracte:</label>
+                        <input
+                          type="date"
+                          value={editDataFiContracte}
+                          onChange={(e) => setEditDataFiContracte(e.target.value)}
+                          className="w-full p-2 rounded-lg bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-slate-100 font-mono text-xs focus:outline-none"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-3 gap-3">
+                      {editRegim === "LLOGUER" ? (
+                        <div className="space-y-1">
+                          <label className="font-bold text-slate-700 dark:text-slate-300">Tarifa Diària (€/dia):</label>
+                          <input
+                            type="number"
+                            step="0.01"
+                            min={0}
+                            placeholder="Ex: 35.00"
+                            value={editTarifaDiaria}
+                            onChange={(e) => setEditTarifaDiaria(e.target.value)}
+                            className="w-full p-2 rounded-lg bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-slate-100 font-mono text-xs focus:outline-none"
+                          />
+                        </div>
+                      ) : (
+                        <div className="space-y-1">
+                          <label className="font-bold text-slate-700 dark:text-slate-300">Quota Mensual (€/mes):</label>
+                          <input
+                            type="number"
+                            step="0.01"
+                            min={0}
+                            placeholder="Ex: 480.00"
+                            value={editQuotaMensual}
+                            onChange={(e) => setEditQuotaMensual(e.target.value)}
+                            className="w-full p-2 rounded-lg bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-slate-100 font-mono text-xs focus:outline-none"
+                          />
+                        </div>
+                      )}
+
+                      <div className="space-y-1">
+                        <label className="font-bold text-slate-700 dark:text-slate-300">Preu km Excés (€/km):</label>
+                        <input
+                          type="number"
+                          step="0.0001"
+                          min={0}
+                          placeholder="Ex: 0.0800"
+                          value={editPreuKmExces}
+                          onChange={(e) => setEditPreuKmExces(e.target.value)}
+                          className="w-full p-2 rounded-lg bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-slate-100 font-mono text-xs focus:outline-none"
+                        />
+                      </div>
+
+                      {editRegim === "LEASING" ? (
+                        <div className="space-y-1">
+                          <label className="font-bold text-slate-700 dark:text-slate-300">Valor Residual Opció Compra (€):</label>
+                          <input
+                            type="number"
+                            step="0.01"
+                            min={0}
+                            placeholder="Ex: 3500.00"
+                            value={editValorResidual}
+                            onChange={(e) => setEditValorResidual(e.target.value)}
+                            className="w-full p-2 rounded-lg bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-slate-100 font-mono text-xs focus:outline-none"
+                          />
+                        </div>
+                      ) : editRegim === "LLOGUER" ? (
+                        <div className="space-y-1">
+                          <label className="font-bold text-slate-700 dark:text-slate-300">Fiança Dipositada (€):</label>
+                          <input
+                            type="number"
+                            step="0.01"
+                            min={0}
+                            placeholder="Ex: 300.00"
+                            value={editFianca}
+                            onChange={(e) => setEditFianca(e.target.value)}
+                            className="w-full p-2 rounded-lg bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-slate-100 font-mono text-xs focus:outline-none"
+                          />
+                        </div>
+                      ) : null}
+                    </div>
+                  </div>
+                )}
               </div>
 
               {/* BLOC 3: TELEMETRIA DE CONSUM & HISTÒRIC (Spec 006 RF-16) */}

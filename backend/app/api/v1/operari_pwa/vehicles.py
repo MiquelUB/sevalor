@@ -17,6 +17,8 @@ from app.models.models import (
     Usuari,
     Vehicle,
 )
+from app.services.flota_service import sincronitzar_vehicle_al_disc_empresa
+from app.services.sovereign_storage import SovereignStorageGateway
 
 router = APIRouter(
     prefix="/operari/vehicles",
@@ -32,23 +34,57 @@ class VehicleResponse(BaseModel):
     matricula: str
     marca: str
     model: str
+    marca_model: str
+    tipus: str = "FURGONETA"
     estat: str
-    odometre_acumulat: int | None
+    odometre_acumulat: int | None = None
 
 
 @router.get("", response_model=List[VehicleResponse])
 async def llistar_vehicles_pwa(
-    request: Request, db: AsyncSession = Depends(get_db_with_tenant_context)
+    request: Request,
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+    claims: dict = Depends(require_roles(["OPERARI", "CAPATAZ", "CAP_DE_COLLA", "BOSS", "SUPERADMIN"])),
 ):
     empresa_id = request.state.empresa_id
-    res = await db.execute(select(Vehicle).where(Vehicle.empresa_id == uuid.UUID(empresa_id)))
-    vehicles = res.scalars().all()
+    emp_uuid = uuid.UUID(empresa_id)
+
+    # Identificar vehicle assignat a l'operari autenticat
+    user_id_raw = getattr(request.state, "user_id", None) or claims.get("sub")
+    user_uuid = None
+    vehicle_assignat_id = None
+    if user_id_raw:
+        try:
+            user_uuid = uuid.UUID(str(user_id_raw))
+            user_res = await db.execute(
+                select(Usuari).where(Usuari.id == user_uuid, Usuari.empresa_id == emp_uuid)
+            )
+            usuari_actiu = user_res.scalars().first()
+            if usuari_actiu:
+                vehicle_assignat_id = usuari_actiu.vehicle_assignat_id
+        except (ValueError, TypeError):
+            pass
+
+    res = await db.execute(select(Vehicle).where(Vehicle.empresa_id == emp_uuid))
+    vehicles = list(res.scalars().all())
+
+    # Ordenar prioritzant el vehicle habitual de l'operari a l'índex 0
+    if user_uuid or vehicle_assignat_id:
+        vehicles.sort(
+            key=lambda v: 0
+            if (vehicle_assignat_id and v.id == vehicle_assignat_id)
+            or (user_uuid and v.conductor_habitual_id == user_uuid)
+            else 1
+        )
+
     return [
         VehicleResponse(
             id=v.id,
             matricula=v.matricula,
             marca=v.marca,
             model=v.model,
+            marca_model=f"{v.marca} {v.model}".strip(),
+            tipus=getattr(v, "tipus", "FURGONETA") or "FURGONETA",
             estat=v.estat,
             odometre_acumulat=v.odometre_acumulat,
         )
@@ -124,6 +160,21 @@ async def reportar_dany_vehicle(
         ambit="VEHICLE",
     )
     db.add(nova_incidencia)
+    await db.flush()
+    await SovereignStorageGateway.desar_entitat_json(
+        db=db,
+        empresa_id=empresa_id,
+        categoria="incidencies_registres",
+        item_id=str(nova_incidencia.id),
+        dades={
+            "id": str(nova_incidencia.id),
+            "vehicle_id": str(vehicle_id),
+            "ambit": "VEHICLE",
+            "estat": "VERMELL",
+            "gravetat": payload.gravetat,
+            "text_observacions": payload.descripcio,
+        },
+    )
     await db.commit()
 
     return {"status": "OK", "incidencia_id": str(nova_incidencia.id)}
@@ -143,11 +194,12 @@ async def vehicle_checkin(
     db: AsyncSession = Depends(get_db_with_tenant_context),
 ):
     empresa_id = request.state.empresa_id
+    emp_uuid = uuid.UUID(empresa_id)
     vehicle = (
         (
             await db.execute(
                 select(Vehicle).where(
-                    Vehicle.id == vehicle_id, Vehicle.empresa_id == uuid.UUID(empresa_id)
+                    Vehicle.id == vehicle_id, Vehicle.empresa_id == emp_uuid
                 )
             )
         )
@@ -157,13 +209,17 @@ async def vehicle_checkin(
     if not vehicle:
         raise HTTPException(status_code=404)
 
-    # En un sistema real, guardaríem l'estat del Checkin (potser en una taula JornadaVehicle)
-    # Per ara, l'assignem al vehicle l'odòmetre per a validació de Check-out
     vehicle.odometre_acumulat = payload.odometre_inicial
+    await sincronitzar_vehicle_al_disc_empresa(
+        db,
+        emp_uuid,
+        vehicle,
+        {
+            "ultim_checkin_odometre": payload.odometre_inicial,
+            "nivell_combustible": payload.nivell_combustible,
+        },
+    )
     await db.commit()
-
-    # Store checkin kms in cache or state to calculate diff at checkout
-    # We'll just rely on vehicle.odometre_acumulat being updated
 
     return {"estat": "CHECKIN_OK", "odometre": vehicle.odometre_acumulat}
 
@@ -182,11 +238,12 @@ async def vehicle_repostatge(
     db: AsyncSession = Depends(get_db_with_tenant_context),
 ):
     empresa_id = request.state.empresa_id
+    emp_uuid = uuid.UUID(empresa_id)
     usuari_id = getattr(request.state, "user_id", None)  # Assuming user_id is in state
     if not usuari_id:
         # Fallback if state doesn't have it (for mock/tests)
         first_user = (
-            (await db.execute(select(Usuari).where(Usuari.empresa_id == uuid.UUID(empresa_id))))
+            (await db.execute(select(Usuari).where(Usuari.empresa_id == emp_uuid)))
             .scalars()
             .first()
         )
@@ -196,7 +253,7 @@ async def vehicle_repostatge(
         (
             await db.execute(
                 select(Vehicle).where(
-                    Vehicle.id == vehicle_id, Vehicle.empresa_id == uuid.UUID(empresa_id)
+                    Vehicle.id == vehicle_id, Vehicle.empresa_id == emp_uuid
                 )
             )
         )
@@ -207,7 +264,7 @@ async def vehicle_repostatge(
         raise HTTPException(status_code=404)
 
     tiquet = TiquetCarburant(
-        empresa_id=uuid.UUID(empresa_id),
+        empresa_id=emp_uuid,
         vehicle_id=vehicle_id,
         operari_id=uuid.UUID(str(usuari_id)),
         tiquet_foto_path="n/a",
@@ -217,6 +274,24 @@ async def vehicle_repostatge(
         odometre_valor=payload.odometre,
     )
     db.add(tiquet)
+    await db.flush()
+
+    await SovereignStorageGateway.desar_entitat_json(
+        db=db,
+        empresa_id=emp_uuid,
+        categoria="tiquets_despesa",
+        item_id=str(tiquet.id),
+        dades={
+            "id": str(tiquet.id),
+            "operari_id": str(tiquet.operari_id),
+            "vehicle_id": str(vehicle_id),
+            "matricula": vehicle.matricula,
+            "litres": float(payload.litres),
+            "import_euros": float(payload.euros),
+            "odometre_valor": int(payload.odometre),
+        },
+    )
+    await sincronitzar_vehicle_al_disc_empresa(db, emp_uuid, vehicle)
     await db.commit()
 
     return {"estat": "REPOSTATGE_OK", "consum_litres": payload.litres, "tiquet_id": str(tiquet.id)}
@@ -236,11 +311,12 @@ async def vehicle_checkout(
     db: AsyncSession = Depends(get_db_with_tenant_context),
 ):
     empresa_id = request.state.empresa_id
+    emp_uuid = uuid.UUID(empresa_id)
     vehicle = (
         (
             await db.execute(
                 select(Vehicle).where(
-                    Vehicle.id == vehicle_id, Vehicle.empresa_id == uuid.UUID(empresa_id)
+                    Vehicle.id == vehicle_id, Vehicle.empresa_id == emp_uuid
                 )
             )
         )
@@ -253,6 +329,15 @@ async def vehicle_checkout(
     km_recorreguts = payload.odometre_final - (vehicle.odometre_acumulat or 0)
 
     vehicle.odometre_acumulat = payload.odometre_final
+    await sincronitzar_vehicle_al_disc_empresa(
+        db,
+        emp_uuid,
+        vehicle,
+        {
+            "ultim_checkout_odometre": payload.odometre_final,
+            "ultim_km_recorreguts": km_recorreguts,
+        },
+    )
     await db.commit()
 
     return {"estat": "CHECKOUT_OK", "km_recorreguts": km_recorreguts}

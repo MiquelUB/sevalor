@@ -725,8 +725,14 @@ async def processar_ocr_document_vehicle(file_input: bytes | str, node_ia_url: O
             resultat["data_caducitat_asseguranca"] = _normalitzar_data_iso(cad_m.group(1))
 
         # 11. Règim d'Adquisició i Límit km
-        # Primer detectem si és RÈNTING o LEASING
+        # Primer detectem si és LEASING financer pur (sense paraula renting) o RÈNTING
         if re.search(
+            r"\b(l[ií]sing|leasing)\b|(?:arrendament\s*financer|arrendamiento\s*financiero|opci[oó]\s*de\s*compra|opci[oó]n\s*de\s*compra|valor\s*residual)",
+            text,
+            re.IGNORECASE,
+        ) and not re.search(r"\b(renting|r[eèé]nting)\b", text, re.IGNORECASE):
+            resultat["regim_adquisicio"] = "LEASING"
+        elif re.search(
             r"\b(renting|leasing|l[ií]sing|arval|alphabet|leaseplan|ald\s*automotive|santander\s*consumer\s*renting|santander\s*renting|bbva\s*autorenting|bansacar|caixarenting|northgate|ayvens)\b|"
             r"(?:arrendament\s*financer|arrendamiento\s*financiero|arrendament\s*(?:operatiu\s*)?a\s*llarg\s*termini|arrendamiento\s*(?:operativo\s*)?a\s*largo\s*plazo|arrendament\s*sense\s*conductor|arrendamiento\s*sin\s*conductor|arrendatari\s*a\s*llarg\s*termini|arrendatario\s*largo\s*plazo|quota\s*(?:de\s*)?r[eèé]nting|cuota\s*(?:de\s*)?renting|contracte\s*de\s*r[eèé]nting|contrato\s*de\s*renting)",
             text,
@@ -756,9 +762,9 @@ async def processar_ocr_document_vehicle(file_input: bytes | str, node_ia_url: O
             resultat["regim_adquisicio"] = None
 
         # LÍMIT DE QUILÒMETRES CONTRACTUAL:
-        # S'aplica NOMÉS si el vehicle és de RÈNTING o LLOGUER.
+        # S'aplica NOMÉS si el vehicle és de RÈNTING, LEASING o LLOGUER.
         # Si la furgoneta és de compra en propietat o substitució, mai ha de tenir km limitat.
-        if resultat["regim_adquisicio"] in ("RENTING", "LLOGUER"):
+        if resultat["regim_adquisicio"] in ("RENTING", "LEASING", "LLOGUER"):
             lim_m = re.search(
                 r"(?:L[ií]mit\s*(?:contractual|de\s*km|anual)?|L[ií]mite\s*(?:contractual|de\s*km|anual)?|Km\s*(?:m[aá]ximos|contractuales))[\s\w]*(?:km)?[\s:]*([0-9\.\, ]+)",
                 text,
@@ -824,7 +830,7 @@ async def processar_ocr_document_vehicle(file_input: bytes | str, node_ia_url: O
             "estat_itv ('FAVORABLE', 'FAVORABLE_LEUS', 'DESFAVORABLE', 'NEGATIVA'), "
             "data_proxima_itv (YYYY-MM-DD), data_matriculacio (YYYY-MM-DD), "
             "companyia_asseguradora (str), polissa_asseguranca (str), data_caducitat_asseguranca (YYYY-MM-DD), "
-            "regim_adquisicio ('PROPIETAT', 'RENTING', 'LLOGUER', 'SUBSTITUCIO'), renting_limit_km (int o null si no aplica), "
+            "regim_adquisicio ('PROPIETAT', 'RENTING', 'LEASING', 'LLOGUER', 'SUBSTITUCIO'), renting_limit_km (int o null si no aplica), "
             "carnet_necessari ('B', 'B+E', 'C', 'C+E', 'AM', 'N/A')."
         )
         b64 = None
@@ -846,7 +852,7 @@ async def processar_ocr_document_vehicle(file_input: bytes | str, node_ia_url: O
             for k in resultat:
                 if ai_res.get(k) is not None and not resultat.get(k):
                     resultat[k] = ai_res[k]
-        if resultat.get("regim_adquisicio") not in ("RENTING", "LLOGUER"):
+        if resultat.get("regim_adquisicio") not in ("RENTING", "LEASING", "LLOGUER"):
             resultat["renting_limit_km"] = None
 
     trobat = bool(

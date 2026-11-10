@@ -70,7 +70,7 @@ async def iniciar_jornada(
     )
 
     db.add(jornada)
-    await db.commit()
+    await db.flush()
 
     from app.services.sovereign_storage import SovereignStorageGateway
 
@@ -87,6 +87,7 @@ async def iniciar_jornada(
             "geolocalitzacio_inici": jornada.geolocalitzacio_inici,
         },
     )
+    await db.commit()
 
     return jornada
 
@@ -144,8 +145,7 @@ async def finalitzar_jornada(
     jornada.hora_fi = datetime.now(timezone.utc)
     jornada.geolocalitzacio_fi = f"{payload.latitud},{payload.longitud}"
     jornada.estat = "COMPLERT"
-
-    await db.commit()
+    await db.flush()
 
     from app.services.sovereign_storage import SovereignStorageGateway
 
@@ -164,6 +164,7 @@ async def finalitzar_jornada(
             "geolocalitzacio_fi": jornada.geolocalitzacio_fi,
         },
     )
+    await db.commit()
 
     return jornada
 
@@ -215,9 +216,12 @@ async def assignar_vehicle_a_jornada(
     vehicle.odometre_acumulat = payload.km_actuals
     u_res = await db.execute(select(Usuari).where(Usuari.id == uuid.UUID(usuari_id)))
     usuari = u_res.scalars().first()
-    usuari.vehicle_assignat_id = vehicle.id  # type: ignore
+    if usuari:
+        usuari.vehicle_assignat_id = vehicle.id
+        if not vehicle.conductor_habitual_id:
+            vehicle.conductor_habitual_id = usuari.id
 
-    await db.commit()
+    await db.flush()
 
     from app.services.sovereign_storage import SovereignStorageGateway
 
@@ -229,12 +233,17 @@ async def assignar_vehicle_a_jornada(
         dades={
             "id": str(vehicle.id),
             "matricula": vehicle.matricula,
+            "marca": vehicle.marca,
             "model": vehicle.model,
             "odometre_acumulat": vehicle.odometre_acumulat,
+            "conductor_habitual_id": (
+                str(vehicle.conductor_habitual_id) if vehicle.conductor_habitual_id else None
+            ),
             "ultim_operari_id": str(usuari_id),
             "jornada_id": str(jornada_id),
         },
     )
+    await db.commit()
 
     return {
         "status": "OK",

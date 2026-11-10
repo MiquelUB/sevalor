@@ -7,7 +7,7 @@ from typing import List, Optional
 import bcrypt
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.operari_pwa.jornada import JornadaInici
@@ -23,7 +23,12 @@ from app.models.models import (
     Usuari,
     Vehicle,
 )
+from app.services.flota_service import (
+    sincronitzar_assignacio_des_de_operari,
+    sincronitzar_operari_al_disc_empresa,
+)
 from app.services.ocr_service import processar_dni_ocr
+from app.services.sovereign_storage import SovereignStorageGateway
 
 router = APIRouter(
     prefix="/gestio/operaris",
@@ -42,6 +47,9 @@ class OperariCreate(BaseModel):
     especialitat: str = Field("SISTEMES_REG", max_length=50)
     cost_hora_eur: float = Field(22.50)
     carnet_conduir: str = Field("B", max_length=20)
+    carnet_caducitat: Optional[date] = None
+    prl_certificat_vigencia: Optional[date] = None
+    vehicle_assignat_id: Optional[uuid.UUID] = None
 
 
 class OperariUpdate(BaseModel):
@@ -176,6 +184,68 @@ async def verificar_permisos_boss(request: Request):
     return request.state.empresa_id
 
 
+async def _build_operari_response(
+    db: AsyncSession, emp_uuid: uuid.UUID, op: Usuari, idx: int = 0
+) -> OperariResponse:
+    """Construeix el DTO complet d'Operari amb eines reals, vehicle 1:1 i geolocalització."""
+    op_resp = OperariResponse.model_validate(op)
+
+    # 1. Total eines assignades reals
+    stmt_eines = select(func.count(EinaCustodia.id)).where(
+        EinaCustodia.empresa_id == emp_uuid,
+        EinaCustodia.custodiat_per_operari_id == op.id,
+    )
+    total_eines = (await db.execute(stmt_eines)).scalar() or 0
+    op_resp.total_eines_assignades = int(total_eines)
+
+    # 2. Vehicle habitual real (cerca bidireccional: vehicle_assignat_id o conductor_habitual_id)
+    stmt_v = select(Vehicle).where(
+        Vehicle.empresa_id == emp_uuid,
+        or_(
+            Vehicle.id == op.vehicle_assignat_id,
+            Vehicle.conductor_habitual_id == op.id,
+        ),
+    )
+    v_res = await db.execute(stmt_v)
+    veh = v_res.scalars().first()
+    if veh:
+        op_resp.vehicle_habitual = {
+            "id": str(veh.id),
+            "matricula": veh.matricula,
+            "model": f"{veh.marca} {veh.model}".strip(),
+        }
+        if not op_resp.vehicle_assignat_id:
+            op_resp.vehicle_assignat_id = veh.id
+
+    # 3. Coordenades segons feines actives
+    stmt_ot = select(OrdreTreball).where(
+        OrdreTreball.empresa_id == emp_uuid,
+        OrdreTreball.cap_de_colla_id == op.id,
+        OrdreTreball.estat.in_(["EN_CURS", "EN_RUTA", "EN_OBRA", "ASSIGNADA", "PROGRAMADA"]),
+    ).order_by(OrdreTreball.created_at.desc())
+    ot_res = await db.execute(stmt_ot)
+    ot_activa = ot_res.scalars().first()
+    if ot_activa:
+        if ot_activa.latitud is not None and ot_activa.longitud is not None:
+            op_resp.latitud = float(ot_activa.latitud) + 0.002
+            op_resp.longitud = float(ot_activa.longitud) + 0.002
+        elif ot_activa.adreca and "," in ot_activa.adreca:
+            try:
+                parts = [float(p.strip()) for p in ot_activa.adreca.split(",")]
+                if len(parts) >= 2:
+                    op_resp.latitud = parts[0] + 0.002
+                    op_resp.longitud = parts[1] + 0.002
+            except (ValueError, TypeError):
+                pass
+
+    if op_resp.latitud is None or op_resp.longitud is None:
+        # Coordenades de base operativa / seu central (Lleida)
+        op_resp.latitud = 41.6176 + ((idx % 7) - 3) * 0.003
+        op_resp.longitud = 0.6200 + ((idx % 7) - 3) * 0.003
+
+    return op_resp
+
+
 @router.get("", response_model=List[OperariResponse])
 async def llistar_operaris(
     request: Request, db: AsyncSession = Depends(get_db_with_tenant_context)
@@ -194,60 +264,9 @@ async def llistar_operaris(
     result = await db.execute(stmt)
     operaris = result.scalars().all()
 
-    # Afegir dades reals de cada operari: eines assignades, vehicle habitual i coordenades
     response_list = []
     for idx, op in enumerate(operaris):
-        op_resp = OperariResponse.model_validate(op)
-
-        # 1. Total eines assignades reals
-        stmt_eines = select(func.count(EinaCustodia.id)).where(
-            EinaCustodia.empresa_id == emp_uuid,
-            EinaCustodia.custodiat_per_operari_id == op.id,
-        )
-        total_eines = (await db.execute(stmt_eines)).scalar() or 0
-        op_resp.total_eines_assignades = int(total_eines)
-
-        # 2. Vehicle habitual real
-        if op.vehicle_assignat_id:
-            stmt_v = select(Vehicle).where(
-                Vehicle.id == op.vehicle_assignat_id,
-                Vehicle.empresa_id == emp_uuid,
-            )
-            v_res = await db.execute(stmt_v)
-            veh = v_res.scalars().first()
-            if veh:
-                op_resp.vehicle_habitual = {
-                    "id": str(veh.id),
-                    "matricula": veh.matricula,
-                    "model": f"{veh.marca} {veh.model}".strip(),
-                }
-
-        # 3. Coordenades segons feines actives
-        stmt_ot = select(OrdreTreball).where(
-            OrdreTreball.empresa_id == emp_uuid,
-            OrdreTreball.cap_de_colla_id == op.id,
-            OrdreTreball.estat.in_(["EN_CURS", "EN_RUTA", "EN_OBRA", "ASSIGNADA", "PROGRAMADA"]),
-        ).order_by(OrdreTreball.created_at.desc())
-        ot_res = await db.execute(stmt_ot)
-        ot_activa = ot_res.scalars().first()
-        if ot_activa:
-            if ot_activa.latitud is not None and ot_activa.longitud is not None:
-                op_resp.latitud = float(ot_activa.latitud) + 0.002
-                op_resp.longitud = float(ot_activa.longitud) + 0.002
-            elif ot_activa.adreca and "," in ot_activa.adreca:
-                try:
-                    parts = [float(p.strip()) for p in ot_activa.adreca.split(",")]
-                    if len(parts) >= 2:
-                        op_resp.latitud = parts[0] + 0.002
-                        op_resp.longitud = parts[1] + 0.002
-                except (ValueError, TypeError):
-                    pass
-
-        if op_resp.latitud is None or op_resp.longitud is None:
-            # Coordenades de base operativa / seu central (Lleida)
-            op_resp.latitud = 41.6176 + ((idx % 7) - 3) * 0.003
-            op_resp.longitud = 0.6200 + ((idx % 7) - 3) * 0.003
-
+        op_resp = await _build_operari_response(db, emp_uuid, op, idx)
         response_list.append(op_resp)
 
     return response_list
@@ -366,19 +385,53 @@ async def alta_operari(
         especialitat=operari.especialitat,
         cost_hora_eur=operari.cost_hora_eur,
         carnet_conduir=operari.carnet_conduir or "B",
+        carnet_caducitat=operari.carnet_caducitat,
+        prl_certificat_vigencia=operari.prl_certificat_vigencia,
         rol=rol_norm,
         estat="ACTIU",
         pin_hash=hashed_pin,
     )
     db.add(nou_usuari)
     await db.flush()
-    resp_obj = OperariResponse.model_validate(nou_usuari)
+
+    if operari.vehicle_assignat_id:
+        await sincronitzar_assignacio_des_de_operari(
+            db, emp_uuid, nou_usuari, operari.vehicle_assignat_id
+        )
+
+    resp_obj = await _build_operari_response(db, emp_uuid, nou_usuari)
+    await sincronitzar_operari_al_disc_empresa(
+        db, emp_uuid, nou_usuari, resp_obj.model_dump(mode="json", exclude={"pin_generat"})
+    )
     resp_obj.pin_generat = nou_pin
     resp_obj.login_url = "/operari/login"
     await db.commit()
 
     print(f"[SMS DISPATCH] -> Per a {operari.telefon}: El teu nou PIN de CampoPro és {nou_pin}")
     return resp_obj
+
+
+@router.get("/{operari_id}", response_model=OperariResponse)
+async def obtenir_operari(
+    request: Request,
+    operari_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+):
+    """Retorna el detall complet d'un operari amb el seu vehicle habitual (Zero Mock)."""
+    empresa_id = await verificar_permisos_boss(request)
+    emp_uuid = uuid.UUID(empresa_id)
+
+    stmt = select(Usuari).where(
+        Usuari.id == operari_id,
+        Usuari.empresa_id == emp_uuid,
+        Usuari.rol.in_(["OPERARI", "CAP_DE_COLLA"]),
+    )
+    result = await db.execute(stmt)
+    usuari = result.scalars().first()
+    if not usuari:
+        raise HTTPException(status_code=404, detail="Operari no trobat")
+
+    return await _build_operari_response(db, emp_uuid, usuari)
 
 
 @router.put("/{operari_id}", response_model=OperariResponse)
@@ -447,12 +500,23 @@ async def actualitzar_operari(
         usuari.prl_certificat_vigencia = payload.prl_certificat_vigencia
     if "cap_de_grup_id" in payload.model_fields_set:
         usuari.cap_de_grup_id = payload.cap_de_grup_id
+
+    # Sincronització atòmica 1:1 i validació de carnet de conduir si es modifica el vehicle o permís
     if "vehicle_assignat_id" in payload.model_fields_set:
-        usuari.vehicle_assignat_id = payload.vehicle_assignat_id
+        await sincronitzar_assignacio_des_de_operari(
+            db, emp_uuid, usuari, payload.vehicle_assignat_id
+        )
+    elif usuari.vehicle_assignat_id:
+        await sincronitzar_assignacio_des_de_operari(
+            db, emp_uuid, usuari, usuari.vehicle_assignat_id
+        )
 
     usuari.updated_at = datetime.now(timezone.utc)
     await db.flush()
-    resp_obj = OperariResponse.model_validate(usuari)
+    resp_obj = await _build_operari_response(db, emp_uuid, usuari)
+    await sincronitzar_operari_al_disc_empresa(
+        db, emp_uuid, usuari, resp_obj.model_dump(mode="json", exclude={"pin_generat"})
+    )
     await db.commit()
     return resp_obj
 
@@ -477,9 +541,13 @@ async def tramitar_baixa_operari(
     if not usuari:
         raise HTTPException(status_code=404, detail="Operari no trobat")
 
+    if usuari.vehicle_assignat_id:
+        await sincronitzar_assignacio_des_de_operari(db, emp_uuid, usuari, None)
+
     usuari.estat = "BAIXA"
     usuari.estat_operatiu = "BAIXA"
     usuari.updated_at = datetime.now(timezone.utc)
+    await sincronitzar_operari_al_disc_empresa(db, emp_uuid, usuari, {"vehicle_habitual": None})
     await db.commit()
 
     return {"status": "OK", "missatge": "Baixa laboral tramitada correctament", "id": str(operari_id)}
@@ -562,6 +630,22 @@ async def fitxar_operari_gestio(
         jornada.hora_fi = datetime.now(timezone.utc)
         jornada.geolocalitzacio_fi = f"{payload.latitud},{payload.longitud}"
         jornada.estat = "COMPLERT"
+        await db.flush()
+        await SovereignStorageGateway.desar_entitat_json(
+            db=db,
+            empresa_id=empresa_id,
+            categoria="jornades",
+            item_id=str(jornada.id),
+            dades={
+                "id": str(jornada.id),
+                "usuari_id": str(jornada.usuari_id),
+                "estat": jornada.estat,
+                "hora_inici": jornada.hora_inici.isoformat() if jornada.hora_inici else None,
+                "hora_fi": jornada.hora_fi.isoformat() if jornada.hora_fi else None,
+                "geolocalitzacio_inici": jornada.geolocalitzacio_inici,
+                "geolocalitzacio_fi": jornada.geolocalitzacio_fi,
+            },
+        )
         await db.commit()
         return {"estat": "COMPLERT", "jornada_id": jornada.id}
     else:
@@ -572,6 +656,20 @@ async def fitxar_operari_gestio(
             estat="EN_CURS",
         )
         db.add(nova_jornada)
+        await db.flush()
+        await SovereignStorageGateway.desar_entitat_json(
+            db=db,
+            empresa_id=empresa_id,
+            categoria="jornades",
+            item_id=str(nova_jornada.id),
+            dades={
+                "id": str(nova_jornada.id),
+                "usuari_id": str(nova_jornada.usuari_id),
+                "estat": nova_jornada.estat,
+                "hora_inici": nova_jornada.hora_inici.isoformat() if nova_jornada.hora_inici else None,
+                "geolocalitzacio_inici": nova_jornada.geolocalitzacio_inici,
+            },
+        )
         await db.commit()
         return {"estat": "EN_CURS", "jornada_id": nova_jornada.id}
 
@@ -683,6 +781,22 @@ async def regularitzar_shift_operari(
         motiu_justificatiu=payload.motiu_justificatiu,
     )
     db.add(auditoria)
+    await db.flush()
+    await SovereignStorageGateway.desar_entitat_json(
+        db=db,
+        empresa_id=emp_uuid,
+        categoria="jornades",
+        item_id=str(shift.id),
+        dades={
+            "id": str(shift.id),
+            "usuari_id": str(shift.usuari_id),
+            "estat": shift.estat,
+            "hora_inici": shift.hora_inici.isoformat() if shift.hora_inici else None,
+            "hora_fi": shift.hora_fi.isoformat() if shift.hora_fi else None,
+            "motiu_justificatiu": payload.motiu_justificatiu,
+            "version_id": shift.version_id,
+        },
+    )
     await db.commit()
 
     return {

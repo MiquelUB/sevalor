@@ -62,6 +62,7 @@ interface OperariItem {
   actiu: boolean;
   cap_de_grup_id: string | null;
   cap_de_grup_nom: string | null;
+  vehicle_assignat_id?: string | null;
   vehicle_habitual: VehicleHabitual | null;
   cost_hora_eur: number;
   carnet_conduir: string;
@@ -175,6 +176,9 @@ export default function GestioOperarisPage() {
   const [editCarnet, setEditCarnet] = useState<string>("B");
   const [editCarnetCaducitat, setEditCarnetCaducitat] = useState<string>("");
   const [editPrlVigencia, setEditPrlVigencia] = useState<string>("");
+  const [editVehicleAssignatId, setEditVehicleAssignatId] = useState<string>("");
+  const [nouVehicleAssignatId, setNouVehicleAssignatId] = useState<string>("");
+  const [vehiclesFlota, setVehiclesFlota] = useState<any[]>([]);
   const [desantEdicio, setDesantEdicio] = useState<boolean>(false);
   const [pinGeneratEditor, setPinGeneratEditor] = useState<string | null>(null);
   const [regenerantPinEditor, setRegenerantPinEditor] = useState<boolean>(false);
@@ -207,10 +211,14 @@ export default function GestioOperarisPage() {
   const fetchOperaris = async () => {
     setCarregant(true);
     try {
-      const [dataOperaris, dataMetrics] = await Promise.all([
+      const [dataOperaris, dataMetrics, dataFlota] = await Promise.all([
         apiFetch<any>("/gestio/operaris"),
         apiFetch<any>("/gestio/operaris/metrics").catch(() => null),
+        apiFetch<any>("/gestio/flota").catch(() => []),
       ]);
+      if (Array.isArray(dataFlota)) {
+        setVehiclesFlota(dataFlota);
+      }
       const list = Array.isArray(dataOperaris) ? dataOperaris : (dataOperaris?.operaris || []);
       const formatted: OperariItem[] = list.map((op: any) => ({
         id: op.id,
@@ -227,6 +235,7 @@ export default function GestioOperarisPage() {
         actiu: op.estat === "ACTIU",
         cap_de_grup_id: op.cap_de_grup_id || null,
         cap_de_grup_nom: op.cap_de_grup_nom || null,
+        vehicle_assignat_id: op.vehicle_assignat_id || op.vehicle_habitual?.id || null,
         vehicle_habitual: op.vehicle_habitual || null,
         cost_hora_eur: Number(op.cost_hora_eur) || 22.50,
         carnet_conduir: op.carnet_conduir || "B",
@@ -316,6 +325,7 @@ export default function GestioOperarisPage() {
           especialitat: novaEspecialitat,
           cost_hora_eur: nouCostHora,
           carnet_conduir: nouCarnet,
+          vehicle_assignat_id: nouVehicleAssignatId || null,
         }),
       });
 
@@ -356,6 +366,7 @@ export default function GestioOperarisPage() {
     setEditCarnet(op.carnet_conduir || "B");
     setEditCarnetCaducitat(op.carnet_caducitat || "");
     setEditPrlVigencia(op.prl_certificat_vigencia || "");
+    setEditVehicleAssignatId(op.vehicle_habitual?.id || op.vehicle_assignat_id || "");
     setPinGeneratEditor(null);
     setModalEditarObert(true);
   };
@@ -413,6 +424,7 @@ export default function GestioOperarisPage() {
           carnet_conduir: editCarnet,
           carnet_caducitat: editCarnetCaducitat || null,
           prl_certificat_vigencia: editPrlVigencia || null,
+          vehicle_assignat_id: editVehicleAssignatId || null,
         }),
       });
 
@@ -1391,6 +1403,22 @@ export default function GestioOperarisPage() {
                 </div>
               </div>
 
+              <div>
+                <label className="text-[10px] text-slate-400">Vehicle Habitual Inicial (Opcional)</label>
+                <select
+                  value={nouVehicleAssignatId}
+                  onChange={(e) => setNouVehicleAssignatId(e.target.value)}
+                  className="w-full px-3 py-1.5 rounded-lg bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs mt-1"
+                >
+                  <option value="">Sense vehicle inicial</option>
+                  {vehiclesFlota.map((v) => (
+                    <option key={v.id} value={v.id}>
+                      {v.matricula} — {v.marca} {v.model} ({v.tipus}) {v.conductor_nom ? `[Conductor: ${v.conductor_nom}]` : "[Disponible]"}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
               <div className="pt-3 border-t border-slate-200 dark:border-slate-800 flex justify-end gap-2">
                 <button
                   type="button"
@@ -1616,6 +1644,33 @@ export default function GestioOperarisPage() {
                     className="w-full px-3 py-1.5 rounded-lg bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs mt-1"
                   />
                 </div>
+              </div>
+
+              <div>
+                <label className="text-[10px] text-slate-400 flex items-center justify-between">
+                  <span>Vehicle Habitual Assignat (1:1 Operari ↔ Vehicle)</span>
+                  {editVehicleAssignatId && (
+                    <button
+                      type="button"
+                      onClick={() => setEditVehicleAssignatId("")}
+                      className="text-amber-500 hover:underline text-[10px]"
+                    >
+                      Desvincular vehicle
+                    </button>
+                  )}
+                </label>
+                <select
+                  value={editVehicleAssignatId}
+                  onChange={(e) => setEditVehicleAssignatId(e.target.value)}
+                  className="w-full px-3 py-1.5 rounded-lg bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs mt-1"
+                >
+                  <option value="">Sense vehicle assignat (Desvinculat)</option>
+                  {vehiclesFlota.map((v) => (
+                    <option key={v.id} value={v.id}>
+                      {v.matricula} — {v.marca} {v.model} ({v.tipus}) {v.conductor_nom ? `[Conductor: ${v.conductor_nom}]` : "[Disponible]"}
+                    </option>
+                  ))}
+                </select>
               </div>
 
               <div className="pt-3 border-t border-slate-200 dark:border-slate-800 flex justify-end gap-2">

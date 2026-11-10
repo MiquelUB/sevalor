@@ -1,11 +1,10 @@
 import math
-import os
 import re
 import uuid
 from datetime import date, datetime, timezone
 from typing import Any, Dict, List, Optional
 
-import filetype
+import filetype  # type: ignore[import-untyped]
 from fastapi import (
     APIRouter,
     Depends,
@@ -18,21 +17,27 @@ from fastapi import (
     status,
 )
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db_with_tenant_context
 from app.core.security import require_roles
 from app.models.models import (
     DocumentFlota,
-    HistorialAssignacioVehicle,
     Magatzem,
     MantenimentVehicle,
     OrdreTreball,
+    TiquetCarburant,
+    TiquetCombustible,
     Usuari,
     Vehicle,
 )
+from app.services.flota_service import (
+    sincronitzar_assignacio_vehicle_operari,
+    sincronitzar_vehicle_al_disc_empresa,
+)
 from app.services.ocr_service import processar_ocr_document_vehicle
+from app.services.sovereign_storage import SovereignStorageGateway
 
 router = APIRouter(
     prefix="/gestio/flota",
@@ -59,6 +64,19 @@ class VehicleCreate(BaseModel):
     historial_reparacions: Optional[str] = None
     regim_adquisicio: str = Field("PROPIETAT", max_length=30)
     renting_limit_km: Optional[int] = None
+    odometre_inici_contracte: Optional[int] = 0
+    data_inici_contracte: Optional[date] = None
+    data_fi_contracte: Optional[date] = None
+    quota_mensual_eur: Optional[float] = 0.0
+    tarifa_diaria_eur: Optional[float] = 0.0
+    preu_km_exces_eur: Optional[float] = 0.0
+    valor_residual_eur: Optional[float] = None
+    fianca_eur: Optional[float] = None
+    data_fi_garantia_oficial: Optional[date] = None
+    interval_canvi_oli_km: Optional[int] = 15000
+    ultim_canvi_oli_km: Optional[int] = 0
+    data_itv_negativa: Optional[date] = None
+    data_ultima_descarrega_tacograf: Optional[date] = None
     tacograf_necessari: bool = False
     data_propera_descarrega_tacograf: Optional[date] = None
     capacitat_bateria_kwh: Optional[float] = None
@@ -81,14 +99,89 @@ class VehicleResponse(VehicleCreate):
     renting_ocupacio_percent: Optional[float] = None
     renting_alerta: bool = False
     renting_nivell_alerta: Optional[str] = None
+    alerta_renting_km: Optional[str] = None
     dies_propera_itv: Optional[int] = None
+    km_recorreguts_contracte: int = 0
+    dies_restants_contracte: Optional[int] = None
+    ocupacio_temps_percent: Optional[float] = None
+    desviacio_ritme_percent: Optional[float] = None
+    cost_fix_meritat_eur: float = 0.0
+    cost_penalitzacio_km_eur: float = 0.0
+    despesa_combustible_acumulada_eur: float = 0.0
+    despesa_manteniment_acumulada_eur: float = 0.0
+    manteniment_computable_tco_eur: float = 0.0
+    cost_total_acumulat_eur: float = 0.0
+    cost_per_km_eur: float = 0.0
+    alerta_contracte_venciment: bool = False
 
     model_config = ConfigDict(from_attributes=True)
 
 
-def _build_vehicle_response(veh: Vehicle, conductor_nom: Optional[str] = None) -> VehicleResponse:
+async def _obtenir_despeses_vehicles(
+    db: AsyncSession, empresa_id: uuid.UUID, vehicle_ids: List[uuid.UUID]
+) -> tuple[Dict[uuid.UUID, float], Dict[uuid.UUID, float]]:
+    """Retorna (despesa_combustible_per_vehicle, despesa_manteniment_per_vehicle) per als vehicles indicats."""
+    if not vehicle_ids:
+        return {}, {}
+
+    comb_map: Dict[uuid.UUID, float] = {}
+    mant_map: Dict[uuid.UUID, float] = {}
+
+    # 1. Manteniments (MantenimentVehicle.cost_euros)
+    stmt_m = (
+        select(MantenimentVehicle.vehicle_id, func.coalesce(func.sum(MantenimentVehicle.cost_euros), 0.0))
+        .where(
+            MantenimentVehicle.empresa_id == empresa_id,
+            MantenimentVehicle.vehicle_id.in_(vehicle_ids),
+        )
+        .group_by(MantenimentVehicle.vehicle_id)
+    )
+    res_m = await db.execute(stmt_m)
+    for v_id, total_m in res_m.all():
+        mant_map[v_id] = float(total_m or 0.0)
+
+    # 2. Tiquets Combustible Backoffice (TiquetCombustible.import_euros)
+    stmt_tc = (
+        select(TiquetCombustible.vehicle_id, func.coalesce(func.sum(TiquetCombustible.import_euros), 0.0))
+        .where(
+            TiquetCombustible.empresa_id == empresa_id,
+            TiquetCombustible.vehicle_id.in_(vehicle_ids),
+        )
+        .group_by(TiquetCombustible.vehicle_id)
+    )
+    res_tc = await db.execute(stmt_tc)
+    for v_id, total_tc in res_tc.all():
+        comb_map[v_id] = comb_map.get(v_id, 0.0) + float(total_tc or 0.0)
+
+    # 3. Tiquets Carburant Operari PWA (TiquetCarburant.import_)
+    stmt_tcarb = (
+        select(TiquetCarburant.vehicle_id, func.coalesce(func.sum(TiquetCarburant.import_), 0.0))
+        .where(
+            TiquetCarburant.empresa_id == empresa_id,
+            TiquetCarburant.vehicle_id.in_(vehicle_ids),
+        )
+        .group_by(TiquetCarburant.vehicle_id)
+    )
+    res_tcarb = await db.execute(stmt_tcarb)
+    for v_id, total_tcarb in res_tcarb.all():
+        comb_map[v_id] = comb_map.get(v_id, 0.0) + float(total_tcarb or 0.0)
+
+    return comb_map, mant_map
+
+
+def _build_vehicle_response(
+    veh: Vehicle,
+    conductor_nom: Optional[str] = None,
+    despesa_combustible_acumulada: float = 0.0,
+    despesa_manteniment_acumulada: float = 0.0,
+    conductor_id_fallback: Optional[uuid.UUID] = None,
+) -> VehicleResponse:
     v_dict = {c.name: getattr(veh, c.name) for c in veh.__table__.columns}
     v_dict["conductor_nom"] = conductor_nom
+    if v_dict.get("conductor_habitual_id") is None and conductor_id_fallback is not None:
+        v_dict["conductor_habitual_id"] = conductor_id_fallback
+    if v_dict.get("estat") == "ASSIGNAT":
+        v_dict["estat"] = "OPERATIU"
 
     if v_dict.get("estat_itv") is None:
         v_dict["estat_itv"] = "FAVORABLE"
@@ -104,8 +197,20 @@ def _build_vehicle_response(veh: Vehicle, conductor_nom: Optional[str] = None) -
         v_dict["horometre_acumulat"] = 0.0
     if v_dict.get("odometre_acumulat") is None:
         v_dict["odometre_acumulat"] = 0
+    if v_dict.get("odometre_inici_contracte") is None:
+        v_dict["odometre_inici_contracte"] = 0
     if v_dict.get("consum_adblue_litres") is None:
         v_dict["consum_adblue_litres"] = 0.0
+    if v_dict.get("quota_mensual_eur") is None:
+        v_dict["quota_mensual_eur"] = 0.0
+    if v_dict.get("tarifa_diaria_eur") is None:
+        v_dict["tarifa_diaria_eur"] = 0.0
+    if v_dict.get("preu_km_exces_eur") is None:
+        v_dict["preu_km_exces_eur"] = 0.0
+    if v_dict.get("interval_canvi_oli_km") is None:
+        v_dict["interval_canvi_oli_km"] = 15000
+    if v_dict.get("ultim_canvi_oli_km") is None:
+        v_dict["ultim_canvi_oli_km"] = 0
 
     consum = float(veh.consum_l_100km) if veh.consum_l_100km is not None else None
     mitjana = float(veh.consum_mitjana_historica) if veh.consum_mitjana_historica is not None else None
@@ -125,31 +230,104 @@ def _build_vehicle_response(veh: Vehicle, conductor_nom: Optional[str] = None) -
         if consum > mitjana * 1.10:
             anomalia = True
     v_dict["anomalia_consum"] = anomalia
-    v_dict["anomalia_descartada"] = False
+    v_dict["anomalia_descartada"] = bool(getattr(veh, "anomalia_consum_descartada", False))
+    if v_dict["anomalia_descartada"]:
+        v_dict["anomalia_consum"] = False
 
+    avui = date.today()
+    odo_actual = int(veh.odometre_acumulat or 0)
+    odo_inici = int(getattr(veh, "odometre_inici_contracte", 0) or 0)
+    km_contracte = max(0, odo_actual - odo_inici)
+    v_dict["km_recorreguts_contracte"] = km_contracte
+
+    # Càlcul de percentatge d'ocupació de km (RENTING, LEASING, LLOGUER)
     renting_percent = None
     alerta_renting = False
     nivell_alerta = None
-    if veh.regim_adquisicio in ("RENTING", "LLOGUER") and veh.renting_limit_km and veh.renting_limit_km > 0:
-        odometre = veh.odometre_acumulat or 0
-        renting_percent = round((odometre / veh.renting_limit_km) * 100, 1)
+    alerta_renting_km = None
+    if veh.regim_adquisicio in ("RENTING", "LEASING", "LLOGUER") and veh.renting_limit_km and veh.renting_limit_km > 0:
+        renting_percent = round((km_contracte / veh.renting_limit_km) * 100, 1)
         if renting_percent >= 100:
             alerta_renting = True
             nivell_alerta = "100%"
+            alerta_renting_km = "SUPERAT_100"
         elif renting_percent >= 95:
             alerta_renting = True
             nivell_alerta = "95%"
+            alerta_renting_km = "CRITIC_95"
         elif renting_percent >= 90:
             alerta_renting = True
             nivell_alerta = "90%"
+            alerta_renting_km = "AVIS_90"
+
+    # Projecció temporal del contracte
+    dies_restants_contracte = None
+    ocupacio_temps_pct = None
+    desviacio_ritme_pct = None
+    alerta_contracte_venciment = False
+    llindar_venciment = 3 if veh.regim_adquisicio == "LLOGUER" else 15
+
+    if veh.data_inici_contracte and veh.data_fi_contracte and veh.data_fi_contracte > veh.data_inici_contracte:
+        dies_totals = (veh.data_fi_contracte - veh.data_inici_contracte).days
+        dies_passats = max(0, (avui - veh.data_inici_contracte).days)
+        dies_restants_contracte = (veh.data_fi_contracte - avui).days
+        ocupacio_temps_pct = round(min(100.0, (dies_passats / dies_totals) * 100.0), 1)
+        if renting_percent is not None:
+            desviacio_ritme_pct = round(renting_percent - ocupacio_temps_pct, 1)
+            if desviacio_ritme_pct > 10.0 and not alerta_renting:
+                alerta_renting = True
+                nivell_alerta = "RITME_EXCES_KM"
+                alerta_renting_km = "RITME_EXCES_KM"
+        if dies_restants_contracte is not None and dies_restants_contracte <= llindar_venciment:
+            alerta_contracte_venciment = True
+    elif veh.data_fi_contracte:
+        dies_restants_contracte = (veh.data_fi_contracte - avui).days
+        if dies_restants_contracte <= llindar_venciment:
+            alerta_contracte_venciment = True
+
+    # Càlcul de costos meritats (Fix + Penalització Km Excés + Combustible + Manteniment segons règim)
+    cost_fix_meritat = 0.0
+    if veh.data_inici_contracte and avui >= veh.data_inici_contracte:
+        dies_actiu = max(1, (min(avui, veh.data_fi_contracte or avui) - veh.data_inici_contracte).days)
+        if veh.regim_adquisicio == "LLOGUER" and float(veh.tarifa_diaria_eur or 0) > 0:
+            cost_fix_meritat = round(dies_actiu * float(veh.tarifa_diaria_eur), 2)
+        elif float(veh.quota_mensual_eur or 0) > 0:
+            mesos_actiu = max(1.0, round(dies_actiu / 30.4375, 2))
+            cost_fix_meritat = round(mesos_actiu * float(veh.quota_mensual_eur), 2)
+
+    km_exces = max(0, km_contracte - (veh.renting_limit_km or 0)) if veh.renting_limit_km else 0
+    cost_penalitzacio_km = round(km_exces * float(veh.preu_km_exces_eur or 0.0), 2)
+
+    despesa_comb = round(float(despesa_combustible_acumulada or 0.0), 2)
+    despesa_mant = round(float(despesa_manteniment_acumulada or 0.0), 2)
+    # En RENTING, LLOGUER i SUBSTITUCIO el manteniment ordinari està inclòs en la quota/tarifa;
+    # en PROPIETAT i LEASING corre a càrrec de l'empresa i s'imputa al TCO
+    manteniment_computable = (
+        0.0 if veh.regim_adquisicio in ("RENTING", "LLOGUER", "SUBSTITUCIO") else despesa_mant
+    )
+
+    cost_total = round(cost_fix_meritat + cost_penalitzacio_km + despesa_comb + manteniment_computable, 2)
+    cost_per_km = round(cost_total / km_contracte, 4) if km_contracte > 0 else 0.0
 
     v_dict["renting_ocupacio_percent"] = renting_percent
     v_dict["renting_alerta"] = alerta_renting
     v_dict["renting_nivell_alerta"] = nivell_alerta
+    v_dict["alerta_renting_km"] = alerta_renting_km
+    v_dict["dies_restants_contracte"] = dies_restants_contracte
+    v_dict["ocupacio_temps_percent"] = ocupacio_temps_pct
+    v_dict["desviacio_ritme_percent"] = desviacio_ritme_pct
+    v_dict["cost_fix_meritat_eur"] = cost_fix_meritat
+    v_dict["cost_penalitzacio_km_eur"] = cost_penalitzacio_km
+    v_dict["despesa_combustible_acumulada_eur"] = despesa_comb
+    v_dict["despesa_manteniment_acumulada_eur"] = despesa_mant
+    v_dict["manteniment_computable_tco_eur"] = manteniment_computable
+    v_dict["cost_total_acumulat_eur"] = cost_total
+    v_dict["cost_per_km_eur"] = cost_per_km
+    v_dict["alerta_contracte_venciment"] = alerta_contracte_venciment
 
     dies_itv = None
     if veh.data_proxima_itv:
-        dies_itv = (veh.data_proxima_itv - date.today()).days
+        dies_itv = (veh.data_proxima_itv - avui).days
     v_dict["dies_propera_itv"] = dies_itv
 
     return VehicleResponse.model_validate(v_dict)
@@ -168,10 +346,20 @@ async def llistar_flota(
     if not empresa_id or empresa_id == "undefined":
         raise HTTPException(status_code=401, detail="No identificat")
 
+    emp_uuid = uuid.UUID(empresa_id)
     stmt = (
-        select(Vehicle, Usuari.nom, Usuari.cognoms)
-        .outerjoin(Usuari, Vehicle.conductor_habitual_id == Usuari.id)
-        .where(Vehicle.empresa_id == uuid.UUID(empresa_id))
+        select(Vehicle, Usuari.id, Usuari.nom, Usuari.cognoms)
+        .outerjoin(
+            Usuari,
+            and_(
+                Usuari.empresa_id == emp_uuid,
+                or_(
+                    Vehicle.conductor_habitual_id == Usuari.id,
+                    Usuari.vehicle_assignat_id == Vehicle.id,
+                ),
+            ),
+        )
+        .where(Vehicle.empresa_id == emp_uuid)
     )
 
     if q:
@@ -192,10 +380,25 @@ async def llistar_flota(
 
     result = await db.execute(stmt)
     rows = result.all()
+    veh_ids = [veh.id for veh, _, _, _ in rows]
+    comb_map, mant_map = await _obtenir_despeses_vehicles(db, emp_uuid, veh_ids)
+
     vehicles = []
-    for veh, u_nom, u_cognoms in rows:
+    seen_veh_ids = set()
+    for veh, u_id, u_nom, u_cognoms in rows:
+        if veh.id in seen_veh_ids:
+            continue
+        seen_veh_ids.add(veh.id)
         c_nom = f"{u_nom or ''} {u_cognoms or ''}".strip() or None
-        vehicles.append(_build_vehicle_response(veh, c_nom))
+        vehicles.append(
+            _build_vehicle_response(
+                veh,
+                c_nom,
+                despesa_combustible_acumulada=comb_map.get(veh.id, 0.0),
+                despesa_manteniment_acumulada=mant_map.get(veh.id, 0.0),
+                conductor_id_fallback=u_id,
+            )
+        )
 
     return vehicles
 
@@ -215,6 +418,7 @@ async def alta_vehicle(
     if result_mat.scalars().first():
         raise HTTPException(status_code=400, detail="La matrícula ja es troba registrada")
 
+    estat_norm = "OPERATIU" if vehicle.estat == "ASSIGNAT" else vehicle.estat
     nou_vehicle = Vehicle(
         empresa_id=uuid.UUID(empresa_id),
         matricula=vehicle.matricula.strip().upper(),
@@ -222,8 +426,8 @@ async def alta_vehicle(
         model=vehicle.model.strip(),
         tipus=vehicle.tipus,
         distintiu_ambiental=vehicle.distintiu_ambiental,
-        estat=vehicle.estat,
-        conductor_habitual_id=vehicle.conductor_habitual_id,
+        estat=estat_norm,
+        conductor_habitual_id=None,
         odometre_acumulat=vehicle.odometre_acumulat or 0,
         data_proxima_itv=vehicle.data_proxima_itv,
         estat_itv=vehicle.estat_itv,
@@ -233,7 +437,20 @@ async def alta_vehicle(
         carnet_necessari=vehicle.carnet_necessari,
         historial_reparacions=vehicle.historial_reparacions,
         regim_adquisicio=vehicle.regim_adquisicio,
-        renting_limit_km=vehicle.renting_limit_km if vehicle.regim_adquisicio in ("RENTING", "LLOGUER") else None,
+        renting_limit_km=vehicle.renting_limit_km if vehicle.regim_adquisicio in ("RENTING", "LEASING", "LLOGUER") else None,
+        odometre_inici_contracte=vehicle.odometre_inici_contracte or 0,
+        data_inici_contracte=vehicle.data_inici_contracte,
+        data_fi_contracte=vehicle.data_fi_contracte,
+        quota_mensual_eur=vehicle.quota_mensual_eur or 0.0,
+        tarifa_diaria_eur=vehicle.tarifa_diaria_eur or 0.0,
+        preu_km_exces_eur=vehicle.preu_km_exces_eur or 0.0,
+        valor_residual_eur=vehicle.valor_residual_eur,
+        fianca_eur=vehicle.fianca_eur,
+        data_fi_garantia_oficial=vehicle.data_fi_garantia_oficial,
+        interval_canvi_oli_km=vehicle.interval_canvi_oli_km or 15000,
+        ultim_canvi_oli_km=vehicle.ultim_canvi_oli_km or 0,
+        data_itv_negativa=vehicle.data_itv_negativa,
+        data_ultima_descarrega_tacograf=vehicle.data_ultima_descarrega_tacograf,
         tacograf_necessari=vehicle.tacograf_necessari,
         data_propera_descarrega_tacograf=vehicle.data_propera_descarrega_tacograf,
         capacitat_bateria_kwh=vehicle.capacitat_bateria_kwh,
@@ -257,8 +474,18 @@ async def alta_vehicle(
         actiu=True,
     )
     db.add(magatzem_furgoneta)
-    await db.commit()
-    await db.refresh(nou_vehicle)
+    await db.flush()
+
+    if vehicle.conductor_habitual_id:
+        await sincronitzar_assignacio_vehicle_operari(
+            db=db,
+            empresa_id=uuid.UUID(empresa_id),
+            vehicle=nou_vehicle,
+            nou_conductor_id=vehicle.conductor_habitual_id,
+            motiu="Alta de vehicle",
+            odometre=nou_vehicle.odometre_acumulat,
+        )
+        await db.flush()
 
     c_nom = None
     if nou_vehicle.conductor_habitual_id:
@@ -267,7 +494,12 @@ async def alta_vehicle(
         if u:
             c_nom = f"{u.nom or ''} {u.cognoms or ''}".strip() or None
 
-    return _build_vehicle_response(nou_vehicle, c_nom)
+    response = _build_vehicle_response(nou_vehicle, c_nom)
+    await sincronitzar_vehicle_al_disc_empresa(
+        db, nou_vehicle.empresa_id, nou_vehicle, response.model_dump(mode="json")
+    )
+    await db.commit()
+    return response
 
 
 @router.put("/{vehicle_id}", response_model=VehicleResponse)
@@ -281,8 +513,9 @@ async def editar_vehicle(
     if not empresa_id or empresa_id == "undefined":
         raise HTTPException(status_code=401, detail="No identificat")
 
+    emp_uuid = uuid.UUID(empresa_id)
     stmt = select(Vehicle).where(
-        Vehicle.id == vehicle_id, Vehicle.empresa_id == uuid.UUID(empresa_id)
+        Vehicle.id == vehicle_id, Vehicle.empresa_id == emp_uuid
     )
     result = await db.execute(stmt)
     v_db = result.scalars().first()
@@ -294,8 +527,7 @@ async def editar_vehicle(
     v_db.model = vehicle.model.strip()
     v_db.tipus = vehicle.tipus
     v_db.distintiu_ambiental = vehicle.distintiu_ambiental
-    v_db.estat = vehicle.estat
-    v_db.conductor_habitual_id = vehicle.conductor_habitual_id
+    v_db.estat = "OPERATIU" if vehicle.estat == "ASSIGNAT" else vehicle.estat
     if vehicle.odometre_acumulat is not None:
         v_db.odometre_acumulat = vehicle.odometre_acumulat
     v_db.data_proxima_itv = vehicle.data_proxima_itv
@@ -306,7 +538,26 @@ async def editar_vehicle(
     v_db.carnet_necessari = vehicle.carnet_necessari
     v_db.historial_reparacions = vehicle.historial_reparacions
     v_db.regim_adquisicio = vehicle.regim_adquisicio
-    v_db.renting_limit_km = vehicle.renting_limit_km if vehicle.regim_adquisicio in ("RENTING", "LLOGUER") else None
+    v_db.renting_limit_km = vehicle.renting_limit_km if vehicle.regim_adquisicio in ("RENTING", "LEASING", "LLOGUER") else None
+    if vehicle.odometre_inici_contracte is not None:
+        v_db.odometre_inici_contracte = vehicle.odometre_inici_contracte
+    v_db.data_inici_contracte = vehicle.data_inici_contracte
+    v_db.data_fi_contracte = vehicle.data_fi_contracte
+    if vehicle.quota_mensual_eur is not None:
+        v_db.quota_mensual_eur = vehicle.quota_mensual_eur
+    if vehicle.tarifa_diaria_eur is not None:
+        v_db.tarifa_diaria_eur = vehicle.tarifa_diaria_eur
+    if vehicle.preu_km_exces_eur is not None:
+        v_db.preu_km_exces_eur = vehicle.preu_km_exces_eur
+    v_db.valor_residual_eur = vehicle.valor_residual_eur
+    v_db.fianca_eur = vehicle.fianca_eur
+    v_db.data_fi_garantia_oficial = vehicle.data_fi_garantia_oficial
+    if vehicle.interval_canvi_oli_km is not None:
+        v_db.interval_canvi_oli_km = vehicle.interval_canvi_oli_km
+    if vehicle.ultim_canvi_oli_km is not None:
+        v_db.ultim_canvi_oli_km = vehicle.ultim_canvi_oli_km
+    v_db.data_itv_negativa = vehicle.data_itv_negativa
+    v_db.data_ultima_descarrega_tacograf = vehicle.data_ultima_descarrega_tacograf
     v_db.tacograf_necessari = vehicle.tacograf_necessari
     v_db.data_propera_descarrega_tacograf = vehicle.data_propera_descarrega_tacograf
     v_db.capacitat_bateria_kwh = vehicle.capacitat_bateria_kwh
@@ -318,8 +569,17 @@ async def editar_vehicle(
     if vehicle.consum_adblue_litres is not None:
         v_db.consum_adblue_litres = vehicle.consum_adblue_litres
 
-    await db.commit()
-    await db.refresh(v_db)
+    if vehicle.conductor_habitual_id != v_db.conductor_habitual_id or vehicle.conductor_habitual_id is not None:
+        await sincronitzar_assignacio_vehicle_operari(
+            db=db,
+            empresa_id=emp_uuid,
+            vehicle=v_db,
+            nou_conductor_id=vehicle.conductor_habitual_id,
+            motiu="Modificació fitxa vehicle",
+            odometre=v_db.odometre_acumulat,
+        )
+
+    await db.flush()
 
     c_nom = None
     if v_db.conductor_habitual_id:
@@ -328,7 +588,18 @@ async def editar_vehicle(
         if u:
             c_nom = f"{u.nom or ''} {u.cognoms or ''}".strip() or None
 
-    return _build_vehicle_response(v_db, c_nom)
+    comb_map, mant_map = await _obtenir_despeses_vehicles(db, emp_uuid, [v_db.id])
+    response = _build_vehicle_response(
+        v_db,
+        c_nom,
+        despesa_combustible_acumulada=comb_map.get(v_db.id, 0.0),
+        despesa_manteniment_acumulada=mant_map.get(v_db.id, 0.0),
+    )
+    await sincronitzar_vehicle_al_disc_empresa(
+        db, emp_uuid, v_db, response.model_dump(mode="json")
+    )
+    await db.commit()
+    return response
 
 
 class RegistrarItvRequest(BaseModel):
@@ -348,8 +619,9 @@ async def registrar_itv(
     if not empresa_id or empresa_id == "undefined":
         raise HTTPException(status_code=401, detail="No identificat")
 
+    emp_uuid = uuid.UUID(empresa_id)
     stmt = select(Vehicle).where(
-        Vehicle.id == payload.vehicle_id, Vehicle.empresa_id == uuid.UUID(empresa_id)
+        Vehicle.id == payload.vehicle_id, Vehicle.empresa_id == emp_uuid
     )
     result = await db.execute(stmt)
     v_db = result.scalars().first()
@@ -374,7 +646,7 @@ async def registrar_itv(
     elif payload.veredicte == "DESFAVORABLE":
         v_db.estat = "DESFAVORABLE"
         ot_interna = OrdreTreball(
-            empresa_id=uuid.UUID(empresa_id),
+            empresa_id=emp_uuid,
             codi=f"OT-ITV-{v_db.matricula}-{str(uuid.uuid4())[:4].upper()}",
             titol=f"Subsanació ITV Desfavorable - {v_db.matricula}",
             descripcio=f"Defectes detectats en ITV: {payload.defectes_detectats or 'Revisió general urgent per ITV desfavorable'}. Termini màxim 2 mesos (RD 920/2017).",
@@ -386,7 +658,7 @@ async def registrar_itv(
     elif payload.veredicte == "NEGATIVA":
         v_db.estat = "INACTIVAT"
         ot_interna = OrdreTreball(
-            empresa_id=uuid.UUID(empresa_id),
+            empresa_id=emp_uuid,
             codi=f"OT-GRUA-{v_db.matricula}-{str(uuid.uuid4())[:4].upper()}",
             titol=f"Immobilització Total ITV Negativa - {v_db.matricula}",
             descripcio=f"Vehicle immobilitzat per ITV Negativa. Trasllat en grua obligatori a taller. Defectes: {payload.defectes_detectats or 'Defectes molt greus que inhabiliten la circulació'}.",
@@ -396,9 +668,12 @@ async def registrar_itv(
         )
         db.add(ot_interna)
 
+    estat_final = v_db.estat
+    estat_itv_final = v_db.estat_itv
+    data_prox_str = str(v_db.data_proxima_itv)
+    await sincronitzar_vehicle_al_disc_empresa(db, emp_uuid, v_db)
     await db.commit()
-    await db.refresh(v_db)
-    return {"ok": True, "estat": v_db.estat, "estat_itv": v_db.estat_itv, "data_proxima_itv": str(v_db.data_proxima_itv)}
+    return {"ok": True, "estat": estat_final, "estat_itv": estat_itv_final, "data_proxima_itv": data_prox_str}
 
 
 class DescartarAnomaliaRequest(BaseModel):
@@ -417,8 +692,9 @@ async def descartar_anomalia_consum(
     if not empresa_id or empresa_id == "undefined":
         raise HTTPException(status_code=401, detail="No identificat")
 
+    emp_uuid = uuid.UUID(empresa_id)
     stmt = select(Vehicle).where(
-        Vehicle.id == payload.vehicle_id, Vehicle.empresa_id == uuid.UUID(empresa_id)
+        Vehicle.id == payload.vehicle_id, Vehicle.empresa_id == emp_uuid
     )
     result = await db.execute(stmt)
     v_db = result.scalars().first()
@@ -430,6 +706,9 @@ async def descartar_anomalia_consum(
     prev = v_db.historial_reparacions or ""
     v_db.historial_reparacions = f"{prev}\n{nota}".strip()
 
+    await sincronitzar_vehicle_al_disc_empresa(
+        db, emp_uuid, v_db, {"historial_reparacions": v_db.historial_reparacions}
+    )
     await db.commit()
     return {"ok": True, "vehicle_id": str(v_db.id), "motiu": payload.motiu_tipificat, "data_resolucio": data_avui}
 
@@ -559,19 +838,36 @@ async def obtenir_vehicle(
     if not empresa_id or empresa_id == "undefined":
         raise HTTPException(status_code=401, detail="No identificat")
 
+    emp_uuid = uuid.UUID(empresa_id)
     stmt = (
-        select(Vehicle, Usuari.nom, Usuari.cognoms)
-        .outerjoin(Usuari, Vehicle.conductor_habitual_id == Usuari.id)
-        .where(Vehicle.id == vehicle_id, Vehicle.empresa_id == uuid.UUID(empresa_id))
+        select(Vehicle, Usuari.id, Usuari.nom, Usuari.cognoms)
+        .outerjoin(
+            Usuari,
+            and_(
+                Usuari.empresa_id == emp_uuid,
+                or_(
+                    Vehicle.conductor_habitual_id == Usuari.id,
+                    Usuari.vehicle_assignat_id == Vehicle.id,
+                ),
+            ),
+        )
+        .where(Vehicle.id == vehicle_id, Vehicle.empresa_id == emp_uuid)
     )
     result = await db.execute(stmt)
     row = result.first()
     if not row:
         raise HTTPException(status_code=404, detail="Vehicle no trobat")
 
-    veh, u_nom, u_cognoms = row
+    veh, u_id, u_nom, u_cognoms = row
     c_nom = f"{u_nom or ''} {u_cognoms or ''}".strip() or None
-    return _build_vehicle_response(veh, c_nom)
+    comb_map, mant_map = await _obtenir_despeses_vehicles(db, emp_uuid, [veh.id])
+    return _build_vehicle_response(
+        veh,
+        c_nom,
+        despesa_combustible_acumulada=comb_map.get(veh.id, 0.0),
+        despesa_manteniment_acumulada=mant_map.get(veh.id, 0.0),
+        conductor_id_fallback=u_id,
+    )
 
 
 @router.post("/{vehicle_id}/documents", status_code=201)
@@ -597,8 +893,8 @@ async def pujar_document_flota(
     # Guardar disc local
     file_bytes = await file.read()
     kind = filetype.guess(file_bytes)
-    is_pdf = file_bytes.startswith(b"%PDF") or (bool(file.filename) and file.filename.lower().endswith(".pdf"))
     filename_lower = (file.filename or "").lower()
+    is_pdf = file_bytes.startswith(b"%PDF") or filename_lower.endswith(".pdf")
     is_text = False
     if filename_lower.endswith((".md", ".txt", ".markdown", ".csv")):
         is_text = True
@@ -617,26 +913,29 @@ async def pujar_document_flota(
 
     if kind:
         file_ext = kind.extension
+        content_type = kind.mime
     elif is_pdf:
         file_ext = "pdf"
+        content_type = "application/pdf"
     elif filename_lower.endswith(".md"):
         file_ext = "md"
+        content_type = "text/markdown; charset=utf-8"
     elif filename_lower.endswith(".markdown"):
         file_ext = "markdown"
+        content_type = "text/markdown; charset=utf-8"
     else:
         file_ext = "txt"
+        content_type = "text/plain; charset=utf-8"
 
-    docs_dir = f"/docs/{empresa_id}/flota/{vehicle_id}"
-    try:
-        os.makedirs(docs_dir, exist_ok=True)
-    except PermissionError:
-        docs_dir = f"/tmp/docs/{empresa_id}/flota/{vehicle_id}"
-        os.makedirs(docs_dir, exist_ok=True)
-    safe_name = f"{uuid.uuid4()}.{file_ext}"
-    file_path = os.path.join(docs_dir, safe_name)
-
-    with open(file_path, "wb") as buffer:
-        buffer.write(file_bytes)
+    safe_name = f"doc_{vehicle_id}_{uuid.uuid4().hex[:8]}.{file_ext}"
+    file_path = await SovereignStorageGateway.pujar_fitxer_binari(
+        db=db,
+        empresa_id=empresa_id,
+        categoria="vehicles",
+        nom_fitxer=safe_name,
+        content=file_bytes,
+        content_type=content_type,
+    )
 
     doc = DocumentFlota(
         empresa_id=empresa_id,
@@ -647,6 +946,22 @@ async def pujar_document_flota(
         creat_per_id=None,
     )
     db.add(doc)
+    await db.flush()
+
+    await SovereignStorageGateway.desar_entitat_json(
+        db=db,
+        empresa_id=empresa_id,
+        categoria="vehicles",
+        item_id=f"doc_{doc.id}",
+        dades={
+            "id": str(doc.id),
+            "vehicle_id": str(vehicle_id),
+            "matricula": v_db.matricula,
+            "tipus_document": tipus_document,
+            "nom_arxiu": safe_name,
+            "ruta_arxiu": file_path,
+        },
+    )
     await db.commit()
 
     # Executar OCR asíncron
@@ -657,7 +972,11 @@ async def pujar_document_flota(
     except Exception:
         pass
 
-    return {"missatge": "Document pujat i en procés d'OCR", "id": str(doc.id)}
+    return {
+        "missatge": "Document pujat al disc dur de l'empresa i en procés d'OCR",
+        "id": str(doc.id),
+        "ruta_arxiu": file_path,
+    }
 
 
 @router.get("/{vehicle_id}/documents")
@@ -679,10 +998,54 @@ async def llistar_documents_flota(
             "id": str(d.id),
             "tipus": d.tipus_document,
             "nom_arxiu": d.nom_arxiu,
+            "ruta_arxiu": d.ruta_arxiu,
+            "url_fitxer": f"/api/v1/gestio/flota/{vehicle_id}/documents/{d.id}/fitxer",
             "data": d.data_document.isoformat() if d.data_document else None,
         }
         for d in docs
     ]
+
+
+@router.get("/{vehicle_id}/documents/{doc_id}/fitxer")
+async def descarregar_document_flota(
+    request: Request,
+    vehicle_id: uuid.UUID,
+    doc_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+):
+    """Serveix el document del vehicle directament des del disc dur dedicat de l'empresa."""
+    empresa_id = request.state.empresa_id
+    if not empresa_id:
+        raise HTTPException(status_code=401, detail="No identificat")
+    emp_uuid = uuid.UUID(empresa_id)
+
+    stmt = select(DocumentFlota).where(
+        DocumentFlota.id == doc_id,
+        DocumentFlota.vehicle_id == vehicle_id,
+        DocumentFlota.empresa_id == emp_uuid,
+    )
+    doc = (await db.execute(stmt)).scalars().first()
+    if not doc or not doc.ruta_arxiu:
+        raise HTTPException(status_code=404, detail="Document de vehicle no trobat")
+
+    ext = (doc.nom_arxiu or "").lower().rsplit(".", 1)[-1]
+    media_map = {
+        "pdf": "application/pdf",
+        "jpg": "image/jpeg",
+        "jpeg": "image/jpeg",
+        "png": "image/png",
+        "webp": "image/webp",
+        "md": "text/markdown; charset=utf-8",
+        "txt": "text/plain; charset=utf-8",
+    }
+    media_type = media_map.get(ext, "application/octet-stream")
+    return await SovereignStorageGateway.servir_fitxer(
+        db=db,
+        empresa_id=emp_uuid,
+        fitxer_path=doc.ruta_arxiu,
+        media_type=media_type,
+        disposition="inline",
+    )
 
 
 @router.post("/ocr-draft")
@@ -783,7 +1146,7 @@ async def ocr_vehicle_draft(
             merged_data["distintiu_ambiental"] = "C"
     if not merged_data["regim_adquisicio"]:
         merged_data["regim_adquisicio"] = "PROPIETAT"
-    if merged_data["regim_adquisicio"] not in ("RENTING", "LLOGUER"):
+    if merged_data["regim_adquisicio"] not in ("RENTING", "LEASING", "LLOGUER"):
         merged_data["renting_limit_km"] = None
     if not merged_data["carnet_necessari"]:
         merged_data["carnet_necessari"] = "B"
@@ -817,27 +1180,24 @@ async def assignar_vehicle(
     if not v:
         raise HTTPException(status_code=404, detail="Vehicle no trobat")
 
-    # Check usuari
-    u = await db.scalar(
-        select(Usuari).where(Usuari.id == data.usuari_id, Usuari.empresa_id == empresa_id)
-    )
-    if not u:
-        raise HTTPException(status_code=404, detail="Usuari no trobat")
-
-    v.estat = "ASSIGNAT"
-    u.vehicle_assignat_id = v.id
-
-    historial = HistorialAssignacioVehicle(
+    # Sincronitzar assignació 1:1 amb guarda de carnet
+    await sincronitzar_assignacio_vehicle_operari(
+        db=db,
         empresa_id=empresa_id,
-        vehicle_id=v.id,
-        conductor_id=u.id,
-        data_inici=datetime.now(timezone.utc),
-        odometre_inici=data.odometre,
-        motiu=data.motiu,
+        vehicle=v,
+        nou_conductor_id=data.usuari_id,
+        motiu=data.motiu or "Assignació de flota",
+        odometre=data.odometre,
     )
-    db.add(historial)
     await db.commit()
-    return {"status": "ok", "missatge": "Vehicle assignat correctament"}
+    return {
+        "status": "ok",
+        "missatge": "Vehicle assignat correctament",
+        "id": str(v.id),
+        "vehicle_id": str(v.id),
+        "conductor_habitual_id": str(v.conductor_habitual_id) if v.conductor_habitual_id else None,
+        "estat": v.estat,
+    }
 
 
 class RevocarVehicleRequest(BaseModel):
@@ -858,30 +1218,24 @@ async def revocar_vehicle(
     if not v:
         raise HTTPException(status_code=404, detail="Vehicle no trobat")
 
-    # Update usuari
-    usuaris = await db.execute(
-        select(Usuari).where(Usuari.vehicle_assignat_id == v.id, Usuari.empresa_id == empresa_id)
+    # Sincronitzar desvinculació 1:1
+    await sincronitzar_assignacio_vehicle_operari(
+        db=db,
+        empresa_id=empresa_id,
+        vehicle=v,
+        nou_conductor_id=None,
+        motiu=data.motiu or "Revocació d'assignació",
+        odometre=data.odometre,
     )
-    for u in usuaris.scalars().all():
-        u.vehicle_assignat_id = None
-
-    v.estat = "DISPONIBLE"
-
-    # Close historial
-    hist = await db.scalar(
-        select(HistorialAssignacioVehicle)
-        .where(
-            HistorialAssignacioVehicle.vehicle_id == v.id,
-            HistorialAssignacioVehicle.data_fi.is_(None),
-        )
-        .order_by(HistorialAssignacioVehicle.data_inici.desc())
-    )
-    if hist:
-        hist.data_fi = datetime.now(timezone.utc)
-        hist.odometre_fi = data.odometre
-
     await db.commit()
-    return {"status": "ok", "missatge": "Assignació revocada"}
+    return {
+        "status": "ok",
+        "missatge": "Assignació revocada correctament",
+        "id": str(v.id),
+        "vehicle_id": str(v.id),
+        "conductor_habitual_id": None,
+        "estat": v.estat,
+    }
 
 
 class MantenimentCreate(BaseModel):
@@ -919,6 +1273,24 @@ async def crear_manteniment(
         cost_euros=manteniment.cost_euros,
     )
     db.add(mant)
+    await db.flush()
+    await SovereignStorageGateway.desar_entitat_json(
+        db=db,
+        empresa_id=empresa_id,
+        categoria="vehicles",
+        item_id=f"manteniment_{mant.id}",
+        dades={
+            "id": str(mant.id),
+            "vehicle_id": str(vehicle_id),
+            "matricula": v.matricula,
+            "data_manteniment": manteniment.data_manteniment.isoformat(),
+            "tipus": manteniment.tipus,
+            "descripcio": manteniment.descripcio,
+            "taller": manteniment.taller,
+            "cost_euros": manteniment.cost_euros,
+        },
+    )
+    await sincronitzar_vehicle_al_disc_empresa(db, empresa_id, v)
     await db.commit()
     return {"id": str(mant.id), "missatge": "Manteniment registrat"}
 
@@ -935,7 +1307,7 @@ async def llistar_manteniments(
         )
         .order_by(MantenimentVehicle.data_manteniment.desc())
     )
-    return mants.scalars().all()
+    return list(mants.scalars().all())
 
 
 @router.post("/ocr-document")
@@ -949,8 +1321,8 @@ async def ocr_document_vehicle(request: Request, file: UploadFile = File(...)):
         raise HTTPException(status_code=400, detail="Fitxer buit")
 
     kind = filetype.guess(file_bytes)
-    is_pdf = file_bytes.startswith(b"%PDF") or (bool(file.filename) and file.filename.lower().endswith(".pdf"))
     filename_lower = (file.filename or "").lower()
+    is_pdf = file_bytes.startswith(b"%PDF") or filename_lower.endswith(".pdf")
     is_text = False
     if filename_lower.endswith((".md", ".txt", ".markdown", ".csv")):
         is_text = True
