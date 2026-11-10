@@ -424,24 +424,19 @@ async def llistar_documents_flota(
 @router.post("/ocr-draft")
 async def ocr_vehicle_draft(request: Request, file: UploadFile = File(...)):
     empresa_id = request.state.empresa_id
-    if not empresa_id:
-        raise HTTPException(status_code=401)
+    if not empresa_id or empresa_id == "undefined":
+        raise HTTPException(status_code=401, detail="No identificat")
 
     file_bytes = await file.read()
+    if not file_bytes:
+        raise HTTPException(status_code=400, detail="Fitxer buit")
+
     kind = filetype.guess(file_bytes)
-    if not kind:
-        raise HTTPException(status_code=400, detail="Tipus de fitxer invàlid")
-    file_ext = kind.extension
+    is_pdf = file_bytes.startswith(b"%PDF") or (file.filename and file.filename.lower().endswith(".pdf"))
+    if not kind and not is_pdf:
+        raise HTTPException(status_code=400, detail="Tipus de fitxer invàlid. Cal una imatge o document PDF.")
 
-    docs_dir = f"/docs/{empresa_id}/flota/ocr"
-    os.makedirs(docs_dir, exist_ok=True)
-    safe_name = f"{uuid.uuid4()}.{file_ext}"
-    file_path = os.path.join(docs_dir, safe_name)
-
-    with open(file_path, "wb") as buffer:
-        buffer.write(file_bytes)
-
-    resultat = await processar_ocr_document_vehicle(file_path)
+    resultat = await processar_ocr_document_vehicle(file_bytes)
     return resultat
 
 
@@ -589,22 +584,17 @@ async def llistar_manteniments(
 @router.post("/ocr-document")
 async def ocr_document_vehicle(request: Request, file: UploadFile = File(...)):
     empresa_id = request.state.empresa_id
-    if not empresa_id:
-        raise HTTPException(status_code=401)
+    if not empresa_id or empresa_id == "undefined":
+        raise HTTPException(status_code=401, detail="No identificat")
 
     file_bytes = await file.read()
+    if not file_bytes:
+        raise HTTPException(status_code=400, detail="Fitxer buit")
+
     kind = filetype.guess(file_bytes)
-    if not kind:
-        raise HTTPException(status_code=400, detail="Tipus de fitxer invàlid")
-    file_ext = kind.extension
+    is_pdf = file_bytes.startswith(b"%PDF") or (file.filename and file.filename.lower().endswith(".pdf"))
+    if not kind and not is_pdf:
+        raise HTTPException(status_code=400, detail="Tipus de fitxer invàlid. Cal una imatge o document PDF.")
 
-    docs_dir = f"/docs/{empresa_id}/flota/ocr"
-    os.makedirs(docs_dir, exist_ok=True)
-    safe_name = f"{uuid.uuid4()}.{file_ext}"
-    file_path = os.path.join(docs_dir, safe_name)
-
-    with open(file_path, "wb") as buffer:
-        buffer.write(file_bytes)
-
-    resultat = await processar_ocr_document_vehicle(file_path)
+    resultat = await processar_ocr_document_vehicle(file_bytes)
     return resultat

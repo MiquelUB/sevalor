@@ -36,7 +36,11 @@ def _extreure_text_de_fitxer(file_bytes: bytes) -> str:
 
     try:
         decoded = file_bytes.decode("utf-8")
-        if any(w in decoded.lower() for w in ("total", "nif", "cif", "albarà", "data", "litres", "eur", "factura")):
+        keywords = (
+            "total", "nif", "cif", "albarà", "albara", "data", "litres", "eur", "factura",
+            "matricula", "matrícula", "bastidor", "vin", "vehicle", "vehiculo", "marca", "model", "modelo", "itv", "permis", "permiso", "dgt"
+        )
+        if any(w in decoded.lower() for w in keywords):
             return decoded.strip()
     except Exception:
         pass
@@ -428,14 +432,19 @@ async def processar_albara_ocr(file_bytes: bytes, node_ia_url: Optional[str] = N
 
 
 
-async def processar_ocr_document_vehicle(file_path: str, node_ia_url: Optional[str] = None) -> Dict[str, Any]:
+async def processar_ocr_document_vehicle(file_input: bytes | str, node_ia_url: Optional[str] = None) -> Dict[str, Any]:
     """Extracció OCR de Permís de Circulació / Targeta ITV de vehicle."""
     file_bytes = b""
-    try:
-        with open(file_path, "rb") as f:
-            file_bytes = f.read()
-    except Exception as e:
-        logger.warning(f"No s'ha pogut llegir el fitxer del vehicle a {file_path}: {e}")
+    if isinstance(file_input, bytes):
+        file_bytes = file_input
+    elif isinstance(file_input, str):
+        try:
+            with open(file_input, "rb") as f:
+                file_bytes = f.read()
+        except Exception as e:
+            logger.warning(f"No s'ha pogut llegir el fitxer del vehicle a {file_input}: {e}")
+    else:
+        logger.warning(f"Tipus d'entrada no suportat per a OCR de vehicle: {type(file_input)}")
 
     text = _extreure_text_de_fitxer(file_bytes)
     resultat: Dict[str, Any] = {

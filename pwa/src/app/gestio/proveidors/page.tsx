@@ -123,44 +123,43 @@ export default function GestioProveidorsPage() {
   };
 
 
-  // Carregar proveïdors des del backend
-  const handleOcrUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    
+  const fileInputRef = React.useRef<HTMLInputElement | null>(null);
+
+  const processFileOcr = async (file: File) => {
     setOcrLoading(true);
     try {
       const formData = new FormData();
       formData.append("file", file);
-      const token = localStorage.getItem("sevalor_auth_token") ? JSON.parse(localStorage.getItem("sevalor_auth_token")!).token : "";
-      
-      const res = await fetch(`${getApiBaseUrl()}/gestio/proveidors/ocr-draft`, {
+
+      const data = await apiFetch<any>("/gestio/proveidors/ocr-draft", {
         method: "POST",
-        headers: {
-          "Authorization": `Bearer ${token}`,
-          "X-Empresa-ID": localStorage.getItem("sevalor_tenant_id") || ""
-        },
-        body: formData
+        body: formData,
       });
-      
-      if (res.ok) {
-        const data = await res.json();
+
+      if (data) {
         setNouNif(data.nif || "");
         setNovaRaoSocial(data.rao_social || "");
         setNouEmail(data.email || "");
         setNouTelefon(data.telefon || "");
         if (data.iban) setNouIban(data.iban);
-        
+
         setModalAltaObert(true);
-      } else {
-        alert("Error processant OCR del Proveïdor");
       }
-    } catch (err) {
-      alert("Error de xarxa OCR: " + err);
+    } catch (err: any) {
+      alert("Error processant OCR del Proveïdor: " + (err?.message || err));
     } finally {
       setOcrLoading(false);
-      e.target.value = "";
+      if (fileInputRef.current) {
+        fileInputRef.current.value = "";
+      }
     }
+  };
+
+  // Carregar proveïdors des del backend
+  const handleOcrUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    await processFileOcr(file);
   };
 
   const fetchProveidors = async () => {
@@ -184,6 +183,27 @@ export default function GestioProveidorsPage() {
         if (c && c.feature_copilot_ia === false) setHasCopilotIa(false);
       })
       .catch(() => {});
+
+    // Evitar que arrossegar fitxers al navegador provoqui navegació a file:/// (Error de seguretat navegador)
+    const handleGlobalDragOver = (e: DragEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+    };
+    const handleGlobalDrop = (e: DragEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const droppedFile = e.dataTransfer?.files?.[0];
+      if (droppedFile) {
+        processFileOcr(droppedFile);
+      }
+    };
+
+    window.addEventListener("dragover", handleGlobalDragOver);
+    window.addEventListener("drop", handleGlobalDrop);
+    return () => {
+      window.removeEventListener("dragover", handleGlobalDragOver);
+      window.removeEventListener("drop", handleGlobalDrop);
+    };
   }, [rolActiu]);
 
   // Simular / Reportar canvi d'IBAN (Spec 003 RF-09 / EDGE-01)
@@ -372,12 +392,34 @@ export default function GestioProveidorsPage() {
             <span>Refrescar</span>
           </button>
           <div className="flex items-center gap-2">
+            <input
+              ref={fileInputRef}
+              type="file"
+              className="hidden"
+              accept="image/*,.pdf,application/pdf"
+              onChange={handleOcrUpload}
+            />
             {hasCopilotIa && (
-              <label className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-mono font-bold bg-indigo-600 text-white hover:bg-indigo-700 shadow-sm cursor-pointer transition-all ${ocrLoading ? 'opacity-50 pointer-events-none' : ''}`}>
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                }}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  const f = e.dataTransfer?.files?.[0];
+                  if (f) processFileOcr(f);
+                }}
+                disabled={ocrLoading}
+                className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-mono font-bold bg-indigo-600 text-white hover:bg-indigo-700 shadow-sm cursor-pointer transition-all ${ocrLoading ? 'opacity-50 pointer-events-none' : ''}`}
+                title="Clica o arrossega un document o factura (PDF o Imatge)"
+              >
                 {ocrLoading ? <span className="animate-spin text-lg leading-none">⚙</span> : <span className="text-lg leading-none">✨</span>}
                 <span>{ocrLoading ? 'Processant IA...' : 'Alta OCR'}</span>
-                <input type="file" className="hidden" accept="image/*,.pdf" onChange={handleOcrUpload} />
-              </label>
+              </button>
             )}
             <button
               onClick={() => {
