@@ -60,6 +60,49 @@ async def test_ocr_polissa_asseguranca():
 
 
 @pytest.mark.asyncio
+async def test_ocr_contracte_lloguer():
+    """Verifica l'extracció d'un contracte o albarà de lloguer de vehicle (Europcar/Sixt)."""
+    doc_lloguer = (
+        "CONTRACTE D'ARRENDAMENT / LLOGUER DE VEHICLE COMERCIAL\n"
+        "Empresa arrendadora: Europcar IB SA\n"
+        "Matrícula: 7788-BBB\n"
+        "Marca: Renault Master\n"
+        "Règim: Lloguer sense conductor\n"
+        "Límit contractual: 30000 km\n"
+        "Data devolució: 15/09/2026\n"
+    ).encode("utf-8")
+
+    res = await processar_ocr_document_vehicle(doc_lloguer)
+
+    assert res["status"] == "EXTRET_AUTOMATIC"
+    assert res["matricula"] == "7788-BBB"
+    assert res["marca"] == "Renault"
+    assert res["regim_adquisicio"] == "LLOGUER"
+    assert res["renting_limit_km"] == 30000
+
+
+@pytest.mark.asyncio
+async def test_ocr_factura_compra_propietat():
+    """Verifica que una factura de compra o certificat en propietat no té límit de km."""
+    doc_compra = (
+        "FACTURA DE COMPRAVENTA DE VEHICLE NOU\n"
+        "Concessionari Oficial Ford Romacar\n"
+        "Comprador: SEVALOR INSTAL·LACIONS SL\n"
+        "Matrícula: 1122-CCC\n"
+        "Marca: Ford Transit Courier\n"
+        "Adquisició en propietat (compra directa)\n"
+    ).encode("utf-8")
+
+    res = await processar_ocr_document_vehicle(doc_compra)
+
+    assert res["status"] == "EXTRET_AUTOMATIC"
+    assert res["matricula"] == "1122-CCC"
+    assert res["marca"] == "Ford"
+    assert res["regim_adquisicio"] == "PROPIETAT"
+    assert res["renting_limit_km"] is None
+
+
+@pytest.mark.asyncio
 async def test_ocr_multi_document_fusion():
     """Verifica que la combinació de dades procedents d'ITV i Assegurança cobreix els 16 camps."""
     doc_itv = (
@@ -167,13 +210,57 @@ async def test_ocr_fitxers_markdown_reals():
         assert res_seg["data_caducitat_asseguranca"] == "2027-03-14"
         assert res_seg["tipus_document"] == "ASSEGURANCA"
 
-    print("Extracció dels fitxers .md reals validada al 100%!")
+    print("Extracció dels fitxers .md reals (vehicle 1) validada al 100%!")
+
+
+@pytest.mark.asyncio
+async def test_ocr_vehicle_2_renting_reals():
+    """Verifica l'extracció dels fitxers de vehicle 2 (Rènting Arval / Kangoo)."""
+    import os
+
+    folder = "demo_docs/Banc_Documents_Sevalor_Complet/demo_docs/02_flota_vehicles/vehicle_2"
+    itv_path = os.path.join(folder, " TARJETA DE INSPECCIÓN TÉCNICA DE VEHÍCULOS (eITV).md")
+    permis_path = os.path.join(folder, " PERMISO DE CIRCULACIÓN.md")
+    renting_path = os.path.join(folder, " RENTING OPERATIVO.md")
+    cert_path = os.path.join(folder, "CERTIFICADO DE ARRENDAMIENTO Y AUTORIZACIÓN DE USO (RENTING).md")
+
+    if os.path.exists(itv_path):
+        res_itv = await processar_ocr_document_vehicle(open(itv_path, "rb").read())
+        assert res_itv["matricula"] == "7314-LJH"
+        assert res_itv["marca"] == "Renault"
+        assert res_itv["model"] == "KANGOO"
+        assert res_itv["data_proxima_itv"] == "2026-11-16"
+        assert res_itv["odometre_acumulat"] == 97840
+        assert res_itv["regim_adquisicio"] is None
+
+    if os.path.exists(permis_path):
+        res_perm = await processar_ocr_document_vehicle(open(permis_path, "rb").read())
+        assert res_perm["matricula"] == "7314-LJH"
+        assert res_perm["regim_adquisicio"] == "RENTING"
+        assert res_perm["tipus_document"] == "PERMIS_CIRCULACIO"
+
+    if os.path.exists(renting_path):
+        res_rent = await processar_ocr_document_vehicle(open(renting_path, "rb").read())
+        assert res_rent["matricula"] == "7314-LJH"
+        assert res_rent["companyia_asseguradora"] == "Mapfre"
+        assert res_rent["polissa_asseguranca"] == "071-2400981234-99"
+        assert res_rent["regim_adquisicio"] == "RENTING"
+
+    if os.path.exists(cert_path):
+        res_cert = await processar_ocr_document_vehicle(open(cert_path, "rb").read())
+        assert res_cert["matricula"] == "7314-LJH"
+        assert res_cert["regim_adquisicio"] == "RENTING"
+
+    print("Extracció dels fitxers .md reals (vehicle 2) validada al 100%!")
 
 
 if __name__ == "__main__":
     import asyncio
     asyncio.run(test_ocr_targeta_itv_vehicle())
     asyncio.run(test_ocr_polissa_asseguranca())
+    asyncio.run(test_ocr_contracte_lloguer())
+    asyncio.run(test_ocr_factura_compra_propietat())
     asyncio.run(test_ocr_multi_document_fusion())
     asyncio.run(test_ocr_fitxers_markdown_reals())
+    asyncio.run(test_ocr_vehicle_2_renting_reals())
     print("ALL TESTS PASSED CLEANLY.")

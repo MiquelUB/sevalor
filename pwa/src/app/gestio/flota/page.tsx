@@ -141,7 +141,7 @@ export default function GestioFlotaPage() {
         }
         if (data.regim_adquisicio) {
           setNouRegim(data.regim_adquisicio);
-          if (data.regim_adquisicio === "RENTING" && data.renting_limit_km) {
+          if ((data.regim_adquisicio === "RENTING" || data.regim_adquisicio === "LLOGUER") && data.renting_limit_km) {
             setNouLimitKm(Number(data.renting_limit_km));
           } else {
             setNouLimitKm("");
@@ -391,7 +391,7 @@ export default function GestioFlotaPage() {
           distintiu_ambiental: nouDistintiu,
           odometre_acumulat: nouOdometre,
           regim_adquisicio: nouRegim,
-          renting_limit_km: nouRegim === "RENTING" && nouLimitKm !== "" ? Number(nouLimitKm) : null,
+          renting_limit_km: (nouRegim === "RENTING" || nouRegim === "LLOGUER") && nouLimitKm !== "" ? Number(nouLimitKm) : null,
           estat_itv: nouEstatItv,
           data_proxima_itv: novaDataItv || null,
           data_caducitat_asseguranca: novaDataAsseguranca || null,
@@ -666,12 +666,14 @@ export default function GestioFlotaPage() {
                       <p className="text-[10px] text-slate-500">{v.model}</p>
                     </td>
 
-                    {/* 4. Règim d'Adquisició & Llindars Rènting 90/95/100% (RF-06, RF-29) */}
+                    {/* 4. Règim d'Adquisició & Llindars Rènting / Lloguer */}
                     <td className="p-3.5 text-center">
-                      {v.regim_adquisicio === "RENTING" ? (
+                      {v.regim_adquisicio === "RENTING" || (v.regim_adquisicio === "LLOGUER" && v.renting_limit_km) ? (
                         <div className="space-y-1 inline-block text-left w-28">
                           <div className="flex items-center justify-between text-[10px]">
-                            <span className="text-slate-500 font-bold">Rènting</span>
+                            <span className="text-slate-500 font-bold">
+                              {v.regim_adquisicio === "RENTING" ? "Rènting" : "Lloguer"}
+                            </span>
                             <span
                               className={`font-bold ${
                                 (v.renting_ocupacio_percent || 0) >= 100
@@ -709,8 +711,24 @@ export default function GestioFlotaPage() {
                         </div>
                       ) : (
                         <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 text-[10px] font-mono font-medium">
-                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
-                          <span>{v.regim_adquisicio === "PROPIETAT" ? "Propietat" : v.regim_adquisicio}</span>
+                          <span
+                            className={`w-1.5 h-1.5 rounded-full ${
+                              v.regim_adquisicio === "PROPIETAT"
+                                ? "bg-emerald-500"
+                                : v.regim_adquisicio === "LLOGUER"
+                                ? "bg-blue-500"
+                                : "bg-purple-500"
+                            }`}
+                          ></span>
+                          <span>
+                            {v.regim_adquisicio === "PROPIETAT"
+                              ? "Compra"
+                              : v.regim_adquisicio === "LLOGUER"
+                              ? "Lloguer"
+                              : v.regim_adquisicio === "SUBSTITUCIO"
+                              ? "Substitució"
+                              : v.regim_adquisicio}
+                          </span>
                         </div>
                       )}
                     </td>
@@ -1197,15 +1215,16 @@ export default function GestioFlotaPage() {
                     onChange={(e) => {
                       const val = e.target.value;
                       setNouRegim(val);
-                      if (val !== "RENTING") {
+                      if (val !== "RENTING" && val !== "LLOGUER") {
                         setNouLimitKm("");
                       }
                     }}
                     className="w-full p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-slate-100 font-mono text-xs focus:outline-none"
                   >
                     <option value="PROPIETAT">Compra en Propietat (Sense límit de km)</option>
-                    <option value="RENTING">Rènting / Lloguer a llarg termini (Amb límit de km)</option>
-                    <option value="SUBSTITUCIO">Vehicle de Sustitució Temporal (Sense límit)</option>
+                    <option value="RENTING">Rènting / Lísing (Amb límit contractual)</option>
+                    <option value="LLOGUER">Lloguer / Arrendament (Flota llogada)</option>
+                    <option value="SUBSTITUCIO">Vehicle de Substitució Temporal (Sense límit)</option>
                   </select>
                 </div>
               </div>
@@ -1227,17 +1246,19 @@ export default function GestioFlotaPage() {
                 <div className="space-y-1">
                   <label className="font-bold text-slate-700 dark:text-slate-300 flex items-center justify-between">
                     <span>Límit Contractual (km):</span>
-                    {nouRegim === "RENTING" ? (
-                      <span className="text-[10px] text-amber-600 dark:text-amber-400 font-medium">Requerit per Rènting</span>
+                    {nouRegim === "RENTING" || nouRegim === "LLOGUER" ? (
+                      <span className="text-[10px] text-amber-600 dark:text-amber-400 font-medium">
+                        {nouRegim === "RENTING" ? "Requerit per Rènting" : "Opcional per Lloguer"}
+                      </span>
                     ) : (
                       <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-medium">No aplica</span>
                     )}
                   </label>
-                  {nouRegim === "RENTING" ? (
+                  {nouRegim === "RENTING" || nouRegim === "LLOGUER" ? (
                     <input
                       type="number"
                       min={1000}
-                      placeholder="Ex: 120000"
+                      placeholder={nouRegim === "RENTING" ? "Ex: 120000" : "Ex: 30000 o buit"}
                       value={nouLimitKm}
                       onChange={(e) => setNouLimitKm(e.target.value ? Number(e.target.value) : "")}
                       className="w-full p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-slate-100 font-mono text-xs focus:outline-none focus:ring-1 focus:ring-emerald-500"

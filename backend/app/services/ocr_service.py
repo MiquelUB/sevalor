@@ -634,14 +634,16 @@ async def processar_ocr_document_vehicle(file_input: bytes | str, node_ia_url: O
         elif "FAVORABLE" in res_str or "APTE" in res_str or "APTO" in res_str:
             resultat["estat_itv"] = "FAVORABLE"
 
-        # 7. Data Pròxima ITV
-        prox_m = re.search(
+        # 7. Data Pròxima ITV (agafar sempre la data futura/vigent més recent si hi ha diverses inspeccions)
+        prox_matches = re.findall(
             r"(?:Pr[oò]xima\s*ITV|Propera\s*ITV|Venciment\s*ITV|Proper\s*venciment|Validesa\s*fins|V[aá]lida\s*hasta|V[aá]lida\s*fins|Pr[oó]xima\s*inspecci[oó]n|Caducitat\s*ITV|Data\s*(?:de\s*)?caducitat\s*(?:propera\s*)?itv)[\s:]*(\d{1,2}[/-]\d{1,2}[/-]\d{4}|\d{4}[/-]\d{1,2}[/-]\d{1,2})",
             text,
             re.IGNORECASE,
         )
-        if prox_m:
-            resultat["data_proxima_itv"] = _normalitzar_data_iso(prox_m.group(1))
+        if prox_matches:
+            iso_dates = [_normalitzar_data_iso(m) for m in prox_matches if _normalitzar_data_iso(m)]
+            if iso_dates:
+                resultat["data_proxima_itv"] = max(iso_dates)
 
         # 8. Data Inspecció ITV i Data Matriculació
         insp_m = re.search(
@@ -660,19 +662,25 @@ async def processar_ocr_document_vehicle(file_input: bytes | str, node_ia_url: O
         if matr_m:
             resultat["data_matriculacio"] = _normalitzar_data_iso(matr_m.group(1))
 
-        # 9. Odòmetre / Quilometratge
-        km_m = re.search(
+        # 9. Odòmetre / Quilometratge (agafar la lectura màxima de quilòmetres si hi ha historial d'inspeccions)
+        km_matches = re.findall(
             r"(?:Lectura\s*km|Quilometratge|Kilometraje|Od[oò]metre|Odometro|Lectura\s*od[oò]metre|(?:(?<!desde\s)(?<!des de\s)\bKm\b))[\s:]*([0-9\.\, ]+)",
             text,
             re.IGNORECASE,
         )
-        if km_m:
-            try:
-                clean_km = re.sub(r"[^\d]", "", km_m.group(1))
-                if clean_km and int(clean_km) > 0 and not ("desde km" in text.lower() and int(clean_km) == 0):
-                    resultat["odometre_acumulat"] = int(clean_km)
-            except ValueError:
-                pass
+        if km_matches:
+            km_vals: List[int] = []
+            for km_str in km_matches:
+                clean_km = re.sub(r"[^\d]", "", km_str)
+                if clean_km:
+                    try:
+                        val_km = int(clean_km)
+                        if val_km > 0 and not ("desde km" in text.lower() and val_km == 0):
+                            km_vals.append(val_km)
+                    except ValueError:
+                        pass
+            if km_vals:
+                resultat["odometre_acumulat"] = max(km_vals)
 
         # 10. Assegurança (Companyia, Pòlissa, Caducitat)
         comp_m = re.search(
@@ -699,12 +707,14 @@ async def processar_ocr_document_vehicle(file_input: bytes | str, node_ia_url: O
                     break
 
         pol_m = re.search(
-            r"(?:(?:N[úu]m\.?|N[úu]mero|Nº)\s*(?:de\s*)?)?P[oòó]li(?:ss|[sz])a(?:\s*(?:n[úu]m\.?|nº))?[\s:]+([A-Z0-9\-_/]{4,})",
+            r"(?:(?:N[úu]m\.?|N[úu]mero|Nº)\s*(?:de\s*)?)?P[oòó]li(?:ss|[sz])a(?:\s*(?:de\s*)?(?:flota|colectiva|individual|n[úu]m\.?|nº|numero))?[\s:]+([A-Z0-9\-_/]{5,})",
             text,
             re.IGNORECASE,
         )
         if pol_m:
-            resultat["polissa_asseguranca"] = pol_m.group(1).strip()
+            cand_pol = pol_m.group(1).strip()
+            if cand_pol.upper() not in ("FLOTA", "COLECTIVA", "INDIVIDUAL", "SEGUROS"):
+                resultat["polissa_asseguranca"] = cand_pol
 
         cad_m = re.search(
             r"(?:Vencimiento\s*(?:de\s*la\s*anualidad)?|Venciment\s*(?:de\s*l'anualitat)?|Venciment\s*(?:asseguran[cç]a)?|Caducitat\s*(?:asseguran[cç]a)?|Vencimiento|Validesa\s*fins|Efecte\s*fins|Data\s*(?:de\s*)?venciment|Data\s*(?:de\s*)?caducitat)[\s:]*(\d{1,2}[/-]\d{1,2}[/-]\d{4}|\d{4}[/-]\d{1,2}[/-]\d{1,2})",
@@ -715,20 +725,40 @@ async def processar_ocr_document_vehicle(file_input: bytes | str, node_ia_url: O
             resultat["data_caducitat_asseguranca"] = _normalitzar_data_iso(cad_m.group(1))
 
         # 11. Règim d'Adquisició i Límit km
-        # En permís de circulació espanyol (apartat C.4): "Es el propietario del vehículo"
-        if re.search(r"(?:es\s*el\s*propietario|propietari|compra|propietat|propiedad|en\s*propiedad)", text, re.IGNORECASE):
-            resultat["regim_adquisicio"] = "PROPIETAT"
-        elif re.search(r"\b(renting|leasing|l[ií]sing|arval|alphabet|leaseplan|ald\s*automotive)\b", text, re.IGNORECASE):
+        # Primer detectem si és RÈNTING o LEASING
+        if re.search(
+            r"\b(renting|leasing|l[ií]sing|arval|alphabet|leaseplan|ald\s*automotive|santander\s*consumer\s*renting|santander\s*renting|bbva\s*autorenting|bansacar|caixarenting|northgate|ayvens)\b|"
+            r"(?:arrendament\s*financer|arrendamiento\s*financiero|arrendament\s*(?:operatiu\s*)?a\s*llarg\s*termini|arrendamiento\s*(?:operativo\s*)?a\s*largo\s*plazo|arrendament\s*sense\s*conductor|arrendamiento\s*sin\s*conductor|arrendatari\s*a\s*llarg\s*termini|arrendatario\s*largo\s*plazo|quota\s*(?:de\s*)?r[eèé]nting|cuota\s*(?:de\s*)?renting|contracte\s*de\s*r[eèé]nting|contrato\s*de\s*renting)",
+            text,
+            re.IGNORECASE,
+        ):
             resultat["regim_adquisicio"] = "RENTING"
-        elif re.search(r"\b(substituci[oó]|sustituci[oó]n)\b", text, re.IGNORECASE):
+        elif re.search(
+            r"\b(lloguer|alquiler|rent\s*a\s*car|rentacar|sixt|europcar|hertz|avis|enterprise|goldcar|centauro|record\s*go|budget|ok\s*mobility)\b|"
+            r"(?:alquiler\s*sin\s*conductor|lloguer\s*sense\s*conductor|contracte\s*de\s*lloguer|contrato\s*de\s*alquiler|vehicle\s*de\s*lloguer|veh[íi]culo\s*de\s*alquiler)",
+            text,
+            re.IGNORECASE,
+        ):
+            resultat["regim_adquisicio"] = "LLOGUER"
+        elif re.search(
+            r"(?:regim|r[eèé]gimen)[\s:]*(?:substituci[oó]|sustituci[oó]n)|\b(vehicle\s*de\s*substituci[oó]\s*temporal|veh[íi]culo\s*de\s*sustituci[oó]n\s*temporal|vehicle\s*de\s*cortesia|veh[íi]culo\s*de\s*cortes[íi]a)\b",
+            text,
+            re.IGNORECASE,
+        ):
             resultat["regim_adquisicio"] = "SUBSTITUCIO"
-        else:
+        elif re.search(
+            r"(?:es\s*el\s*propietario|propietari\s*del\s*vehicle|propietario\s*del\s*veh[íi]culo|compraventa|compra-venda|factura\s*de\s*compra|adquisici[oó]n\s*en\s*propiedad|adquisici[oó]\s*en\s*propietat|adquirido\s*en\s*propiedad|adquirit\s*en\s*propietat|en\s*propiedad|en\s*propietat|compra\s*directa|tomador\s*(?:y|i|\/)\s*propietario)|\b(compra|propietat|propiedad)\b",
+            text,
+            re.IGNORECASE,
+        ):
             resultat["regim_adquisicio"] = "PROPIETAT"
+        else:
+            resultat["regim_adquisicio"] = None
 
         # LÍMIT DE QUILÒMETRES CONTRACTUAL:
-        # NOMÉS té sentit si el vehicle és de RÈNTING / LÍSING!
-        # Si la furgoneta és de compra en propietat, mai ha de tenir km limitat.
-        if resultat["regim_adquisicio"] == "RENTING":
+        # S'aplica NOMÉS si el vehicle és de RÈNTING o LLOGUER.
+        # Si la furgoneta és de compra en propietat o substitució, mai ha de tenir km limitat.
+        if resultat["regim_adquisicio"] in ("RENTING", "LLOGUER"):
             lim_m = re.search(
                 r"(?:L[ií]mit\s*(?:contractual|de\s*km|anual)?|L[ií]mite\s*(?:contractual|de\s*km|anual)?|Km\s*(?:m[aá]ximos|contractuales))[\s\w]*(?:km)?[\s:]*([0-9\.\, ]+)",
                 text,
@@ -737,7 +767,7 @@ async def processar_ocr_document_vehicle(file_input: bytes | str, node_ia_url: O
             if lim_m:
                 try:
                     clean_lim = re.sub(r"[^\d]", "", lim_m.group(1))
-                    if clean_lim and int(clean_lim) >= 5000:
+                    if clean_lim and int(clean_lim) >= 1000:
                         resultat["renting_limit_km"] = int(clean_lim)
                 except ValueError:
                     pass
@@ -771,10 +801,12 @@ async def processar_ocr_document_vehicle(file_input: bytes | str, node_ia_url: O
         # 14. Tipus de document detectat
         if re.search(r"PERMISO\s*DE\s*CIRCULACI[OÓ]N|PERM[IÍ]S\s*DE\s*CIRCULACI[OÓ]", text, re.IGNORECASE):
             resultat["tipus_document"] = "PERMIS_CIRCULACIO"
-        elif re.search(r"ITV|FITXA\s*T[EÈ]CNICA|INSPECCI[OÓ]|TARGETA\s*ITV", text, re.IGNORECASE):
-            resultat["tipus_document"] = "ITV"
         elif re.search(r"P[OÒÓ]LI(?:SS|[SZ])A|ASSEGURAN[CÇ]A|ASEGURADORA|PRIMA|TOMADOR|SEGURO\s*DE\s*VEH[IÍ]CULOS", text, re.IGNORECASE):
             resultat["tipus_document"] = "ASSEGURANCA"
+        elif re.search(r"CERTIFICADO\s*DE\s*ARRENDAMIENTO|CONTRATO\s*DE\s*RENTING|CONTRATO\s*DE\s*ALQUILER|ARRENDAMIENTO|RENTING\s*OPERATIVO", text, re.IGNORECASE):
+            resultat["tipus_document"] = "CONTRACTE"
+        elif re.search(r"ITV|FITXA\s*T[EÈ]CNICA|INSPECCI[OÓ]|TARGETA\s*ITV", text, re.IGNORECASE):
+            resultat["tipus_document"] = "ITV"
         elif re.search(r"REPARACI[OÓ]|TALLER|MANTENIMENT|CANVI\s*D'OLI", text, re.IGNORECASE):
             resultat["tipus_document"] = "MANTENIMENT"
         else:
@@ -792,7 +824,7 @@ async def processar_ocr_document_vehicle(file_input: bytes | str, node_ia_url: O
             "estat_itv ('FAVORABLE', 'FAVORABLE_LEUS', 'DESFAVORABLE', 'NEGATIVA'), "
             "data_proxima_itv (YYYY-MM-DD), data_matriculacio (YYYY-MM-DD), "
             "companyia_asseguradora (str), polissa_asseguranca (str), data_caducitat_asseguranca (YYYY-MM-DD), "
-            "regim_adquisicio ('PROPIETAT', 'RENTING', 'SUBSTITUCIO'), renting_limit_km (int), "
+            "regim_adquisicio ('PROPIETAT', 'RENTING', 'LLOGUER', 'SUBSTITUCIO'), renting_limit_km (int o null si no aplica), "
             "carnet_necessari ('B', 'B+E', 'C', 'C+E', 'AM', 'N/A')."
         )
         b64 = None
@@ -814,7 +846,7 @@ async def processar_ocr_document_vehicle(file_input: bytes | str, node_ia_url: O
             for k in resultat:
                 if ai_res.get(k) is not None and not resultat.get(k):
                     resultat[k] = ai_res[k]
-        if resultat.get("regim_adquisicio") != "RENTING":
+        if resultat.get("regim_adquisicio") not in ("RENTING", "LLOGUER"):
             resultat["renting_limit_km"] = None
 
     trobat = bool(
