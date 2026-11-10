@@ -94,6 +94,7 @@ export default function GestioFlotaPage() {
   const [modalNouVehicleObert, setModalNouVehicleObert] = useState<boolean>(false);
   const [hasCopilotIa, setHasCopilotIa] = useState<boolean>(true);
   const [ocrLoading, setOcrLoading] = useState<boolean>(false);
+  const [creantVehicle, setCreantVehicle] = useState<boolean>(false);
   const [novaMatricula, setNovaMatricula] = useState<string>("");
   const [novaMarca, setNovaMarca] = useState<string>("");
   const [nouModel, setNouModel] = useState<string>("");
@@ -112,13 +113,17 @@ export default function GestioFlotaPage() {
   const [arxiuReparacio, setArxiuReparacio] = useState<File | null>(null);
   const [novaCompanyiaAsseguranca, setNovaCompanyiaAsseguranca] = useState<string>("");
   const [nouCarnet, setNouCarnet] = useState<string>("B");
+  const [fitxersAdjunts, setFitxersAdjunts] = useState<{ file: File; tipus: string; nom: string }[]>([]);
   const fileInputRef = React.useRef<HTMLInputElement | null>(null);
+  const modalFileInputRef = React.useRef<HTMLInputElement | null>(null);
 
-  const processFileOcr = async (file: File) => {
+  const processFilesOcr = async (files: File[]) => {
+    if (!files || files.length === 0) return;
     setOcrLoading(true);
     try {
       const formData = new FormData();
-      formData.append("file", file);
+      files.forEach((f) => formData.append("files", f));
+      formData.append("file", files[0]); // Compatibilitat retroactiva
 
       const data = await apiFetch<any>("/gestio/flota/ocr-draft", {
         method: "POST",
@@ -126,16 +131,70 @@ export default function GestioFlotaPage() {
       });
 
       if (data) {
-        setNovaMatricula(data.matricula || "");
-        setNovaMarca(data.marca || "");
-        setNouModel(data.model || "");
-        setNouTipus(data.tipus || "THERMIC");
-        setNouDistintiu(data.distintiu_ambiental || "C");
-        setNovaCompanyiaAsseguranca(data.companyia_asseguradora || "");
-        setNovaPolissaAsseguranca(data.polissa_asseguranca || "");
-        setNouCarnet(data.carnet_necessari || "B");
-        setNouRegim(data.regim_adquisicio || "PROPIETAT");
-        if (data.renting_limit_km) setNouLimitKm(data.renting_limit_km);
+        if (data.matricula) setNovaMatricula(data.matricula);
+        if (data.marca) setNovaMarca(data.marca);
+        if (data.model) setNouModel(data.model);
+        if (data.tipus) setNouTipus(data.tipus);
+        if (data.distintiu_ambiental) setNouDistintiu(data.distintiu_ambiental);
+        if (data.odometre_acumulat !== null && data.odometre_acumulat !== undefined) {
+          setNouOdometre(Number(data.odometre_acumulat));
+        }
+        if (data.regim_adquisicio) setNouRegim(data.regim_adquisicio);
+        if (data.renting_limit_km) setNouLimitKm(Number(data.renting_limit_km));
+        if (data.companyia_asseguradora) setNovaCompanyiaAsseguranca(data.companyia_asseguradora);
+        if (data.polissa_asseguranca) setNovaPolissaAsseguranca(data.polissa_asseguranca);
+        if (data.data_caducitat_asseguranca) setNovaDataAsseguranca(data.data_caducitat_asseguranca);
+        if (data.estat_itv) setNouEstatItv(data.estat_itv);
+        if (data.data_proxima_itv) setNovaDataItv(data.data_proxima_itv);
+        if (data.carnet_necessari) setNouCarnet(data.carnet_necessari);
+
+        // Auto-assignar fitxers als inputs del formulari segons detecció
+        const docTypes: { [nom: string]: string } = {};
+        if (Array.isArray(data.documents_processats)) {
+          data.documents_processats.forEach((doc: any) => {
+            if (doc?.nom) docTypes[doc.nom] = doc.tipus_detectat;
+          });
+        }
+
+        const nousAdjunts: { file: File; tipus: string; nom: string }[] = [];
+        files.forEach((f) => {
+          const tipusDetectat = docTypes[f.name] || "GENERAL";
+          nousAdjunts.push({ file: f, tipus: tipusDetectat, nom: f.name });
+
+          const nomLower = f.name.toLowerCase();
+          if (
+            tipusDetectat === "ITV" ||
+            nomLower.includes("itv") ||
+            nomLower.includes("fitxa") ||
+            nomLower.includes("tecnica")
+          ) {
+            setArxiuITV(f);
+          } else if (
+            tipusDetectat === "ASSEGURANCA" ||
+            nomLower.includes("asseguran") ||
+            nomLower.includes("seguro") ||
+            nomLower.includes("polissa")
+          ) {
+            setArxiuAsseguranca(f);
+          } else if (
+            tipusDetectat === "MANTENIMENT" ||
+            nomLower.includes("reparac") ||
+            nomLower.includes("oli") ||
+            nomLower.includes("taller") ||
+            nomLower.includes("factura")
+          ) {
+            setArxiuReparacio(f);
+          } else if (files.length === 1 && !arxiuITV) {
+            setArxiuITV(f);
+          }
+        });
+
+        setFitxersAdjunts((prev) => {
+          const map = new Map<string, { file: File; tipus: string; nom: string }>();
+          prev.forEach((item) => map.set(item.nom, item));
+          nousAdjunts.forEach((item) => map.set(item.nom, item));
+          return Array.from(map.values());
+        });
 
         setModalNouVehicleObert(true);
       }
@@ -146,13 +205,16 @@ export default function GestioFlotaPage() {
       if (fileInputRef.current) {
         fileInputRef.current.value = "";
       }
+      if (modalFileInputRef.current) {
+        modalFileInputRef.current.value = "";
+      }
     }
   };
 
   const handleOcrUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    await processFileOcr(file);
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+    await processFilesOcr(Array.from(files));
   };
 
   // Carregar vehicles des del backend
@@ -185,9 +247,9 @@ export default function GestioFlotaPage() {
     const handleGlobalDrop = (e: DragEvent) => {
       e.preventDefault();
       e.stopPropagation();
-      const droppedFile = e.dataTransfer?.files?.[0];
-      if (droppedFile) {
-        processFileOcr(droppedFile);
+      const droppedFiles = e.dataTransfer?.files;
+      if (droppedFiles && droppedFiles.length > 0) {
+        processFilesOcr(Array.from(droppedFiles));
       }
     };
 
@@ -284,8 +346,9 @@ export default function GestioFlotaPage() {
     e.preventDefault();
     if (!novaMatricula || !novaMarca || !nouModel) return;
 
+    setCreantVehicle(true);
     try {
-      await apiFetch("/gestio/flota", {
+      const res = await apiFetch<any>("/gestio/flota", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -302,14 +365,61 @@ export default function GestioFlotaPage() {
           data_caducitat_asseguranca: novaDataAsseguranca || null,
           companyia_asseguradora: novaCompanyiaAsseguranca || null,
           polissa_asseguranca: novaPolissaAsseguranca || null,
-          carnet_necessari: nouCarnet
+          carnet_necessari: nouCarnet,
         }),
       });
 
+      const nouVehicleId = res?.id;
+
+      // Si s'han adjuntat fitxers (ITV, Assegurança, Reparació), els pugem al vehicle
+      if (nouVehicleId) {
+        const docsAEnviar: { file: File; tipus: string }[] = [];
+        if (arxiuITV) docsAEnviar.push({ file: arxiuITV, tipus: "FITXA_TECNICA" });
+        if (arxiuAsseguranca) docsAEnviar.push({ file: arxiuAsseguranca, tipus: "ASSEGURANCA" });
+        if (arxiuReparacio) docsAEnviar.push({ file: arxiuReparacio, tipus: "MANTENIMENT" });
+
+        fitxersAdjunts.forEach((adj) => {
+          const jaHiEs = docsAEnviar.some((d) => d.file.name === adj.file.name);
+          if (!jaHiEs) {
+            docsAEnviar.push({
+              file: adj.file,
+              tipus:
+                adj.tipus === "ITV"
+                  ? "FITXA_TECNICA"
+                  : adj.tipus === "ASSEGURANCA"
+                  ? "ASSEGURANCA"
+                  : adj.tipus === "MANTENIMENT"
+                  ? "MANTENIMENT"
+                  : "ALTRES",
+            });
+          }
+        });
+
+        for (const item of docsAEnviar) {
+          try {
+            const docFormData = new FormData();
+            docFormData.append("file", item.file);
+            docFormData.append("tipus_document", item.tipus);
+            await apiFetch(`/gestio/flota/${nouVehicleId}/documents`, {
+              method: "POST",
+              body: docFormData,
+            });
+          } catch (uploadErr) {
+            console.warn("No s'ha pogut vincular automàticament el document:", uploadErr);
+          }
+        }
+      }
+
       setModalNouVehicleObert(false);
+      setFitxersAdjunts([]);
+      setArxiuITV(null);
+      setArxiuAsseguranca(null);
+      setArxiuReparacio(null);
       fetchVehicles();
     } catch (err: any) {
       alert("Error al crear el vehicle: " + (err.message || "Error desconegut"));
+    } finally {
+      setCreantVehicle(false);
     }
   };
 
@@ -360,6 +470,7 @@ export default function GestioFlotaPage() {
             <input
               ref={fileInputRef}
               type="file"
+              multiple
               className="hidden"
               accept="image/*,.pdf,application/pdf"
               onChange={handleOcrUpload}
@@ -375,15 +486,15 @@ export default function GestioFlotaPage() {
                 onDrop={(e) => {
                   e.preventDefault();
                   e.stopPropagation();
-                  const f = e.dataTransfer?.files?.[0];
-                  if (f) processFileOcr(f);
+                  const f = e.dataTransfer?.files;
+                  if (f && f.length > 0) processFilesOcr(Array.from(f));
                 }}
                 disabled={ocrLoading}
                 className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-mono font-bold bg-indigo-600 text-white hover:bg-indigo-700 shadow-sm cursor-pointer transition-all ${ocrLoading ? 'opacity-50 pointer-events-none' : ''}`}
-                title="Clica o arrossega el permís de circulació o targeta ITV (PDF o Imatge)"
+                title="Clica o arrossega un o diversos documents: Targeta ITV, Pòlissa Assegurança, Reparació (PDF o Imatges)"
               >
                 {ocrLoading ? <span className="animate-spin text-lg leading-none">⚙</span> : <span className="text-lg leading-none">✨</span>}
-                <span>{ocrLoading ? 'Processant IA...' : 'Alta OCR'}</span>
+                <span>{ocrLoading ? 'Processant IA...' : 'Alta OCR Multi-Document'}</span>
               </button>
             )}
             <button
@@ -391,6 +502,21 @@ export default function GestioFlotaPage() {
                 setNovaMatricula("");
                 setNovaMarca("");
                 setNouModel("");
+                setNouTipus("DIESEL");
+                setNouDistintiu("C");
+                setNouOdometre(0);
+                setNouRegim("PROPIETAT");
+                setNouLimitKm(100000);
+                setNouEstatItv("FAVORABLE");
+                setNovaDataItv("");
+                setNovaDataAsseguranca("");
+                setNovaCompanyiaAsseguranca("");
+                setNovaPolissaAsseguranca("");
+                setNouCarnet("B");
+                setFitxersAdjunts([]);
+                setArxiuITV(null);
+                setArxiuAsseguranca(null);
+                setArxiuReparacio(null);
                 setModalNouVehicleObert(true);
               }}
               className="px-3.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-mono font-bold flex items-center gap-1.5 shadow transition-colors"
@@ -963,105 +1089,6 @@ export default function GestioFlotaPage() {
                 />
               </div>
 
-
-              <div className="grid grid-cols-2 gap-3">
-                <div className="space-y-1">
-                  <label className="font-bold text-slate-700 dark:text-slate-300">Assegurança (Companyia):</label>
-                  <input
-                    type="text"
-                    placeholder="Ex: Mapfre, Allianz"
-                    value={novaCompanyiaAsseguranca}
-                    onChange={(e) => setNovaCompanyiaAsseguranca(e.target.value)}
-                    className="w-full p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-slate-100 font-mono text-xs focus:outline-none"
-                  />
-                </div>
-                <div className="space-y-1">
-                  <label className="font-bold text-slate-700 dark:text-slate-300">Caducitat Assegurança:</label>
-                  <input
-                    type="date"
-                    value={novaDataAsseguranca}
-                    onChange={(e) => setNovaDataAsseguranca(e.target.value)}
-                    className="w-full p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-slate-100 font-mono text-xs focus:outline-none"
-                  />
-                </div>
-                
-                <div className="space-y-1 col-span-2">
-                  <label className="font-bold text-slate-700 dark:text-slate-300 flex justify-between">
-                    <span>Pòlissa (Núm) i Document Assegurança:</span>
-                  </label>
-                  <div className="flex gap-2">
-                    <input
-                      type="text"
-                      placeholder="Ex: POL-9938221"
-                      value={novaPolissaAsseguranca}
-                      onChange={(e) => setNovaPolissaAsseguranca(e.target.value)}
-                      className="w-1/2 p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-slate-100 font-mono text-[10px] focus:outline-none"
-                    />
-                    <input
-                      type="file"
-                      onChange={(e) => setArxiuAsseguranca(e.target.files?.[0] || null)}
-                      className="w-1/2 p-1.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-slate-100 font-mono text-[10px] file:mr-2 file:py-1 file:px-2 file:rounded-lg file:border-0 file:text-[10px] file:bg-emerald-600 file:text-white"
-                    />
-                  </div>
-                </div>
-              </div>
-              
-              <div className="grid grid-cols-3 gap-3">
-                <div className="space-y-1 col-span-3">
-                  <label className="font-bold text-slate-700 dark:text-slate-300">Documentació ITV (Opcional):</label>
-                  <input
-                    type="file"
-                    onChange={(e) => setArxiuITV(e.target.files?.[0] || null)}
-                    className="w-full p-1.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-slate-100 font-mono text-[10px] file:mr-2 file:py-1 file:px-2 file:rounded-lg file:border-0 file:text-[10px] file:bg-emerald-600 file:text-white"
-                  />
-                </div>
-                <div className="space-y-1">
-                  <label className="font-bold text-slate-700 dark:text-slate-300">Estat ITV actual:</label>
-                  <select
-                    value={nouEstatItv}
-                    onChange={(e) => setNouEstatItv(e.target.value)}
-                    className="w-full p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-slate-100 font-mono text-xs focus:outline-none"
-                  >
-                    <option value="FAVORABLE">Favorable Neta</option>
-                    <option value="FAVORABLE_LEUS">Favorable amb Def. Lleus</option>
-                    <option value="DESFAVORABLE">Desfavorable</option>
-                    <option value="NEGATIVA">Negativa</option>
-                  </select>
-                </div>
-                <div className="space-y-1">
-                  <label className="font-bold text-slate-700 dark:text-slate-300">Data propera ITV:</label>
-                  <input
-                    type="date"
-                    value={novaDataItv}
-                    onChange={(e) => setNovaDataItv(e.target.value)}
-                    className="w-full p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-slate-100 font-mono text-xs focus:outline-none"
-                  />
-                </div>
-                <div className="space-y-1 col-span-3">
-                  <label className="font-bold text-slate-700 dark:text-slate-300">Última Reparació / Canvi Oli:</label>
-                  <input
-                    type="file"
-                    onChange={(e) => setArxiuReparacio(e.target.files?.[0] || null)}
-                    className="w-full p-1.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-slate-100 font-mono text-[10px] file:mr-2 file:py-1 file:px-2 file:rounded-lg file:border-0 file:text-[10px] file:bg-emerald-600 file:text-white"
-                  />
-                </div>
-                <div className="space-y-1">
-                  <label className="font-bold text-slate-700 dark:text-slate-300">Carnet Requerit:</label>
-                  <select
-                    value={nouCarnet}
-                    onChange={(e) => setNouCarnet(e.target.value)}
-                    className="w-full p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-slate-100 font-mono text-xs focus:outline-none"
-                  >
-                    <option value="B">B (Turismes/Furgonetes)</option>
-                    <option value="B+E">B+E (Remolc)</option>
-                    <option value="C">C (Camions rígids)</option>
-                    <option value="C+E">C+E (Tràilers)</option>
-                    <option value="AM">AM / A1 (Motos)</option>
-                    <option value="N/A">Maquinària exempta</option>
-                  </select>
-                </div>
-              </div>
-
               <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-200 dark:border-slate-800">
                 <button
                   type="button"
@@ -1085,7 +1112,7 @@ export default function GestioFlotaPage() {
       {/* MODAL 3: REGISTRE DE NOU VEHICLE / MAQUINÀRIA / REMOLC (Spec 006 RF-05) */}
       {modalNouVehicleObert && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="w-full max-w-lg rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-6 space-y-4 shadow-xl text-slate-900 dark:text-slate-100">
+          <div className="w-full max-w-xl max-h-[90vh] overflow-y-auto rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-6 space-y-4 shadow-xl text-slate-900 dark:text-slate-100">
             <div className="flex items-center justify-between pb-3 border-b border-slate-200 dark:border-slate-800">
               <div className="flex items-center gap-2">
                 <Car className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
@@ -1099,6 +1126,69 @@ export default function GestioFlotaPage() {
               </button>
             </div>
 
+            {/* Zona Dropzone d'extracció Multi-Document IA dins la pròpia modal */}
+            {hasCopilotIa && (
+              <div
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                }}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  const files = e.dataTransfer?.files;
+                  if (files && files.length > 0) processFilesOcr(Array.from(files));
+                }}
+                onClick={() => modalFileInputRef.current?.click()}
+                className={`p-3.5 rounded-xl border-2 border-dashed transition-all cursor-pointer text-center ${
+                  ocrLoading
+                    ? "border-indigo-500 bg-indigo-50/50 dark:bg-indigo-950/20"
+                    : "border-slate-300 dark:border-slate-700 hover:border-indigo-500 hover:bg-slate-50 dark:hover:bg-slate-800/50"
+                }`}
+              >
+                <input
+                  ref={modalFileInputRef}
+                  type="file"
+                  multiple
+                  className="hidden"
+                  accept="image/*,.pdf,application/pdf"
+                  onChange={handleOcrUpload}
+                />
+                <div className="flex items-center justify-center gap-2 text-indigo-600 dark:text-indigo-400 font-mono text-xs font-bold">
+                  {ocrLoading ? (
+                    <>
+                      <RefreshCw className="w-4 h-4 animate-spin text-indigo-500" />
+                      <span>Extreient dades dels documents amb IA...</span>
+                    </>
+                  ) : (
+                    <>
+                      <FileText className="w-4 h-4 text-indigo-500" />
+                      <span>Arrossega o clica per afegir més documents (ITV, Assegurança, Factura)</span>
+                    </>
+                  )}
+                </div>
+                <p className="text-[10px] text-slate-500 dark:text-slate-400 mt-1 font-mono">
+                  L'OCR creua fitxa tècnica ITV, assegurança i manteniments en una única alta.
+                </p>
+
+                {/* Badges de documents processats */}
+                {fitxersAdjunts.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5 mt-2.5 justify-center">
+                    {fitxersAdjunts.map((adj, i) => (
+                      <span
+                        key={i}
+                        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-mono font-bold bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800"
+                      >
+                        <Check className="w-3 h-3 text-emerald-600 dark:text-emerald-400" />
+                        <span>{adj.nom}</span>
+                        <span className="opacity-60 text-[9px]">({adj.tipus})</span>
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
             <form onSubmit={handleCrearVehicle} className="space-y-4 text-xs font-mono">
               <div className="grid grid-cols-2 gap-3">
                 <div className="space-y-1">
@@ -1108,7 +1198,7 @@ export default function GestioFlotaPage() {
                   <input
                     type="text"
                     required
-                    placeholder="Ex: 8392-MBB o MINI-EXC-01"
+                    placeholder="Ex: 4321-KMN o MINI-EXC-01"
                     value={novaMatricula}
                     onChange={(e) => setNovaMatricula(e.target.value)}
                     className="w-full p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-slate-100 font-mono text-xs uppercase focus:outline-none"
@@ -1139,7 +1229,7 @@ export default function GestioFlotaPage() {
                   <input
                     type="text"
                     required
-                    placeholder="Ex: Renault, Toyota, Kubota"
+                    placeholder="Ex: Ford, Renault, Toyota"
                     value={novaMarca}
                     onChange={(e) => setNovaMarca(e.target.value)}
                     className="w-full p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-slate-100 font-mono text-xs focus:outline-none"
@@ -1151,7 +1241,7 @@ export default function GestioFlotaPage() {
                   <input
                     type="text"
                     required
-                    placeholder="Ex: Master E-Tech L2H2"
+                    placeholder="Ex: Transit, Master L2H2"
                     value={nouModel}
                     onChange={(e) => setNouModel(e.target.value)}
                     className="w-full p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-slate-100 font-mono text-xs focus:outline-none"
@@ -1222,13 +1312,12 @@ export default function GestioFlotaPage() {
                 </div>
               </div>
 
-
               <div className="grid grid-cols-2 gap-3">
                 <div className="space-y-1">
                   <label className="font-bold text-slate-700 dark:text-slate-300">Assegurança (Companyia):</label>
                   <input
                     type="text"
-                    placeholder="Ex: Mapfre, Allianz"
+                    placeholder="Ex: Mapfre, Allianz, AXA"
                     value={novaCompanyiaAsseguranca}
                     onChange={(e) => setNovaCompanyiaAsseguranca(e.target.value)}
                     className="w-full p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-slate-100 font-mono text-xs focus:outline-none"
@@ -1247,6 +1336,11 @@ export default function GestioFlotaPage() {
                 <div className="space-y-1 col-span-2">
                   <label className="font-bold text-slate-700 dark:text-slate-300 flex justify-between">
                     <span>Pòlissa (Núm) i Document Assegurança:</span>
+                    {arxiuAsseguranca && (
+                      <span className="text-emerald-600 dark:text-emerald-400 font-mono text-[10px] font-bold">
+                        ✓ {arxiuAsseguranca.name}
+                      </span>
+                    )}
                   </label>
                   <div className="flex gap-2">
                     <input
@@ -1254,7 +1348,7 @@ export default function GestioFlotaPage() {
                       placeholder="Ex: POL-9938221"
                       value={novaPolissaAsseguranca}
                       onChange={(e) => setNovaPolissaAsseguranca(e.target.value)}
-                      className="w-1/2 p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-slate-100 font-mono text-[10px] focus:outline-none"
+                      className="w-1/2 p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-slate-100 font-mono text-[11px] focus:outline-none"
                     />
                     <input
                       type="file"
@@ -1265,9 +1359,16 @@ export default function GestioFlotaPage() {
                 </div>
               </div>
               
-              <div className="grid grid-cols-3 gap-3">
-                <div className="space-y-1 col-span-3">
-                  <label className="font-bold text-slate-700 dark:text-slate-300">Documentació ITV (Opcional):</label>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1 col-span-2">
+                  <label className="font-bold text-slate-700 dark:text-slate-300 flex justify-between">
+                    <span>Documentació ITV (Fitxa Tècnica / Targeta ITV):</span>
+                    {arxiuITV && (
+                      <span className="text-emerald-600 dark:text-emerald-400 font-mono text-[10px] font-bold">
+                        ✓ {arxiuITV.name}
+                      </span>
+                    )}
+                  </label>
                   <input
                     type="file"
                     onChange={(e) => setArxiuITV(e.target.files?.[0] || null)}
@@ -1296,15 +1397,22 @@ export default function GestioFlotaPage() {
                     className="w-full p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-slate-100 font-mono text-xs focus:outline-none"
                   />
                 </div>
-                <div className="space-y-1 col-span-3">
-                  <label className="font-bold text-slate-700 dark:text-slate-300">Última Reparació / Canvi Oli:</label>
+                <div className="space-y-1 col-span-2">
+                  <label className="font-bold text-slate-700 dark:text-slate-300 flex justify-between">
+                    <span>Última Reparació / Canvi Oli (Factura o Justificant):</span>
+                    {arxiuReparacio && (
+                      <span className="text-emerald-600 dark:text-emerald-400 font-mono text-[10px] font-bold">
+                        ✓ {arxiuReparacio.name}
+                      </span>
+                    )}
+                  </label>
                   <input
                     type="file"
                     onChange={(e) => setArxiuReparacio(e.target.files?.[0] || null)}
                     className="w-full p-1.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-slate-100 font-mono text-[10px] file:mr-2 file:py-1 file:px-2 file:rounded-lg file:border-0 file:text-[10px] file:bg-emerald-600 file:text-white"
                   />
                 </div>
-                <div className="space-y-1">
+                <div className="space-y-1 col-span-2">
                   <label className="font-bold text-slate-700 dark:text-slate-300">Carnet Requerit:</label>
                   <select
                     value={nouCarnet}
@@ -1331,9 +1439,11 @@ export default function GestioFlotaPage() {
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold shadow"
+                  disabled={creantVehicle}
+                  className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold shadow disabled:opacity-50 flex items-center gap-2"
                 >
-                  Donar d'Alta Vehicle
+                  {creantVehicle && <RefreshCw className="w-3.5 h-3.5 animate-spin" />}
+                  <span>{creantVehicle ? "Guardant i vinculant..." : "Donar d'Alta Vehicle"}</span>
                 </button>
               </div>
             </form>

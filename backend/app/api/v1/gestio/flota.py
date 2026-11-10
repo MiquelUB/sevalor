@@ -3,7 +3,7 @@ import os
 import re
 import uuid
 from datetime import date, datetime, timezone
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 import filetype
 from fastapi import (
@@ -49,6 +49,7 @@ class VehicleCreate(BaseModel):
     distintiu_ambiental: Optional[str] = Field(None, max_length=10)
     estat: str = Field("OPERATIU", max_length=30)
     conductor_habitual_id: Optional[uuid.UUID] = None
+    odometre_acumulat: Optional[int] = 0
     data_proxima_itv: Optional[date] = None
     estat_itv: str = Field("FAVORABLE", max_length=50)
     data_caducitat_asseguranca: Optional[date] = None
@@ -144,6 +145,7 @@ async def alta_vehicle(
         tipus=vehicle.tipus,
         distintiu_ambiental=vehicle.distintiu_ambiental,
         estat=vehicle.estat,
+        odometre_acumulat=vehicle.odometre_acumulat or 0,
         data_proxima_itv=vehicle.data_proxima_itv,
         estat_itv=vehicle.estat_itv,
         data_caducitat_asseguranca=vehicle.data_caducitat_asseguranca,
@@ -203,6 +205,8 @@ async def editar_vehicle(
     v_db.tipus = vehicle.tipus
     v_db.distintiu_ambiental = vehicle.distintiu_ambiental
     v_db.estat = vehicle.estat
+    if vehicle.odometre_acumulat is not None:
+        v_db.odometre_acumulat = vehicle.odometre_acumulat
     v_db.data_proxima_itv = vehicle.data_proxima_itv
     v_db.estat_itv = vehicle.estat_itv
     v_db.data_caducitat_asseguranca = vehicle.data_caducitat_asseguranca
@@ -362,12 +366,17 @@ async def pujar_document_flota(
     # Guardar disc local
     file_bytes = await file.read()
     kind = filetype.guess(file_bytes)
-    if not kind:
-        raise HTTPException(status_code=400, detail="Tipus de fitxer invàlid")
-    file_ext = kind.extension
+    is_pdf = file_bytes.startswith(b"%PDF") or (bool(file.filename) and file.filename.lower().endswith(".pdf"))
+    if not kind and not is_pdf:
+        raise HTTPException(status_code=400, detail="Tipus de fitxer invàlid. Cal una imatge o document PDF.")
+    file_ext = kind.extension if kind else "pdf"
 
     docs_dir = f"/docs/{empresa_id}/flota/{vehicle_id}"
-    os.makedirs(docs_dir, exist_ok=True)
+    try:
+        os.makedirs(docs_dir, exist_ok=True)
+    except PermissionError:
+        docs_dir = f"/tmp/docs/{empresa_id}/flota/{vehicle_id}"
+        os.makedirs(docs_dir, exist_ok=True)
     safe_name = f"{uuid.uuid4()}.{file_ext}"
     file_path = os.path.join(docs_dir, safe_name)
 
@@ -422,22 +431,113 @@ async def llistar_documents_flota(
 
 
 @router.post("/ocr-draft")
-async def ocr_vehicle_draft(request: Request, file: UploadFile = File(...)):
+async def ocr_vehicle_draft(
+    request: Request,
+    files: Optional[List[UploadFile]] = File(None),
+    file: Optional[UploadFile] = File(None),
+):
     empresa_id = request.state.empresa_id
     if not empresa_id or empresa_id == "undefined":
         raise HTTPException(status_code=401, detail="No identificat")
 
-    file_bytes = await file.read()
-    if not file_bytes:
-        raise HTTPException(status_code=400, detail="Fitxer buit")
+    all_files: List[UploadFile] = []
+    if files:
+        all_files.extend([f for f in files if f and f.filename])
+    if file and file.filename and file not in all_files:
+        all_files.append(file)
 
-    kind = filetype.guess(file_bytes)
-    is_pdf = file_bytes.startswith(b"%PDF") or (file.filename and file.filename.lower().endswith(".pdf"))
-    if not kind and not is_pdf:
-        raise HTTPException(status_code=400, detail="Tipus de fitxer invàlid. Cal una imatge o document PDF.")
+    if not all_files:
+        raise HTTPException(
+            status_code=400,
+            detail="Cal adjuntar com a mínim un document de vehicle (Targeta ITV, Permís de Circulació o Pòlissa d'Assegurança)",
+        )
 
-    resultat = await processar_ocr_document_vehicle(file_bytes)
-    return resultat
+    merged_data: Dict[str, Any] = {
+        "status": "EXTRET_AUTOMATIC",
+        "confidence": 0.0,
+        "matricula": None,
+        "bastidor": None,
+        "marca": None,
+        "model": None,
+        "tipus": None,
+        "distintiu_ambiental": None,
+        "estat_itv": None,
+        "data_proxima_itv": None,
+        "data_inspeccio_itv": None,
+        "data_matriculacio": None,
+        "odometre_acumulat": None,
+        "companyia_asseguradora": None,
+        "polissa_asseguranca": None,
+        "data_caducitat_asseguranca": None,
+        "regim_adquisicio": None,
+        "renting_limit_km": None,
+        "carnet_necessari": None,
+        "documents_processats": [],
+    }
+
+    confidences: List[float] = []
+
+    for upload in all_files:
+        file_bytes = await upload.read()
+        if not file_bytes:
+            continue
+
+        res = await processar_ocr_document_vehicle(file_bytes)
+        confidences.append(res.get("confidence", 0.0))
+
+        # Fusionar camps no nuls procedents de qualsevol document pujat
+        for k in [
+            "matricula",
+            "bastidor",
+            "marca",
+            "model",
+            "tipus",
+            "distintiu_ambiental",
+            "estat_itv",
+            "data_proxima_itv",
+            "data_inspeccio_itv",
+            "data_matriculacio",
+            "odometre_acumulat",
+            "companyia_asseguradora",
+            "polissa_asseguranca",
+            "data_caducitat_asseguranca",
+            "regim_adquisicio",
+            "renting_limit_km",
+            "carnet_necessari",
+        ]:
+            if res.get(k) is not None and not merged_data.get(k):
+                merged_data[k] = res[k]
+
+        merged_data["documents_processats"].append(
+            {
+                "nom": upload.filename,
+                "tipus_detectat": res.get("tipus_document", "GENERAL"),
+                "matricula_detectada": res.get("matricula"),
+            }
+        )
+
+    # Valors per defecte si no s'han especificat en cap document
+    if not merged_data["tipus"]:
+        merged_data["tipus"] = "DIESEL"
+    if not merged_data["distintiu_ambiental"]:
+        if merged_data["tipus"] == "EV":
+            merged_data["distintiu_ambiental"] = "ZERO"
+        elif merged_data["tipus"] == "PHEV":
+            merged_data["distintiu_ambiental"] = "ECO"
+        else:
+            merged_data["distintiu_ambiental"] = "C"
+    if not merged_data["regim_adquisicio"]:
+        merged_data["regim_adquisicio"] = "PROPIETAT"
+    if not merged_data["carnet_necessari"]:
+        merged_data["carnet_necessari"] = "B"
+    if not merged_data["estat_itv"]:
+        merged_data["estat_itv"] = "FAVORABLE"
+
+    merged_data["confidence"] = max(confidences) if confidences else 0.0
+    trobat = bool(merged_data.get("matricula") or merged_data.get("bastidor"))
+    merged_data["status"] = "EXTRET_AUTOMATIC" if trobat else "PENDENT_REVISIO_MANUAL"
+
+    return merged_data
 
 
 class AssignarVehicleRequest(BaseModel):

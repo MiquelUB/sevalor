@@ -38,9 +38,11 @@ def _extreure_text_de_fitxer(file_bytes: bytes) -> str:
         decoded = file_bytes.decode("utf-8")
         keywords = (
             "total", "nif", "cif", "albarà", "albara", "data", "litres", "eur", "factura",
-            "matricula", "matrícula", "bastidor", "vin", "vehicle", "vehiculo", "marca", "model", "modelo", "itv", "permis", "permiso", "dgt"
+            "matricula", "matrícula", "bastidor", "vin", "vehicle", "vehiculo", "marca", "model", "modelo", "itv", "permis", "permiso", "dgt",
+            "assegurança", "asseguranca", "polissa", "pòlissa", "seguro", "póliza", "poliza", "cobertura", "asseguradora", "aseguradora", "companyia",
+            "reparacio", "reparació", "manteniment", "oli", "taller"
         )
-        if any(w in decoded.lower() for w in keywords):
+        if any(w in decoded.lower() for w in keywords) or ("\n" in decoded and "\x00" not in decoded):
             return decoded.strip()
     except Exception:
         pass
@@ -432,8 +434,40 @@ async def processar_albara_ocr(file_bytes: bytes, node_ia_url: Optional[str] = N
 
 
 
+def _normalitzar_data_iso(data_str: Optional[str]) -> Optional[str]:
+    """Normalitza una data en format DD/MM/YYYY o YYYY/MM/DD a format estàndard ISO YYYY-MM-DD."""
+    if not data_str:
+        return None
+    data_str = data_str.strip().replace(".", "/").replace("-", "/")
+    m1 = re.match(r"^(\d{1,2})/(\d{1,2})/(\d{4})$", data_str)
+    if m1:
+        d, m, y = m1.group(1), m1.group(2), m1.group(3)
+        return f"{y}-{int(m):02d}-{int(d):02d}"
+    m2 = re.match(r"^(\d{4})/(\d{1,2})/(\d{1,2})$", data_str)
+    if m2:
+        y, m, d = m2.group(1), m2.group(2), m2.group(3)
+        return f"{y}-{int(m):02d}-{int(d):02d}"
+    return None
+
+
+MARQUES_VEHICLES_CONEGUDES = [
+    "MERCEDES-BENZ", "MERCEDES", "VOLKSWAGEN", "RENAULT", "FORD", "PEUGEOT",
+    "CITROEN", "CITROËN", "IVECO", "FIAT", "TOYOTA", "NISSAN", "OPEL", "SEAT",
+    "SKODA", "ŠKODA", "HYUNDAI", "KIA", "BMW", "AUDI", "VOLVO", "MAN", "SCANIA",
+    "DAF", "ISUZU", "MITSUBISHI", "SUZUKI", "DACIA", "JEEP", "LAND ROVER",
+    "KUBOTA", "JOHN DEERE", "CATERPILLAR", "JCB", "BOBCAT", "NEW HOLLAND",
+    "KOMATSU", "LIEBHERR", "CASE", "YANMAR"
+]
+
+COMPANYIES_ASSEGURANCES_CONEGUDES = [
+    "MAPFRE", "ALLIANZ", "AXA", "MUTUA MADRILEÑA", "MUTUA MADRILENYA", "GENERALI",
+    "ZURICH", "CATALANA OCCIDENTE", "OCCIDENT", "REALE", "PELAYO", "LINEA DIRECTA",
+    "LÍNEA DIRECTA", "LIBERTY", "FIATC", "HELVETIA", "CASER", "SANTA LUCIA", "SANTALUCIA"
+]
+
+
 async def processar_ocr_document_vehicle(file_input: bytes | str, node_ia_url: Optional[str] = None) -> Dict[str, Any]:
-    """Extracció OCR de Permís de Circulació / Targeta ITV de vehicle."""
+    """Extracció OCR completa de Permís de Circulació, Targeta ITV o Pòlissa d'Assegurança de vehicle."""
     file_bytes = b""
     if isinstance(file_input, bytes):
         file_bytes = file_input
@@ -455,55 +489,291 @@ async def processar_ocr_document_vehicle(file_input: bytes | str, node_ia_url: O
         "marca": None,
         "model": None,
         "titular": None,
+        "tipus": None,
+        "distintiu_ambiental": None,
+        "odometre_acumulat": None,
+        "estat_itv": None,
+        "data_proxima_itv": None,
+        "data_inspeccio_itv": None,
         "data_matriculacio": None,
+        "companyia_asseguradora": None,
+        "polissa_asseguranca": None,
+        "data_caducitat_asseguranca": None,
+        "regim_adquisicio": None,
+        "renting_limit_km": None,
+        "carnet_necessari": None,
+        "tipus_document": None,
     }
 
     if text:
-        # Matrícula espanyola: 4 dígits + 3 lletres o format antic
-        mat_m = re.search(r"\b([0-9]{4}[ -]?[A-Z]{3})\b", text.upper())
-        if mat_m:
-            resultat["matricula"] = mat_m.group(1).replace(" ", "-")
+        # 1. Matrícula espanyola: 4 dígits + 3 lletres o format antic
+        mat_explicit = re.search(
+            r"(?:Matr[íi]cula|Matricula|Placa)[\s:]*([0-9]{4}[ -]?[A-Z]{3}|[A-Z]{1,2}[ -]?[0-9]{4}[ -]?[A-Z]{1,2})",
+            text,
+            re.IGNORECASE,
+        )
+        if mat_explicit:
+            resultat["matricula"] = mat_explicit.group(1).replace(" ", "-").upper()
+        else:
+            mat_m = re.search(r"\b([0-9]{4}[ -]?[A-Z]{3})\b", text.upper()) or re.search(
+                r"\b([A-Z]{1,2}[ -]?[0-9]{4}[ -]?[A-Z]{1,2})\b", text.upper()
+            )
+            if mat_m:
+                resultat["matricula"] = mat_m.group(1).replace(" ", "-").upper()
 
-        # VIN / Bastidor (17 caràcters alfanumèrics)
-        vin_m = re.search(r"\b([A-HJ-NPR-Z0-9]{17})\b", text.upper())
-        if vin_m:
-            resultat["bastidor"] = vin_m.group(1)
+        # 2. VIN / Bastidor (alfanumèric)
+        vin_explicit = re.search(
+            r"(?:VIN|Bastidor|N[úu]m\.?\s*Bastidor|N[úu]mero\s*de\s*bastidor)[\s:]*([A-HJ-NPR-Z0-9]{11,18})",
+            text,
+            re.IGNORECASE,
+        )
+        if vin_explicit:
+            resultat["bastidor"] = vin_explicit.group(1).strip().upper()
+        else:
+            vin_m = re.search(r"\b([A-HJ-NPR-Z0-9]{17})\b", text.upper())
+            if vin_m:
+                resultat["bastidor"] = vin_m.group(1).upper()
 
-        # Marca i Model
-        marca_m = re.search(r"(?:Marca|Marca\/Model)[\s:]*([A-Za-z0-9\-]+)", text, re.IGNORECASE)
+        # 3. Marca i Model
+        marca_m = re.search(r"(?:Marca|Marca\/Model|Marca\s*i\s*Model)[\s:]*([^\n\r]+)", text, re.IGNORECASE)
         if marca_m:
-            resultat["marca"] = marca_m.group(1).strip()
+            raw_marca_line = marca_m.group(1).strip()
+            for m_cand in MARQUES_VEHICLES_CONEGUDES:
+                if raw_marca_line.upper().startswith(m_cand):
+                    resultat["marca"] = m_cand.title()
+                    rest = raw_marca_line[len(m_cand):].strip(" -/,").strip()
+                    if rest:
+                        resultat["model"] = rest
+                    break
+            if not resultat["marca"]:
+                parts = raw_marca_line.split()
+                resultat["marca"] = parts[0].capitalize()
+                if len(parts) > 1 and not resultat["model"]:
+                    resultat["model"] = " ".join(parts[1:])
 
-        model_m = re.search(r"(?:Model)[\s:]*([A-Za-z0-9\-\s]+)", text, re.IGNORECASE)
+        model_m = re.search(
+            r"(?:Model|Modelo|Versi[oó]|Versi[oó]n|Model\s*&\s*Versi[oó])[\s:]*([^\n\r]+)",
+            text,
+            re.IGNORECASE,
+        )
         if model_m:
             resultat["model"] = model_m.group(1).strip().splitlines()[0]
 
-        # Titular
-        titular_m = re.search(r"(?:Titular)[\s:]*([A-Za-z0-9À-ÿ\s\.,\-]+)", text, re.IGNORECASE)
-        if titular_m:
-            resultat["titular"] = titular_m.group(1).strip().splitlines()[0]
+        # 4. Tipus de Propulsió (Combustible)
+        comb_m = re.search(r"(?:Combustible|Carburant|Propulsi[oó]|Propulsion|Motor)[\s:]*([^\n\r]+)", text, re.IGNORECASE)
+        comb_str = (comb_m.group(1) if comb_m else "") + " " + text
+        if re.search(r"\b(di[eè]sel|gasoil|gas[oó]leo)\b", comb_str, re.IGNORECASE):
+            resultat["tipus"] = "DIESEL"
+        elif re.search(r"\b(gasolina|benzina)\b", comb_str, re.IGNORECASE):
+            resultat["tipus"] = "GASOLINA"
+        elif re.search(r"\b(el[eè]ctric|electric|ev\b|bev\b|100%\s*el[eè]ctric)\b", comb_str, re.IGNORECASE):
+            resultat["tipus"] = "EV"
+        elif re.search(r"\b(h[ií]brid|phev|hev|glp|gnc|enchufable)\b", comb_str, re.IGNORECASE):
+            resultat["tipus"] = "PHEV"
+        elif re.search(r"\b(maquin[aà]ria|tractor|excavadora|dumper|elevadora)\b", comb_str, re.IGNORECASE):
+            resultat["tipus"] = "MAQUINARIA"
+        elif re.search(r"\b(remolc|semiremolc|trailer)\b", comb_str, re.IGNORECASE):
+            resultat["tipus"] = "REMOLC"
 
-        # Dates
-        dates = re.findall(r"\b(\d{2}[/-]\d{2}[/-]\d{4}|\d{4}[/-]\d{2}[/-]\d{2})\b", text)
-        if dates:
-            resultat["data_matriculacio"] = dates[0]
+        # 5. Distintiu Ambiental DGT
+        dist_m = re.search(r"(?:Distintiu|Etiqueta|DGT|Ambiental)[\s:]*([A-Z0-9]+)", text, re.IGNORECASE)
+        if dist_m:
+            val = dist_m.group(1).upper()
+            if val in ("0", "ZERO", "CERO"):
+                resultat["distintiu_ambiental"] = "ZERO"
+            elif val == "ECO":
+                resultat["distintiu_ambiental"] = "ECO"
+            elif val == "C":
+                resultat["distintiu_ambiental"] = "C"
+            elif val == "B":
+                resultat["distintiu_ambiental"] = "B"
+            elif val in ("SENSE", "SIN"):
+                resultat["distintiu_ambiental"] = "SENSE"
+
+        if not resultat["distintiu_ambiental"]:
+            if resultat.get("tipus") == "EV":
+                resultat["distintiu_ambiental"] = "ZERO"
+            elif resultat.get("tipus") == "PHEV":
+                resultat["distintiu_ambiental"] = "ECO"
+            elif resultat.get("tipus") in ("DIESEL", "GASOLINA"):
+                resultat["distintiu_ambiental"] = "C"
+
+        # 6. Estat ITV Actual
+        res_itv = re.search(r"(?:Resultat|Resultado|Estat\s*ITV|Veredicte)[\s:]*([^\n\r]+)", text, re.IGNORECASE)
+        res_str = res_itv.group(1).upper() if res_itv else text.upper()
+        if "FAVORABLE AMB DEFECTES LLEUS" in res_str or "DEFECTES LLEUS" in res_str or "DEFECTOS LEVES" in res_str or "LEVE" in res_str:
+            resultat["estat_itv"] = "FAVORABLE_LEUS"
+        elif "DESFAVORABLE" in res_str or "NO APTE" in res_str or "NO APTO" in res_str:
+            resultat["estat_itv"] = "DESFAVORABLE"
+        elif "NEGATIVA" in res_str or "INACTIVAT" in res_str:
+            resultat["estat_itv"] = "NEGATIVA"
+        elif "FAVORABLE" in res_str or "APTE" in res_str or "APTO" in res_str:
+            resultat["estat_itv"] = "FAVORABLE"
+
+        # 7. Data Pròxima ITV
+        prox_m = re.search(
+            r"(?:Pr[oò]xima\s*ITV|Propera\s*ITV|Venciment\s*ITV|Proper\s*venciment|Validesa\s*fins|Pr[oó]xima\s*inspecci[oó]n|Caducitat\s*ITV)[\s:]*(\d{1,2}[/-]\d{1,2}[/-]\d{4}|\d{4}[/-]\d{1,2}[/-]\d{1,2})",
+            text,
+            re.IGNORECASE,
+        )
+        if prox_m:
+            resultat["data_proxima_itv"] = _normalitzar_data_iso(prox_m.group(1))
+
+        # 8. Data Inspecció ITV i Data Matriculació
+        insp_m = re.search(
+            r"(?:Data\s*Inspecci[oó]|Data\s*d'inspecci[oó]|Fecha\s*inspecci[oó]n)[\s:]*(\d{1,2}[/-]\d{1,2}[/-]\d{4}|\d{4}[/-]\d{1,2}[/-]\d{1,2})",
+            text,
+            re.IGNORECASE,
+        )
+        if insp_m:
+            resultat["data_inspeccio_itv"] = _normalitzar_data_iso(insp_m.group(1))
+
+        matr_m = re.search(
+            r"(?:Data\s*Matriculaci[oó]|Data\s*1[aª]\s*matriculaci[oó]|Fecha\s*matriculaci[oó]n)[\s:]*(\d{1,2}[/-]\d{1,2}[/-]\d{4}|\d{4}[/-]\d{1,2}[/-]\d{1,2})",
+            text,
+            re.IGNORECASE,
+        )
+        if matr_m:
+            resultat["data_matriculacio"] = _normalitzar_data_iso(matr_m.group(1))
+
+        # 9. Odòmetre / Quilometratge
+        km_m = re.search(r"(?:Km|Kil[oò]metres|Kilometros|Od[oò]metre|Odometro|Lectura\s*km)[\s:]*([0-9\.\, ]+)", text, re.IGNORECASE)
+        if km_m:
+            try:
+                clean_km = re.sub(r"[^\d]", "", km_m.group(1))
+                if clean_km:
+                    resultat["odometre_acumulat"] = int(clean_km)
+            except ValueError:
+                pass
+
+        # 10. Assegurança (Companyia, Pòlissa, Caducitat)
+        comp_m = re.search(
+            r"(?:Companyia\s*asseguradora|Entitat\s*asseguradora|Companyia|Asseguradora|Aseguradora)[\s:]*([^\n\r]+)",
+            text,
+            re.IGNORECASE,
+        )
+        if comp_m:
+            cand_comp = comp_m.group(1).strip()
+            # Netejar si encara té prefixos residual com "Asseguradora:"
+            cand_comp = re.sub(r"^(?:Asseguradora|Aseguradora|Companyia)[\s:]*", "", cand_comp, flags=re.IGNORECASE).strip()
+            # Si cand_comp conté una companyia coneguda, la normalitzem
+            for c_cand in COMPANYIES_ASSEGURANCES_CONEGUDES:
+                if re.search(r"\b" + re.escape(c_cand) + r"\b", cand_comp, re.IGNORECASE):
+                    cand_comp = c_cand.title()
+                    break
+            if len(cand_comp) > 2:
+                resultat["companyia_asseguradora"] = cand_comp
+
+        if not resultat["companyia_asseguradora"]:
+            for c_cand in COMPANYIES_ASSEGURANCES_CONEGUDES:
+                if re.search(r"\b" + re.escape(c_cand) + r"\b", text, re.IGNORECASE):
+                    resultat["companyia_asseguradora"] = c_cand.title()
+                    break
+
+        pol_m = re.search(
+            r"(?:(?:N[úu]m\.?|N[úu]mero|Nº)\s*de\s*)?P[oòó]li(?:ss|[sz])a(?:\s*(?:n[úu]m\.?|nº))?[\s:]+([A-Z0-9\-_/]{4,})",
+            text,
+            re.IGNORECASE,
+        )
+        if pol_m:
+            resultat["polissa_asseguranca"] = pol_m.group(1).strip()
+
+        cad_m = re.search(
+            r"(?:Venciment\s*(?:asseguran[cç]a)?|Caducitat\s*(?:asseguran[cç]a)?|Vencimiento|Validesa\s*fins|Efecte\s*fins|Data\s*(?:de\s*)?venciment|Data\s*(?:de\s*)?caducitat)[\s:]*(\d{1,2}[/-]\d{1,2}[/-]\d{4}|\d{4}[/-]\d{1,2}[/-]\d{1,2})",
+            text,
+            re.IGNORECASE,
+        )
+        if cad_m:
+            resultat["data_caducitat_asseguranca"] = _normalitzar_data_iso(cad_m.group(1))
+
+        # 11. Règim d'Adquisició i Límit km
+        if re.search(r"\b(renting|leasing|l[ií]sing|arval|alphabet|leaseplan|ald\s*automotive)\b", text, re.IGNORECASE):
+            resultat["regim_adquisicio"] = "RENTING"
+        elif re.search(r"\b(substituci[oó]|sustituci[oó]n)\b", text, re.IGNORECASE):
+            resultat["regim_adquisicio"] = "SUBSTITUCIO"
+        elif re.search(r"\b(propietat|propiedad|compra)\b", text, re.IGNORECASE):
+            resultat["regim_adquisicio"] = "PROPIETAT"
+
+        lim_m = re.search(r"(?:L[ií]mit|Limit)[\s\w]*(?:km)?[\s:]*([0-9\.\, ]+)", text, re.IGNORECASE)
+        if lim_m:
+            try:
+                clean_lim = re.sub(r"[^\d]", "", lim_m.group(1))
+                if clean_lim:
+                    resultat["renting_limit_km"] = int(clean_lim)
+            except ValueError:
+                pass
+
+        # 12. Carnet Requerit
+        carnet_m = re.search(r"(?:Carnet|Perm[ií]s\s*(?:de\s*conduir)?)[\s:]*([A-Z0-9\+]+)", text, re.IGNORECASE)
+        if carnet_m and carnet_m.group(1).upper() in ("B", "B+E", "C", "C+E", "AM", "N/A"):
+            resultat["carnet_necessari"] = carnet_m.group(1).upper()
+        else:
+            mma_m = re.search(r"(?:MMA|PMA|Pes\s*M[aà]xim|Masa\s*M[aá]xima)[\s:]*([0-9]+)", text, re.IGNORECASE)
+            if mma_m:
+                mma = int(mma_m.group(1))
+                resultat["carnet_necessari"] = "C" if mma > 3500 else "B"
+            else:
+                resultat["carnet_necessari"] = "B"
+
+        # 13. Titular
+        titular_m = re.search(r"(?:Titular|Nom|Nombre)[\s:]*([A-Za-z0-9À-ÿ\s\.,\-]+)", text, re.IGNORECASE)
+        if titular_m:
+            cand_tit = titular_m.group(1).strip().splitlines()[0]
+            if len(cand_tit) > 3 and not any(cand_tit.lower().startswith(x) for x in ("ford", "renault", "iveco", "data", "nif")):
+                resultat["titular"] = cand_tit
+
+        # 14. Tipus de document detectat
+        if re.search(r"ITV|FITXA\s*T[EÈ]CNICA|INSPECCI[OÓ]|TARGETA\s*ITV", text, re.IGNORECASE):
+            resultat["tipus_document"] = "ITV"
+        elif re.search(r"P[OÒÓ]LI(?:SS|[SZ])A|ASSEGURAN[CÇ]A|ASEGURADORA|PRIMA|TOMADOR", text, re.IGNORECASE):
+            resultat["tipus_document"] = "ASSEGURANCA"
+        elif re.search(r"REPARACI[OÓ]|TALLER|MANTENIMENT|CANVI\s*D'OLI", text, re.IGNORECASE):
+            resultat["tipus_document"] = "MANTENIMENT"
+        else:
+            resultat["tipus_document"] = "GENERAL"
 
     # Suport d'IA si manca bastidor o matrícula
     if (not resultat["matricula"] or not resultat["bastidor"]) and node_ia_url:
         prompt = (
-            "Ets un extractor OCR de fitxes tècniques i permisos de circulació de vehicles a Espanya. "
-            "Retorna ÚNICAMENT un JSON: matricula, bastidor (VIN de 17 caràcters), marca, model, titular, data_matriculacio."
+            "Ets un extractor OCR especialitzat en documentació de vehicles a Espanya (Fitxa Tècnica, Targeta ITV, Permís de Circulació i Pòlissa d'Assegurança). "
+            "Extreu les dades en un JSON amb els camps següents (posa null si no es troba): "
+            "matricula (str, ex: '4321-KMN'), bastidor (VIN de 17 caràcters), marca (str), model (str), "
+            "tipus ('DIESEL', 'GASOLINA', 'EV', 'PHEV', 'MAQUINARIA', 'REMOLC'), "
+            "distintiu_ambiental ('ZERO', 'ECO', 'C', 'B', 'SENSE'), "
+            "odometre_acumulat (int amb els km actuals), "
+            "estat_itv ('FAVORABLE', 'FAVORABLE_LEUS', 'DESFAVORABLE', 'NEGATIVA'), "
+            "data_proxima_itv (YYYY-MM-DD), data_matriculacio (YYYY-MM-DD), "
+            "companyia_asseguradora (str), polissa_asseguranca (str), data_caducitat_asseguranca (YYYY-MM-DD), "
+            "regim_adquisicio ('PROPIETAT', 'RENTING', 'SUBSTITUCIO'), renting_limit_km (int), "
+            "carnet_necessari ('B', 'B+E', 'C', 'C+E', 'AM', 'N/A')."
         )
         b64 = None
         if not text and len(file_bytes) > 0:
-            b64 = base64.b64encode(file_bytes).decode("utf-8")
+            if file_bytes.startswith(b"%PDF"):
+                try:
+                    import pymupdf
+                    doc = pymupdf.open(stream=file_bytes, filetype="pdf")
+                    if len(doc) > 0:
+                        pix = doc[0].get_pixmap(dpi=150)
+                        b64 = base64.b64encode(pix.tobytes("jpeg")).decode("utf-8")
+                except Exception:
+                    pass
+            else:
+                b64 = base64.b64encode(file_bytes).decode("utf-8")
+
         ai_res = await _cridar_ia_vision(prompt, text, b64, node_ia_url=node_ia_url)
         if ai_res:
-            for k in ("matricula", "bastidor", "marca", "model", "titular", "data_matriculacio"):
-                if ai_res.get(k) and not resultat.get(k):
+            for k in resultat:
+                if ai_res.get(k) is not None and not resultat.get(k):
                     resultat[k] = ai_res[k]
 
-    trobat = bool(resultat.get("matricula") or resultat.get("bastidor"))
+    trobat = bool(
+        resultat.get("matricula")
+        or resultat.get("bastidor")
+        or (resultat.get("companyia_asseguradora") and resultat.get("polissa_asseguranca"))
+        or (resultat.get("marca") and resultat.get("model"))
+        or resultat.get("data_proxima_itv")
+    )
     resultat["status"] = ESTAT_EXTRET_AUTOMATIC if trobat else ESTAT_REVISIO_MANUAL
     resultat["confidence"] = 0.95 if trobat else 0.0
     return resultat
