@@ -53,10 +53,10 @@ interface VehicleItem {
   dies_propera_itv: number | null;
   alerta_itv_cadena: string;
   regim_adquisicio: string;
-  renting_limit_km: number;
-  renting_ocupacio_percent: number;
-  renting_alerta: boolean;
-  renting_nivell_alerta: string;
+  renting_limit_km?: number | null;
+  renting_ocupacio_percent?: number;
+  renting_alerta?: boolean;
+  renting_nivell_alerta?: string;
   consum_format: string;
   consum_l_100km: number | null;
   consum_mitjana_historica: number | null;
@@ -102,7 +102,7 @@ export default function GestioFlotaPage() {
   const [nouDistintiu, setNouDistintiu] = useState<string>("C");
   const [nouOdometre, setNouOdometre] = useState<number>(0);
   const [nouRegim, setNouRegim] = useState<string>("PROPIETAT");
-  const [nouLimitKm, setNouLimitKm] = useState<number>(100000);
+  const [nouLimitKm, setNouLimitKm] = useState<number | string>("");
   
   const [nouEstatItv, setNouEstatItv] = useState<string>("FAVORABLE");
   const [novaDataItv, setNovaDataItv] = useState<string>("");
@@ -139,8 +139,17 @@ export default function GestioFlotaPage() {
         if (data.odometre_acumulat !== null && data.odometre_acumulat !== undefined) {
           setNouOdometre(Number(data.odometre_acumulat));
         }
-        if (data.regim_adquisicio) setNouRegim(data.regim_adquisicio);
-        if (data.renting_limit_km) setNouLimitKm(Number(data.renting_limit_km));
+        if (data.regim_adquisicio) {
+          setNouRegim(data.regim_adquisicio);
+          if (data.regim_adquisicio === "RENTING" && data.renting_limit_km) {
+            setNouLimitKm(Number(data.renting_limit_km));
+          } else {
+            setNouLimitKm("");
+          }
+        } else {
+          setNouRegim("PROPIETAT");
+          setNouLimitKm("");
+        }
         if (data.companyia_asseguradora) setNovaCompanyiaAsseguranca(data.companyia_asseguradora);
         if (data.polissa_asseguranca) setNovaPolissaAsseguranca(data.polissa_asseguranca);
         if (data.data_caducitat_asseguranca) setNovaDataAsseguranca(data.data_caducitat_asseguranca);
@@ -341,6 +350,29 @@ export default function GestioFlotaPage() {
     }
   };
 
+  // Obrir formulari net de Nou Vehicle
+  const handleObrirModalNouVehicle = () => {
+    setNovaMatricula("");
+    setNovaMarca("");
+    setNouModel("");
+    setNouTipus("DIESEL");
+    setNouDistintiu("C");
+    setNouOdometre(0);
+    setNouRegim("PROPIETAT");
+    setNouLimitKm("");
+    setNouEstatItv("FAVORABLE");
+    setNovaDataItv("");
+    setNovaDataAsseguranca("");
+    setNovaCompanyiaAsseguranca("");
+    setNovaPolissaAsseguranca("");
+    setNouCarnet("B");
+    setFitxersAdjunts([]);
+    setArxiuITV(null);
+    setArxiuAsseguranca(null);
+    setArxiuReparacio(null);
+    setModalNouVehicleObert(true);
+  };
+
   // Donar d'alta nou vehicle (Spec 006 RF-05)
   const handleCrearVehicle = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -359,7 +391,7 @@ export default function GestioFlotaPage() {
           distintiu_ambiental: nouDistintiu,
           odometre_acumulat: nouOdometre,
           regim_adquisicio: nouRegim,
-          renting_limit_km: nouLimitKm,
+          renting_limit_km: nouRegim === "RENTING" && nouLimitKm !== "" ? Number(nouLimitKm) : null,
           estat_itv: nouEstatItv,
           data_proxima_itv: novaDataItv || null,
           data_caducitat_asseguranca: novaDataAsseguranca || null,
@@ -498,27 +530,7 @@ export default function GestioFlotaPage() {
               </button>
             )}
             <button
-              onClick={() => {
-                setNovaMatricula("");
-                setNovaMarca("");
-                setNouModel("");
-                setNouTipus("DIESEL");
-                setNouDistintiu("C");
-                setNouOdometre(0);
-                setNouRegim("PROPIETAT");
-                setNouLimitKm(100000);
-                setNouEstatItv("FAVORABLE");
-                setNovaDataItv("");
-                setNovaDataAsseguranca("");
-                setNovaCompanyiaAsseguranca("");
-                setNovaPolissaAsseguranca("");
-                setNouCarnet("B");
-                setFitxersAdjunts([]);
-                setArxiuITV(null);
-                setArxiuAsseguranca(null);
-                setArxiuReparacio(null);
-                setModalNouVehicleObert(true);
-              }}
+              onClick={handleObrirModalNouVehicle}
               className="px-3.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-mono font-bold flex items-center gap-1.5 shadow transition-colors"
             >
               <PlusCircle className="w-4 h-4" />
@@ -588,7 +600,7 @@ export default function GestioFlotaPage() {
             </p>
           </div>
           <button
-            onClick={() => setModalNouVehicleObert(true)}
+            onClick={handleObrirModalNouVehicle}
             className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-mono font-bold shadow transition-colors"
           >
             <PlusCircle className="w-4 h-4" />
@@ -656,44 +668,51 @@ export default function GestioFlotaPage() {
 
                     {/* 4. Règim d'Adquisició & Llindars Rènting 90/95/100% (RF-06, RF-29) */}
                     <td className="p-3.5 text-center">
-                      <div className="space-y-1 inline-block text-left w-28">
-                        <div className="flex items-center justify-between text-[10px]">
-                          <span className="text-slate-500">{v.regim_adquisicio}</span>
-                          <span
-                            className={`font-bold ${
-                              v.renting_ocupacio_percent >= 100
-                                ? "text-rose-500"
-                                : v.renting_ocupacio_percent >= 95
-                                ? "text-orange-500"
-                                : v.renting_ocupacio_percent >= 90
-                                ? "text-amber-500"
-                                : "text-slate-400"
-                            }`}
-                          >
-                            {v.renting_ocupacio_percent}%
-                          </span>
+                      {v.regim_adquisicio === "RENTING" ? (
+                        <div className="space-y-1 inline-block text-left w-28">
+                          <div className="flex items-center justify-between text-[10px]">
+                            <span className="text-slate-500 font-bold">Rènting</span>
+                            <span
+                              className={`font-bold ${
+                                (v.renting_ocupacio_percent || 0) >= 100
+                                  ? "text-rose-500"
+                                  : (v.renting_ocupacio_percent || 0) >= 95
+                                  ? "text-orange-500"
+                                  : (v.renting_ocupacio_percent || 0) >= 90
+                                  ? "text-amber-500"
+                                  : "text-slate-400"
+                              }`}
+                            >
+                              {v.renting_ocupacio_percent || 0}%
+                            </span>
+                          </div>
+                          {/* Barra de progrés */}
+                          <div className="w-full h-1.5 rounded-full bg-slate-200 dark:bg-slate-700 overflow-hidden">
+                            <div
+                              className={`h-full transition-all ${
+                                (v.renting_ocupacio_percent || 0) >= 100
+                                  ? "bg-rose-500"
+                                  : (v.renting_ocupacio_percent || 0) >= 95
+                                  ? "bg-orange-500"
+                                  : (v.renting_ocupacio_percent || 0) >= 90
+                                  ? "bg-amber-500"
+                                  : "bg-emerald-500"
+                              }`}
+                              style={{ width: `${Math.min(100, v.renting_ocupacio_percent || 0)}%` }}
+                            ></div>
+                          </div>
+                          {v.renting_alerta && (
+                            <p className="text-[9px] font-bold text-amber-500">
+                              Límit {v.renting_nivell_alerta} assolit!
+                            </p>
+                          )}
                         </div>
-                        {/* Barra de progrés */}
-                        <div className="w-full h-1.5 rounded-full bg-slate-200 dark:bg-slate-700 overflow-hidden">
-                          <div
-                            className={`h-full transition-all ${
-                              v.renting_ocupacio_percent >= 100
-                                ? "bg-rose-500"
-                                : v.renting_ocupacio_percent >= 95
-                                ? "bg-orange-500"
-                                : v.renting_ocupacio_percent >= 90
-                                ? "bg-amber-500"
-                                : "bg-emerald-500"
-                            }`}
-                            style={{ width: `${Math.min(100, v.renting_ocupacio_percent)}%` }}
-                          ></div>
+                      ) : (
+                        <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 text-[10px] font-mono font-medium">
+                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
+                          <span>{v.regim_adquisicio === "PROPIETAT" ? "Propietat" : v.regim_adquisicio}</span>
                         </div>
-                        {v.renting_alerta && (
-                          <p className="text-[9px] font-bold text-amber-500">
-                            Límit {v.renting_nivell_alerta} assolit!
-                          </p>
-                        )}
-                      </div>
+                      )}
                     </td>
 
                     {/* 5. Custodi / Conductor */}
@@ -1175,12 +1194,18 @@ export default function GestioFlotaPage() {
                   </label>
                   <select
                     value={nouRegim}
-                    onChange={(e) => setNouRegim(e.target.value)}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setNouRegim(val);
+                      if (val !== "RENTING") {
+                        setNouLimitKm("");
+                      }
+                    }}
                     className="w-full p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-slate-100 font-mono text-xs focus:outline-none"
                   >
-                    <option value="PROPIETAT">Compra en Propietat (Amortització)</option>
-                    <option value="RENTING">Rènting / Lísing (Límits de km)</option>
-                    <option value="SUBSTITUCIO">Vehicle de Sustitució Temporal</option>
+                    <option value="PROPIETAT">Compra en Propietat (Sense límit de km)</option>
+                    <option value="RENTING">Rènting / Lloguer a llarg termini (Amb límit de km)</option>
+                    <option value="SUBSTITUCIO">Vehicle de Sustitució Temporal (Sense límit)</option>
                   </select>
                 </div>
               </div>
@@ -1200,16 +1225,29 @@ export default function GestioFlotaPage() {
                 </div>
 
                 <div className="space-y-1">
-                  <label className="font-bold text-slate-700 dark:text-slate-300">
-                    Límit Contractual (km):
+                  <label className="font-bold text-slate-700 dark:text-slate-300 flex items-center justify-between">
+                    <span>Límit Contractual (km):</span>
+                    {nouRegim === "RENTING" ? (
+                      <span className="text-[10px] text-amber-600 dark:text-amber-400 font-medium">Requerit per Rènting</span>
+                    ) : (
+                      <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-medium">No aplica</span>
+                    )}
                   </label>
-                  <input
-                    type="number"
-                    min={1000}
-                    value={nouLimitKm}
-                    onChange={(e) => setNouLimitKm(Number(e.target.value))}
-                    className="w-full p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-slate-100 font-mono text-xs focus:outline-none"
-                  />
+                  {nouRegim === "RENTING" ? (
+                    <input
+                      type="number"
+                      min={1000}
+                      placeholder="Ex: 120000"
+                      value={nouLimitKm}
+                      onChange={(e) => setNouLimitKm(e.target.value ? Number(e.target.value) : "")}
+                      className="w-full p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-slate-100 font-mono text-xs focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                    />
+                  ) : (
+                    <div className="w-full p-2.5 rounded-xl bg-slate-100 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-800 text-slate-500 dark:text-slate-400 font-mono text-xs flex items-center gap-1.5 cursor-not-allowed">
+                      <span className="inline-block w-2 h-2 rounded-full bg-emerald-500"></span>
+                      <span>Exempt — Vehicle en propietat / compra (Sense límit)</span>
+                    </div>
+                  )}
                 </div>
               </div>
 

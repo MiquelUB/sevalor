@@ -137,6 +137,7 @@ async def test_ocr_fitxers_markdown_reals():
         assert res_itv["estat_itv"] == "FAVORABLE"
         assert res_itv["data_proxima_itv"] == "2028-03-12"
         assert res_itv["tipus_document"] == "ITV"
+        assert res_itv["renting_limit_km"] is None
 
     if os.path.exists(informe_path):
         res_inf = await processar_ocr_document_vehicle(open(informe_path, "rb").read())
@@ -145,6 +146,7 @@ async def test_ocr_fitxers_markdown_reals():
         assert res_inf["marca"] == "Ford"
         assert res_inf["estat_itv"] == "FAVORABLE"
         assert res_inf["data_proxima_itv"] == "2028-03-12"
+        assert res_inf["renting_limit_km"] is None
 
     if os.path.exists(permis_path):
         res_perm = await processar_ocr_document_vehicle(open(permis_path, "rb").read())
@@ -152,6 +154,8 @@ async def test_ocr_fitxers_markdown_reals():
         assert res_perm["bastidor"] == "WF0YXXTTGYNJ58291"
         assert res_perm["marca"] == "Ford"
         assert res_perm["tipus"] == "DIESEL"
+        assert res_perm["regim_adquisicio"] == "PROPIETAT"
+        assert res_perm["renting_limit_km"] is None
         assert res_perm["tipus_document"] == "PERMIS_CIRCULACIO"
 
     if os.path.exists(seguro_path):

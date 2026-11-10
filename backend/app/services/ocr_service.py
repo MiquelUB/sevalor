@@ -570,6 +570,19 @@ async def processar_ocr_document_vehicle(file_input: bytes | str, node_ia_url: O
             if cand_model:
                 resultat["model"] = cand_model
 
+        # Preferir sempre la Denominació Comercial pura sobre codis de variant/versió (ex: FAC6/YMF6)
+        denom_m = re.search(
+            r"(?:(?:\([A-Z0-9\.]+\)|[A-Z0-9\.]+\s*)?(?:Denominaci[oó]n\s*comercial|Denominaci[oó]\s*comercial))[\s:]*([^\n\r]+)",
+            text,
+            re.IGNORECASE,
+        )
+        if denom_m:
+            cand_denom = denom_m.group(1).strip().splitlines()[0]
+            if resultat.get("marca") and cand_denom.upper().startswith(resultat["marca"].upper()):
+                cand_denom = cand_denom[len(resultat["marca"]):].strip(" -/,")
+            if cand_denom:
+                resultat["model"] = cand_denom
+
         # 4. Tipus de Propulsió (Combustible)
         comb_m = re.search(r"(?:Combustible|Carburant|Propulsi[oó]|Propulsion|Motor)[\s:]*([^\n\r]+)", text, re.IGNORECASE)
         comb_str = (comb_m.group(1) if comb_m else "") + " " + text
@@ -702,21 +715,34 @@ async def processar_ocr_document_vehicle(file_input: bytes | str, node_ia_url: O
             resultat["data_caducitat_asseguranca"] = _normalitzar_data_iso(cad_m.group(1))
 
         # 11. Règim d'Adquisició i Límit km
-        if re.search(r"\b(renting|leasing|l[ií]sing|arval|alphabet|leaseplan|ald\s*automotive)\b", text, re.IGNORECASE):
+        # En permís de circulació espanyol (apartat C.4): "Es el propietario del vehículo"
+        if re.search(r"(?:es\s*el\s*propietario|propietari|compra|propietat|propiedad|en\s*propiedad)", text, re.IGNORECASE):
+            resultat["regim_adquisicio"] = "PROPIETAT"
+        elif re.search(r"\b(renting|leasing|l[ií]sing|arval|alphabet|leaseplan|ald\s*automotive)\b", text, re.IGNORECASE):
             resultat["regim_adquisicio"] = "RENTING"
         elif re.search(r"\b(substituci[oó]|sustituci[oó]n)\b", text, re.IGNORECASE):
             resultat["regim_adquisicio"] = "SUBSTITUCIO"
-        elif re.search(r"\b(propietat|propiedad|compra)\b", text, re.IGNORECASE):
+        else:
             resultat["regim_adquisicio"] = "PROPIETAT"
 
-        lim_m = re.search(r"(?:L[ií]mit|Limit)[\s\w]*(?:km)?[\s:]*([0-9\.\, ]+)", text, re.IGNORECASE)
-        if lim_m:
-            try:
-                clean_lim = re.sub(r"[^\d]", "", lim_m.group(1))
-                if clean_lim:
-                    resultat["renting_limit_km"] = int(clean_lim)
-            except ValueError:
-                pass
+        # LÍMIT DE QUILÒMETRES CONTRACTUAL:
+        # NOMÉS té sentit si el vehicle és de RÈNTING / LÍSING!
+        # Si la furgoneta és de compra en propietat, mai ha de tenir km limitat.
+        if resultat["regim_adquisicio"] == "RENTING":
+            lim_m = re.search(
+                r"(?:L[ií]mit\s*(?:contractual|de\s*km|anual)?|L[ií]mite\s*(?:contractual|de\s*km|anual)?|Km\s*(?:m[aá]ximos|contractuales))[\s\w]*(?:km)?[\s:]*([0-9\.\, ]+)",
+                text,
+                re.IGNORECASE,
+            )
+            if lim_m:
+                try:
+                    clean_lim = re.sub(r"[^\d]", "", lim_m.group(1))
+                    if clean_lim and int(clean_lim) >= 5000:
+                        resultat["renting_limit_km"] = int(clean_lim)
+                except ValueError:
+                    pass
+        else:
+            resultat["renting_limit_km"] = None
 
         # 12. Carnet Requerit
         carnet_m = re.search(r"(?:Carnet|Perm[ií]s\s*(?:de\s*conduir)?)[\s:]*([A-Z0-9\+]+)", text, re.IGNORECASE)
@@ -731,10 +757,15 @@ async def processar_ocr_document_vehicle(file_input: bytes | str, node_ia_url: O
                 resultat["carnet_necessari"] = "B"
 
         # 13. Titular
-        titular_m = re.search(r"(?:(?:\([A-Z0-9\.]+\)|[A-Z0-9\.]+\s*)?(?:Apellidos\s*o\s*raz[oó]n\s*social|Tomador\s*\/\s*Asegurado|Tomador|Asegurado|Titular|Nom|Nombre))[\s:]*([A-Za-z0-9À-ÿ\s\.,\-]+)", text, re.IGNORECASE)
+        titular_m = re.search(
+            r"(?:(?:\([A-Z0-9\.]+\)|[A-Z0-9\.]+\s*)?(?:Apellidos\s*o\s*raz[oó]n\s*social|Cognoms\s*o\s*ra[oó]\s*social|Tomador\s*(?:\/|\s*y\s*|\s*i\s*)\s*Asegurado|Tomador|Titular|C\.1\.1[^\n\r]*?))[\s:]+([A-Za-z0-9À-ÿ\s\.,\-]+)",
+            text,
+            re.IGNORECASE,
+        )
         if titular_m:
             cand_tit = titular_m.group(1).strip().splitlines()[0]
-            if len(cand_tit) > 3 and not any(cand_tit.lower().startswith(x) for x in ("ford", "renault", "iveco", "data", "nif")):
+            cand_tit = cand_tit.strip("[](){}:;").strip()
+            if len(cand_tit) > 3 and not any(cand_tit.lower().startswith(x) for x in ("ford", "renault", "iveco", "data", "nif", "cif", "datos")):
                 resultat["titular"] = cand_tit
 
         # 14. Tipus de document detectat
@@ -783,6 +814,8 @@ async def processar_ocr_document_vehicle(file_input: bytes | str, node_ia_url: O
             for k in resultat:
                 if ai_res.get(k) is not None and not resultat.get(k):
                     resultat[k] = ai_res[k]
+        if resultat.get("regim_adquisicio") != "RENTING":
+            resultat["renting_limit_km"] = None
 
     trobat = bool(
         resultat.get("matricula")

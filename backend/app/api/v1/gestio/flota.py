@@ -154,7 +154,7 @@ async def alta_vehicle(
         carnet_necessari=vehicle.carnet_necessari,
         historial_reparacions=vehicle.historial_reparacions,
         regim_adquisicio=vehicle.regim_adquisicio,
-        renting_limit_km=vehicle.renting_limit_km,
+        renting_limit_km=vehicle.renting_limit_km if vehicle.regim_adquisicio == "RENTING" else None,
         tacograf_necessari=vehicle.tacograf_necessari,
         data_propera_descarrega_tacograf=vehicle.data_propera_descarrega_tacograf,
         capacitat_bateria_kwh=vehicle.capacitat_bateria_kwh,
@@ -215,7 +215,7 @@ async def editar_vehicle(
     v_db.carnet_necessari = vehicle.carnet_necessari
     v_db.historial_reparacions = vehicle.historial_reparacions
     v_db.regim_adquisicio = vehicle.regim_adquisicio
-    v_db.renting_limit_km = vehicle.renting_limit_km
+    v_db.renting_limit_km = vehicle.renting_limit_km if vehicle.regim_adquisicio == "RENTING" else None
     v_db.tacograf_necessari = vehicle.tacograf_necessari
     v_db.data_propera_descarrega_tacograf = vehicle.data_propera_descarrega_tacograf
     v_db.capacitat_bateria_kwh = vehicle.capacitat_bateria_kwh
@@ -552,6 +552,8 @@ async def ocr_vehicle_draft(
             merged_data["distintiu_ambiental"] = "C"
     if not merged_data["regim_adquisicio"]:
         merged_data["regim_adquisicio"] = "PROPIETAT"
+    if merged_data["regim_adquisicio"] != "RENTING":
+        merged_data["renting_limit_km"] = None
     if not merged_data["carnet_necessari"]:
         merged_data["carnet_necessari"] = "B"
     if not merged_data["estat_itv"]:
