@@ -100,9 +100,10 @@ async def test_sincronitzacio_assignacio_vehicle_ot_7261(
     client = Client(
         id=client_id,
         empresa_id=emp_uuid,
-        nom="Agrícola de Prova SL",
-        cif_nif="A" + str(uuid.uuid4())[:8].upper(),
-        adreca="Carrer Major 1, Lleida",
+        codi="CLI-7261",
+        rao_social="Agrícola de Prova SL",
+        nif="A" + str(uuid.uuid4())[:8].upper(),
+        adreca_fiscal="Carrer Major 1, Lleida",
         email="client@prova.cat",
         telefon="+34973000000",
     )
