@@ -82,14 +82,34 @@ def upgrade() -> None:
         "ALTER TABLE documents_flota ADD COLUMN IF NOT EXISTS metadata_ocr JSONB;"
     )
 
-    # 3. Check constraint idempotent per tipus_document
+    # 3. Check constraint idempotent per tipus_document amb sanejament previ de files existents
     op.execute("ALTER TABLE documents_flota DROP CONSTRAINT IF EXISTS chk_documents_flota_tipus;")
+    op.execute(
+        """
+        UPDATE documents_flota
+        SET tipus_document = UPPER(TRIM(tipus_document))
+        WHERE tipus_document IS NOT NULL;
+        """
+    )
+    op.execute(
+        """
+        UPDATE documents_flota
+        SET tipus_document = 'GENERAL'
+        WHERE tipus_document IS NULL
+           OR tipus_document NOT IN (
+               'PERMIS_CIRCULACIO', 'FITXA_TECNICA', 'INFORME_ITV', 'ITV', 'EITV',
+               'ASSEGURANCA', 'POLISSA', 'REPARACIO', 'CONTRACTE', 'CONTRACTE_RENTING',
+               'TARGETA_TRANSPORT', 'MANTENIMENT', 'GENERAL', 'ALTRES'
+           );
+        """
+    )
     op.execute(
         """
         ALTER TABLE documents_flota ADD CONSTRAINT chk_documents_flota_tipus
         CHECK (tipus_document IN (
-            'ITV', 'FITXA_TECNICA', 'INFORME_ITV', 'ASSEGURANCA', 'REPARACIO',
-            'CONTRACTE', 'CONTRACTE_RENTING', 'TARGETA_TRANSPORT', 'GENERAL', 'MANTENIMENT'
+            'PERMIS_CIRCULACIO', 'FITXA_TECNICA', 'INFORME_ITV', 'ITV', 'EITV',
+            'ASSEGURANCA', 'POLISSA', 'REPARACIO', 'CONTRACTE', 'CONTRACTE_RENTING',
+            'TARGETA_TRANSPORT', 'MANTENIMENT', 'GENERAL', 'ALTRES'
         ));
         """
     )
