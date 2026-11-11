@@ -2,10 +2,11 @@ import secrets
 import string
 import uuid
 from datetime import date, datetime, timezone
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 import bcrypt
-from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
+import filetype
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -27,7 +28,10 @@ from app.services.flota_service import (
     sincronitzar_assignacio_des_de_operari,
     sincronitzar_operari_al_disc_empresa,
 )
-from app.services.ocr_service import processar_dni_ocr
+from app.services.ocr_service import (
+    consolidar_i_validar_ocr_operari,
+    processar_ocr_document_operari,
+)
 from app.services.sovereign_storage import SovereignStorageGateway
 
 router = APIRouter(
@@ -35,6 +39,58 @@ router = APIRouter(
     tags=["Gestió Operaris"],
     dependencies=[Depends(require_roles(["BOSS", "SECRETARIA", "ENGINYER"]))],
 )
+
+EXTENSIONS_PERMESES_OCR_OPERARI = (
+    ".md",
+    ".markdown",
+    ".pdf",
+    ".jpg",
+    ".jpeg",
+    ".png",
+    ".txt",
+    ".doc",
+    ".docx",
+)
+MAX_FILE_SIZE_OPERARI_BYTES = 10 * 1024 * 1024  # 10 MB màxim
+
+
+def _validar_fitxer_ocr_operari(file_bytes: bytes, filename: Optional[str]) -> str:
+    """Valida que l'arxiu sigui .md, .pdf, .jpg, .png, .txt, .doc o .docx i compleixi límits de seguretat."""
+    if not file_bytes:
+        raise HTTPException(status_code=400, detail="Fitxer buit")
+    if len(file_bytes) > MAX_FILE_SIZE_OPERARI_BYTES:
+        raise HTTPException(
+            status_code=400,
+            detail="El fitxer supera el límit màxim de 10 MB permès.",
+        )
+
+    fname = (filename or "document.pdf").strip()
+    fname_lower = fname.lower()
+    ext = "." + fname_lower.rsplit(".", 1)[-1] if "." in fname_lower else ""
+
+    kind = filetype.guess(file_bytes)
+    is_pdf = file_bytes.startswith(b"%PDF") or ext == ".pdf"
+    is_docx = file_bytes.startswith(b"PK\x03\x04") or ext == ".docx"
+    is_doc = file_bytes.startswith(b"\xd0\xcf\x11\xe0") or ext == ".doc"
+    is_image = (
+        (kind is not None and kind.mime in ("image/jpeg", "image/png", "image/webp"))
+        or file_bytes.startswith((b"\xff\xd8\xff", b"\x89PNG"))
+        or ext in (".jpg", ".jpeg", ".png")
+    )
+    is_text = ext in (".md", ".markdown", ".txt", ".doc")
+    if not is_text:
+        try:
+            file_bytes.decode("utf-8")
+            is_text = True
+        except Exception:
+            is_text = False
+
+    if not (is_pdf or is_docx or is_doc or is_image or is_text):
+        raise HTTPException(
+            status_code=400,
+            detail="Format d'arxiu no suportat. Formats admesos: .md, .pdf, .jpg, .png, .txt, .doc, .docx",
+        )
+    return ext or ".pdf"
 
 
 class OperariCreate(BaseModel):
@@ -49,6 +105,9 @@ class OperariCreate(BaseModel):
     carnet_conduir: str = Field("B", max_length=20)
     carnet_caducitat: Optional[date] = None
     prl_certificat_vigencia: Optional[date] = None
+    te_cap_vigent: bool = False
+    certificats_prl: List[str] = Field(default_factory=list)
+    documents_processats: Optional[List[Dict[str, Any]]] = None
     vehicle_assignat_id: Optional[uuid.UUID] = None
 
 
@@ -66,6 +125,8 @@ class OperariUpdate(BaseModel):
     carnet_conduir: Optional[str] = Field(None, max_length=20)
     carnet_caducitat: Optional[date] = None
     prl_certificat_vigencia: Optional[date] = None
+    te_cap_vigent: Optional[bool] = None
+    certificats_prl: Optional[List[str]] = None
     cap_de_grup_id: Optional[uuid.UUID] = None
     vehicle_assignat_id: Optional[uuid.UUID] = None
 
@@ -85,6 +146,10 @@ class OperariResponse(BaseModel):
     carnet_conduir: str = "B"
     carnet_caducitat: Optional[date] = None
     prl_certificat_vigencia: Optional[date] = None
+    te_cap_vigent: bool = False
+    certificats_prl: List[str] = Field(default_factory=list)
+    alertes_copilot: List[Dict[str, Any]] = Field(default_factory=list)
+    documents_pendents: List[str] = Field(default_factory=list)
     pin_bloquejat: bool = False
     intents_pin_fallits: int = 0
     cap_de_grup_id: Optional[uuid.UUID] = None
@@ -184,11 +249,150 @@ async def verificar_permisos_boss(request: Request):
     return request.state.empresa_id
 
 
+def _calcular_alertes_copilot_operari(
+    op: Usuari, avui: Optional[date] = None
+) -> tuple[List[Dict[str, Any]], List[str]]:
+    """Calcula les alertes del Copilot per a un operari:
+    - Caducitat de carnet o PRL (caducat o a <= 30 dies / 1 mes de caducar).
+    - Manca de documents/dates de RRHH (sempre NO bloquejant per a l'alta).
+    """
+    avui = avui or date.today()
+    alertes: List[Dict[str, Any]] = []
+    documents_pendents: List[str] = []
+
+    if op.carnet_caducitat:
+        dies_c = (op.carnet_caducitat - avui).days
+        if dies_c < 0:
+            alertes.append(
+                {
+                    "codi": "CARNET_CADUCAT",
+                    "severitat": "CRITICAL",
+                    "estat": "CADUCAT",
+                    "concepte": "Carnet de Conduir",
+                    "data_caducitat": op.carnet_caducitat.isoformat(),
+                    "dies_restants": dies_c,
+                    "bloquejant_alta": False,
+                    "missatge": (
+                        f"Alerta Copilot: El carnet de conduir ({op.carnet_conduir or 'B'}) de {op.nom} "
+                        f"està CADUCAT des del {op.carnet_caducitat.isoformat()} ({abs(dies_c)} dies vençut)."
+                    ),
+                }
+            )
+        elif dies_c <= 30:
+            alertes.append(
+                {
+                    "codi": "CARNET_PROPER_CADUCAR",
+                    "severitat": "WARNING",
+                    "estat": "PROPER_A_CADUCAR",
+                    "concepte": "Carnet de Conduir",
+                    "data_caducitat": op.carnet_caducitat.isoformat(),
+                    "dies_restants": dies_c,
+                    "bloquejant_alta": False,
+                    "missatge": (
+                        f"Alerta Copilot: El carnet de conduir ({op.carnet_conduir or 'B'}) de {op.nom} "
+                        f"caduca en menys d'un mes ({dies_c} dies restants, el {op.carnet_caducitat.isoformat()})."
+                    ),
+                }
+            )
+    else:
+        documents_pendents.append("CARNET_CONDUIR")
+
+    if op.prl_certificat_vigencia:
+        dies_prl = (op.prl_certificat_vigencia - avui).days
+        if dies_prl < 0:
+            alertes.append(
+                {
+                    "codi": "PRL_CADUCAT",
+                    "severitat": "CRITICAL",
+                    "estat": "CADUCAT",
+                    "concepte": "Certificat PRL",
+                    "data_caducitat": op.prl_certificat_vigencia.isoformat(),
+                    "dies_restants": dies_prl,
+                    "bloquejant_alta": False,
+                    "missatge": (
+                        f"Alerta Copilot: El Certificat PRL de {op.nom} està CADUCAT des del "
+                        f"{op.prl_certificat_vigencia.isoformat()} ({abs(dies_prl)} dies vençut)."
+                    ),
+                }
+            )
+        elif dies_prl <= 30:
+            alertes.append(
+                {
+                    "codi": "PRL_PROPER_CADUCAR",
+                    "severitat": "WARNING",
+                    "estat": "PROPER_A_CADUCAR",
+                    "concepte": "Certificat PRL",
+                    "data_caducitat": op.prl_certificat_vigencia.isoformat(),
+                    "dies_restants": dies_prl,
+                    "bloquejant_alta": False,
+                    "missatge": (
+                        f"Alerta Copilot: El Certificat PRL de {op.nom} caduca en menys d'un mes "
+                        f"({dies_prl} dies restants, el {op.prl_certificat_vigencia.isoformat()})."
+                    ),
+                }
+            )
+    else:
+        documents_pendents.append("CERTIFICAT_PRL")
+
+    if documents_pendents:
+        noms_map = {
+            "CARNET_CONDUIR": "Carnet de Conduir",
+            "CERTIFICAT_PRL": "Certificat PRL",
+        }
+        llista_txt = ", ".join(noms_map.get(c, c) for c in documents_pendents)
+        alertes.append(
+            {
+                "codi": "MANCA_DOCUMENTACIO_RRHH",
+                "severitat": "INFO",
+                "estat": "DOCUMENTACIO_INCOMPLETA_NO_BLOQUEJANT",
+                "concepte": "Expedient Documental RRHH",
+                "documents_pendents": documents_pendents,
+                "bloquejant_alta": False,
+                "missatge": f"Avís Copilot (No bloquejant): Manca acreditar vigència de {llista_txt}.",
+            }
+        )
+
+    return alertes, documents_pendents
+
+
+async def _persistir_alertes_operari_disc(
+    db: AsyncSession,
+    emp_uuid: uuid.UUID,
+    op: Usuari,
+    alertes: List[Dict[str, Any]],
+) -> None:
+    """Desa al disc dur del client totes les alertes de caducitat i manca de documents de l'operari."""
+    for al in alertes:
+        codi_al = str(al.get("codi", "ALERTA")).lower()
+        alerta_id = f"alerta_operari_{op.id}_{codi_al}"
+        try:
+            await SovereignStorageGateway.desar_entitat_json(
+                db=db,
+                empresa_id=emp_uuid,
+                categoria="alertes_operaris",
+                item_id=alerta_id,
+                dades={
+                    "id": alerta_id,
+                    "operari_id": str(op.id),
+                    "nom_operari": f"{op.nom or ''} {op.cognoms or ''}".strip(),
+                    "nif": op.nif,
+                    **al,
+                },
+            )
+        except Exception:
+            pass
+
+
 async def _build_operari_response(
     db: AsyncSession, emp_uuid: uuid.UUID, op: Usuari, idx: int = 0
 ) -> OperariResponse:
-    """Construeix el DTO complet d'Operari amb eines reals, vehicle 1:1 i geolocalització."""
+    """Construeix el DTO complet d'Operari amb eines reals, vehicle 1:1, geolocalització i alertes Copilot."""
     op_resp = OperariResponse.model_validate(op)
+    op_resp.te_cap_vigent = bool(getattr(op, "te_cap", False))
+    op_resp.certificats_prl = list(getattr(op, "_certificats_prl", []))
+    alertes, docs_pendents = _calcular_alertes_copilot_operari(op)
+    op_resp.alertes_copilot = alertes
+    op_resp.documents_pendents = docs_pendents
 
     # 1. Total eines assignades reals
     stmt_eines = select(func.count(EinaCustodia.id)).where(
@@ -391,6 +595,8 @@ async def alta_operari(
         estat="ACTIU",
         pin_hash=hashed_pin,
     )
+    nou_usuari.te_cap = bool(operari.te_cap_vigent)
+    setattr(nou_usuari, "_certificats_prl", list(operari.certificats_prl or []))
     db.add(nou_usuari)
     await db.flush()
 
@@ -400,9 +606,11 @@ async def alta_operari(
         )
 
     resp_obj = await _build_operari_response(db, emp_uuid, nou_usuari)
-    await sincronitzar_operari_al_disc_empresa(
-        db, emp_uuid, nou_usuari, resp_obj.model_dump(mode="json", exclude={"pin_generat"})
-    )
+    extra_disc = resp_obj.model_dump(mode="json", exclude={"pin_generat"})
+    if operari.documents_processats:
+        extra_disc["documents_processats"] = operari.documents_processats
+    await sincronitzar_operari_al_disc_empresa(db, emp_uuid, nou_usuari, extra_disc)
+    await _persistir_alertes_operari_disc(db, emp_uuid, nou_usuari, resp_obj.alertes_copilot)
     resp_obj.pin_generat = nou_pin
     resp_obj.login_url = "/operari/login"
     await db.commit()
@@ -494,10 +702,14 @@ async def actualitzar_operari(
         usuari.cost_hora_eur = float(payload.cost_hora_eur)
     if payload.carnet_conduir is not None and payload.carnet_conduir.strip():
         usuari.carnet_conduir = payload.carnet_conduir.strip()
-    if payload.carnet_caducitat is not None:
+    if payload.carnet_caducitat is not None or "carnet_caducitat" in payload.model_fields_set:
         usuari.carnet_caducitat = payload.carnet_caducitat
-    if payload.prl_certificat_vigencia is not None:
+    if payload.prl_certificat_vigencia is not None or "prl_certificat_vigencia" in payload.model_fields_set:
         usuari.prl_certificat_vigencia = payload.prl_certificat_vigencia
+    if payload.te_cap_vigent is not None:
+        usuari.te_cap = bool(payload.te_cap_vigent)
+    if payload.certificats_prl is not None:
+        setattr(usuari, "_certificats_prl", list(payload.certificats_prl))
     if "cap_de_grup_id" in payload.model_fields_set:
         usuari.cap_de_grup_id = payload.cap_de_grup_id
 
@@ -517,6 +729,7 @@ async def actualitzar_operari(
     await sincronitzar_operari_al_disc_empresa(
         db, emp_uuid, usuari, resp_obj.model_dump(mode="json", exclude={"pin_generat"})
     )
+    await _persistir_alertes_operari_disc(db, emp_uuid, usuari, resp_obj.alertes_copilot)
     await db.commit()
     return resp_obj
 
@@ -595,17 +808,326 @@ async def reset_pin_operari(
     }
 
 
-@router.post("/alta-dni-ocr")
-async def alta_dni_ocr(
+async def _executar_ocr_operari_i_desar_al_disc(
+    db: AsyncSession,
+    empresa_id: str,
+    all_files: List[UploadFile],
+    operari_id: Optional[uuid.UUID] = None,
+) -> Dict[str, Any]:
+    """Processa 1 o més arxius (.md, .pdf, .jpg, .png, .txt, .doc, .docx) per a alta/edició d'operari,
+    extreu i consolida les dades i guarda SEMPRE els fitxers i metadates al disc dur del client.
+    """
+    emp_uuid = uuid.UUID(str(empresa_id))
+    node_ia_url: Optional[str] = None
+    try:
+        emp_obj = await db.get(Empresa, emp_uuid)
+        if emp_obj:
+            node_ia_url = getattr(emp_obj, "node_ia_url", None)
+    except Exception:
+        pass
+
+    docs_extrets: List[Dict[str, Any]] = []
+    for upload in all_files:
+        file_bytes = await upload.read()
+        if not file_bytes:
+            continue
+        ext = _validar_fitxer_ocr_operari(file_bytes, upload.filename)
+        res = await processar_ocr_document_operari(
+            file_bytes,
+            node_ia_url=node_ia_url,
+            filename=upload.filename,
+        )
+        doc_uuid = uuid.uuid4()
+        safe_filename = f"rrhh_{operari_id or 'draft'}_{doc_uuid.hex[:10]}{ext}"
+        content_type = upload.content_type or "application/octet-stream"
+
+        # Guardar SEMPRE l'arxiu físic al disc dur del client
+        ruta_disc = await SovereignStorageGateway.pujar_fitxer_binari(
+            db=db,
+            empresa_id=emp_uuid,
+            categoria="documents_operaris",
+            nom_fitxer=safe_filename,
+            content=file_bytes,
+            content_type=content_type,
+        )
+
+        res["id_document"] = str(doc_uuid)
+        res["nom_fitxer"] = upload.filename or safe_filename
+        res["nom_arxiu_disc"] = safe_filename
+        res["ruta_arxiu"] = ruta_disc
+        docs_extrets.append(res)
+
+        # Guardar metadades individuals del document al disc dur del client
+        await SovereignStorageGateway.desar_entitat_json(
+            db=db,
+            empresa_id=emp_uuid,
+            categoria="documents_operaris",
+            item_id=f"doc_{doc_uuid}",
+            dades={
+                "id": str(doc_uuid),
+                "operari_id": str(operari_id) if operari_id else None,
+                "nif_detectat": res.get("nif"),
+                "nom_detectat": res.get("nom"),
+                "cognoms_detectats": res.get("cognoms"),
+                "tipus_document": res.get("tipus_document"),
+                "nom_fitxer_original": upload.filename or safe_filename,
+                "nom_arxiu_disc": safe_filename,
+                "ruta_arxiu": ruta_disc,
+                "hash_sha256": res.get("hash_sha256"),
+                "carnet_conduir": res.get("carnet_conduir"),
+                "carnet_caducitat": res.get("carnet_caducitat"),
+                "prl_certificat_vigencia": res.get("prl_certificat_vigencia"),
+                "te_cap_vigent": res.get("te_cap_vigent", False),
+                "certificats_prl": res.get("certificats_prl", []),
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            },
+        )
+
+    if not docs_extrets:
+        raise HTTPException(
+            status_code=400,
+            detail="Cal adjuntar com a mínim un document vàlid (.md, .pdf, .jpg, .png, .txt, .doc, .docx).",
+        )
+
+    consolidat = consolidar_i_validar_ocr_operari(docs_extrets)
+    # Enriquir documents_processats amb ruta_arxiu i id_document del disc dur del client
+    for idx_d, d_proc in enumerate(consolidat.get("documents_processats", [])):
+        if idx_d < len(docs_extrets):
+            d_proc["id_document"] = docs_extrets[idx_d].get("id_document")
+            d_proc["nom_arxiu_disc"] = docs_extrets[idx_d].get("nom_arxiu_disc")
+            d_proc["ruta_arxiu"] = docs_extrets[idx_d].get("ruta_arxiu")
+
+    # Guardar esborrany consolidat i alertes del Copilot al disc dur del client
+    draft_id = f"ocr_draft_{operari_id or (consolidat.get('nif') or uuid.uuid4().hex[:8])}"
+    await SovereignStorageGateway.desar_entitat_json(
+        db=db,
+        empresa_id=emp_uuid,
+        categoria="operaris",
+        item_id=draft_id,
+        dades=consolidat,
+    )
+    for al in consolidat.get("alertes_copilot", []):
+        codi_al = str(al.get("codi", "ALERTA")).lower()
+        alerta_id = f"alerta_ocr_{operari_id or (consolidat.get('nif') or 'draft')}_{codi_al}"
+        await SovereignStorageGateway.desar_entitat_json(
+            db=db,
+            empresa_id=emp_uuid,
+            categoria="alertes_operaris",
+            item_id=alerta_id,
+            dades={
+                "id": alerta_id,
+                "operari_id": str(operari_id) if operari_id else None,
+                "nif": consolidat.get("nif"),
+                "nom_operari": f"{consolidat.get('nom') or ''} {consolidat.get('cognoms') or ''}".strip(),
+                **al,
+            },
+        )
+
+    return consolidat
+
+
+@router.post("/ocr-draft")
+async def ocr_operari_draft(
     request: Request,
-    file: UploadFile = File(...),
+    files: Optional[List[UploadFile]] = File(None),
+    file: Optional[UploadFile] = File(None),
     db: AsyncSession = Depends(get_db_with_tenant_context),
     claims: dict = Depends(require_roles(["BOSS", "SECRETARIA"])),
 ):
-    await verificar_permisos_boss(request)
-    content = await file.read()
-    data = await processar_dni_ocr(content)
-    return data
+    """Alta Màgica OCR Multi-Document d'Operari (Spec 008).
+    Llegeix .md, .pdf, .jpg, .png, .txt, .doc, .docx, guarda sempre al disc dur del client,
+    retorna les alertes del Copilot (caducitats o <= 30 dies) i avisa de manca de documents sense bloquejar l'alta.
+    """
+    empresa_id = await verificar_permisos_boss(request)
+    all_files: List[UploadFile] = []
+    if files:
+        all_files.extend([f for f in files if f and f.filename])
+    if file and file.filename and file not in all_files:
+        all_files.append(file)
+    if not all_files and file:
+        all_files.append(file)
+
+    if not all_files:
+        raise HTTPException(
+            status_code=400,
+            detail="Cal adjuntar com a mínim un document d'operari (.md, .pdf, .jpg, .png, .txt, .doc, .docx).",
+        )
+
+    return await _executar_ocr_operari_i_desar_al_disc(db, empresa_id, all_files)
+
+
+@router.post("/alta-dni-ocr")
+async def alta_dni_ocr(
+    request: Request,
+    files: Optional[List[UploadFile]] = File(None),
+    file: Optional[UploadFile] = File(None),
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+    claims: dict = Depends(require_roles(["BOSS", "SECRETARIA"])),
+):
+    """Endpoint d'extracció OCR de DNI / documentació d'operari (compatible amb `file` i `files`)."""
+    empresa_id = await verificar_permisos_boss(request)
+    all_files: List[UploadFile] = []
+    if files:
+        all_files.extend([f for f in files if f and f.filename])
+    if file and file not in all_files:
+        all_files.append(file)
+
+    if not all_files:
+        raise HTTPException(status_code=400, detail="Cal adjuntar un fitxer per a l'OCR.")
+
+    return await _executar_ocr_operari_i_desar_al_disc(db, empresa_id, all_files)
+
+
+@router.post("/{operari_id}/documents")
+async def pujar_documents_operari(
+    request: Request,
+    operari_id: uuid.UUID,
+    files: Optional[List[UploadFile]] = File(None),
+    file: Optional[UploadFile] = File(None),
+    tipus_document: Optional[str] = Form(None),
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+    claims: dict = Depends(require_roles(["BOSS", "SECRETARIA"])),
+):
+    """Puja i processa documents de RRHH (.md, .pdf, .jpg, .png, .txt, .doc, .docx) d'un operari existent,
+    guardant-los sempre al disc dur del client i actualitzant les dates de carnet/PRL i alertes Copilot.
+    """
+    empresa_id = await verificar_permisos_boss(request)
+    emp_uuid = uuid.UUID(empresa_id)
+
+    stmt = select(Usuari).where(Usuari.id == operari_id, Usuari.empresa_id == emp_uuid)
+    usuari = (await db.execute(stmt)).scalars().first()
+    if not usuari:
+        raise HTTPException(status_code=404, detail="Operari no trobat")
+
+    all_files: List[UploadFile] = []
+    if files:
+        all_files.extend([f for f in files if f and f.filename])
+    if file and file not in all_files:
+        all_files.append(file)
+
+    if not all_files:
+        raise HTTPException(status_code=400, detail="Cal adjuntar com a mínim un fitxer.")
+
+    consolidat = await _executar_ocr_operari_i_desar_al_disc(
+        db, empresa_id, all_files, operari_id=operari_id
+    )
+
+    # Actualitzar camps de l'operari si l'OCR ha detectat noves dates o permisos
+    if consolidat.get("carnet_conduir"):
+        usuari.carnet_conduir = consolidat["carnet_conduir"]
+    if consolidat.get("carnet_caducitat"):
+        try:
+            usuari.carnet_caducitat = date.fromisoformat(str(consolidat["carnet_caducitat"])[:10])
+        except Exception:
+            pass
+    if consolidat.get("prl_certificat_vigencia"):
+        try:
+            usuari.prl_certificat_vigencia = date.fromisoformat(str(consolidat["prl_certificat_vigencia"])[:10])
+        except Exception:
+            pass
+    if consolidat.get("te_cap_vigent"):
+        usuari.te_cap = True
+    if consolidat.get("certificats_prl"):
+        setattr(usuari, "_certificats_prl", list(consolidat["certificats_prl"]))
+
+    usuari.updated_at = datetime.now(timezone.utc)
+    await db.flush()
+    resp_obj = await _build_operari_response(db, emp_uuid, usuari)
+    await sincronitzar_operari_al_disc_empresa(
+        db,
+        emp_uuid,
+        usuari,
+        {
+            **resp_obj.model_dump(mode="json", exclude={"pin_generat"}),
+            "ultim_ocr_consolidat": consolidat,
+        },
+    )
+    await _persistir_alertes_operari_disc(db, emp_uuid, usuari, resp_obj.alertes_copilot)
+    await db.commit()
+
+    return {
+        "missatge": "Documents guardats al disc dur del client i processats per OCR",
+        "operari_id": str(operari_id),
+        "ocr_resultat": consolidat,
+        "alertes_copilot": resp_obj.alertes_copilot,
+        "documents_pendents": resp_obj.documents_pendents,
+    }
+
+
+@router.get("/{operari_id}/documents")
+async def llistar_documents_operari(
+    request: Request,
+    operari_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+):
+    """Llista tots els documents de RRHH guardats al disc dur del client per a un operari."""
+    empresa_id = await verificar_permisos_boss(request)
+    emp_uuid = uuid.UUID(empresa_id)
+
+    stmt = select(Usuari).where(Usuari.id == operari_id, Usuari.empresa_id == emp_uuid)
+    usuari = (await db.execute(stmt)).scalars().first()
+    if not usuari:
+        raise HTTPException(status_code=404, detail="Operari no trobat")
+
+    tots_docs = await SovereignStorageGateway.llegir_entitats_json(
+        db=db, empresa_id=emp_uuid, categoria="documents_operaris"
+    )
+    docs_operari = [
+        {
+            **d,
+            "url_fitxer": f"/api/v1/gestio/operaris/{operari_id}/documents/{d.get('id')}/fitxer",
+        }
+        for d in tots_docs
+        if str(d.get("operari_id") or "") == str(operari_id)
+        or (usuari.nif and str(d.get("nif_detectat") or "").upper() == usuari.nif.upper())
+    ]
+
+    alertes, docs_pendents = _calcular_alertes_copilot_operari(usuari)
+    return {
+        "operari_id": str(operari_id),
+        "documents": docs_operari,
+        "documents_pendents": docs_pendents,
+        "alertes_copilot": alertes,
+        "bloqueja_alta": False,
+    }
+
+
+@router.get("/{operari_id}/documents/{doc_id}/fitxer")
+async def descarregar_document_operari(
+    request: Request,
+    operari_id: uuid.UUID,
+    doc_id: str,
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+):
+    """Serveix un document de RRHH de l'operari directament des del disc dur del client."""
+    empresa_id = await verificar_permisos_boss(request)
+    emp_uuid = uuid.UUID(empresa_id)
+
+    tots_docs = await SovereignStorageGateway.llegir_entitats_json(
+        db=db, empresa_id=emp_uuid, categoria="documents_operaris"
+    )
+    doc = next((d for d in tots_docs if str(d.get("id")) == str(doc_id)), None)
+    if not doc or not doc.get("ruta_arxiu"):
+        raise HTTPException(status_code=404, detail="Document d'operari no trobat al disc del client")
+
+    ext = str(doc.get("nom_arxiu_disc") or doc.get("nom_fitxer_original") or "").lower().rsplit(".", 1)[-1]
+    media_map = {
+        "pdf": "application/pdf",
+        "jpg": "image/jpeg",
+        "jpeg": "image/jpeg",
+        "png": "image/png",
+        "md": "text/markdown; charset=utf-8",
+        "txt": "text/plain; charset=utf-8",
+        "doc": "application/msword",
+        "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    }
+    return await SovereignStorageGateway.servir_fitxer(
+        db=db,
+        empresa_id=emp_uuid,
+        fitxer_path=str(doc["ruta_arxiu"]),
+        media_type=media_map.get(ext, "application/octet-stream"),
+        disposition="inline",
+    )
 
 
 @router.post("/{operari_id}/fitxar")

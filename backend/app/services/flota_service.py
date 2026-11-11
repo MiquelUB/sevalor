@@ -137,6 +137,13 @@ async def sincronitzar_operari_al_disc_empresa(
         payload.update(dades_extra)
 
     try:
+        await SovereignStorageGateway.desar_entitat_json(
+            db=db,
+            empresa_id=empresa_id,
+            categoria="operaris",
+            item_id=f"operari_{operari.id}",
+            dades=payload,
+        )
         return await SovereignStorageGateway.desar_entitat_json(
             db=db,
             empresa_id=empresa_id,

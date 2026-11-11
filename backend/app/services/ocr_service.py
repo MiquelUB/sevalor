@@ -5,9 +5,14 @@ i extracció documental amb PyMuPDF. Compliment estricte de la Constitució §2.
 """
 
 import base64
+import hashlib
+import io
 import json
 import logging
 import re
+import xml.etree.ElementTree as ET
+import zipfile
+from datetime import date
 from typing import Any, Dict, List, Optional
 
 import httpx
@@ -21,31 +26,121 @@ ESTAT_REVISIO_MANUAL = "PENDENT_REVISIO_MANUAL"
 ESTAT_EXTRET_AUTOMATIC = "EXTRET_AUTOMATIC"
 
 
-def _extreure_text_de_fitxer(file_bytes: bytes) -> str:
-    """Extreu el text contingut si és un document PDF o text descodificable."""
-    if file_bytes.startswith(b"%PDF"):
+def _normalitzar_data_iso_general(data_str: Optional[str]) -> Optional[str]:
+    """Normalitza qualsevol data DD/MM/YYYY, DD-MM-YYYY, DD.MM.YYYY o YYYY-MM-DD a ISO YYYY-MM-DD."""
+    if not data_str:
+        return None
+    s = data_str.strip().replace(".", "/").replace("-", "/")
+    m1 = re.match(r"^(\d{1,2})/(\d{1,2})/(\d{4})$", s)
+    if m1:
+        d, m, y = int(m1.group(1)), int(m1.group(2)), int(m1.group(3))
+        if 1 <= m <= 12 and 1 <= d <= 31:
+            return f"{y:04d}-{m:02d}-{d:02d}"
+    m2 = re.match(r"^(\d{4})/(\d{1,2})/(\d{1,2})$", s)
+    if m2:
+        y, m, d = int(m2.group(1)), int(m2.group(2)), int(m2.group(3))
+        if 1 <= m <= 12 and 1 <= d <= 31:
+            return f"{y:04d}-{m:02d}-{d:02d}"
+    return None
+
+
+def _extreure_text_de_fitxer(file_bytes: bytes, filename: Optional[str] = None) -> str:
+    """Extreu el text contingut de PDF (.pdf), Word (.docx, .doc), Markdown (.md), Text (.txt) o metadates d'imatge (.jpg, .png)."""
+    if not file_bytes:
+        return ""
+
+    fname_lower = (filename or "").lower()
+
+    # 1. Document PDF (%PDF)
+    if file_bytes.startswith(b"%PDF") or fname_lower.endswith(".pdf"):
+        if file_bytes.startswith(b"%PDF"):
+            try:
+                import pymupdf
+
+                doc = pymupdf.open(stream=file_bytes, filetype="pdf")
+                text = "\n".join(doc[i].get_text() for i in range(len(doc)))
+                if text.strip():
+                    return text.strip()
+            except Exception as e:
+                logger.warning(f"Error extraient text de PDF amb PyMuPDF: {e}")
+
+    # 2. Document Word modern .docx (ZIP amb word/document.xml)
+    if file_bytes.startswith(b"PK\x03\x04") or fname_lower.endswith(".docx"):
+        if file_bytes.startswith(b"PK\x03\x04"):
+            try:
+                with zipfile.ZipFile(io.BytesIO(file_bytes)) as zf:
+                    if "word/document.xml" in zf.namelist():
+                        xml_bytes = zf.read("word/document.xml")
+                        root = ET.fromstring(xml_bytes)
+                        paragraphs: List[str] = []
+                        for elem in root.iter():
+                            tag = elem.tag.split("}")[-1] if "}" in elem.tag else elem.tag
+                            if tag == "p":
+                                texts = [
+                                    t.text
+                                    for t in elem.iter()
+                                    if (t.tag.split("}")[-1] if "}" in t.tag else t.tag) == "t" and t.text
+                                ]
+                                if texts:
+                                    paragraphs.append("".join(texts).strip())
+                        if paragraphs:
+                            return "\n".join(paragraphs).strip()
+            except Exception as e:
+                logger.warning(f"Error extraient text de DOCX: {e}")
+
+    # 3. Document Word clàssic .doc (OLE2 binari o RTF)
+    if file_bytes.startswith(b"\xd0\xcf\x11\xe0"):
         try:
-            import pymupdf
+            # Extracció de cadenes UTF-16LE i ASCII llegibles dins contenidor OLE2 .doc
+            utf16_matches = re.findall(rb"(?:[\x20-\x7e\xc0-\xff]\x00){4,}", file_bytes)
+            chunks = [m.decode("utf-16le", errors="ignore").strip() for m in utf16_matches]
+            ascii_matches = re.findall(rb"[\x20-\x7e\n\r\t]{6,}", file_bytes)
+            chunks.extend(m.decode("latin-1", errors="ignore").strip() for m in ascii_matches)
+            joined = "\n".join(c for c in chunks if c)
+            if joined.strip():
+                return joined.strip()
+        except Exception:
+            pass
 
-            doc = pymupdf.open(stream=file_bytes, filetype="pdf")
-            text = "".join(doc[i].get_text() for i in range(len(doc)))
-            if text.strip():
-                return text.strip()
-        except Exception as e:
-            logger.warning(f"Error extraient text de PDF amb PyMuPDF: {e}")
-
+    # 4. Fitxers de text pla, Markdown (.md, .txt, .doc textual) o UTF-8 directe
     try:
         decoded = file_bytes.decode("utf-8")
         keywords = (
-            "total", "nif", "cif", "albarà", "albara", "data", "litres", "eur", "factura",
+            "total", "nif", "cif", "dni", "nie", "albarà", "albara", "data", "litres", "eur", "factura",
             "matricula", "matrícula", "bastidor", "vin", "vehicle", "vehiculo", "marca", "model", "modelo", "itv", "permis", "permiso", "dgt",
             "assegurança", "asseguranca", "polissa", "pòlissa", "seguro", "póliza", "poliza", "cobertura", "asseguradora", "aseguradora", "companyia",
-            "reparacio", "reparació", "manteniment", "oli", "taller"
+            "reparacio", "reparació", "manteniment", "oli", "taller",
+            "nom", "nombre", "cognoms", "apellidos", "operari", "treballador", "carnet", "prl", "cap",
+            "naixement", "nacimiento", "caducitat", "caducidad", "validesa", "vigencia", "vigència",
+            "telefon", "telèfon", "email", "correu", "especialitat", "contracte", "seguretat social", "tgss"
         )
-        if any(w in decoded.lower() for w in keywords) or ("\n" in decoded and "\x00" not in decoded):
+        if (
+            fname_lower.endswith((".md", ".txt", ".markdown", ".csv", ".doc", ".docx"))
+            or any(w in decoded.lower() for w in keywords)
+            or ("\n" in decoded and "\x00" not in decoded)
+            or ("\x00" not in decoded and len(decoded.strip()) >= 4)
+        ):
             return decoded.strip()
     except Exception:
         pass
+
+    # 5. Si és una imatge (.jpg, .png) amb comentaris/tEXt incrustats (p.ex. escenaris de test o EXIF)
+    if file_bytes.startswith((b"\xff\xd8\xff", b"\x89PNG")):
+        try:
+            latin_text = file_bytes.decode("latin-1", errors="ignore")
+            m_txt = re.findall(r"[A-Za-zÀ-ÿ0-9_:\-\./\s,@\+]{12,}", latin_text)
+            filtered = [
+                seg.strip()
+                for seg in m_txt
+                if any(
+                    k in seg.lower()
+                    for k in ("nif", "dni", "nom", "cognoms", "carnet", "prl", "caducitat", "permis", "permiso", "titular")
+                )
+            ]
+            if filtered:
+                return "\n".join(filtered)
+        except Exception:
+            pass
 
     return ""
 
@@ -110,57 +205,571 @@ async def _cridar_ia_vision(
 
 
 
-async def processar_dni_ocr(file_bytes: bytes, node_ia_url: Optional[str] = None) -> Dict[str, Any]:
-    """Extracció OCR de DNI / NIE."""
-    text = _extreure_text_de_fitxer(file_bytes)
-    raw_data: Dict[str, Optional[str]] = {
+ORDRE_JERARQUIA_CARNETS_OCR = {"AM": 1, "B": 2, "B+E": 3, "C": 4, "C+E": 5}
+
+
+async def processar_ocr_document_operari(
+    file_input: bytes | str,
+    node_ia_url: Optional[str] = None,
+    filename: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Extracció OCR d'un document d'operari (.md, .pdf, .jpg, .png, .txt, .doc, .docx):
+    DNI/NIE, Permís de Conduir, Certificat PRL, Certificat CAP o Fitxa/Contracte RRHH.
+    """
+    file_bytes = b""
+    if isinstance(file_input, bytes):
+        file_bytes = file_input
+    elif isinstance(file_input, str):
+        try:
+            with open(file_input, "rb") as f:
+                file_bytes = f.read()
+            if not filename:
+                filename = file_input.rsplit("/", 1)[-1]
+        except Exception as e:
+            logger.warning(f"No s'ha pogut llegir el fitxer d'operari a {file_input}: {e}")
+
+    hash_sha256 = hashlib.sha256(file_bytes).hexdigest() if file_bytes else ""
+    text = _extreure_text_de_fitxer(file_bytes, filename=filename)
+    fname_lower = (filename or "").lower()
+    text_lower = text.lower()
+
+    # 1. Classificació del tipus de document de RRHH
+    tipus_document = "DNI_NIE"
+    if any(k in fname_lower or k in text_lower for k in ("prl", "prevenció", "prevencio", "riscos laborals", "riesgos laborales", "recurs preventiu", "grua", "alçada", "alcada", "risc elèctric", "riesgo electrico")):
+        tipus_document = "CERTIFICAT_PRL"
+    elif any(k in fname_lower or k in text_lower for k in ("cap", "aptitud professional", "aptitud profesional", "codi 95", "código 95", "codigo 95")) and not any(k in text_lower for k in ("permís de conduir", "permiso de conducción")):
+        tipus_document = "CERTIFICAT_CAP"
+    elif any(k in fname_lower or k in text_lower for k in ("carnet", "conduir", "conducción", "conduccion", "permís de conduir", "permiso de conducir", "dgt", "4b.")):
+        tipus_document = "CARNET_CONDUIR"
+    elif any(k in fname_lower or k in text_lower for k in ("contracte", "contrato", "tgss", "seguretat social", "seguridad social", "fitxa operari", "alta laboral", "rrhh")):
+        tipus_document = "CONTRACTE_RRHH"
+    elif any(k in fname_lower or k in text_lower for k in ("dni", "nie", "identitat", "identidad", "document nacional")):
+        tipus_document = "DNI_NIE"
+
+    res: Dict[str, Any] = {
+        "status": ESTAT_REVISIO_MANUAL,
+        "confidence": 0.0,
+        "nom_fitxer": filename or f"{tipus_document.lower()}.pdf",
+        "tipus_document": tipus_document,
+        "hash_sha256": hash_sha256,
         "nif": None,
         "nom": None,
         "cognoms": None,
         "data_naixement": None,
+        "dni_caducitat": None,
         "data_caducitat": None,
+        "telefon": None,
+        "email": None,
+        "rol": None,
+        "especialitat": None,
+        "cost_hora_eur": None,
+        "carnet_conduir": None,
+        "carnet_caducitat": None,
+        "te_cap_vigent": False,
+        "cap_caducitat": None,
+        "prl_certificat_vigencia": None,
+        "certificats_prl": [],
     }
 
-    # Intent d'extracció directa per patrons (DNI/NIE espanyol)
     if text:
-        nif_m = re.search(r"\b([0-9]{8}[A-Z]|[XYZ][0-9]{7}[A-Z])\b", text.upper())
+        # Clean markdown bold/list markers for regex matching
+        clean_text = re.sub(r"\*\*|__", "", text)
+
+        # A. NIF / NIE (amb o sense guió: 47821948B, 47821948-B, X-1234567-L)
+        nif_m = re.search(
+            r"\b([0-9]{8}[-\s]?[A-Z]|[XYZ][-\s]?[0-9]{7}[-\s]?[A-Z])\b",
+            clean_text.upper(),
+        )
         if nif_m:
-            raw_data["nif"] = nif_m.group(1)
+            res["nif"] = re.sub(r"[-\s]", "", nif_m.group(1))
 
-        titular_m = re.search(r"(?:Titular|Nom|Nombre)[\s:]*([A-Za-zÀ-ÿ\s]+)", text)
-        if titular_m:
-            parts = titular_m.group(1).strip().split()
-            if len(parts) >= 2:
-                raw_data["nom"] = parts[0]
-                raw_data["cognoms"] = " ".join(parts[1:])
-            elif len(parts) == 1:
-                raw_data["nom"] = parts[0]
+        # B. Nom i Cognoms (suportant camps separats o camp únic Titular/Treballador)
+        cognoms_m = re.search(
+            r"(?:1\.?\s*)?(?:Cognoms\s*/\s*Apellidos|Apellidos\s*/\s*Cognoms|Cognoms|Apellidos|Primer\s+i\s+segon\s+cognom)[\s:]+([^\n\r|]+)",
+            clean_text,
+            re.IGNORECASE,
+        )
+        nom_m = re.search(
+            r"(?:2\.?\s*)?(?:Nom\s*/\s*Nombre|Nombre\s*/\s*Nom|Nom\s+propi|Nom(?!\s*(?:complet|i\s+cognoms|del?\s+curs|empresa|fitxer))|Nombre(?!\s*completo))[\s:]+([^\n\r|]+)",
+            clean_text,
+            re.IGNORECASE,
+        )
+        if cognoms_m:
+            c_val = cognoms_m.group(1).strip(" -*•\t")
+            if c_val and not any(k in c_val.lower() for k in ("nif", "dni", "data", "fecha")):
+                res["cognoms"] = c_val
+        if nom_m:
+            n_val = nom_m.group(1).strip(" -*•\t")
+            if n_val and not any(k in n_val.lower() for k in ("nif", "dni", "data", "fecha")):
+                res["nom"] = n_val
 
-        dates = re.findall(r"\b(\d{2}[/-]\d{2}[/-]\d{4}|\d{4}[/-]\d{2}[/-]\d{2})\b", text)
-        if len(dates) >= 1:
-            raw_data["data_caducitat"] = dates[-1]
+        # Si ve com a "Nom complet / Titular / Treballador / Operari / Alumne: ..."
+        if not res["nom"]:
+            titular_m = re.search(
+                r"(?:Titular|Treballador/?a?|Operari/?a?|Alumne/?a?|Nom\s+complet|Nom\s+i\s+cognoms|Nombre\s+y\s+apellidos|Nombre\s+completo)[\s:]+([A-Za-zÀ-ÿ'\-\s]+)",
+                clean_text,
+                re.IGNORECASE,
+            )
+            if titular_m:
+                full_line = titular_m.group(1).splitlines()[0].strip(" -*•\t")
+                # Si ve en format "COGNOMS, NOM"
+                if "," in full_line:
+                    parts_comma = [p.strip() for p in full_line.split(",", 1)]
+                    res["cognoms"] = parts_comma[0]
+                    res["nom"] = parts_comma[1]
+                else:
+                    parts = full_line.split()
+                    if len(parts) >= 3:
+                        res["nom"] = parts[0]
+                        res["cognoms"] = " ".join(parts[1:])
+                    elif len(parts) == 2:
+                        res["nom"] = parts[0]
+                        res["cognoms"] = parts[1]
+                    elif len(parts) == 1:
+                        res["nom"] = parts[0]
 
-    # Si cal suport d'IA local
-    if not raw_data["nif"] and node_ia_url:
+        if res["nom"] and not res["cognoms"]:
+            parts_n = res["nom"].split()
+            if len(parts_n) >= 2:
+                res["nom"] = parts_n[0]
+                res["cognoms"] = " ".join(parts_n[1:])
+
+        # C. Telèfon i Email
+        tel_m = re.search(
+            r"(?:Tel[èe]fon|Tel|M[òo]bil|Móvil|Phone|SMS)[\s:]*(\+?\d[\d\s\-]{7,14}\d)",
+            clean_text,
+            re.IGNORECASE,
+        ) or re.search(r"(\+34[\s\-]?[6789]\d{2}[\s\-]?\d{3}[\s\-]?\d{3}|\b[67]\d{8}\b)", clean_text)
+        if tel_m:
+            res["telefon"] = re.sub(r"[\s\-]", "", tel_m.group(1))
+
+        email_m = re.search(r"\b([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})\b", clean_text)
+        if email_m:
+            res["email"] = email_m.group(1).lower()
+
+        # D. Rol, Especialitat i Cost/Hora
+        if re.search(r"\b(CAP[\s_]+DE[\s_]+COLLA|CAPATAZ|ENCARREGAT)\b", clean_text, re.IGNORECASE):
+            res["rol"] = "CAP_DE_COLLA"
+        elif re.search(r"\b(OPERARI|OFICIAL|PE[ÓO]|AJUDANT|T[ÈE]CNIC)\b", clean_text, re.IGNORECASE):
+            res["rol"] = "OPERARI"
+
+        if any(k in clean_text.lower() for k in ("electricitat", "elèctric", "electrico", "baixa tensió", "rebt")):
+            res["especialitat"] = "ELECTRICITAT"
+        elif any(k in clean_text.lower() for k in ("obra civil", "paleta", "construcció", "excavació", "rasa")):
+            res["especialitat"] = "OBRA_CIVIL"
+        elif any(k in clean_text.lower() for k in ("maquinària", "maquinaria", "tractor", "excavadora", "camió grua")):
+            res["especialitat"] = "CONDUCTOR_MAQUINARIA"
+        elif any(k in clean_text.lower() for k in ("fontaneria", "hidràulic", "hidraulica", "canonada")):
+            res["especialitat"] = "FONTANERIA"
+        elif any(k in clean_text.lower() for k in ("reg", "agricultura", "degoteig", "hidrant", "bombeig")):
+            res["especialitat"] = "SISTEMES_REG"
+
+        cost_m = re.search(
+            r"(?:Cost\s*/?\s*hora|Tarifa\s+hor[àa]ria|Cost\s+horari)[\s:]*(\d+(?:[.,]\d+)?)\s*(?:€|eur)?",
+            clean_text,
+            re.IGNORECASE,
+        )
+        if cost_m:
+            res["cost_hora_eur"] = float(cost_m.group(1).replace(",", "."))
+
+        # E. Permís de conduir (Categories AM, B, B+E, C, C+E)
+        carnets_trobats: List[str] = []
+        if re.search(r"(?:Categories|Categoria|Perm[íi]s(?:os)?|Carnet(?:\s+de\s+conduir)?|9\.)[\s:]*([^\n\r]+)", clean_text, re.IGNORECASE):
+            for m_cat in re.finditer(
+                r"(?:Categories|Categoria|Perm[íi]s(?:os)?|Carnet(?:\s+de\s+conduir)?|9\.|Classe)[\s:]*([^\n\r]+)",
+                clean_text,
+                re.IGNORECASE,
+            ):
+                linia_cat = m_cat.group(1).upper()
+                if re.search(r"\bC\s*\+\s*E\b", linia_cat):
+                    carnets_trobats.append("C+E")
+                if re.search(r"\bB\s*\+\s*E\b", linia_cat):
+                    carnets_trobats.append("B+E")
+                if re.search(r"\bC1?E?\b", linia_cat) and "C+E" not in carnets_trobats:
+                    if re.search(r"\bC\b", linia_cat):
+                        carnets_trobats.append("C")
+                if re.search(r"\bB\b", linia_cat):
+                    carnets_trobats.append("B")
+                if re.search(r"\bAM\b", linia_cat):
+                    carnets_trobats.append("AM")
+
+        if carnets_trobats:
+            carnets_trobats.sort(key=lambda c: ORDRE_JERARQUIA_CARNETS_OCR.get(c, 0), reverse=True)
+            res["carnet_conduir"] = carnets_trobats[0]
+
+        # F. CAP (Certificat d'Aptitud Professional / Codi 95)
+        if re.search(r"\b(CAP\s+VIGENT|CERTIFICAT\s+D'APTITUD\s+PROFESSIONAL|APTITUD\s+PROFESIONAL|CODI\s*95|C[ÓO]DIGO\s*95|TARJETA\s+DE\s+CUALIFICACI[ÓO]N)\b", clean_text, re.IGNORECASE):
+            res["te_cap_vigent"] = True
+
+        # G. Certificats PRL específics
+        prl_set = set()
+        if re.search(r"\b(OPERADOR[_\s]+(?:DE\s+)?GRUA|GRUA\s+AUTOCARREGANT|GRUA\s+CAMI[ÓO]|CAMI[ÓO]\s+PLOMA)\b", clean_text, re.IGNORECASE):
+            prl_set.add("OPERADOR_GRUA_CAMIO")
+        if re.search(r"\b(TREBALLS?\s+(?:EN\s+)?AL[ÇC]ADA|TRABAJOS?\s+EN\s+ALTURA|PLATAFORMES\s+ELEVADORES|PEMP)\b", clean_text, re.IGNORECASE):
+            prl_set.add("TREBALLS_ALCADA")
+        if re.search(r"\b(RISC\s+EL[ÈE]CTRIC|RIESGO\s+EL[ÉE]CTRICO|BAIXA\s+TENSI[ÓO]\s+PRL| ALTA\s+TENSI[ÓO])\b", clean_text, re.IGNORECASE):
+            prl_set.add("RISC_ELECTRIC_BT")
+        if re.search(r"\b(60\s*H(?:ORES)?|RECURS\s+PREVENTIU|RECURSO\s+PREVENTIVO)\b", clean_text, re.IGNORECASE):
+            prl_set.add("PRL_60H_RECURS_PREVENTIU")
+        if re.search(r"\b(20\s*H(?:ORES)?|CONSTRUCCI[ÓO]|ALBA[ÑN]ILER[ÍI]A|MOVIMENT\s+DE\s+TERRES)\b", clean_text, re.IGNORECASE):
+            prl_set.add("PRL_20H_CONSTRUCCIO")
+        if re.search(r"\b(FITOSANITARIS?|APLICADOR\s+FITOSANITARI)\b", clean_text, re.IGNORECASE):
+            prl_set.add("APLICADOR_FITOSANITARIS")
+        if tipus_document == "CERTIFICAT_PRL" and not prl_set:
+            prl_set.add("PRL_BASICA_SECTORIAL")
+        res["certificats_prl"] = sorted(prl_set)
+
+        # H. Extracció semàntica de Dates (Naixement, Caducitat DNI, Caducitat Carnet, Vigència PRL, CAP)
+        date_pat = r"(\d{1,2}[/.-]\d{1,2}[/.-]\d{4}|\d{4}[/.-]\d{1,2}[/.-]\d{1,2})"
+
+        naix_m = re.search(
+            rf"(?:Naixement|Nacimiento|Data\s+de\s+naixement|Fecha\s+de\s+nacimiento|3\.)[\s:]*{date_pat}",
+            clean_text,
+            re.IGNORECASE,
+        )
+        if naix_m:
+            res["data_naixement"] = _normalitzar_data_iso_general(naix_m.group(1))
+
+        # Caducitat específica de Carnet de Conduir
+        carnet_cad_m = re.search(
+            rf"(?:Caducitat\s+(?:del\s+)?(?:carnet|perm[íi]s)|Validesa\s+(?:del\s+)?(?:carnet|perm[íi]s)|4b\.?(?:\s*Validesa|\s*Caducitat)?|Venciment\s+carnet)[\s:]*{date_pat}",
+            clean_text,
+            re.IGNORECASE,
+        )
+        if carnet_cad_m:
+            res["carnet_caducitat"] = _normalitzar_data_iso_general(carnet_cad_m.group(1))
+
+        # Caducitat / Vigència específica de PRL
+        prl_cad_m = re.search(
+            rf"(?:Vig[èe]ncia\s+PRL|Caducitat\s+PRL|Validesa\s+PRL|V[àa]lid\s+fins(?:\s+al)?|Data\s+venciment\s+PRL|Renovaci[óo]\s+PRL)[\s:]*{date_pat}",
+            clean_text,
+            re.IGNORECASE,
+        )
+        if prl_cad_m:
+            res["prl_certificat_vigencia"] = _normalitzar_data_iso_general(prl_cad_m.group(1))
+
+        # Caducitat específica de CAP
+        cap_cad_m = re.search(
+            rf"(?:Caducitat\s+CAP|Vig[èe]ncia\s+CAP|Validesa\s+CAP)[\s:]*{date_pat}",
+            clean_text,
+            re.IGNORECASE,
+        )
+        if cap_cad_m:
+            res["cap_caducitat"] = _normalitzar_data_iso_general(cap_cad_m.group(1))
+
+        # Caducitat genèrica del document segons el tipus_document
+        gen_cad_m = re.search(
+            rf"(?:Caducitat|Caducidad|Validesa|Validez|Venciment|Vencimiento| Vig[èe]ncia|Data\s+l[íi]mit|Expira)[\s:]*{date_pat}",
+            clean_text,
+            re.IGNORECASE,
+        )
+        gen_cad_iso = _normalitzar_data_iso_general(gen_cad_m.group(1)) if gen_cad_m else None
+
+        if not gen_cad_iso:
+            all_dates = [
+                _normalitzar_data_iso_general(d)
+                for d in re.findall(r"\b(\d{1,2}[/.-]\d{1,2}[/.-]\d{4}|\d{4}[/.-]\d{1,2}[/.-]\d{1,2})\b", clean_text)
+            ]
+            valid_dates = [d for d in all_dates if d and d != res["data_naixement"]]
+            if valid_dates:
+                gen_cad_iso = max(valid_dates)
+
+        if gen_cad_iso:
+            res["data_caducitat"] = gen_cad_iso
+            if tipus_document == "CARNET_CONDUIR" and not res["carnet_caducitat"]:
+                res["carnet_caducitat"] = gen_cad_iso
+            elif tipus_document == "CERTIFICAT_PRL" and not res["prl_certificat_vigencia"]:
+                res["prl_certificat_vigencia"] = gen_cad_iso
+            elif tipus_document == "CERTIFICAT_CAP" and not res["cap_caducitat"]:
+                res["cap_caducitat"] = gen_cad_iso
+            elif tipus_document == "DNI_NIE":
+                res["dni_caducitat"] = gen_cad_iso
+
+    # 2. Suport d'IA Multimodal (LM Studio Qwen2.5-VL) per a imatges (.jpg, .png) o PDFs escanejats
+    if (not res["nif"] and not res["nom"]) and node_ia_url:
         prompt = (
-            "Ets un extractor OCR de DNI/NIE espanyol. "
-            "Retorna únicament un JSON amb les claus: nif, nom, cognoms, data_naixement, data_caducitat."
+            "Ets un extractor OCR de RRHH de Sevalor Suite (DNI/NIE, Carnet de Conduir, Certificat PRL, CAP).\n"
+            "Retorna únicament un JSON amb les claus: tipus_document (DNI_NIE, CARNET_CONDUIR, CERTIFICAT_PRL, CERTIFICAT_CAP, CONTRACTE_RRHH), "
+            "nif, nom, cognoms, data_naixement (YYYY-MM-DD), dni_caducitat (YYYY-MM-DD), telefon, email, "
+            "carnet_conduir (AM, B, B+E, C, C+E), carnet_caducitat (YYYY-MM-DD), te_cap_vigent (bool), "
+            "prl_certificat_vigencia (YYYY-MM-DD), certificats_prl (llista de codis)."
         )
         b64 = None
-        if not text and len(file_bytes) > 0:
+        if file_bytes.startswith(b"%PDF"):
+            try:
+                import fitz  # type: ignore[import-untyped]
+                doc = fitz.open(stream=file_bytes, filetype="pdf")
+                if len(doc) > 0:
+                    pix = doc[0].get_pixmap(dpi=150)
+                    b64 = base64.b64encode(pix.tobytes("jpeg")).decode("utf-8")
+            except Exception:
+                pass
+        elif len(file_bytes) > 0 and not text:
             b64 = base64.b64encode(file_bytes).decode("utf-8")
-        ai_res = await _cridar_ia_vision(prompt, text, b64, node_ia_url=node_ia_url)
-        if ai_res:
-            for k in raw_data:
-                if ai_res.get(k):
-                    raw_data[k] = str(ai_res[k])
 
-    trobat = bool(raw_data.get("nif") or raw_data.get("nom"))
-    return {
-        "status": ESTAT_EXTRET_AUTOMATIC if trobat else ESTAT_REVISIO_MANUAL,
-        "confidence": 0.95 if trobat else 0.0,
-        "raw_data": raw_data,
+        ai_res = await _cridar_ia_vision(prompt, text, b64, node_ia_url=node_ia_url)
+        if ai_res and isinstance(ai_res, dict):
+            for k in (
+                "tipus_document", "nif", "nom", "cognoms", "data_naixement", "dni_caducitat",
+                "data_caducitat", "telefon", "email", "rol", "especialitat", "carnet_conduir",
+                "carnet_caducitat", "prl_certificat_vigencia", "cap_caducitat"
+            ):
+                if ai_res.get(k) and not res.get(k):
+                    val = str(ai_res[k]).strip()
+                    if "caducitat" in k or "vigencia" in k or "naixement" in k:
+                        val = _normalitzar_data_iso_general(val) or val
+                    res[k] = val
+            if ai_res.get("te_cap_vigent") is True:
+                res["te_cap_vigent"] = True
+            if isinstance(ai_res.get("certificats_prl"), list) and not res["certificats_prl"]:
+                res["certificats_prl"] = [str(x) for x in ai_res["certificats_prl"]]
+
+    if res["dni_caducitat"] and not res["data_caducitat"]:
+        res["data_caducitat"] = res["dni_caducitat"]
+
+    trobat = bool(
+        res.get("nif")
+        or res.get("nom")
+        or res.get("carnet_conduir")
+        or res.get("carnet_caducitat")
+        or res.get("prl_certificat_vigencia")
+        or res.get("certificats_prl")
+    )
+    res["status"] = ESTAT_EXTRET_AUTOMATIC if trobat else ESTAT_REVISIO_MANUAL
+    res["confidence"] = 0.96 if trobat else 0.0
+    return res
+
+
+def consolidar_i_validar_ocr_operari(
+    docs: List[Dict[str, Any]],
+    data_referencia: Optional[date] = None,
+) -> Dict[str, Any]:
+    """Consolida múltiples documents d'un operari (DNI, Carnet, PRL, CAP, Contracte),
+    genera les alertes del Copilot per caducitat (caducat o a <= 30 dies / 1 mes de caducar)
+    i informa de la manca de documents SENSE bloquejar mai l'alta de l'operari.
+    """
+    avui = data_referencia or date.today()
+
+    consolidat: Dict[str, Any] = {
+        "status": ESTAT_REVISIO_MANUAL,
+        "confidence": 0.0,
+        "nif": None,
+        "nom": None,
+        "cognoms": None,
+        "data_naixement": None,
+        "dni_caducitat": None,
+        "data_caducitat": None,
+        "telefon": None,
+        "email": None,
+        "rol": "OPERARI",
+        "especialitat": "SISTEMES_REG",
+        "cost_hora_eur": 22.50,
+        "carnet_conduir": "B",
+        "carnet_caducitat": None,
+        "te_cap_vigent": False,
+        "cap_caducitat": None,
+        "prl_certificat_vigencia": None,
+        "certificats_prl": [],
+        "apte_alta_operari": True,
+        "bloqueja_alta": False,
+        "documents_aportats": [],
+        "documents_pendents": [],
+        "alertes_copilot": [],
+        "documents_processats": [],
     }
+
+    nifs_detectats: set[str] = set()
+    tipus_aportats: set[str] = set()
+    prl_acumulats: set[str] = set()
+    millor_carnet = "B"
+    millor_nivell_carnet = 0
+    algun_extret = False
+
+    for doc in docs:
+        if doc.get("status") == ESTAT_EXTRET_AUTOMATIC:
+            algun_extret = True
+        t_doc = str(doc.get("tipus_document") or "DNI_NIE").upper()
+        tipus_aportats.add(t_doc)
+
+        if doc.get("nif"):
+            nif_clean = str(doc["nif"]).strip().upper()
+            nifs_detectats.add(nif_clean)
+            if not consolidat["nif"]:
+                consolidat["nif"] = nif_clean
+
+        for camp in ("nom", "cognoms", "data_naixement", "dni_caducitat", "telefon", "email", "carnet_caducitat", "prl_certificat_vigencia", "cap_caducitat"):
+            if doc.get(camp) and not consolidat.get(camp):
+                consolidat[camp] = doc[camp]
+
+        if doc.get("rol"):
+            consolidat["rol"] = doc["rol"]
+        if doc.get("especialitat"):
+            consolidat["especialitat"] = doc["especialitat"]
+        if doc.get("cost_hora_eur") is not None:
+            consolidat["cost_hora_eur"] = float(doc["cost_hora_eur"])
+
+        if doc.get("carnet_conduir"):
+            c_doc = str(doc["carnet_conduir"]).upper().strip()
+            niv = ORDRE_JERARQUIA_CARNETS_OCR.get(c_doc, 2)
+            if niv > millor_nivell_carnet:
+                millor_nivell_carnet = niv
+                millor_carnet = c_doc
+            # Inferència de tipus documental si el document aporta explícitament carnet
+            if doc.get("carnet_caducitat"):
+                tipus_aportats.add("CARNET_CONDUIR")
+
+        if doc.get("prl_certificat_vigencia") or doc.get("certificats_prl"):
+            tipus_aportats.add("CERTIFICAT_PRL")
+
+        if doc.get("te_cap_vigent"):
+            consolidat["te_cap_vigent"] = True
+            tipus_aportats.add("CERTIFICAT_CAP")
+
+        for prl_item in doc.get("certificats_prl") or []:
+            prl_acumulats.add(str(prl_item))
+
+        consolidat["documents_processats"].append(
+            {
+                "nom_fitxer": doc.get("nom_fitxer") or f"{t_doc.lower()}.pdf",
+                "tipus_document": t_doc,
+                "hash_sha256": doc.get("hash_sha256") or "",
+                "data_caducitat": (
+                    doc.get("carnet_caducitat")
+                    or doc.get("prl_certificat_vigencia")
+                    or doc.get("dni_caducitat")
+                    or doc.get("data_caducitat")
+                ),
+                "accio_persistencia": "ARXIVAR_SOVEREIGN_STORAGE",
+            }
+        )
+
+    if millor_nivell_carnet > 0:
+        consolidat["carnet_conduir"] = millor_carnet
+    consolidat["certificats_prl"] = sorted(prl_acumulats)
+    consolidat["data_caducitat"] = (
+        consolidat["dni_caducitat"]
+        or consolidat["carnet_caducitat"]
+        or consolidat["prl_certificat_vigencia"]
+    )
+    consolidat["documents_aportats"] = sorted(tipus_aportats)
+
+    # 1. Validació de discrepància de NIF entre documents (no bloquejant però alerta Copilot)
+    alertes: List[Dict[str, Any]] = []
+    if len(nifs_detectats) > 1:
+        alertes.append(
+            {
+                "codi": "DISCREPANCIA_NIF_DOCUMENTS",
+                "severitat": "WARNING",
+                "estat": "REVISIO_IDENTITAT",
+                "concepte": "Identitat NIF/NIE",
+                "bloquejant_alta": False,
+                "missatge": f"S'han detectat NIFs diferents entre els documents adjuntats ({', '.join(sorted(nifs_detectats))}). Revisa que pertanyin al mateix operari.",
+            }
+        )
+
+    # 2. Alertes del Copilot per caducitat (caducat o a <= 30 dies / 1 mes vista)
+    venciments_check = [
+        ("CARNET", "Carnet de Conduir", consolidat.get("carnet_caducitat")),
+        ("PRL", "Certificat PRL", consolidat.get("prl_certificat_vigencia")),
+        ("DNI", "DNI / NIE", consolidat.get("dni_caducitat")),
+        ("CAP", "Certificat CAP", consolidat.get("cap_caducitat")),
+    ]
+    for prefix, nom_concepte, data_iso in venciments_check:
+        if data_iso:
+            try:
+                d_venc = date.fromisoformat(str(data_iso)[:10])
+                dies_restants = (d_venc - avui).days
+                if dies_restants < 0:
+                    alertes.append(
+                        {
+                            "codi": f"{prefix}_CADUCAT",
+                            "severitat": "CRITICAL",
+                            "estat": "CADUCAT",
+                            "concepte": nom_concepte,
+                            "data_caducitat": d_venc.isoformat(),
+                            "dies_restants": dies_restants,
+                            "bloquejant_alta": False,
+                            "missatge": (
+                                f"Alerta Copilot: El {nom_concepte} està CADUCAT des del {d_venc.isoformat()} "
+                                f"({abs(dies_restants)} dies vençut). No bloqueja l'alta de l'operari, però cal renovar-lo."
+                            ),
+                        }
+                    )
+                elif dies_restants <= 30:
+                    alertes.append(
+                        {
+                            "codi": f"{prefix}_PROPER_CADUCAR",
+                            "severitat": "WARNING",
+                            "estat": "PROPER_A_CADUCAR",
+                            "concepte": nom_concepte,
+                            "data_caducitat": d_venc.isoformat(),
+                            "dies_restants": dies_restants,
+                            "bloquejant_alta": False,
+                            "missatge": (
+                                f"Alerta Copilot: El {nom_concepte} caduca en menys d'un mes ({dies_restants} dies restants, "
+                                f"venciment {d_venc.isoformat()})."
+                            ),
+                        }
+                    )
+            except Exception:
+                pass
+
+    # 3. Control de manca de documents (NO BLOQUEJANT per a l'alta de l'operari)
+    docs_recomanats = [
+        ("DNI_NIE", "DNI / NIE"),
+        ("CARNET_CONDUIR", "Carnet de Conduir"),
+        ("CERTIFICAT_PRL", "Certificat PRL"),
+    ]
+    pendents_codis: List[str] = []
+    pendents_noms: List[str] = []
+    for codi_doc, label_doc in docs_recomanats:
+        if codi_doc not in tipus_aportats:
+            pendents_codis.append(codi_doc)
+            pendents_noms.append(label_doc)
+
+    consolidat["documents_pendents"] = pendents_codis
+    if pendents_codis:
+        alertes.append(
+            {
+                "codi": "MANCA_DOCUMENTACIO_RRHH",
+                "severitat": "INFO",
+                "estat": "DOCUMENTACIO_INCOMPLETA_NO_BLOQUEJANT",
+                "concepte": "Expedient Documental RRHH",
+                "documents_pendents": pendents_codis,
+                "bloquejant_alta": False,
+                "missatge": (
+                    f"Avís Copilot (No bloquejant): Manca adjuntar {', '.join(pendents_noms)}. "
+                    "Pots completar l'alta de l'operari ara i pujar la resta de documents més endavant."
+                ),
+            }
+        )
+
+    consolidat["alertes_copilot"] = alertes
+    consolidat["status"] = ESTAT_EXTRET_AUTOMATIC if algun_extret else ESTAT_REVISIO_MANUAL
+    consolidat["confidence"] = 0.96 if algun_extret else 0.0
+    consolidat["raw_data"] = {
+        "nif": consolidat["nif"],
+        "nom": consolidat["nom"],
+        "cognoms": consolidat["cognoms"],
+        "data_naixement": consolidat["data_naixement"],
+        "data_caducitat": consolidat["data_caducitat"],
+        "carnet_conduir": consolidat["carnet_conduir"],
+        "carnet_caducitat": consolidat["carnet_caducitat"],
+        "prl_certificat_vigencia": consolidat["prl_certificat_vigencia"],
+    }
+    return consolidat
+
+
+async def processar_dni_ocr(
+    file_bytes: bytes,
+    node_ia_url: Optional[str] = None,
+    filename: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Extracció OCR de DNI / NIE i documentació d'operari amb compatibilitat retroactiva."""
+    doc_extret = await processar_ocr_document_operari(
+        file_bytes, node_ia_url=node_ia_url, filename=filename
+    )
+    return consolidar_i_validar_ocr_operari([doc_extret])
 
 
 async def processar_albara_ocr(file_bytes: bytes, node_ia_url: Optional[str] = None) -> Dict[str, Any]:

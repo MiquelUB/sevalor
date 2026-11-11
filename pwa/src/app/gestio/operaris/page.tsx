@@ -68,6 +68,10 @@ interface OperariItem {
   carnet_conduir: string;
   carnet_caducitat: string | null;
   prl_certificat_vigencia: string | null;
+  te_cap_vigent?: boolean;
+  certificats_prl?: string[];
+  alertes_copilot?: any[];
+  documents_pendents?: string[];
   intents_pin_fallits: number;
   pin_bloquejat: boolean;
   total_eines_assignades: number;
@@ -161,6 +165,59 @@ export default function GestioOperarisPage() {
   const [novaEspecialitat, setNovaEspecialitat] = useState<string>("SISTEMES_REG");
   const [nouCostHora, setNouCostHora] = useState<number>(22.50);
   const [nouCarnet, setNouCarnet] = useState<string>("B");
+  const [nouCarnetCaducitat, setNouCarnetCaducitat] = useState<string>("");
+  const [novaPrlVigencia, setNovaPrlVigencia] = useState<string>("");
+  const [nouTeCap, setNouTeCap] = useState<boolean>(false);
+  const [nousCertificatsPrl, setNousCertificatsPrl] = useState<string[]>([]);
+  const [ocrLoading, setOcrLoading] = useState<boolean>(false);
+  const [ocrAlertesCopilot, setOcrAlertesCopilot] = useState<any[]>([]);
+  const [ocrDocsPendents, setOcrDocsPendents] = useState<string[]>([]);
+  const [ocrDocsProcessats, setOcrDocsProcessats] = useState<any[]>([]);
+  const [ocrFilesAdjunts, setOcrFilesAdjunts] = useState<File[]>([]);
+  const ocrFileInputRef = React.useRef<HTMLInputElement | null>(null);
+
+  const processarFitxersOcrOperari = async (files: File[]) => {
+    if (!files || files.length === 0) return;
+    setOcrLoading(true);
+    try {
+      const formData = new FormData();
+      files.forEach((f) => formData.append("files", f));
+      formData.append("file", files[0]);
+
+      const data = await apiFetch<any>("/gestio/operaris/ocr-draft", {
+        method: "POST",
+        body: formData,
+      });
+
+      if (data) {
+        if (data.nom) setNouNom(data.nom);
+        if (data.cognoms) setNousCognoms(data.cognoms);
+        if (data.nif) setNouNif(data.nif);
+        if (data.telefon) setNouTelefon(data.telefon);
+        if (data.email) setNouEmail(data.email);
+        if (data.rol === "OPERARI" || data.rol === "CAP_DE_COLLA") setNouRol(data.rol);
+        if (data.especialitat) setNovaEspecialitat(data.especialitat);
+        if (data.cost_hora_eur) setNouCostHora(Number(data.cost_hora_eur));
+        if (data.carnet_conduir) setNouCarnet(data.carnet_conduir);
+        if (data.carnet_caducitat) setNouCarnetCaducitat(data.carnet_caducitat);
+        if (data.prl_certificat_vigencia) setNovaPrlVigencia(data.prl_certificat_vigencia);
+        if (data.te_cap_vigent !== undefined) setNouTeCap(Boolean(data.te_cap_vigent));
+        if (Array.isArray(data.certificats_prl)) setNousCertificatsPrl(data.certificats_prl);
+        if (Array.isArray(data.alertes_copilot)) setOcrAlertesCopilot(data.alertes_copilot);
+        if (Array.isArray(data.documents_pendents)) setOcrDocsPendents(data.documents_pendents);
+        if (Array.isArray(data.documents_processats)) setOcrDocsProcessats(data.documents_processats);
+        setOcrFilesAdjunts((prev) => [...prev, ...files]);
+        setModalAltaObert(true);
+      }
+    } catch (err: any) {
+      alert("Error processant OCR d'operari: " + (err?.message || "Error desconegut"));
+    } finally {
+      setOcrLoading(false);
+      if (ocrFileInputRef.current) {
+        ocrFileInputRef.current.value = "";
+      }
+    }
+  };
 
   // Formulari d'Edició d'Operari (BOSS / SECRETARIA)
   const [operariEditantId, setOperariEditantId] = useState<string | null>(null);
@@ -241,6 +298,10 @@ export default function GestioOperarisPage() {
         carnet_conduir: op.carnet_conduir || "B",
         carnet_caducitat: op.carnet_caducitat || null,
         prl_certificat_vigencia: op.prl_certificat_vigencia || null,
+        te_cap_vigent: Boolean(op.te_cap_vigent),
+        certificats_prl: Array.isArray(op.certificats_prl) ? op.certificats_prl : [],
+        alertes_copilot: Array.isArray(op.alertes_copilot) ? op.alertes_copilot : [],
+        documents_pendents: Array.isArray(op.documents_pendents) ? op.documents_pendents : [],
         intents_pin_fallits: op.intents_pin_fallits || 0,
         pin_bloquejat: Boolean(op.pin_bloquejat),
         total_eines_assignades: op.total_eines_assignades || 0,
@@ -306,7 +367,7 @@ export default function GestioOperarisPage() {
     }
   }, [operariSeleccionat, pestanyaActiva, rolActiu]);
 
-  // Alta d'operari (RF-25)
+  // Alta d'operari (RF-25 + OCR Multi-Document Spec 008)
   const handleCrearOperari = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!nouNom || !nouNif || !nouTelefon) return;
@@ -325,9 +386,28 @@ export default function GestioOperarisPage() {
           especialitat: novaEspecialitat,
           cost_hora_eur: nouCostHora,
           carnet_conduir: nouCarnet,
+          carnet_caducitat: nouCarnetCaducitat || null,
+          prl_certificat_vigencia: novaPrlVigencia || null,
+          te_cap_vigent: nouTeCap,
+          certificats_prl: nousCertificatsPrl,
+          documents_processats: ocrDocsProcessats,
           vehicle_assignat_id: nouVehicleAssignatId || null,
         }),
       });
+
+      if (data?.id && ocrFilesAdjunts.length > 0) {
+        try {
+          const formDocs = new FormData();
+          ocrFilesAdjunts.forEach((f) => formDocs.append("files", f));
+          formDocs.append("file", ocrFilesAdjunts[0]);
+          await apiFetch<any>(`/gestio/operaris/${data.id}/documents`, {
+            method: "POST",
+            body: formDocs,
+          });
+        } catch (errDocs) {
+          console.error("Avís vinculant documents d'operari al disc del client:", errDocs);
+        }
+      }
 
       setModalAltaObert(false);
       if (data && data.pin_generat) {
@@ -589,12 +669,21 @@ export default function GestioOperarisPage() {
                 setNouNif("");
                 setNouTelefon("");
                 setNouEmail("");
+                setNouCarnet("B");
+                setNouCarnetCaducitat("");
+                setNovaPrlVigencia("");
+                setNouTeCap(false);
+                setNousCertificatsPrl([]);
+                setOcrAlertesCopilot([]);
+                setOcrDocsPendents([]);
+                setOcrDocsProcessats([]);
+                setOcrFilesAdjunts([]);
                 setModalAltaObert(true);
               }}
               className="px-3.5 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-500 text-white text-xs font-mono font-bold flex items-center gap-1.5 shadow transition-colors"
             >
               <PlusCircle className="w-4 h-4" />
-              <span>Alta Nou Operari</span>
+              <span>Alta Nou Operari (OCR)</span>
             </button>
           ) : (
             <div className="px-3 py-1.5 rounded-lg bg-slate-200 dark:bg-slate-800 text-slate-500 text-xs font-mono flex items-center gap-1.5 border border-slate-300 dark:border-slate-700" title="Veto d'Enginyer a l'alta de personal">
@@ -980,6 +1069,33 @@ export default function GestioOperarisPage() {
               {/* 1. INFO */}
               {pestanyaActiva === "info" && (
                 <div className="space-y-4 text-xs font-mono">
+                  {operariSeleccionat.alertes_copilot && operariSeleccionat.alertes_copilot.length > 0 && (
+                    <div className="space-y-1.5">
+                      {operariSeleccionat.alertes_copilot.map((al: any, idx: number) => {
+                        const isCrit = al.severitat === "CRITICAL";
+                        const isWarn = al.severitat === "WARNING";
+                        return (
+                          <div
+                            key={idx}
+                            className={`p-2.5 rounded-xl border text-[11px] flex items-start gap-2 ${
+                              isCrit
+                                ? "bg-rose-50 dark:bg-rose-950/40 border-rose-300 dark:border-rose-800 text-rose-800 dark:text-rose-200"
+                                : isWarn
+                                ? "bg-amber-50 dark:bg-amber-950/40 border-amber-300 dark:border-amber-800 text-amber-800 dark:text-amber-200"
+                                : "bg-sky-50 dark:bg-sky-950/40 border-sky-300 dark:border-sky-800 text-sky-800 dark:text-sky-200"
+                            }`}
+                          >
+                            <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+                            <div>
+                              <span className="font-bold">{al.concepte || "Avís Copilot"}: </span>
+                              <span>{al.missatge}</span>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+
                   <div className="grid grid-cols-2 gap-3">
                     <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700">
                       <span className="text-slate-400">Telèfon Corporatiu:</span>
@@ -1004,9 +1120,9 @@ export default function GestioOperarisPage() {
                   </div>
 
                   <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700">
-                    <span className="text-slate-400">Custòdia Sobirana de Fitxers Hetzner:</span>
+                    <span className="text-slate-400">Custòdia al Disc Dur Dedicat del Client (SovereignStorage):</span>
                     <p className="text-[11px] text-slate-600 dark:text-slate-300 mt-1">
-                      /docs/[empresa_id]/operaris/{operariSeleccionat.nif}/ (Xifrat AES-256-GCM)
+                      08_flota_i_operaris/operaris/documents_rrhh/{operariSeleccionat.nif}/
                     </p>
                   </div>
 
@@ -1284,18 +1400,112 @@ export default function GestioOperarisPage() {
         </div>
       )}
 
-      {/* MODAL ALTA NOU OPERARI (RF-25) */}
+      {/* MODAL ALTA NOU OPERARI (RF-25 + OCR Multi-Document Spec 008) */}
       {modalAltaObert && (
         <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="w-full max-w-lg bg-white dark:bg-slate-900 rounded-2xl shadow-xl border border-slate-200 dark:border-slate-800 overflow-hidden font-mono text-xs">
+          <div className="w-full max-w-xl max-h-[90vh] overflow-y-auto bg-white dark:bg-slate-900 rounded-2xl shadow-xl border border-slate-200 dark:border-slate-800 overflow-hidden font-mono text-xs">
             <div className="p-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between">
               <h3 className="font-bold text-slate-900 dark:text-white flex items-center gap-2">
                 <HardHat className="w-4 h-4 text-amber-500" />
-                <span>Alta d'Operari & Generació de PIN SMS</span>
+                <span>Alta d'Operari via OCR & Generació de PIN SMS</span>
               </h3>
               <button onClick={() => setModalAltaObert(false)} className="p-1 hover:bg-slate-100 dark:hover:bg-slate-800 rounded">
                 <X className="w-4 h-4" />
               </button>
+            </div>
+
+            {/* Zona Dropzone Alta Màgica OCR Multi-Document (.md, .pdf, .jpg, .png, .txt, .doc, .docx) */}
+            <div className="px-5 pt-4 space-y-2.5">
+              <div
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                }}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  const files = e.dataTransfer?.files;
+                  if (files && files.length > 0) processarFitxersOcrOperari(Array.from(files));
+                }}
+                onClick={() => ocrFileInputRef.current?.click()}
+                className={`p-3.5 rounded-xl border-2 border-dashed transition-all cursor-pointer text-center ${
+                  ocrLoading
+                    ? "border-amber-500 bg-amber-50/50 dark:bg-amber-950/20"
+                    : "border-slate-300 dark:border-slate-700 hover:border-amber-500 hover:bg-slate-50 dark:hover:bg-slate-800/50"
+                }`}
+              >
+                <input
+                  ref={ocrFileInputRef}
+                  type="file"
+                  multiple
+                  className="hidden"
+                  accept=".md,.markdown,.pdf,.jpg,.jpeg,.png,.txt,.doc,.docx,image/*,application/pdf,text/markdown,text/plain,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                  onChange={(e) => {
+                    if (e.target.files && e.target.files.length > 0) {
+                      processarFitxersOcrOperari(Array.from(e.target.files));
+                    }
+                  }}
+                />
+                <div className="flex items-center justify-center gap-2 text-amber-600 dark:text-amber-400 font-bold">
+                  {ocrLoading ? (
+                    <>
+                      <RefreshCw className="w-4 h-4 animate-spin text-amber-500" />
+                      <span>Processant documents d'operari amb OCR i desant al disc del client...</span>
+                    </>
+                  ) : (
+                    <>
+                      <FileText className="w-4 h-4 text-amber-500" />
+                      <span>Alta Màgica OCR: Arrossega o clica per pujar DNI, Carnet, PRL o Contracte (.md, .pdf, .jpg, .png, .txt, .doc, .docx)</span>
+                    </>
+                  )}
+                </div>
+                <p className="text-[10px] text-slate-500 dark:text-slate-400 mt-1">
+                  Els documents es guarden sempre al disc dur del client. La manca de documents és informativa i NO bloqueja l'alta.
+                </p>
+
+                {ocrDocsProcessats.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5 mt-2.5 justify-center">
+                    {ocrDocsProcessats.map((doc, idx) => (
+                      <span
+                        key={idx}
+                        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800"
+                      >
+                        <Check className="w-3 h-3 text-emerald-600 dark:text-emerald-400" />
+                        <span>{doc.nom_fitxer}</span>
+                        <span className="opacity-70 text-[9px]">({doc.tipus_document})</span>
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Panell d'Alertes Copilot (Caducitat de carnets / PRL <= 30 dies o caducats i Manca de documents no bloquejant) */}
+              {ocrAlertesCopilot.length > 0 && (
+                <div className="space-y-1.5">
+                  {ocrAlertesCopilot.map((al, i) => {
+                    const isCrit = al.severitat === "CRITICAL";
+                    const isWarn = al.severitat === "WARNING";
+                    return (
+                      <div
+                        key={i}
+                        className={`p-2.5 rounded-xl border text-[11px] flex items-start gap-2 ${
+                          isCrit
+                            ? "bg-rose-50 dark:bg-rose-950/40 border-rose-300 dark:border-rose-800 text-rose-800 dark:text-rose-200"
+                            : isWarn
+                            ? "bg-amber-50 dark:bg-amber-950/40 border-amber-300 dark:border-amber-800 text-amber-800 dark:text-amber-200"
+                            : "bg-sky-50 dark:bg-sky-950/40 border-sky-300 dark:border-sky-800 text-sky-800 dark:text-sky-200"
+                        }`}
+                      >
+                        <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+                        <div className="flex-1">
+                          <span className="font-bold">{al.concepte || "Avís Copilot"}: </span>
+                          <span>{al.missatge}</span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
 
             <form onSubmit={handleCrearOperari} className="p-5 space-y-3">
@@ -1395,11 +1605,33 @@ export default function GestioOperarisPage() {
                     onChange={(e) => setNouCarnet(e.target.value)}
                     className="w-full px-3 py-1.5 rounded-lg bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs mt-1"
                   >
+                    <option value="AM">Permís AM</option>
                     <option value="B">Permís B</option>
                     <option value="B+E">Permís B+E (Remolc)</option>
                     <option value="C">Permís C (Camió)</option>
                     <option value="C+E">Permís C+E</option>
                   </select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-[10px] text-slate-400">Caducitat Carnet (Opcional / OCR)</label>
+                  <input
+                    type="date"
+                    value={nouCarnetCaducitat}
+                    onChange={(e) => setNouCarnetCaducitat(e.target.value)}
+                    className="w-full px-3 py-1.5 rounded-lg bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs mt-1"
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] text-slate-400">Vigència PRL (Opcional / OCR)</label>
+                  <input
+                    type="date"
+                    value={novaPrlVigencia}
+                    onChange={(e) => setNovaPrlVigencia(e.target.value)}
+                    className="w-full px-3 py-1.5 rounded-lg bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs mt-1"
+                  />
                 </div>
               </div>
 

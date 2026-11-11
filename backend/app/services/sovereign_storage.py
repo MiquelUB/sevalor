@@ -59,6 +59,10 @@ MAPA_CARPETES_CLIENT: Dict[str, str] = {
     "incidencies_registres": "07_incidencies/registres",
     # 08. Flota i Operaris
     "vehicles": "08_flota_i_operaris/vehicles",
+    "alertes_flota": "08_flota_i_operaris/vehicles/alertes_flota",
+    "operaris": "08_flota_i_operaris/operaris",
+    "documents_operaris": "08_flota_i_operaris/operaris/documents_rrhh",
+    "alertes_operaris": "08_flota_i_operaris/operaris/alertes_rrhh",
     "tiquets_despesa": "08_flota_i_operaris/tiquets_despesa",
     "jornades": "08_flota_i_operaris/registres_jornada",
     # 09. Agent Copilot Dedicat i Autoaprenentatge
@@ -101,15 +105,17 @@ class SovereignStorageGateway:
 
     @staticmethod
     async def resoldre_desti_disc_empresa(
-        db: AsyncSession, empresa_id: str | uuid.UUID
+        db: Optional[AsyncSession], empresa_id: str | uuid.UUID
     ) -> Tuple[str, str, Optional[str]]:
         """
         Obté la destinació del disc dur configurat per a l'empresa.
         Retorna: (mode: 'LOCAL_FS' | 'HTTP_VAULT', base_target: str, secret: Optional[str])
         """
         emp_uuid = uuid.UUID(str(empresa_id))
-        res = await db.execute(select(Empresa).where(Empresa.id == emp_uuid))
-        emp = res.scalars().first()
+        emp = None
+        if db is not None:
+            res = await db.execute(select(Empresa).where(Empresa.id == emp_uuid))
+            emp = res.scalars().first()
         base_vaults = os.getenv("CLIENT_DISKS_MOUNT_ROOT", "/tmp/sevalor_client_disks")
         if not emp:
             raw_disc = os.path.join(base_vaults, f"disc_{emp_uuid}")

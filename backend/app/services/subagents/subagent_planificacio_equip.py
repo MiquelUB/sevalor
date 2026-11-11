@@ -71,6 +71,13 @@ class SubagentPlanificacioEquip(BaseSubagent):
             "incidencia",
             "incidencies",
             "treball d'avui",
+            "carnet",
+            "carnets",
+            "caducitat",
+            "caducar",
+            "prl",
+            "documentació operari",
+            "documents operari",
         ]
         return any(k in q for k in paraules_clau)
 
@@ -385,11 +392,41 @@ class SubagentPlanificacioEquip(BaseSubagent):
 
         rols_count: Dict[str, int] = {}
         llista_membres = []
+        alertes_carnets_prl: List[str] = []
+        avisos_manca_docs: List[str] = []
+
         for u, _, _, _, _ in rows:
             r = u.rol or "OPERARI"
             rols_count[r] = rols_count.get(r, 0) + 1
             nom_u = f"{u.nom} {u.cognoms or ''}".strip() or u.email
             llista_membres.append(f"{nom_u} ({r})")
+
+            if r in ("OPERARI", "CAP_DE_COLLA"):
+                if u.carnet_caducitat:
+                    dies_c = (u.carnet_caducitat - avui).days
+                    if dies_c < 0:
+                        alertes_carnets_prl.append(
+                            f"⚠️ {nom_u}: Carnet de conduir ({u.carnet_conduir or 'B'}) CADUCAT des del {u.carnet_caducitat.isoformat()} ({abs(dies_c)} dies vençut)."
+                        )
+                    elif dies_c <= 30:
+                        alertes_carnets_prl.append(
+                            f"⚠️ {nom_u}: Carnet de conduir ({u.carnet_conduir or 'B'}) caduca en {dies_c} dies ({u.carnet_caducitat.isoformat()})."
+                        )
+                else:
+                    avisos_manca_docs.append(f"{nom_u} (manca data carnet conduir)")
+
+                if u.prl_certificat_vigencia:
+                    dies_p = (u.prl_certificat_vigencia - avui).days
+                    if dies_p < 0:
+                        alertes_carnets_prl.append(
+                            f"⚠️ {nom_u}: Certificat PRL CADUCAT des del {u.prl_certificat_vigencia.isoformat()} ({abs(dies_p)} dies vençut)."
+                        )
+                    elif dies_p <= 30:
+                        alertes_carnets_prl.append(
+                            f"⚠️ {nom_u}: Certificat PRL caduca en {dies_p} dies ({u.prl_certificat_vigencia.isoformat()})."
+                        )
+                else:
+                    avisos_manca_docs.append(f"{nom_u} (manca vigència PRL)")
 
         rols_txt = ", ".join(
             [f"{count} {r.lower()}s" if count > 1 else f"1 {r.lower()}" for r, count in rols_count.items()]
@@ -408,6 +445,16 @@ class SubagentPlanificacioEquip(BaseSubagent):
         if sense_fitxar and caller_role not in ("OPERARI", "CAPATAZ", "CAP_DE_COLLA"):
             linies.append(f"• Pendent de fitxar ({len(sense_fitxar)}): " + ", ".join(sense_fitxar))
 
+        if alertes_carnets_prl:
+            linies.append("\nAlertes Copilot de Caducitat (Carnets / PRL):")
+            for al_txt in alertes_carnets_prl:
+                linies.append(f"• {al_txt}")
+        if avisos_manca_docs and caller_role not in ("OPERARI", "CAPATAZ", "CAP_DE_COLLA"):
+            linies.append(
+                "• Avís documental (no bloquejant): Manca informar documents de "
+                + ", ".join(avisos_manca_docs)
+            )
+
         equip_data = [
             {
                 "id": str(u.id),
@@ -417,6 +464,9 @@ class SubagentPlanificacioEquip(BaseSubagent):
                 "hora_inici": h_inici.strftime("%H:%M") if h_inici else None,
                 "hora_fi": h_fi.strftime("%H:%M") if h_fi else None,
                 "vehicle": v_mat,
+                "carnet_conduir": u.carnet_conduir,
+                "carnet_caducitat": u.carnet_caducitat.isoformat() if u.carnet_caducitat else None,
+                "prl_certificat_vigencia": u.prl_certificat_vigencia.isoformat() if u.prl_certificat_vigencia else None,
             }
             for u, h_inici, h_fi, reg_estat, v_mat in rows
         ]
@@ -429,6 +479,8 @@ class SubagentPlanificacioEquip(BaseSubagent):
             "desglossament_rols": rols_count,
             "equip": equip_data,
             "actius": actius,
+            "alertes_carnets_prl": alertes_carnets_prl,
+            "avisos_manca_docs": avisos_manca_docs,
             "missatge": "\n".join(linies),
         }
 
@@ -617,6 +669,11 @@ class SubagentPlanificacioEquip(BaseSubagent):
                 "qui ha fitxat",
                 "cens",
                 "equip",
+                "carnet",
+                "carnets",
+                "caducitat",
+                "caducar",
+                "prl",
             ]
         ):
             tool_name = "get_team_today"

@@ -280,4 +280,107 @@ async def test_metrics_operaris_i_fitxa_360(admin_session, boss_token):
         assert res_veto.status_code == 403
 
 
+@pytest.mark.asyncio
+async def test_ocr_operari_multiformat_i_alertes_copilot():
+    """Valida que l'OCR d'operari llegeix .md, .pdf, .jpg, .png, .txt, .doc, .docx,
+    genera alertes Copilot de caducitat (caducat o <= 30 dies) i informa de manca de documents sense bloquejar l'alta.
+    """
+    import io
+    import zipfile
+    from datetime import date
+
+    from app.services.ocr_service import (
+        consolidar_i_validar_ocr_operari,
+        processar_ocr_document_operari,
+    )
+
+    data_ref = date(2026, 11, 11)
+
+    # 1. Fitxer .md (DNI)
+    dni_md = (
+        "# DNI ESPANYA\n"
+        "**Cognoms / Apellidos:** Soler Vila\n"
+        "**Nom / Nombre:** Jordi\n"
+        "**NIF:** 47821948B\n"
+        "**Data de naixement:** 14/05/1988\n"
+        "**Validesa:** 20/11/2026\n"
+    ).encode("utf-8")
+    res_md = await processar_ocr_document_operari(dni_md, filename="dni_jordi.md")
+    assert res_md["nif"] == "47821948B"
+    assert res_md["nom"] == "Jordi"
+    assert res_md["cognoms"] == "Soler Vila"
+    assert res_md["dni_caducitat"] == "2026-11-20"
+
+    # 2. Fitxer .txt (Carnet de conduir a menys d'un mes de caducar: 15 dies)
+    carnet_txt = (
+        "PERMÍS DE CONDUIR DGT\n"
+        "1. Soler Vila\n"
+        "2. Jordi\n"
+        "4d. NIF: 47821948B\n"
+        "9. Categories: B, B+E, C\n"
+        "4b. Caducitat del carnet: 26/11/2026\n"
+        "Observacions: Codi 95 CAP VIGENT\n"
+    ).encode("utf-8")
+    res_txt = await processar_ocr_document_operari(carnet_txt, filename="carnet_dgt.txt")
+    assert res_txt["tipus_document"] == "CARNET_CONDUIR"
+    assert res_txt["carnet_conduir"] == "C"
+    assert res_txt["carnet_caducitat"] == "2026-11-26"
+    assert res_txt["te_cap_vigent"] is True
+
+    # 3. Fitxer .docx (ZIP amb word/document.xml - Contracte RRHH)
+    docx_buf = io.BytesIO()
+    with zipfile.ZipFile(docx_buf, "w") as zf:
+        xml_content = (
+            '<?xml version="1.0" encoding="UTF-8"?>'
+            '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+            "<w:body>"
+            "<w:p><w:r><w:t>CONTRACTE LABORAL RRHH - NIF: 47821948B</w:t></w:r></w:p>"
+            "<w:p><w:r><w:t>Telèfon: +34612345678 | Email: jordi.soler@campopro.cat</w:t></w:r></w:p>"
+            "<w:p><w:r><w:t>Especialitat: ELECTRICITAT | Cost/hora: 26.50 EUR</w:t></w:r></w:p>"
+            "</w:body></w:document>"
+        )
+        zf.writestr("word/document.xml", xml_content)
+    res_docx = await processar_ocr_document_operari(docx_buf.getvalue(), filename="contracte.docx")
+    assert res_docx["telefon"] == "+34612345678"
+    assert res_docx["email"] == "jordi.soler@campopro.cat"
+    assert res_docx["especialitat"] == "ELECTRICITAT"
+    assert res_docx["cost_hora_eur"] == 26.50
+
+    # 4. Fitxer .doc i .jpg/.png amb metadates incrustades
+    doc_bytes = b"FITXA OPERARI .DOC\nNom: Jordi\nCognoms: Soler Vila\nNIF: 47821948B\n"
+    res_doc = await processar_ocr_document_operari(doc_bytes, filename="fitxa.doc")
+    assert res_doc["nif"] == "47821948B"
+
+    jpg_bytes = b"\xff\xd8\xff\xe0JFIF\x00DNI Titular: Jordi Soler Vila NIF: 47821948B Caducitat: 2026-11-20"
+    res_jpg = await processar_ocr_document_operari(jpg_bytes, filename="dni_scan.jpg")
+    assert res_jpg["nif"] == "47821948B"
+
+    png_bytes = b"\x89PNG\r\n\x1a\nDNI Titular: Jordi Soler Vila NIF: 47821948B Caducitat: 2026-11-20"
+    res_png = await processar_ocr_document_operari(png_bytes, filename="dni_scan.png")
+    assert res_png["nif"] == "47821948B"
+
+    # 5. Consolidació SENSE Certificat PRL: ha d'alertar de carnet a punt de caducar (<=30 dies)
+    # i informar de manca de CERTIFICAT_PRL SENSE bloquejar l'alta!
+    consolidat = consolidar_i_validar_ocr_operari([res_md, res_txt, res_docx], data_referencia=data_ref)
+    assert consolidat["apte_alta_operari"] is True
+    assert consolidat["bloqueja_alta"] is False
+    assert "CERTIFICAT_PRL" in consolidat["documents_pendents"]
+
+    codis_alertes = [a["codi"] for a in consolidat["alertes_copilot"]]
+    assert "CARNET_PROPER_CADUCAR" in codis_alertes
+    assert "DNI_PROPER_CADUCAR" in codis_alertes
+    assert "MANCA_DOCUMENTACIO_RRHH" in codis_alertes
+    assert all(a["bloquejant_alta"] is False for a in consolidat["alertes_copilot"])
+
+    # 6. Escenari amb Carnet CADUCAT (< data_ref): alerta CRITICAL però no bloqueja l'alta
+    carnet_caducat = await processar_ocr_document_operari(
+        b"PERMIS DE CONDUIR\nNIF: 47821948B\nCarnet: B\nCaducitat del carnet: 01/10/2026\n",
+        filename="carnet_caducat.txt",
+    )
+    cons_cad = consolidar_i_validar_ocr_operari([carnet_caducat], data_referencia=data_ref)
+    assert cons_cad["bloqueja_alta"] is False
+    assert any(a["codi"] == "CARNET_CADUCAT" and a["severitat"] == "CRITICAL" for a in cons_cad["alertes_copilot"])
+
+
+
 
