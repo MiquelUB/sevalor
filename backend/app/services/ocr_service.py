@@ -489,6 +489,18 @@ async def processar_ocr_document_vehicle(file_input: bytes | str, node_ia_url: O
         "marca": None,
         "model": None,
         "titular": None,
+        "titular_nif": None,
+        "arrendatari_nif": None,
+        "categoria_ue": None,
+        "mma_kg": None,
+        "tara_kg": None,
+        "carrega_util_kg": None,
+        "requereix_cap": False,
+        "equipament_homologat": [],
+        "empresa_renting": None,
+        "num_contracte_renting": None,
+        "data_venciment_renting": None,
+        "dades_pesants": None,
         "tipus": None,
         "distintiu_ambiental": None,
         "odometre_acumulat": None,
@@ -505,10 +517,14 @@ async def processar_ocr_document_vehicle(file_input: bytes | str, node_ia_url: O
         "tipus_document": None,
     }
 
+    mmr_amb_fre_kg: Optional[int] = None
+    dades_pesants_dict: Dict[str, Any] = {}
+    equipament_detectat: List[str] = []
+
     if text:
-        # 1. Matrícula espanyola: 4 dígits + 3 lletres o format antic
+        # 1. Matrícula espanyola: Codi UE (A) o cerca general
         mat_explicit = re.search(
-            r"(?:Matr[íi]cula|Matricula|Placa)[\s:]*([0-9]{4}[ -]?[A-Z]{3}|[A-Z]{1,2}[ -]?[0-9]{4}[ -]?[A-Z]{1,2})",
+            r"(?:(?:\(A\)|A\.)\s*Matr[íi]cula|Matr[íi]cula|Matricula|Placa)[\s:]*([0-9]{4}[ -]?[A-Z]{3}|[A-Z]{1,2}[ -]?[0-9]{4}[ -]?[A-Z]{1,2})",
             text,
             re.IGNORECASE,
         )
@@ -521,9 +537,9 @@ async def processar_ocr_document_vehicle(file_input: bytes | str, node_ia_url: O
             if mat_m:
                 resultat["matricula"] = mat_m.group(1).replace(" ", "-").upper()
 
-        # 2. VIN / Bastidor (alfanumèric)
+        # 2. VIN / Bastidor (Codi UE (E) o cerca alfanumèrica ISO)
         vin_explicit = re.search(
-            r"(?:VIN|Bastidor|N[úu]m\.?\s*Bastidor|N[úu]mero\s*de\s*bastidor)[\s:]*([A-HJ-NPR-Z0-9]{11,18})",
+            r"(?:(?:\(E\)|E\.)\s*(?:N[úu]m\.?\s*Identificaci[oó]n\s*\(VIN\)|N[º°]\s*Identificaci[oó]n\s*\(VIN\)|VIN|Bastidor)|(?:VIN|Bastidor|N[úu]m\.?\s*Bastidor|N[º°]\s*Bastidor|N[úu]mero\s*de\s*bastidor))[\s:]*([A-HJ-NPR-Z0-9]{11,18})",
             text,
             re.IGNORECASE,
         )
@@ -534,57 +550,69 @@ async def processar_ocr_document_vehicle(file_input: bytes | str, node_ia_url: O
             if vin_m:
                 resultat["bastidor"] = vin_m.group(1).upper()
 
-        # 3. Marca i Model
-        marca_m = re.search(
-            r"(?:(?:\([A-Z0-9\.]+\)|[A-Z0-9\.]+\s*)?Marca\s*(?:[\/\&\|\-]\s*(?:Model|Modelo)|y\s*Modelo|i\s*Model)?|(?:\([A-Z0-9\.]+\)|[A-Z0-9\.]+\s*)?Marca)[\s:]*([^\n\r]+)",
-            text,
-            re.IGNORECASE,
-        )
-        if marca_m:
-            raw_marca_line = marca_m.group(1).strip()
-            raw_marca_line = re.sub(r"^(?:y|i|\/)?\s*(?:Model|Modelo)[\s:]*", "", raw_marca_line, flags=re.IGNORECASE).strip()
+        # 3. Marca i Model (Codi UE D.1 i D.3)
+        marca_ue_m = re.search(r"(?:(?:\(D\.1\)|D\.1)\s*Marca)[\s:]*([^\n\r]+)", text, re.IGNORECASE)
+        if marca_ue_m:
+            raw_marca_line = marca_ue_m.group(1).strip()
             for m_cand in MARQUES_VEHICLES_CONEGUDES:
                 if raw_marca_line.upper().startswith(m_cand):
                     resultat["marca"] = m_cand.title()
-                    rest = raw_marca_line[len(m_cand):].strip(" -/,").strip()
-                    if rest:
-                        resultat["model"] = rest
                     break
-            if not resultat["marca"]:
-                parts = raw_marca_line.split()
-                if parts:
-                    resultat["marca"] = parts[0].capitalize()
-                    if len(parts) > 1 and not resultat["model"]:
-                        resultat["model"] = " ".join(parts[1:])
+            if not resultat["marca"] and raw_marca_line:
+                resultat["marca"] = raw_marca_line.split()[0].capitalize()
 
-        model_m = re.search(
-            r"(?:(?:\([A-Z0-9\.]+\)|[A-Z0-9\.]+\s*)?(?:Denominaci[oó]n\s*comercial|Denominaci[oó]\s*comercial|Model\s*&\s*Versi[oó]|Modelo|Model|Versi[oó]n|Versi[oó]))[\s:]*([^\n\r]+)",
+        if not resultat["marca"]:
+            marca_m = re.search(
+                r"(?:(?:\([A-Z0-9\.]+\)|[A-Z0-9\.]+\s*)?Marca\s*(?:[\/\&\|\-]\s*(?:Model|Modelo)|y\s*Modelo|i\s*Model)?|(?:\([A-Z0-9\.]+\)|[A-Z0-9\.]+\s*)?Marca)[\s:]*([^\n\r]+)",
+                text,
+                re.IGNORECASE,
+            )
+            if marca_m:
+                raw_marca_line = marca_m.group(1).strip()
+                raw_marca_line = re.sub(r"^(?:y|i|\/)?\s*(?:Model|Modelo)[\s:]*", "", raw_marca_line, flags=re.IGNORECASE).strip()
+                for m_cand in MARQUES_VEHICLES_CONEGUDES:
+                    if raw_marca_line.upper().startswith(m_cand):
+                        resultat["marca"] = m_cand.title()
+                        rest = raw_marca_line[len(m_cand):].strip(" -/,").strip()
+                        if rest:
+                            resultat["model"] = rest
+                        break
+                if not resultat["marca"]:
+                    parts = raw_marca_line.split()
+                    if parts:
+                        resultat["marca"] = parts[0].capitalize()
+                        if len(parts) > 1 and not resultat["model"]:
+                            resultat["model"] = " ".join(parts[1:])
+
+        # Prioritzar D.3 Denominación comercial explícita per sobre de D.2 Versión
+        model_d3_m = re.search(
+            r"(?:(?:\(D\.3\)|D\.3)\s*Denominaci[oó]n\s*comercial|Denominaci[oó]n\s*comercial|Denominaci[oó]\s*comercial)[\s:]*([^\n\r]+)",
             text,
             re.IGNORECASE,
         )
-        if model_m:
-            cand_model = model_m.group(1).strip().splitlines()[0]
+        if model_d3_m:
+            cand_model = model_d3_m.group(1).strip().splitlines()[0]
             cand_model = re.sub(r"^[oO]\s*:\s*", "", cand_model).strip()
             if resultat.get("marca") and cand_model.upper().startswith(resultat["marca"].upper()):
                 cand_model = cand_model[len(resultat["marca"]):].strip(" -/,")
             if cand_model:
                 resultat["model"] = cand_model
+        else:
+            model_m = re.search(
+                r"(?:Model\s*&\s*Versi[oó]|Modelo|Model|(?:(?:\(D\.2\)|D\.2)\s*)?(?:Tipo\s*\/\s*Variante\s*\/\s*Versi[oó]n|Versi[oó]n|Versi[oó]))[\s:]*([^\n\r]+)",
+                text,
+                re.IGNORECASE,
+            )
+            if model_m:
+                cand_model = model_m.group(1).strip().splitlines()[0]
+                cand_model = re.sub(r"^[oO]\s*:\s*", "", cand_model).strip()
+                if resultat.get("marca") and cand_model.upper().startswith(resultat["marca"].upper()):
+                    cand_model = cand_model[len(resultat["marca"]):].strip(" -/,")
+                if cand_model:
+                    resultat["model"] = cand_model
 
-        # Preferir sempre la Denominació Comercial pura sobre codis de variant/versió (ex: FAC6/YMF6)
-        denom_m = re.search(
-            r"(?:(?:\([A-Z0-9\.]+\)|[A-Z0-9\.]+\s*)?(?:Denominaci[oó]n\s*comercial|Denominaci[oó]\s*comercial))[\s:]*([^\n\r]+)",
-            text,
-            re.IGNORECASE,
-        )
-        if denom_m:
-            cand_denom = denom_m.group(1).strip().splitlines()[0]
-            if resultat.get("marca") and cand_denom.upper().startswith(resultat["marca"].upper()):
-                cand_denom = cand_denom[len(resultat["marca"]):].strip(" -/,")
-            if cand_denom:
-                resultat["model"] = cand_denom
-
-        # 4. Tipus de Propulsió (Combustible)
-        comb_m = re.search(r"(?:Combustible|Carburant|Propulsi[oó]|Propulsion|Motor)[\s:]*([^\n\r]+)", text, re.IGNORECASE)
+        # 4. Tipus de Propulsió (Combustible Codi UE P.3)
+        comb_m = re.search(r"(?:(?:\(P\.3\)|P\.3)\s*Combustible|Combustible|Carburant|Propulsi[oó]|Propulsion|Motor)[\s:]*([^\n\r]+)", text, re.IGNORECASE)
         comb_str = (comb_m.group(1) if comb_m else "") + " " + text
         if re.search(r"\b(di[eè]sel|gasoil|gas[oó]leo|ga\b)\b", comb_str, re.IGNORECASE):
             resultat["tipus"] = "DIESEL"
@@ -622,7 +650,69 @@ async def processar_ocr_document_vehicle(file_input: bytes | str, node_ia_url: O
             elif resultat.get("tipus") in ("DIESEL", "GASOLINA"):
                 resultat["distintiu_ambiental"] = "C"
 
-        # 6. Estat ITV Actual
+        # 6. Classificació i Categoria UE (Codi UE J)
+        cat_m = re.search(
+            r"(?:(?:\(J\)|J\.)\s*Categor[íi]a\s*(?:del\s*veh[íi]culo)?|Categor[íi]a\s*(?:del\s*veh[íi]culo)?|Categoria)[\s:]*([MNOL][1-5]|N[123]|M[123]|O[1-4])",
+            text,
+            re.IGNORECASE,
+        )
+        if cat_m:
+            resultat["categoria_ue"] = cat_m.group(1).upper()
+
+        # 7. Masses i Pesos Harmonitzats: MMA (F.2/F.1), Tara (G), Càrrega Útil i MMR amb fre (O.1.2)
+        mma_m = re.search(
+            r"(?:(?:\(F\.2\)|F\.2)[^\n\r:]*|(?:\(F\.1\)|F\.1)[^\n\r:]*|(?:MMA|PMA\s*\(MMA\)|PMA|Masa\s*M[aá]xima\s*Autorizada|Pes\s*M[aà]xim\s*Autoritzat)[^\n\r:]*)[\s:]+([0-9\.\, ]+)\s*(?:kg)?",
+            text,
+            re.IGNORECASE,
+        )
+        if mma_m:
+            clean_mma = re.sub(r"[^\d]", "", mma_m.group(1))
+            if clean_mma:
+                try:
+                    resultat["mma_kg"] = int(clean_mma)
+                except ValueError:
+                    pass
+
+        tara_m = re.search(
+            r"(?:(?:\(G\)|G\.)[^\n\r:]*|(?:Masa\s*en\s*servicio|Masa\s*en\s*orden\s*de\s*marcha|Tara)[^\n\r:]*)[\s:]+([0-9\.\, ]+)\s*(?:kg)?",
+            text,
+            re.IGNORECASE,
+        )
+        if tara_m:
+            clean_tara = re.sub(r"[^\d]", "", tara_m.group(1))
+            if clean_tara:
+                try:
+                    resultat["tara_kg"] = int(clean_tara)
+                except ValueError:
+                    pass
+
+        util_m = re.search(
+            r"(?:Carga\s*[uú]til\s*(?:m[aá]xima)?|C[aà]rrega\s*[uú]til\s*(?:m[aà]xima)?|Capacitat\s*de\s*c[aà]rrega\s*[uú]til)[\s:]*([0-9\.\, ]+)\s*(?:kg)?",
+            text,
+            re.IGNORECASE,
+        )
+        if util_m:
+            clean_util = re.sub(r"[^\d]", "", util_m.group(1))
+            if clean_util:
+                try:
+                    resultat["carrega_util_kg"] = int(clean_util)
+                except ValueError:
+                    pass
+
+        mmr_m = re.search(
+            r"(?:(?:\(O\.1(?:\.2)?\)|O\.1(?:\.2)?)\s*(?:MMR\s*c\/f|MMR\s*con\s*freno)|MMR\s*c\/f)[\s:]*([0-9\.\, ]+)\s*(?:kg)?",
+            text,
+            re.IGNORECASE,
+        )
+        if mmr_m:
+            clean_mmr = re.sub(r"[^\d]", "", mmr_m.group(1))
+            if clean_mmr:
+                try:
+                    mmr_amb_fre_kg = int(clean_mmr)
+                except ValueError:
+                    pass
+
+        # 8. Estat ITV Actual
         res_itv = re.search(r"(?:Resultat|Resultado|Estat\s*ITV|Veredicte)[\s:]*([^\n\r]+)", text, re.IGNORECASE)
         res_str = res_itv.group(1).upper() if res_itv else text.upper()
         if "FAVORABLE AMB DEFECTES LLEUS" in res_str or "DEFECTES LLEUS" in res_str or "DEFECTOS LEVES" in res_str or "LEVE" in res_str:
@@ -634,18 +724,18 @@ async def processar_ocr_document_vehicle(file_input: bytes | str, node_ia_url: O
         elif "FAVORABLE" in res_str or "APTE" in res_str or "APTO" in res_str:
             resultat["estat_itv"] = "FAVORABLE"
 
-        # 7. Data Pròxima ITV (agafar sempre la data futura/vigent més recent si hi ha diverses inspeccions)
+        # 9. Data Pròxima ITV
         prox_matches = re.findall(
             r"(?:Pr[oò]xima\s*ITV|Propera\s*ITV|Venciment\s*ITV|Proper\s*venciment|Validesa\s*fins|V[aá]lida\s*hasta|V[aá]lida\s*fins|Pr[oó]xima\s*inspecci[oó]n|Caducitat\s*ITV|Data\s*(?:de\s*)?caducitat\s*(?:propera\s*)?itv)[\s:]*(\d{1,2}[/-]\d{1,2}[/-]\d{4}|\d{4}[/-]\d{1,2}[/-]\d{1,2})",
             text,
             re.IGNORECASE,
         )
         if prox_matches:
-            iso_dates = [_normalitzar_data_iso(m) for m in prox_matches if _normalitzar_data_iso(m)]
-            if iso_dates:
-                resultat["data_proxima_itv"] = max(iso_dates)
+            valid_dates: List[str] = [d for m in prox_matches if (d := _normalitzar_data_iso(m)) is not None]
+            if valid_dates:
+                resultat["data_proxima_itv"] = max(valid_dates)
 
-        # 8. Data Inspecció ITV i Data Matriculació
+        # 10. Data Inspecció ITV i Data Matriculació (Codi UE B)
         insp_m = re.search(
             r"(?:Data\s*Inspecci[oó]|Data\s*d'inspecci[oó]|Fecha\s*inspecci[oó]n)[\s:]*(\d{1,2}[/-]\d{1,2}[/-]\d{4}|\d{4}[/-]\d{1,2}[/-]\d{1,2})",
             text,
@@ -655,14 +745,14 @@ async def processar_ocr_document_vehicle(file_input: bytes | str, node_ia_url: O
             resultat["data_inspeccio_itv"] = _normalitzar_data_iso(insp_m.group(1))
 
         matr_m = re.search(
-            r"(?:(?:\([A-Z0-9\.]+\)|[A-Z0-9\.]+\s*)?(?:Data\s*Matriculaci[oó]|Data\s*1[aª]\s*matriculaci[oó]|Fecha\s*matriculaci[oó]n|Fecha\s*1[aª]\s*matriculaci[oó]n|Fecha\s*de\s*primera\s*matr[íi]cula))[\s:]*(\d{1,2}[/-]\d{1,2}[/-]\d{4}|\d{4}[/-]\d{1,2}[/-]\d{1,2})",
+            r"(?:(?:\(B\)|B\.)\s*(?:Fecha\s*(?:de\s*)?(?:primera|1[aª])\s*matr[íi]cula|Data\s*(?:de\s*)?(?:primera|1[aª])\s*matr[íi]cula)|(?:\([A-Z0-9\.]+\)|[A-Z0-9\.]+\s*)?(?:Data\s*Matriculaci[oó]|Data\s*1[aª]\s*matriculaci[oó]|Fecha\s*matriculaci[oó]n|Fecha\s*1[aª]\s*matriculaci[oó]n|Fecha\s*de\s*primera\s*matr[íi]cula))[\s:]*(\d{1,2}[/-]\d{1,2}[/-]\d{4}|\d{4}[/-]\d{1,2}[/-]\d{1,2})",
             text,
             re.IGNORECASE,
         )
         if matr_m:
             resultat["data_matriculacio"] = _normalitzar_data_iso(matr_m.group(1))
 
-        # 9. Odòmetre / Quilometratge (agafar la lectura màxima de quilòmetres si hi ha historial d'inspeccions)
+        # 11. Odòmetre / Quilometratge
         km_matches = re.findall(
             r"(?:Lectura\s*km|Quilometratge|Kilometraje|Od[oò]metre|Odometro|Lectura\s*od[oò]metre|(?:(?<!desde\s)(?<!des de\s)\bKm\b))[\s:]*([0-9\.\, ]+)",
             text,
@@ -682,7 +772,7 @@ async def processar_ocr_document_vehicle(file_input: bytes | str, node_ia_url: O
             if km_vals:
                 resultat["odometre_acumulat"] = max(km_vals)
 
-        # 10. Assegurança (Companyia, Pòlissa, Caducitat)
+        # 12. Assegurança (Companyia, Pòlissa, Caducitat)
         comp_m = re.search(
             r"(?:Companyia\s*asseguradora|Entitat\s*asseguradora|Companyia|Asseguradora|Aseguradora)[\s:]*([^\n\r]+)",
             text,
@@ -690,9 +780,7 @@ async def processar_ocr_document_vehicle(file_input: bytes | str, node_ia_url: O
         )
         if comp_m:
             cand_comp = comp_m.group(1).strip()
-            # Netejar si encara té prefixos residual com "Asseguradora:"
             cand_comp = re.sub(r"^(?:Asseguradora|Aseguradora|Companyia)[\s:]*", "", cand_comp, flags=re.IGNORECASE).strip()
-            # Si cand_comp conté una companyia coneguda, la normalitzem
             for c_cand in COMPANYIES_ASSEGURANCES_CONEGUDES:
                 if re.search(r"\b" + re.escape(c_cand) + r"\b", cand_comp, re.IGNORECASE):
                     cand_comp = c_cand.title()
@@ -724,46 +812,50 @@ async def processar_ocr_document_vehicle(file_input: bytes | str, node_ia_url: O
         if cad_m:
             resultat["data_caducitat_asseguranca"] = _normalitzar_data_iso(cad_m.group(1))
 
-        # 11. Règim d'Adquisició i Límit km
-        # Primer detectem si és LEASING financer pur (sense paraula renting) o RÈNTING
-        if re.search(
-            r"\b(l[ií]sing|leasing)\b|(?:arrendament\s*financer|arrendamiento\s*financiero|opci[oó]\s*de\s*compra|opci[oó]n\s*de\s*compra|valor\s*residual)",
-            text,
-            re.IGNORECASE,
-        ) and not re.search(r"\b(renting|r[eèé]nting)\b", text, re.IGNORECASE):
-            resultat["regim_adquisicio"] = "LEASING"
-        elif re.search(
-            r"\b(renting|leasing|l[ií]sing|arval|alphabet|leaseplan|ald\s*automotive|santander\s*consumer\s*renting|santander\s*renting|bbva\s*autorenting|bansacar|caixarenting|northgate|ayvens)\b|"
-            r"(?:arrendament\s*financer|arrendamiento\s*financiero|arrendament\s*(?:operatiu\s*)?a\s*llarg\s*termini|arrendamiento\s*(?:operativo\s*)?a\s*largo\s*plazo|arrendament\s*sense\s*conductor|arrendamiento\s*sin\s*conductor|arrendatari\s*a\s*llarg\s*termini|arrendatario\s*largo\s*plazo|quota\s*(?:de\s*)?r[eèé]nting|cuota\s*(?:de\s*)?renting|contracte\s*de\s*r[eèé]nting|contrato\s*de\s*renting)",
-            text,
-            re.IGNORECASE,
-        ):
-            resultat["regim_adquisicio"] = "RENTING"
-        elif re.search(
-            r"\b(lloguer|alquiler|rent\s*a\s*car|rentacar|sixt|europcar|hertz|avis|enterprise|goldcar|centauro|record\s*go|budget|ok\s*mobility)\b|"
-            r"(?:alquiler\s*sin\s*conductor|lloguer\s*sense\s*conductor|contracte\s*de\s*lloguer|contrato\s*de\s*alquiler|vehicle\s*de\s*lloguer|veh[íi]culo\s*de\s*alquiler)",
-            text,
-            re.IGNORECASE,
-        ):
-            resultat["regim_adquisicio"] = "LLOGUER"
-        elif re.search(
-            r"(?:regim|r[eèé]gimen)[\s:]*(?:substituci[oó]|sustituci[oó]n)|\b(vehicle\s*de\s*substituci[oó]\s*temporal|veh[íi]culo\s*de\s*sustituci[oó]n\s*temporal|vehicle\s*de\s*cortesia|veh[íi]culo\s*de\s*cortes[íi]a)\b",
-            text,
-            re.IGNORECASE,
-        ):
-            resultat["regim_adquisicio"] = "SUBSTITUCIO"
-        elif re.search(
-            r"(?:es\s*el\s*propietario|propietari\s*del\s*vehicle|propietario\s*del\s*veh[íi]culo|compraventa|compra-venda|factura\s*de\s*compra|adquisici[oó]n\s*en\s*propiedad|adquisici[oó]\s*en\s*propietat|adquirido\s*en\s*propiedad|adquirit\s*en\s*propietat|en\s*propiedad|en\s*propietat|compra\s*directa|tomador\s*(?:y|i|\/)\s*propietario)|\b(compra|propietat|propiedad)\b",
-            text,
-            re.IGNORECASE,
-        ):
-            resultat["regim_adquisicio"] = "PROPIETAT"
-        else:
-            resultat["regim_adquisicio"] = None
+        # 13. Servei DGT i Règim d'Adquisició
+        servei_dgt_m = re.search(r"(?:Servicio\s*(?:al\s*que\s*se\s*destina)?|C[oó]digo\s*DGT)[\s:]*([A-Z0-9]{3})", text, re.IGNORECASE)
+        if servei_dgt_m:
+            codi_srv = servei_dgt_m.group(1).upper()
+            if codi_srv == "A12":
+                resultat["regim_adquisicio"] = "RENTING"
+            elif codi_srv in ("B00", "B09"):
+                resultat["regim_adquisicio"] = "PROPIETAT"
 
-        # LÍMIT DE QUILÒMETRES CONTRACTUAL:
-        # S'aplica NOMÉS si el vehicle és de RÈNTING, LEASING o LLOGUER.
-        # Si la furgoneta és de compra en propietat o substitució, mai ha de tenir km limitat.
+        if not resultat["regim_adquisicio"]:
+            if re.search(
+                r"\b(l[ií]sing|leasing)\b|(?:arrendament\s*financer|arrendamiento\s*financiero|opci[oó]\s*de\s*compra|opci[oó]n\s*de\s*compra|valor\s*residual)",
+                text,
+                re.IGNORECASE,
+            ) and not re.search(r"\b(renting|r[eèé]nting)\b", text, re.IGNORECASE):
+                resultat["regim_adquisicio"] = "LEASING"
+            elif re.search(
+                r"\b(renting|leasing|l[ií]sing|arval|alphabet|leaseplan|ald\s*automotive|santander\s*consumer\s*renting|santander\s*renting|bbva\s*autorenting|bansacar|caixarenting|northgate|ayvens)\b|"
+                r"(?:arrendament\s*financer|arrendamiento\s*financiero|arrendament\s*(?:operatiu\s*)?a\s*llarg\s*termini|arrendamiento\s*(?:operativo\s*)?a\s*largo\s*plazo|arrendament\s*sense\s*conductor|arrendamiento\s*sin\s*conductor|arrendatari\s*a\s*llarg\s*termini|arrendatario\s*largo\s*plazo|quota\s*(?:de\s*)?r[eèé]nting|cuota\s*(?:de\s*)?renting|contracte\s*de\s*r[eèé]nting|contrato\s*de\s*renting)",
+                text,
+                re.IGNORECASE,
+            ):
+                resultat["regim_adquisicio"] = "RENTING"
+            elif re.search(
+                r"\b(lloguer|alquiler|rent\s*a\s*car|rentacar|sixt|europcar|hertz|avis|enterprise|goldcar|centauro|record\s*go|budget|ok\s*mobility)\b|"
+                r"(?:alquiler\s*sin\s*conductor|lloguer\s*sense\s*conductor|contracte\s*de\s*lloguer|contrato\s*de\s*alquiler|vehicle\s*de\s*lloguer|veh[íi]culo\s*de\s*alquiler)",
+                text,
+                re.IGNORECASE,
+            ):
+                resultat["regim_adquisicio"] = "LLOGUER"
+            elif re.search(
+                r"(?:regim|r[eèé]gimen)[\s:]*(?:substituci[oó]|sustituci[oó]n)|\b(vehicle\s*de\s*substituci[oó]\s*temporal|veh[íi]culo\s*de\s*sustituci[oó]n\s*temporal|vehicle\s*de\s*cortesia|veh[íi]culo\s*de\s*cortes[íi]a)\b",
+                text,
+                re.IGNORECASE,
+            ):
+                resultat["regim_adquisicio"] = "SUBSTITUCIO"
+            elif re.search(
+                r"(?:es\s*el\s*propietario|propietari\s*del\s*vehicle|propietario\s*del\s*veh[íi]culo|compraventa|compra-venda|factura\s*de\s*compra|adquisici[oó]n\s*en\s*propiedad|adquisici[oó]\s*en\s*propietat|adquirido\s*en\s*propiedad|adquirit\s*en\s*propietat|en\s*propiedad|en\s*propietat|compra\s*directa|tomador\s*(?:y|i|\/)\s*propietario)|\b(compra|propietat|propiedad)\b",
+                text,
+                re.IGNORECASE,
+            ):
+                resultat["regim_adquisicio"] = "PROPIETAT"
+
+        # LÍMIT DE QUILÒMETRES CONTRACTUAL
         if resultat["regim_adquisicio"] in ("RENTING", "LEASING", "LLOGUER"):
             lim_m = re.search(
                 r"(?:L[ií]mit\s*(?:contractual|de\s*km|anual)?|L[ií]mite\s*(?:contractual|de\s*km|anual)?|Km\s*(?:m[aá]ximos|contractuales))[\s\w]*(?:km)?[\s:]*([0-9\.\, ]+)",
@@ -780,36 +872,130 @@ async def processar_ocr_document_vehicle(file_input: bytes | str, node_ia_url: O
         else:
             resultat["renting_limit_km"] = None
 
-        # 12. Carnet Requerit
-        carnet_m = re.search(r"(?:Carnet|Perm[ií]s\s*(?:de\s*conduir)?)[\s:]*([A-Z0-9\+]+)", text, re.IGNORECASE)
-        if carnet_m and carnet_m.group(1).upper() in ("B", "B+E", "C", "C+E", "AM", "N/A"):
-            resultat["carnet_necessari"] = carnet_m.group(1).upper()
-        else:
-            mma_m = re.search(r"(?:MMA|PMA|Pes\s*M[aà]xim|Masa\s*M[aá]xima)[\s:]*([0-9]+)", text, re.IGNORECASE)
-            if mma_m:
-                mma = int(mma_m.group(1))
-                resultat["carnet_necessari"] = "C" if mma > 3500 else "B"
-            else:
-                resultat["carnet_necessari"] = "B"
+        # 14. Detalls de Rènting Estès
+        if resultat.get("regim_adquisicio") == "RENTING" or re.search(r"\b(arval|alphabet|leaseplan|ald\s*automotive|bansacar|northgate)\b", text, re.IGNORECASE):
+            if re.search(r"\barval\b", text, re.IGNORECASE):
+                resultat["empresa_renting"] = "Arval Service Lease"
+            elif re.search(r"\balphabet\b", text, re.IGNORECASE):
+                resultat["empresa_renting"] = "Alphabet"
+            elif re.search(r"\bleaseplan\b", text, re.IGNORECASE):
+                resultat["empresa_renting"] = "LeasePlan"
+            elif re.search(r"\bbansacar\b", text, re.IGNORECASE):
+                resultat["empresa_renting"] = "Bansacar"
 
-        # 13. Titular
+            contracte_m = re.search(
+                r"(?:ANEXO\s*CONTRATO\s*VEH[ÍI]CULO|ANEXO\s*CONTRATO|CONTRATO\s*VEH[ÍI]CULO)[\s:]*([A-Z0-9\-_]{5,})",
+                text,
+                re.IGNORECASE,
+            ) or re.search(
+                r"(?:REFERENCIA\s*CONTRATO\s*MAESTRO|REFERENCIA\s*CONTRATO|N[ÚU]M(?:\.|ERO)?\s*CONTRATO)[\s:]*([A-Z0-9\-_]{5,})",
+                text,
+                re.IGNORECASE,
+            )
+            if contracte_m:
+                resultat["num_contracte_renting"] = contracte_m.group(1).strip()
+
+            venc_rent_m = re.search(
+                r"(?:FECHA\s*DE\s*FINALIZACI[OÓ]N\s*CONTRATO|Venciment\s*contracte|vencen\s*el\s*pr[oó]ximo)[\s:]*(\d{1,2}[/-]\d{1,2}[/-]\d{4}|\d{4}[/-]\d{1,2}[/-]\d{1,2})",
+                text,
+                re.IGNORECASE,
+            )
+            if venc_rent_m:
+                resultat["data_venciment_renting"] = _normalitzar_data_iso(venc_rent_m.group(1))
+
+        # 15. Titular (Codi UE C.1.1), Titular NIF (Codi UE C.1.2) i Arrendatari NIF
         titular_m = re.search(
-            r"(?:(?:\([A-Z0-9\.]+\)|[A-Z0-9\.]+\s*)?(?:Apellidos\s*o\s*raz[oó]n\s*social|Cognoms\s*o\s*ra[oó]\s*social|Tomador\s*(?:\/|\s*y\s*|\s*i\s*)\s*Asegurado|Tomador|Titular|C\.1\.1[^\n\r]*?))[\s:]+([A-Za-z0-9À-ÿ\s\.,\-]+)",
+            r"(?:(?:\(C\.1(?:\.1)?\)|C\.1(?:\.1)?)\s*(?:Apellidos\s*o\s*raz[oó]n\s*social|Cognoms\s*o\s*ra[oó]\s*social)|(?:\([A-Z0-9\.]+\)|[A-Z0-9\.]+\s*)?(?:Apellidos\s*o\s*raz[oó]n\s*social|Cognoms\s*o\s*ra[oó]\s*social|Tomador\s*(?:\/|\s*y\s*|\s*i\s*)\s*Asegurado|Tomador|Titular))[\s:]+([A-Za-z0-9À-ÿ\s\.,\-]+)",
             text,
             re.IGNORECASE,
         )
         if titular_m:
-            cand_tit = titular_m.group(1).strip().splitlines()[0]
-            cand_tit = cand_tit.strip("[](){}:;").strip()
+            cand_tit = titular_m.group(1).strip().splitlines()[0].strip("[](){}:;").strip()
             if len(cand_tit) > 3 and not any(cand_tit.lower().startswith(x) for x in ("ford", "renault", "iveco", "data", "nif", "cif", "datos")):
                 resultat["titular"] = cand_tit
 
-        # 14. Tipus de document detectat
-        if re.search(r"PERMISO\s*DE\s*CIRCULACI[OÓ]N|PERM[IÍ]S\s*DE\s*CIRCULACI[OÓ]", text, re.IGNORECASE):
+        nif_tit_m = re.search(
+            r"(?:(?:\(C\.1\.2\)|C\.1\.2)\s*(?:Nombre\s*\/)?\s*NIF|(?:(?:Tomador|Propietari[ao]|Titular)[^\n\r]*?NIF[^\n\r]*?|NIF\s*\/\s*CIF[^\n\r]*?(?:Tomador|Propietari|Titular)))[\s:]*([A-HJ-NP-SU-W0-9][0-9]{7}[A-Z0-9]|[A-Z]-[0-9]{7,8}-[A-Z0-9]|[0-9]{8}[A-Z])",
+            text,
+            re.IGNORECASE,
+        )
+        if nif_tit_m:
+            resultat["titular_nif"] = nif_tit_m.group(1).strip().replace(" ", "")
+
+        nif_arr_m = re.search(
+            r"(?:"
+            r"ARRENDATARIO\s*(?:A\s*LARGO\s*PLAZO|LARGO\s*PLAZO)[\s:]*"
+            r"|NIF\s*(?:\/\s*CIF)?\s*(?:del\s*)?Arrendatari[ao]?[\s:\-]+"
+            r"|Arrendatari[ao]?[^\n\r:]*?(?:NIF|CIF)[\s:\-]+"
+            r"|Arrendatari[ao]?[^\n\r]*\n\s*(?:-\s*)?(?:NIF|CIF|NIF\s*\/\s*CIF)[\s:\-]+"
+            r")"
+            r"([A-HJ-NP-SU-W0-9][0-9]{7}[A-Z0-9]|[0-9]{8}[A-Z])",
+            text,
+            re.IGNORECASE,
+        )
+        if nif_arr_m:
+            resultat["arrendatari_nif"] = nif_arr_m.group(1).strip().replace(" ", "")
+
+        # 16. Dades Pesants (Tacògraf, Targeta de transport REAT/MITMA, Visat)
+        targeta_trans_m = re.search(
+            r"(?:CLAU\s*I\s*N[ÚU]MERO\s*D'AUTORITZACI[OÓ]|AUTORIZACI[OÓ]N\s*DE\s*TRANSPORTE|TARGETA\s*MPC|TARJETA\s*MPC)[\s:]*([A-Z0-9 \-]+)",
+            text,
+            re.IGNORECASE,
+        )
+        if targeta_trans_m:
+            dades_pesants_dict["targeta_transport_num"] = targeta_trans_m.group(1).strip()
+
+        visat_trans_m = re.search(
+            r"(?:DATA\s*PROPER\s*VISAT\s*OBLIGATORI|PR[OÓ]XIMO\s*VISADO\s*OBLIGATORIO)[\s:]*(\d{1,2}[/-]\d{1,2}[/-]\d{4}|\d{4}[/-]\d{1,2}[/-]\d{1,2})",
+            text,
+            re.IGNORECASE,
+        )
+        if visat_trans_m:
+            dades_pesants_dict["data_visat_transport"] = _normalitzar_data_iso(visat_trans_m.group(1))
+
+        tac_m = re.search(r"(?:Tac[oó]grafo?\s*(?:Digital)?|Tac[oó]graf)[\s:]*([^\n\r]+)", text, re.IGNORECASE)
+        if tac_m:
+            cand_tac = tac_m.group(1).strip().splitlines()[0]
+            if len(cand_tac) > 2:
+                dades_pesants_dict["tacograf_model"] = cand_tac
+
+        calib_tac_m = re.search(
+            r"(?:v[aà]lida\s*fins\s*al|calibrado\s*hasta|fecha\s*calibrado|calibratge\s*tac[oó]graf)[\s:]*(\d{1,2}[/-]\d{1,2}[/-]\d{4}|\d{4}[/-]\d{1,2}[/-]\d{1,2})",
+            text,
+            re.IGNORECASE,
+        )
+        if calib_tac_m:
+            dades_pesants_dict["data_calibratge_tacograf"] = _normalitzar_data_iso(calib_tac_m.group(1))
+
+        if dades_pesants_dict:
+            resultat["dades_pesants"] = dades_pesants_dict
+
+        # 17. Equipament Homologat i Reformes Reglamentàries
+        if re.search(r"\b(gr[uú]a|palfinger|hiab|fassi)\b", text, re.IGNORECASE):
+            equipament_detectat.append("GRUA")
+        if re.search(r"\btac[oó]grafo?\b", text, re.IGNORECASE):
+            equipament_detectat.append("TACOGRAF")
+        if re.search(r"\b(plataforma\s*elevadora|dhollandia|zepro)\b", text, re.IGNORECASE):
+            equipament_detectat.append("PLATAFORMA ELEVADORA")
+        if re.search(r"\b(enganche|ringfeder|bola\s*remolc|remolc|enganxall)\b", text, re.IGNORECASE):
+            equipament_detectat.append("ENGANXALL")
+        if re.search(r"\blimitador\s*de\s*velocidad\b", text, re.IGNORECASE):
+            equipament_detectat.append("LIMITADOR VELOCITAT")
+        if re.search(r"\b(caixa\s*oberta|caja\s*abierta|basculante)\b", text, re.IGNORECASE):
+            equipament_detectat.append("CAIXA BASCULANT")
+
+        resultat["equipament_homologat"] = sorted(list(set(equipament_detectat)))
+
+        # 18. Tipus de document detectat
+        if re.search(r"REGISTRE\s*REAT|TARGETA\s*MPC|AUTORITZACI[OÓ]\s*DE\s*TRANSPORT", text, re.IGNORECASE):
+            resultat["tipus_document"] = "TARGETA_TRANSPORT"
+        elif re.search(r"CERTIFICADO\s*DE\s*ARRENDAMIENTO|CONTRATO\s*DE\s*RENTING|RENTING\s*OPERATIVO", text, re.IGNORECASE):
+            resultat["tipus_document"] = "CONTRACTE_RENTING"
+        elif re.search(r"PERMISO\s*DE\s*CIRCULACI[OÓ]N|PERM[IÍ]S\s*DE\s*CIRCULACI[OÓ]", text, re.IGNORECASE):
             resultat["tipus_document"] = "PERMIS_CIRCULACIO"
         elif re.search(r"P[OÒÓ]LI(?:SS|[SZ])A|ASSEGURAN[CÇ]A|ASEGURADORA|PRIMA|TOMADOR|SEGURO\s*DE\s*VEH[IÍ]CULOS", text, re.IGNORECASE):
             resultat["tipus_document"] = "ASSEGURANCA"
-        elif re.search(r"CERTIFICADO\s*DE\s*ARRENDAMIENTO|CONTRATO\s*DE\s*RENTING|CONTRATO\s*DE\s*ALQUILER|ARRENDAMIENTO|RENTING\s*OPERATIVO", text, re.IGNORECASE):
+        elif re.search(r"CONTRATO\s*DE\s*ALQUILER|ARRENDAMIENTO", text, re.IGNORECASE):
             resultat["tipus_document"] = "CONTRACTE"
         elif re.search(r"ITV|FITXA\s*T[EÈ]CNICA|INSPECCI[OÓ]|TARGETA\s*ITV", text, re.IGNORECASE):
             resultat["tipus_document"] = "ITV"
@@ -821,17 +1007,38 @@ async def processar_ocr_document_vehicle(file_input: bytes | str, node_ia_url: O
     # Suport d'IA si manca bastidor o matrícula
     if (not resultat["matricula"] or not resultat["bastidor"]) and node_ia_url:
         prompt = (
-            "Ets un extractor OCR especialitzat en documentació de vehicles a Espanya (Fitxa Tècnica, Targeta ITV, Permís de Circulació i Pòlissa d'Assegurança). "
-            "Extreu les dades en un JSON amb els camps següents (posa null si no es troba): "
-            "matricula (str, ex: '4321-KMN'), bastidor (VIN de 17 caràcters), marca (str), model (str), "
-            "tipus ('DIESEL', 'GASOLINA', 'EV', 'PHEV', 'MAQUINARIA', 'REMOLC'), "
-            "distintiu_ambiental ('ZERO', 'ECO', 'C', 'B', 'SENSE'), "
-            "odometre_acumulat (int amb els km actuals), "
-            "estat_itv ('FAVORABLE', 'FAVORABLE_LEUS', 'DESFAVORABLE', 'NEGATIVA'), "
-            "data_proxima_itv (YYYY-MM-DD), data_matriculacio (YYYY-MM-DD), "
-            "companyia_asseguradora (str), polissa_asseguranca (str), data_caducitat_asseguranca (YYYY-MM-DD), "
-            "regim_adquisicio ('PROPIETAT', 'RENTING', 'LEASING', 'LLOGUER', 'SUBSTITUCIO'), renting_limit_km (int o null si no aplica), "
-            "carnet_necessari ('B', 'B+E', 'C', 'C+E', 'AM', 'N/A')."
+            "Ets un extractor OCR especialitzat en documentació de vehicles a Espanya (Fitxa Tècnica eITV, Permís de Circulació DGT, Pòlissa d'Assegurança, Contracte de Rènting i Targeta de Transport REAT/MITMA). "
+            "Extreu les dades en un JSON estricte cercant explícitament els codis harmonitzats UE i camps següents (posa null si no es troba): "
+            "- matricula: Codi (A) (4 dígits i 3 lletres, ex: '9104-MBB' o '4321-KMN') "
+            "- data_matriculacio: Codi (B) 1a matriculació (YYYY-MM-DD) "
+            "- titular: Codi (C.1.1) Raó social o cognoms del titular registral "
+            "- titular_nif: Codi (C.1.2) NIF/CIF del titular "
+            "- arrendatari_nif: NIF/CIF de l'arrendatari en cas de rènting/lloguer "
+            "- marca: Codi (D.1) Marca del vehicle (ex: 'IVECO', 'RENAULT', 'FORD') "
+            "- model: Codi (D.3) Denominació comercial (ex: 'EUROCARGO ML180E28') "
+            "- bastidor: Codi (E) Número VIN de 17 caràcters alfanumèrics (ISO 3779, sense lletres I, O, Q) "
+            "- mma_kg: Codi (F.2) Masa màxima autoritzada en kg (enter) "
+            "- tara_kg: Codi (G) Masa en servei / tara en kg (enter) "
+            "- carrega_util_kg: Capacitat màxima de càrrega útil en kg (enter) "
+            "- mmr_amb_fre_kg: Codi (O.1.2) Masa màxima remolcable amb fre en kg (enter) "
+            "- categoria_ue: Codi (J) Categoria del vehicle ('M1', 'N1', 'N2', 'N3') "
+            "- servei_dgt: Servei al qual es destina ('A12' per a rènting/lloguer, 'B00' o 'B09' per a particular/obres i serveis propis) "
+            "- tipus: Propulsió ('DIESEL', 'GASOLINA', 'EV', 'PHEV', 'MAQUINARIA', 'REMOLC') "
+            "- distintiu_ambiental: Etiqueta DGT ('ZERO', 'ECO', 'C', 'B', 'SENSE') "
+            "- odometre_acumulat: Quilòmetres actuals segons ITV o lectura (enter) "
+            "- estat_itv: Resultat ITV ('FAVORABLE', 'FAVORABLE_LEUS', 'DESFAVORABLE', 'NEGATIVA') "
+            "- data_proxima_itv: Data límit vigència ITV (YYYY-MM-DD) "
+            "- data_inspeccio_itv: Data en què es va fer la inspecció (YYYY-MM-DD) "
+            "- companyia_asseguradora: Entitat asseguradora "
+            "- polissa_asseguranca: Número de pòlissa d'assegurança "
+            "- data_caducitat_asseguranca: Data de venciment de l'assegurança (YYYY-MM-DD) "
+            "- regim_adquisicio: ('PROPIETAT', 'RENTING', 'LEASING', 'LLOGUER', 'SUBSTITUCIO') "
+            "- empresa_renting: Nom de l'empresa propietària o arrendadora en rènting "
+            "- num_contracte_renting: Referència o número de contracte de rènting "
+            "- data_venciment_renting: Data de finalització del rènting (YYYY-MM-DD) "
+            "- renting_limit_km: Límit contractual de km anuals o totals (enter) "
+            "- equipament_homologat: Array de textos amb equipament homologat o reformes (ex: ['GRUA', 'PLATAFORMA ELEVADORA', 'ENGANXALL', 'TACOGRAF']) "
+            "- dades_pesants: Objecte amb camps de pesants: {'targeta_transport_num': str, 'data_visat_transport': YYYY-MM-DD, 'data_calibratge_tacograf': YYYY-MM-DD, 'tacograf_model': str} o null."
         )
         b64 = None
         if not text and len(file_bytes) > 0:
@@ -852,8 +1059,85 @@ async def processar_ocr_document_vehicle(file_input: bytes | str, node_ia_url: O
             for k in resultat:
                 if ai_res.get(k) is not None and not resultat.get(k):
                     resultat[k] = ai_res[k]
-        if resultat.get("regim_adquisicio") not in ("RENTING", "LEASING", "LLOGUER"):
-            resultat["renting_limit_km"] = None
+            if ai_res.get("mmr_amb_fre_kg") and not mmr_amb_fre_kg:
+                try:
+                    mmr_amb_fre_kg = int(ai_res["mmr_amb_fre_kg"])
+                except (ValueError, TypeError):
+                    pass
+            if ai_res.get("servei_dgt") and not resultat.get("regim_adquisicio"):
+                if str(ai_res["servei_dgt"]).upper() == "A12":
+                    resultat["regim_adquisicio"] = "RENTING"
+                elif str(ai_res["servei_dgt"]).upper() in ("B00", "B09"):
+                    resultat["regim_adquisicio"] = "PROPIETAT"
+
+    # =========================================================================
+    # NORMALITZACIÓ POST-OCR DETERMINISTA (Python Pur, Sense confiar en el LLM)
+    # =========================================================================
+
+    # 1. Sanitització de Matrícula (Format Modern ^\d{4}-[BCDFGHJKLMNPRSTVWXYZ]{3}$ o Històric Provincial)
+    if resultat.get("matricula"):
+        raw_m = str(resultat["matricula"]).strip().upper()
+        modern_m = re.match(r"^(\d{4})[ -]?([BCDFGHJKLMNPRSTVWXYZ]{3})$", raw_m)
+        if modern_m:
+            resultat["matricula"] = f"{modern_m.group(1)}-{modern_m.group(2)}"
+        else:
+            prov_m = re.match(r"^([A-Z]{1,2})[ -]?(\d{4})[ -]?([A-Z]{1,2})$", raw_m)
+            if prov_m:
+                resultat["matricula"] = f"{prov_m.group(1)}-{prov_m.group(2)}-{prov_m.group(3)}"
+            else:
+                prov2_m = re.match(r"^([A-Z]{1,2})[ -]?(\d{6})$", raw_m)
+                if prov2_m:
+                    resultat["matricula"] = f"{prov2_m.group(1)}-{prov2_m.group(2)}"
+
+    # 2. Sanitització de VIN Bastidor (ISO 3779: 17 caràcters alfanumèrics excloent I, O, Q)
+    if resultat.get("bastidor"):
+        raw_vin = re.sub(r"[\s\-_]", "", str(resultat["bastidor"]).strip().upper())
+        if re.match(r"^[A-HJ-NPR-Z0-9]{17}$", raw_vin):
+            resultat["bastidor"] = raw_vin
+        elif len(raw_vin) == 17:
+            # Correcció d'errors típics d'OCR (O -> 0, Q -> 0, I -> 1)
+            fixed_vin = raw_vin.replace("O", "0").replace("Q", "0").replace("I", "1")
+            if re.match(r"^[A-HJ-NPR-Z0-9]{17}$", fixed_vin):
+                resultat["bastidor"] = fixed_vin
+        elif re.match(r"^[A-HJ-NPR-Z0-9]{11,18}$", raw_vin):
+            resultat["bastidor"] = raw_vin
+
+    # 3. Càlcul determinista de Càrrega Útil (kg) si no ve explícit
+    if not resultat.get("carrega_util_kg") and resultat.get("mma_kg") and resultat.get("tara_kg"):
+        if resultat["mma_kg"] > resultat["tara_kg"]:
+            resultat["carrega_util_kg"] = resultat["mma_kg"] - resultat["tara_kg"]
+
+    # 4. Lògica determinista de Pesants, Carnet Requerit i CAP
+    # Si mma_kg > 3500 o categoria_ue in ("N2", "N3"): forçar carnet_necessari = "C" i requereix_cap = True
+    # (o "C+E" si mmr_amb_fre_kg > 750 i porta enganxall)
+    is_pesant = False
+    if resultat.get("mma_kg") and resultat["mma_kg"] > 3500:
+        is_pesant = True
+    if resultat.get("categoria_ue") in ("N2", "N3", "M2", "M3"):
+        is_pesant = True
+
+    has_trailer = False
+    if (mmr_amb_fre_kg and mmr_amb_fre_kg > 750) and (
+        "ENGANXALL" in (resultat.get("equipament_homologat") or [])
+        or "enganche" in text.lower()
+        or "remolc" in text.lower()
+    ):
+        has_trailer = True
+
+    if is_pesant:
+        resultat["requereix_cap"] = True
+        if has_trailer:
+            resultat["carnet_necessari"] = "C+E"
+        else:
+            resultat["carnet_necessari"] = "C"
+    else:
+        resultat["requereix_cap"] = False
+        if not resultat.get("carnet_necessari"):
+            resultat["carnet_necessari"] = "B+E" if has_trailer else "B"
+
+    # Assegurar consistència de límit km segons règim d'adquisició
+    if resultat.get("regim_adquisicio") not in ("RENTING", "LEASING", "LLOGUER"):
+        resultat["renting_limit_km"] = None
 
     trobat = bool(
         resultat.get("matricula")

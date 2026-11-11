@@ -83,6 +83,23 @@ class SubagentFlotaDespatx(BaseSubagent):
             "taller",
             "odometre",
             "odòmetre",
+            "grua",
+            "grua autocargant",
+            "pesant",
+            "pesants",
+            "carrega util",
+            "càrrega útil",
+            "mma",
+            "cap",
+            "tacograf",
+            "tacògraf",
+            "visat",
+            "targeta transport",
+            "renting km",
+            "exces km",
+            "excés km",
+            "venciment",
+            "venciments",
         ]
         return any(k in q for k in paraules_clau)
 
@@ -105,6 +122,13 @@ class SubagentFlotaDespatx(BaseSubagent):
         elif tool_name == "audit_itv_insurance_fleet":
             dies = int(args.get("dies_marge", 30))
             return await self.tool_audit_itv_insurance_fleet(db, empresa_id, dies)
+        elif tool_name == "get_heavy_vehicles_for_ot":
+            c_min = int(args["carrega_minima_kg"]) if args.get("carrega_minima_kg") is not None else None
+            eq = args.get("equipament")
+            cat = args.get("categoria_ue")
+            return await self.tool_get_heavy_vehicles_for_ot(
+                db, empresa_id, carrega_minima_kg=c_min, equipament=eq, categoria_ue=cat
+            )
         elif tool_name == "get_fleet_status":
             return await self.tool_get_fleet_status(db, empresa_id, args.get("filtres_estat"))
         elif tool_name == "get_vehicle_maintenance":
@@ -252,35 +276,217 @@ class SubagentFlotaDespatx(BaseSubagent):
         vehs = res.scalars().all()
 
         alertes = []
+        alertes_renting_km = []
+
         for v in vehs:
+            # 1. ITV
             if v.data_proxima_itv and v.data_proxima_itv <= limit:
+                d_rest = (v.data_proxima_itv - avui).days
                 alertes.append(
                     {
                         "matricula": v.matricula,
                         "tipus": "ITV",
                         "data_limit": v.data_proxima_itv.isoformat(),
-                        "caducada": v.data_proxima_itv < avui,
+                        "dies_restants": d_rest,
+                        "caducada": d_rest <= 0,
+                        "severitat": "CRITICAL" if d_rest <= 0 else ("WARNING" if d_rest <= 15 else "INFO"),
                     }
                 )
+
+            # 2. Assegurança
             if v.data_caducitat_asseguranca and v.data_caducitat_asseguranca <= limit:
+                d_rest = (v.data_caducitat_asseguranca - avui).days
                 alertes.append(
                     {
                         "matricula": v.matricula,
                         "tipus": "ASSEGURANÇA",
                         "data_limit": v.data_caducitat_asseguranca.isoformat(),
-                        "caducada": v.data_caducitat_asseguranca < avui,
+                        "dies_restants": d_rest,
+                        "caducada": d_rest <= 0,
+                        "severitat": "CRITICAL" if d_rest <= 0 else ("WARNING" if d_rest <= 15 else "INFO"),
                     }
                 )
 
+            # 3. Rènting (data de venciment del contracte)
+            if v.data_venciment_renting is not None and v.data_venciment_renting <= limit:
+                d_rest = (v.data_venciment_renting - avui).days
+                alertes.append(
+                    {
+                        "matricula": v.matricula,
+                        "tipus": "RÈNTING",
+                        "data_limit": v.data_venciment_renting.isoformat(),
+                        "dies_restants": d_rest,
+                        "caducada": d_rest <= 0,
+                        "severitat": "CRITICAL" if d_rest <= 0 else ("WARNING" if d_rest <= 15 else "INFO"),
+                    }
+                )
+
+            # 4. Dades pesants (visat transport i calibratge de tacògraf)
+            if getattr(v, "dades_pesants", None) and isinstance(v.dades_pesants, dict):
+                visat_raw = v.dades_pesants.get("data_visat_transport")
+                if visat_raw:
+                    try:
+                        d_vis = date.fromisoformat(str(visat_raw)) if isinstance(visat_raw, str) else visat_raw
+                        if d_vis <= limit:
+                            d_rest = (d_vis - avui).days
+                            alertes.append(
+                                {
+                                    "matricula": v.matricula,
+                                    "tipus": "VISAT_TRANSPORT",
+                                    "data_limit": d_vis.isoformat(),
+                                    "dies_restants": d_rest,
+                                    "caducada": d_rest <= 0,
+                                    "severitat": "CRITICAL" if d_rest <= 0 else "WARNING",
+                                }
+                            )
+                    except Exception:
+                        pass
+
+                taco_raw = v.dades_pesants.get("data_calibratge_tacograf")
+                if taco_raw:
+                    try:
+                        d_taco = date.fromisoformat(str(taco_raw)) if isinstance(taco_raw, str) else taco_raw
+                        if d_taco <= limit:
+                            d_rest = (d_taco - avui).days
+                            alertes.append(
+                                {
+                                    "matricula": v.matricula,
+                                    "tipus": "CALIBRATGE_TACOGRAF",
+                                    "data_limit": d_taco.isoformat(),
+                                    "dies_restants": d_rest,
+                                    "caducada": d_rest <= 0,
+                                    "severitat": "CRITICAL" if d_rest <= 0 else "WARNING",
+                                }
+                            )
+                    except Exception:
+                        pass
+
+            # 5. Excés de quilometratge de rènting
+            if (
+                v.regim_adquisicio in ("RENTING", "LEASING", "LLOGUER")
+                and v.renting_limit_km
+                and v.renting_limit_km > 0
+            ):
+                odo_act = v.odometre_acumulat or 0
+                odo_ini = v.odometre_inici_contracte or 0
+                km_fets = max(0, odo_act - odo_ini)
+                if km_fets > v.renting_limit_km:
+                    exces = km_fets - v.renting_limit_km
+                    penalitzacio = round(exces * float(v.preu_km_exces_eur or 0.0), 2)
+                    alertes_renting_km.append(
+                        {
+                            "matricula": v.matricula,
+                            "km_recorreguts": km_fets,
+                            "limit_km": v.renting_limit_km,
+                            "exces_km": exces,
+                            "penalitzacio_eur": penalitzacio,
+                            "severitat": "CRITICAL",
+                        }
+                    )
+
+        total_alertes = len(alertes) + len(alertes_renting_km)
+        parts = []
+        if alertes:
+            parts.append(f"{len(alertes)} venciments legals pendents")
+        if alertes_renting_km:
+            parts.append(f"{len(alertes_renting_km)} vehicles amb excés de quilometratge de rènting")
+
+        missatge = (
+            f"S'han detectat alertes a la flota: {', '.join(parts)}."
+            if total_alertes > 0
+            else "Tots els vehicles tenen les inspeccions, assegurances i contractes de rènting al dia."
+        )
+
         return {
-            "trobat": len(alertes) > 0,
-            "total_alertes": len(alertes),
+            "trobat": total_alertes > 0,
+            "total_alertes": total_alertes,
             "alertes": alertes,
-            "missatge": (
-                f"S'han detectat {len(alertes)} alertes de manteniment/assegurança."
-                if alertes
-                else "Tots els vehicles tenen la ITV i l'assegurança al dia."
-            ),
+            "alertes_renting_km": alertes_renting_km,
+            "missatge": missatge,
+        }
+
+    async def tool_get_heavy_vehicles_for_ot(
+        self,
+        db: AsyncSession,
+        empresa_id: uuid.UUID,
+        carrega_minima_kg: Optional[int] = None,
+        equipament: Optional[str] = None,
+        categoria_ue: Optional[str] = None,
+    ) -> dict:
+        stmt = (
+            select(Vehicle, Usuari.nom, Usuari.cognoms)
+            .outerjoin(Usuari, Vehicle.conductor_habitual_id == Usuari.id)
+            .where(Vehicle.empresa_id == empresa_id)
+            .order_by(Vehicle.carrega_util_kg.desc().nullslast())
+        )
+        res = await db.execute(stmt)
+        rows = res.all()
+
+        trobats = []
+        for veh, u_nom, u_cognoms in rows:
+            # 1. Filtre per càrrega mínima útil
+            if carrega_minima_kg is not None:
+                carrega_actual = veh.carrega_util_kg
+                if carrega_actual is None or carrega_actual < carrega_minima_kg:
+                    continue
+
+            # 2. Filtre per equipament homologat (ex: 'GRUA_AUTOCARGANT')
+            if equipament:
+                eq_requerit = equipament.upper().strip()
+                homologats = [str(e).upper().strip() for e in (veh.equipament_homologat or [])]
+                if not any(eq_requerit in h or h in eq_requerit for h in homologats):
+                    continue
+
+            # 3. Filtre per categoria UE (ex: 'N1', 'N2', 'N3')
+            if categoria_ue:
+                cat_req = categoria_ue.upper().strip()
+                cat_veh = (veh.categoria_ue or "").upper().strip()
+                if cat_veh != cat_req:
+                    continue
+
+            c_nom = f"{u_nom or ''} {u_cognoms or ''}".strip() or "Sense conductor"
+            trobats.append(
+                {
+                    "matricula": veh.matricula,
+                    "marca": veh.marca,
+                    "model": veh.model,
+                    "categoria_ue": veh.categoria_ue,
+                    "mma_kg": veh.mma_kg,
+                    "carrega_util_kg": veh.carrega_util_kg,
+                    "equipament_homologat": veh.equipament_homologat or [],
+                    "carnet_necessari": veh.carnet_necessari,
+                    "requereix_cap": veh.requereix_cap,
+                    "apte_assignacio_pwa": getattr(veh, "apte_assignacio_pwa", True),
+                    "estat": veh.estat,
+                    "conductor": c_nom,
+                }
+            )
+
+        if not trobats:
+            criteris = []
+            if carrega_minima_kg:
+                criteris.append(f"càrrega útil >= {carrega_minima_kg} kg")
+            if equipament:
+                criteris.append(f"equipament '{equipament}'")
+            if categoria_ue:
+                criteris.append(f"categoria {categoria_ue}")
+            desc_criteris = " amb " + " i ".join(criteris) if criteris else ""
+            return {
+                "trobat": False,
+                "total_vehicles": 0,
+                "vehicles": [],
+                "missatge": f"No s'ha trobat cap vehicle a la flota{desc_criteris}.",
+            }
+
+        detalls = [
+            f"{v['matricula']} ({v['marca']} {v['model']} - Càrrega útil: {v['carrega_util_kg'] or 'N/D'} kg, Equipament: {', '.join(v['equipament_homologat']) or 'Estàndard'})"
+            for v in trobats
+        ]
+        return {
+            "trobat": True,
+            "total_vehicles": len(trobats),
+            "vehicles": trobats,
+            "missatge": f"S'han trobat {len(trobats)} vehicles aptes per a l'ordre de treball: {'; '.join(detalls)}.",
         }
 
     async def tool_get_fleet_status(
@@ -534,7 +740,49 @@ class SubagentFlotaDespatx(BaseSubagent):
             tool_res = await self.tool_get_vehicle_maintenance(db, empresa_id, limit=5, caller_role=caller_role)
             return tool_res.get("missatge", "Consulta de manteniment completada."), tool_name, tool_args, tool_res, enllacos
 
-        # 4. Vehicle específic per matrícula
+        # 4. Vehicles especials o pesants per a Ordre de Treball (Grua, Càrrega útil, Categoria N1/N2/N3)
+        if any(
+            k in pregunta_lower
+            for k in [
+                "grua",
+                "grua autocargant",
+                "pesant",
+                "pesants",
+                "carrega util",
+                "càrrega útil",
+                "càrrega",
+                "carrega",
+                "pes autoritzat",
+            ]
+        ):
+            c_min = None
+            kg_match = re.search(r"(\d+)\s*(?:kg|quilos|kgs)", pregunta_lower)
+            if kg_match:
+                c_min = int(kg_match.group(1))
+
+            eq = "GRUA_AUTOCARGANT" if "grua" in pregunta_lower else None
+            cat = None
+            if "n2" in pregunta_lower:
+                cat = "N2"
+            elif "n3" in pregunta_lower:
+                cat = "N3"
+            elif "n1" in pregunta_lower:
+                cat = "N1"
+
+            tool_name = "get_heavy_vehicles_for_ot"
+            tool_args = {"carrega_minima_kg": c_min, "equipament": eq, "categoria_ue": cat}
+            tool_res = await self.tool_get_heavy_vehicles_for_ot(
+                db, empresa_id, carrega_minima_kg=c_min, equipament=eq, categoria_ue=cat
+            )
+            return (
+                tool_res.get("missatge", "Cerca de vehicles per a OT completada."),
+                tool_name,
+                tool_args,
+                tool_res,
+                enllacos,
+            )
+
+        # 5. Vehicle específic per matrícula
         stmt_v = select(Vehicle).where(Vehicle.empresa_id == empresa_id)
         vehs = (await db.execute(stmt_v)).scalars().all()
         target_mat = ""
@@ -568,7 +816,7 @@ class SubagentFlotaDespatx(BaseSubagent):
                 )
             return resposta, tool_name, tool_args, tool_res, enllacos
 
-        # 5. ITV o assegurances de la flota (NOMÉS si es pregunta expressament per aquests conceptes)
+        # 6. ITV, assegurances, rènting i venciments legals de la flota
         if any(
             k in pregunta_lower
             for k in [
@@ -580,6 +828,15 @@ class SubagentFlotaDespatx(BaseSubagent):
                 "polissa",
                 "pòlissa",
                 "inspecci",
+                "venciment",
+                "venciments",
+                "rènting",
+                "renting",
+                "exces km",
+                "excés km",
+                "tacògraf",
+                "tacograf",
+                "visat",
             ]
         ):
             tool_name = "audit_itv_insurance_fleet"

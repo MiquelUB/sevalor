@@ -269,7 +269,7 @@ SCHEMA_AUDIT_ITV_INSURANCE_FLEET = {
     "type": "function",
     "function": {
         "name": "audit_itv_insurance_fleet",
-        "description": "Audita exclusivament les dates de caducitat d'ITV o assegurança dels vehicles (NOMÉS s'ha de cridar quan l'usuari pregunta expressament per ITV, revisions legals o assegurances caducades).",
+        "description": "Audita les alertes de venciment imminent (ITV, assegurança, rènting, visat de transport, calibratge de tacògraf) i l'excés de quilometratge o ritme de contractes de rènting de la flota.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -277,6 +277,31 @@ SCHEMA_AUDIT_ITV_INSURANCE_FLEET = {
                     "type": "integer",
                     "description": "Marge de dies cap al futur (per defecte 30 dies)",
                 }
+            },
+        },
+    },
+}
+
+SCHEMA_GET_HEAVY_VEHICLES_FOR_OT = {
+    "type": "function",
+    "function": {
+        "name": "get_heavy_vehicles_for_ot",
+        "description": "Filtra i localitza vehicles pesants o especials per a una Ordre de Treball (OT): verifica equipament homologat (com GRUA_AUTOCARGANT, ENGANXALL_REMOLC), capacitat de càrrega útil en kg (carrega_util_kg), MMA i carnet requerit.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "carrega_minima_kg": {
+                    "type": "integer",
+                    "description": "Capacitat mínima requerida de càrrega útil en kg (carrega_util_kg)",
+                },
+                "equipament": {
+                    "type": "string",
+                    "description": "Equipament homologat necessari (ex: 'GRUA_AUTOCARGANT', 'ENGANXALL_REMOLC', 'PLATAFORMA_ELEVADORA')",
+                },
+                "categoria_ue": {
+                    "type": "string",
+                    "description": "Categoria UE desitjada (ex: 'N1', 'N2', 'N3')",
+                },
             },
         },
     },
@@ -339,6 +364,7 @@ SCHEMAS_FLOTA_DESPATX: List[Dict[str, Any]] = [
     SCHEMA_GET_CLOSEST_VEHICLE,
     SCHEMA_GET_VEHICLE_INFO,
     SCHEMA_AUDIT_ITV_INSURANCE_FLEET,
+    SCHEMA_GET_HEAVY_VEHICLES_FOR_OT,
     SCHEMA_GET_FLEET_STATUS,
     SCHEMA_GET_VEHICLE_MAINTENANCE,
     SCHEMA_GET_FUEL_CONSUMPTION,

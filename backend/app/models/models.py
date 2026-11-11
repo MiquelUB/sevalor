@@ -19,6 +19,7 @@ from sqlalchemy import (
     text,
 )
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
+from sqlalchemy.ext.hybrid import hybrid_property
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.db import Base
@@ -216,6 +217,15 @@ class Usuari(Base):
     carnet_conduir: Mapped[str] = mapped_column(String(20), default="B", server_default="B")
     carnet_caducitat: Mapped[Optional[date]] = mapped_column(Date)
     prl_certificat_vigencia: Mapped[Optional[date]] = mapped_column(Date)
+
+    @property
+    def te_cap(self) -> bool:
+        """Indica si l'operari té acreditació de Certificat d'Aptitud Professional (CAP)."""
+        return getattr(self, "_te_cap", False)
+
+    @te_cap.setter
+    def te_cap(self, val: bool) -> None:
+        self._te_cap = bool(val)
     intents_pin_fallits: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
     pin_bloquejat: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default=text("false")
@@ -553,8 +563,44 @@ class Vehicle(Base):
     preu_km_exces_eur: Mapped[float] = mapped_column(
         Numeric(6, 4), default=0.0000, server_default=text("0.0000")
     )
+    # Renting, leasing i dades financeres
+    empresa_renting: Mapped[Optional[str]] = mapped_column(String(120))
+    num_contracte_renting: Mapped[Optional[str]] = mapped_column(String(80))
+    data_venciment_renting: Mapped[Optional[date]] = mapped_column(Date)
     valor_residual_eur: Mapped[Optional[float]] = mapped_column(Numeric(10, 2))
     fianca_eur: Mapped[Optional[float]] = mapped_column(Numeric(10, 2))
+
+    # Titularitat i arrendament (conciliació CIF tenant)
+    titular_nif: Mapped[Optional[str]] = mapped_column(String(20))
+    arrendatari_nif: Mapped[Optional[str]] = mapped_column(String(20))
+    codi_servei_dgt: Mapped[Optional[str]] = mapped_column(String(10))
+
+    # Classificació tècnica UE, Pesos i Càrrega (Pesants i Lleugers)
+    categoria_ue: Mapped[Optional[str]] = mapped_column(String(10))
+    mma_kg: Mapped[Optional[int]] = mapped_column(Integer)
+    tara_kg: Mapped[Optional[int]] = mapped_column(Integer)
+    carrega_util_kg: Mapped[Optional[int]] = mapped_column(Integer)
+    mmr_amb_fre_kg: Mapped[Optional[int]] = mapped_column(Integer)
+
+    requereix_cap: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=text("false")
+    )
+    equipament_homologat: Mapped[list] = mapped_column(
+        JSONB, default=list, server_default=text("'[]'::jsonb")
+    )
+    certificats_prl_requerits: Mapped[list] = mapped_column(
+        JSONB, default=list, server_default=text("'[]'::jsonb")
+    )
+    dades_pesants: Mapped[Optional[dict]] = mapped_column(JSONB)
+    regulacio_pesants: Mapped[Optional[dict]] = mapped_column(
+        JSONB, default=dict, server_default=text("'{}'::jsonb")
+    )
+    estat_semafor: Mapped[str] = mapped_column(
+        String(40), default="OPERATIU_OK", server_default=text("'OPERATIU_OK'")
+    )
+    _apte_assignacio_pwa: Mapped[bool] = mapped_column(
+        "apte_assignacio_pwa", Boolean, default=True, server_default=text("true")
+    )
 
     # Manteniment, garantia, anomalies i alertes legals (FR-011 / US4 / Spec 006)
     data_fi_garantia_oficial: Mapped[Optional[date]] = mapped_column(Date)
@@ -590,6 +636,45 @@ class Vehicle(Base):
     consum_adblue_litres: Mapped[float] = mapped_column(
         Numeric(10, 2), default=0.0, server_default=text("0")
     )
+
+    @hybrid_property
+    def apte_assignacio_pwa(self) -> bool:
+        """Determina si el vehicle és apte per ser assignat a un operari a la PWA."""
+        if getattr(self, "estat", None) in ("BLOQUEJAT", "TALLER", "BAIXA"):
+            return False
+        if getattr(self, "estat_itv", None) in ("DESFAVORABLE", "NEGATIVA", "CADUCADA"):
+            return False
+        avui = date.today()
+        if self.data_proxima_itv and self.data_proxima_itv < avui:
+            return False
+        if self.data_caducitat_asseguranca and self.data_caducitat_asseguranca < avui:
+            return False
+        if self.data_venciment_renting and self.data_venciment_renting < avui:
+            return False
+        pesants_info = self.dades_pesants or self.regulacio_pesants
+        if pesants_info and isinstance(pesants_info, dict):
+            visat = pesants_info.get("data_visat_transport")
+            if visat:
+                try:
+                    d_visat = date.fromisoformat(str(visat)) if isinstance(visat, str) else visat
+                    if d_visat < avui:
+                        return False
+                except Exception:
+                    pass
+            tacograf = pesants_info.get("data_calibratge_tacograf")
+            if tacograf:
+                try:
+                    d_taco = date.fromisoformat(str(tacograf)) if isinstance(tacograf, str) else tacograf
+                    if d_taco < avui:
+                        return False
+                except Exception:
+                    pass
+        raw_val = getattr(self, "_apte_assignacio_pwa", True)
+        return bool(raw_val if raw_val is not None else True)
+
+    @apte_assignacio_pwa.setter
+    def apte_assignacio_pwa(self, val: bool) -> None:
+        self._apte_assignacio_pwa = bool(val)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -2029,12 +2114,15 @@ class DocumentFlota(Base):
     )
     tipus_document: Mapped[str] = mapped_column(
         String(50), nullable=False
-    )  # ITV, ASSEGURANCA, REPARACIO, CONTRACTE, FITXA_TECNICA
+    )  # FITXA_TECNICA, INFORME_ITV, ITV, ASSEGURANCA, REPARACIO, CONTRACTE, CONTRACTE_RENTING, TARGETA_TRANSPORT, GENERAL, MANTENIMENT
     nom_arxiu: Mapped[str] = mapped_column(String(255), nullable=False)
     ruta_arxiu: Mapped[str] = mapped_column(String(500), nullable=False)
     contingut_extret: Mapped[Optional[str]] = mapped_column(
         Text
     )  # Text extret via OCR per al Copilot
+    bastidor_detectat: Mapped[Optional[str]] = mapped_column(String(30))
+    nif_detectat: Mapped[Optional[str]] = mapped_column(String(20))
+    metadata_ocr: Mapped[Optional[dict]] = mapped_column(JSONB)
     data_document: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),

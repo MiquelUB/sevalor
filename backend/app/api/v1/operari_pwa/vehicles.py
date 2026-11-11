@@ -20,6 +20,55 @@ from app.models.models import (
 from app.services.flota_service import sincronitzar_vehicle_al_disc_empresa
 from app.services.sovereign_storage import SovereignStorageGateway
 
+JERARQUIA_CARNETS: dict[str, int] = {"AM": 1, "B": 2, "B+E": 3, "C": 4, "C+E": 5}
+
+
+def validar_assignacio_vehicle_operari(vehicle: dict, operari: dict) -> bool:
+    """Valida si un operari pot agafar un vehicle a l'inici de jornada PWA."""
+    estat_flota = vehicle.get("estat_operatiu_flota") or {}
+    apte_pwa = estat_flota.get("apte_assignacio_pwa", vehicle.get("apte_assignacio_pwa", True))
+    estat_semafor = estat_flota.get("estat_semafor", vehicle.get("estat_semafor", "OPERATIU_OK"))
+    if not apte_pwa:
+        raise HTTPException(
+            status_code=403,
+            detail=f"Vehicle bloquejat operativament: {estat_semafor}",
+        )
+
+    req = vehicle.get("requisits_operari") or {}
+    carnet_req = req.get("carnet_minim") or vehicle.get("carnet_necessari") or "B"
+    nivell_req = JERARQUIA_CARNETS.get(carnet_req, 2)
+    nivell_op = JERARQUIA_CARNETS.get(operari.get("carnet_conduir", "B"), 2)
+
+    if nivell_op < nivell_req:
+        raise HTTPException(
+            status_code=403,
+            detail=f"Permís insuficient: es requereix carnet {carnet_req}",
+        )
+
+    requereix_cap = req.get("requereix_cap", vehicle.get("requereix_cap", False))
+    te_cap = operari.get("te_cap_vigent", operari.get("te_cap", False))
+    if requereix_cap and not te_cap:
+        raise HTTPException(
+            status_code=403,
+            detail="Es requereix certificat CAP en vigor per a vehicles >3.500 kg",
+        )
+
+    prl_op = set(operari.get("certificats_prl", []))
+    if "OPERADOR_GRUA_CAMIO" in prl_op or "PRL_OPERADOR_GRUA" in prl_op:
+        prl_op.add("OPERADOR_GRUA_CAMIO")
+        prl_op.add("PRL_OPERADOR_GRUA")
+
+    certificats_req = req.get("certificats_prl_requerits", vehicle.get("certificats_prl_requerits", []))
+    for prl in certificats_req:
+        if prl not in prl_op:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Falta formació PRL obligatòria: {prl}",
+            )
+
+    return True
+
+
 router = APIRouter(
     prefix="/operari/vehicles",
     tags=["Operari PWA Vehicles"],
@@ -38,6 +87,7 @@ class VehicleResponse(BaseModel):
     tipus: str = "FURGONETA"
     estat: str
     odometre_acumulat: int | None = None
+    apte_assignacio_pwa: bool = True
 
 
 @router.get("", response_model=List[VehicleResponse])
@@ -87,6 +137,7 @@ async def llistar_vehicles_pwa(
             tipus=getattr(v, "tipus", "FURGONETA") or "FURGONETA",
             estat=v.estat,
             odometre_acumulat=v.odometre_acumulat,
+            apte_assignacio_pwa=bool(getattr(v, "apte_assignacio_pwa", True)),
         )
         for v in vehicles
     ]
@@ -208,6 +259,12 @@ async def vehicle_checkin(
     )
     if not vehicle:
         raise HTTPException(status_code=404)
+
+    if not getattr(vehicle, "apte_assignacio_pwa", True):
+        raise HTTPException(
+            status_code=422,
+            detail=f"Bloqueig operatiu: El vehicle {vehicle.matricula} no és apte (ITV o assegurança caducada).",
+        )
 
     vehicle.odometre_acumulat = payload.odometre_inicial
     await sincronitzar_vehicle_al_disc_empresa(

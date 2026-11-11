@@ -24,6 +24,7 @@ from app.core.db import get_db_with_tenant_context
 from app.core.security import require_roles
 from app.models.models import (
     DocumentFlota,
+    Empresa,
     Magatzem,
     MantenimentVehicle,
     OrdreTreball,
@@ -33,6 +34,7 @@ from app.models.models import (
     Vehicle,
 )
 from app.services.flota_service import (
+    consolidar_i_validar_ocr_flota,
     sincronitzar_assignacio_vehicle_operari,
     sincronitzar_vehicle_al_disc_empresa,
 )
@@ -86,6 +88,19 @@ class VehicleCreate(BaseModel):
     consum_l_100km: Optional[float] = None
     consum_mitjana_historica: Optional[float] = None
     consum_adblue_litres: Optional[float] = 0.0
+    titular_nif: Optional[str] = Field(None, max_length=20)
+    arrendatari_nif: Optional[str] = Field(None, max_length=20)
+    categoria_ue: Optional[str] = Field(None, max_length=10)
+    mma_kg: Optional[int] = None
+    tara_kg: Optional[int] = None
+    carrega_util_kg: Optional[int] = None
+    requereix_cap: bool = False
+    equipament_homologat: List[str] = Field(default_factory=list)
+    empresa_renting: Optional[str] = Field(None, max_length=120)
+    num_contracte_renting: Optional[str] = Field(None, max_length=80)
+    data_venciment_renting: Optional[date] = None
+    dades_pesants: Optional[Dict[str, Any]] = None
+    documents_processats: Optional[List[Dict[str, Any]]] = None
 
 
 class VehicleResponse(VehicleCreate):
@@ -96,6 +111,7 @@ class VehicleResponse(VehicleCreate):
     consum_format: str = "Sense dades"
     anomalia_consum: bool = False
     anomalia_descartada: bool = False
+    apte_assignacio_pwa: bool = True
     renting_ocupacio_percent: Optional[float] = None
     renting_alerta: bool = False
     renting_nivell_alerta: Optional[str] = None
@@ -178,6 +194,7 @@ def _build_vehicle_response(
 ) -> VehicleResponse:
     v_dict = {c.name: getattr(veh, c.name) for c in veh.__table__.columns}
     v_dict["conductor_nom"] = conductor_nom
+    v_dict["apte_assignacio_pwa"] = getattr(veh, "apte_assignacio_pwa", True)
     if v_dict.get("conductor_habitual_id") is None and conductor_id_fallback is not None:
         v_dict["conductor_habitual_id"] = conductor_id_fallback
     if v_dict.get("estat") == "ASSIGNAT":
@@ -460,10 +477,102 @@ async def alta_vehicle(
         consum_l_100km=vehicle.consum_l_100km,
         consum_mitjana_historica=vehicle.consum_mitjana_historica,
         consum_adblue_litres=vehicle.consum_adblue_litres or 0.0,
+        titular_nif=vehicle.titular_nif,
+        arrendatari_nif=vehicle.arrendatari_nif,
+        categoria_ue=vehicle.categoria_ue,
+        mma_kg=vehicle.mma_kg,
+        tara_kg=vehicle.tara_kg,
+        carrega_util_kg=vehicle.carrega_util_kg,
+        requereix_cap=vehicle.requereix_cap,
+        equipament_homologat=vehicle.equipament_homologat or [],
+        empresa_renting=vehicle.empresa_renting,
+        num_contracte_renting=vehicle.num_contracte_renting,
+        data_venciment_renting=vehicle.data_venciment_renting,
+        dades_pesants=vehicle.dades_pesants,
     )
 
     db.add(nou_vehicle)
     await db.flush()
+
+    # Desar documents de flota si s'han adjuntat via OCR draft
+    if vehicle.documents_processats:
+        for doc in vehicle.documents_processats:
+            tipus_doc = doc.get("tipus_document") or "ALTRES"
+            nom_f = doc.get("nom_fitxer") or f"{tipus_doc.lower()}.pdf"
+            ruta_a = (
+                doc.get("ruta_arxiu")
+                or doc.get("fitxer_url")
+                or f"flota/{empresa_id}/{nou_vehicle.id}/{nom_f}"
+            )
+            bastidor_det = doc.get("bastidor_detectat") or doc.get("num_bastidor_vin")
+            data_cad = doc.get("data_caducitat") or doc.get("data_proxima_itv")
+            if isinstance(data_cad, str):
+                try:
+                    data_cad = date.fromisoformat(data_cad)
+                except Exception:
+                    data_cad = None
+            data_em = doc.get("data_emissio") or doc.get("data_matriculacio")
+            if isinstance(data_em, str):
+                try:
+                    data_em = date.fromisoformat(data_em)
+                except Exception:
+                    data_em = None
+
+            nou_doc = DocumentFlota(
+                empresa_id=uuid.UUID(empresa_id),
+                vehicle_id=nou_vehicle.id,
+                tipus_document=tipus_doc,
+                nom_fitxer=nom_f,
+                ruta_arxiu=ruta_a,
+                bastidor_detectat=bastidor_det,
+                metadata_ocr=doc.get("metadata_ocr") or doc,
+                data_caducitat=data_cad,
+                data_emissio=data_em,
+                validat=True,
+                observacions=doc.get("observacions") or "Processat via OCR",
+            )
+            db.add(nou_doc)
+        await db.flush()
+
+    # Control i generació d'alertes de venciment a Notificacio / SovereignStorage si dies_restants <= 30
+    avui = date.today()
+    venciments_a_revisar = [
+        ("ITV", nou_vehicle.data_proxima_itv),
+        ("Assegurança", nou_vehicle.data_caducitat_asseguranca),
+        ("Rènting", nou_vehicle.data_venciment_renting),
+    ]
+    if nou_vehicle.dades_pesants and isinstance(nou_vehicle.dades_pesants, dict):
+        if "data_visat_transport" in nou_vehicle.dades_pesants:
+            d_visat_raw = nou_vehicle.dades_pesants["data_visat_transport"]
+            d_visat = date.fromisoformat(str(d_visat_raw)) if d_visat_raw else None
+            venciments_a_revisar.append(("Visat Transport", d_visat))
+        if "data_calibratge_tacograf" in nou_vehicle.dades_pesants:
+            d_taco_raw = nou_vehicle.dades_pesants["data_calibratge_tacograf"]
+            d_taco = date.fromisoformat(str(d_taco_raw)) if d_taco_raw else None
+            venciments_a_revisar.append(("Calibratge Tacògraf", d_taco))
+
+    for concepte, d_venc in venciments_a_revisar:
+        if d_venc:
+            d_rest = (d_venc - avui).days
+            if d_rest <= 30:
+                alerta_id = f"alerta_flota_{nou_vehicle.id}_{concepte.lower().replace(' ', '_')}"
+                severitat = "CRITICAL" if d_rest <= 0 else "WARNING"
+                await SovereignStorageGateway.desar_entitat_json(
+                    db=db,
+                    empresa_id=empresa_id,
+                    categoria="alertes_flota",
+                    item_id=alerta_id,
+                    dades={
+                        "id": alerta_id,
+                        "vehicle_id": str(nou_vehicle.id),
+                        "matricula": nou_vehicle.matricula,
+                        "concepte": concepte,
+                        "data_venciment": d_venc.isoformat(),
+                        "dies_restants": d_rest,
+                        "severitat": severitat,
+                        "missatge": f"El vehicle {nou_vehicle.matricula} té {concepte} amb venciment el {d_venc.isoformat()} ({d_rest} dies restants).",
+                    },
+                )
 
     # Creació automàtica del Magatzem Mòbil per al Vehicle (Spec 004 / Spec 01 / Spec 015)
     magatzem_furgoneta = Magatzem(
@@ -568,6 +677,30 @@ async def editar_vehicle(
     v_db.consum_mitjana_historica = vehicle.consum_mitjana_historica
     if vehicle.consum_adblue_litres is not None:
         v_db.consum_adblue_litres = vehicle.consum_adblue_litres
+    if vehicle.titular_nif is not None:
+        v_db.titular_nif = vehicle.titular_nif
+    if vehicle.arrendatari_nif is not None:
+        v_db.arrendatari_nif = vehicle.arrendatari_nif
+    if vehicle.categoria_ue is not None:
+        v_db.categoria_ue = vehicle.categoria_ue
+    if vehicle.mma_kg is not None:
+        v_db.mma_kg = vehicle.mma_kg
+    if vehicle.tara_kg is not None:
+        v_db.tara_kg = vehicle.tara_kg
+    if vehicle.carrega_util_kg is not None:
+        v_db.carrega_util_kg = vehicle.carrega_util_kg
+    if vehicle.requereix_cap is not None:
+        v_db.requereix_cap = vehicle.requereix_cap
+    if vehicle.equipament_homologat is not None:
+        v_db.equipament_homologat = vehicle.equipament_homologat
+    if vehicle.empresa_renting is not None:
+        v_db.empresa_renting = vehicle.empresa_renting
+    if vehicle.num_contracte_renting is not None:
+        v_db.num_contracte_renting = vehicle.num_contracte_renting
+    if vehicle.data_venciment_renting is not None:
+        v_db.data_venciment_renting = vehicle.data_venciment_renting
+    if vehicle.dades_pesants is not None:
+        v_db.dades_pesants = vehicle.dades_pesants
 
     if vehicle.conductor_habitual_id != v_db.conductor_habitual_id or vehicle.conductor_habitual_id is not None:
         await sincronitzar_assignacio_vehicle_operari(
@@ -1053,6 +1186,7 @@ async def ocr_vehicle_draft(
     request: Request,
     files: Optional[List[UploadFile]] = File(None),
     file: Optional[UploadFile] = File(None),
+    db: AsyncSession = Depends(get_db_with_tenant_context),
 ):
     empresa_id = request.state.empresa_id
     if not empresa_id or empresa_id == "undefined":
@@ -1070,93 +1204,26 @@ async def ocr_vehicle_draft(
             detail="Cal adjuntar com a mínim un document de vehicle (Targeta ITV, Permís de Circulació o Pòlissa d'Assegurança)",
         )
 
-    merged_data: Dict[str, Any] = {
-        "status": "EXTRET_AUTOMATIC",
-        "confidence": 0.0,
-        "matricula": None,
-        "bastidor": None,
-        "marca": None,
-        "model": None,
-        "tipus": None,
-        "distintiu_ambiental": None,
-        "estat_itv": None,
-        "data_proxima_itv": None,
-        "data_inspeccio_itv": None,
-        "data_matriculacio": None,
-        "odometre_acumulat": None,
-        "companyia_asseguradora": None,
-        "polissa_asseguranca": None,
-        "data_caducitat_asseguranca": None,
-        "regim_adquisicio": None,
-        "renting_limit_km": None,
-        "carnet_necessari": None,
-        "documents_processats": [],
-    }
+    # Obtenir el CIF del tenant si és possible
+    tenant_cif = ""
+    try:
+        empresa_uuid = uuid.UUID(str(empresa_id))
+        empresa_obj = await db.get(Empresa, empresa_uuid)
+        if empresa_obj and empresa_obj.nif:
+            tenant_cif = empresa_obj.nif
+    except Exception:
+        pass
 
-    confidences: List[float] = []
-
+    docs_extrets: List[Dict[str, Any]] = []
     for upload in all_files:
         file_bytes = await upload.read()
         if not file_bytes:
             continue
-
         res = await processar_ocr_document_vehicle(file_bytes)
-        confidences.append(res.get("confidence", 0.0))
+        res["nom_fitxer"] = upload.filename
+        docs_extrets.append(res)
 
-        # Fusionar camps no nuls procedents de qualsevol document pujat
-        for k in [
-            "matricula",
-            "bastidor",
-            "marca",
-            "model",
-            "tipus",
-            "distintiu_ambiental",
-            "estat_itv",
-            "data_proxima_itv",
-            "data_inspeccio_itv",
-            "data_matriculacio",
-            "odometre_acumulat",
-            "companyia_asseguradora",
-            "polissa_asseguranca",
-            "data_caducitat_asseguranca",
-            "regim_adquisicio",
-            "renting_limit_km",
-            "carnet_necessari",
-        ]:
-            if res.get(k) is not None and not merged_data.get(k):
-                merged_data[k] = res[k]
-
-        merged_data["documents_processats"].append(
-            {
-                "nom": upload.filename,
-                "tipus_detectat": res.get("tipus_document", "GENERAL"),
-                "matricula_detectada": res.get("matricula"),
-            }
-        )
-
-    # Valors per defecte si no s'han especificat en cap document
-    if not merged_data["tipus"]:
-        merged_data["tipus"] = "DIESEL"
-    if not merged_data["distintiu_ambiental"]:
-        if merged_data["tipus"] == "EV":
-            merged_data["distintiu_ambiental"] = "ZERO"
-        elif merged_data["tipus"] == "PHEV":
-            merged_data["distintiu_ambiental"] = "ECO"
-        else:
-            merged_data["distintiu_ambiental"] = "C"
-    if not merged_data["regim_adquisicio"]:
-        merged_data["regim_adquisicio"] = "PROPIETAT"
-    if merged_data["regim_adquisicio"] not in ("RENTING", "LEASING", "LLOGUER"):
-        merged_data["renting_limit_km"] = None
-    if not merged_data["carnet_necessari"]:
-        merged_data["carnet_necessari"] = "B"
-    if not merged_data["estat_itv"]:
-        merged_data["estat_itv"] = "FAVORABLE"
-
-    merged_data["confidence"] = max(confidences) if confidences else 0.0
-    trobat = bool(merged_data.get("matricula") or merged_data.get("bastidor"))
-    merged_data["status"] = "EXTRET_AUTOMATIC" if trobat else "PENDENT_REVISIO_MANUAL"
-
+    merged_data = consolidar_i_validar_ocr_flota(docs_extrets, tenant_cif=tenant_cif)
     return merged_data
 
 

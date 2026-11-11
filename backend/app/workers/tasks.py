@@ -292,33 +292,159 @@ def comprovar_trencament_estoc(empresa_id: str):
 
 @celery_app.task(name="app.workers.tasks.revisar_itv_asseguranca", queue="queue_critical")
 def revisar_itv_asseguranca(empresa_id: str):
-    """T030: Checks vehicles with ITV or Assegurança expiring in <= 30 days and logs it."""
+    """Fase 4 / T030: Revisa diàriament dates de Vehicle i DocumentFlota, bloqueja quan dies_restants <= 0,
+
+    i calcula la projecció de km de rènting (odometre_acumulat vs renting_limit_km).
+    """
     import asyncio
-    from datetime import datetime, timedelta, timezone
+    import uuid
+    from datetime import date, datetime, timezone
 
-    from sqlalchemy import or_, select
+    from sqlalchemy import select
 
-    from app.models.models import Vehicle
+    from app.models.models import DocumentFlota, Vehicle
 
     async def process_itv():
         async with get_worker_session(empresa_id) as session:
             avui = datetime.now(timezone.utc).date()
-            trenta_dies = avui + timedelta(days=30)
-            stmt = select(Vehicle).where(
-                or_(
-                    Vehicle.data_proxima_itv <= trenta_dies,
-                    Vehicle.data_caducitat_asseguranca <= trenta_dies,
-                )
-            )
-            result = await session.execute(stmt)
+            stmt_v = select(Vehicle).where(Vehicle.empresa_id == uuid.UUID(empresa_id))
+            result = await session.execute(stmt_v)
             vehicles = result.scalars().all()
+
+            vehicles_afectats = 0
+            vehicles_bloquejats = 0
+            alertes_renting = 0
+
             for vehicle in vehicles:
-                vehicle.estat_itv = "CADUCADA_O_PROXIMA"
-                logger.info(
-                    f"ALERTA ITV/ASSEGURANCA: Vehicle {vehicle.matricula} necessita revisió."
-                )
+                es_bloquejat = False
+                es_alerta = False
+
+                # 1. Comprovació ITV
+                if vehicle.data_proxima_itv:
+                    dies_itv = (vehicle.data_proxima_itv - avui).days
+                    if dies_itv <= 0 or vehicle.estat_itv in ("DESFAVORABLE", "NEGATIVA"):
+                        vehicle.estat_itv = "CADUCADA"
+                        vehicle.estat = "BLOQUEJAT"
+                        es_bloquejat = True
+                        logger.warning(
+                            f"BLOQUEIG ITV: Vehicle {vehicle.matricula} té la ITV caducada ({dies_itv} dies)."
+                        )
+                    elif dies_itv <= 30:
+                        vehicle.estat_itv = "CADUCADA_O_PROXIMA"
+                        es_alerta = True
+
+                # 2. Comprovació Assegurança
+                if vehicle.data_caducitat_asseguranca:
+                    dies_ass = (vehicle.data_caducitat_asseguranca - avui).days
+                    if dies_ass <= 0:
+                        vehicle.estat = "BLOQUEJAT"
+                        es_bloquejat = True
+                        logger.warning(
+                            f"BLOQUEIG ASSEGURANÇA: Vehicle {vehicle.matricula} amb pòlissa vençuda ({dies_ass} dies)."
+                        )
+                    elif dies_ass <= 30:
+                        es_alerta = True
+
+                # 3. Comprovació Venciment Contracte Rènting
+                if vehicle.data_venciment_renting:
+                    dies_renting = (vehicle.data_venciment_renting - avui).days
+                    if dies_renting <= 0:
+                        vehicle.estat = "BLOQUEJAT"
+                        es_bloquejat = True
+                        logger.warning(
+                            f"BLOQUEIG RÈNTING: Vehicle {vehicle.matricula} contracte vençut ({dies_renting} dies)."
+                        )
+                    elif dies_renting <= 30:
+                        es_alerta = True
+
+                # 4. Comprovació Dades Pesants (Visat transport i calibratge tacògraf)
+                if vehicle.dades_pesants and isinstance(vehicle.dades_pesants, dict):
+                    visat_raw = vehicle.dades_pesants.get("data_visat_transport")
+                    if visat_raw:
+                        try:
+                            d_visat = (
+                                date.fromisoformat(str(visat_raw))
+                                if isinstance(visat_raw, str)
+                                else visat_raw
+                            )
+                            if (d_visat - avui).days <= 0:
+                                vehicle.estat = "BLOQUEJAT"
+                                es_bloquejat = True
+                        except Exception:
+                            pass
+
+                    taco_raw = vehicle.dades_pesants.get("data_calibratge_tacograf")
+                    if taco_raw:
+                        try:
+                            d_taco = (
+                                date.fromisoformat(str(taco_raw))
+                                if isinstance(taco_raw, str)
+                                else taco_raw
+                            )
+                            if (d_taco - avui).days <= 0:
+                                vehicle.estat = "BLOQUEJAT"
+                                es_bloquejat = True
+                        except Exception:
+                            pass
+
+                # 5. Càlcul de Projecció de KM de Rènting (odometre_acumulat vs renting_limit_km)
+                if (
+                    vehicle.regim_adquisicio in ("RENTING", "LEASING", "LLOGUER")
+                    and vehicle.renting_limit_km
+                    and vehicle.renting_limit_km > 0
+                ):
+                    odo_actual = vehicle.odometre_acumulat or 0
+                    odo_inici = vehicle.odometre_inici_contracte or 0
+                    km_fets = max(0, odo_actual - odo_inici)
+                    limit_km = vehicle.renting_limit_km
+
+                    if km_fets > limit_km:
+                        alertes_renting += 1
+                        exces_km = km_fets - limit_km
+                        penalitzacio = exces_km * float(vehicle.preu_km_exces_eur or 0.0)
+                        logger.warning(
+                            f"ALERTA RÈNTING KM: Vehicle {vehicle.matricula} supera límit de {limit_km} km "
+                            f"(realitzats: {km_fets} km, excés: {exces_km} km, penalització: {penalitzacio:.2f} €)."
+                        )
+                    elif (
+                        vehicle.data_inici_contracte
+                        and vehicle.data_fi_contracte
+                        and vehicle.data_fi_contracte > vehicle.data_inici_contracte
+                    ):
+                        dies_totals = (vehicle.data_fi_contracte - vehicle.data_inici_contracte).days
+                        dies_transcorreguts = max(1, (avui - vehicle.data_inici_contracte).days)
+                        if 0 < dies_transcorreguts <= dies_totals:
+                            km_per_dia = km_fets / dies_transcorreguts
+                            projeccio_km_finals = km_per_dia * dies_totals
+                            if projeccio_km_finals > limit_km * 1.05:  # Desviació > 5%
+                                alertes_renting += 1
+                                logger.info(
+                                    f"PROJECCIÓ RÈNTING KM: Vehicle {vehicle.matricula} superarà el límit "
+                                    f"({projeccio_km_finals:.0f} km projectats vs {limit_km} km)."
+                                )
+
+                if es_bloquejat:
+                    vehicles_bloquejats += 1
+                if es_alerta or es_bloquejat:
+                    vehicles_afectats += 1
+
+            # 6. Comprovació de documents de flota caducats
+            stmt_doc = select(DocumentFlota).where(DocumentFlota.empresa_id == uuid.UUID(empresa_id))
+            res_doc = await session.execute(stmt_doc)
+            documents = res_doc.scalars().all()
+            for doc in documents:
+                if doc.data_caducitat and (doc.data_caducitat - avui).days <= 0:
+                    logger.warning(
+                        f"DOCUMENT FLOTA CADUCAT: {doc.nom_fitxer} ({doc.tipus_document}) vehicle_id={doc.vehicle_id}."
+                    )
+
             await session.commit()
-            return len(vehicles)
+            return {
+                "total_vehicles": len(vehicles),
+                "vehicles_bloquejats": vehicles_bloquejats,
+                "vehicles_afectats": vehicles_afectats,
+                "alertes_renting": alertes_renting,
+            }
 
     return asyncio.run(process_itv())
 

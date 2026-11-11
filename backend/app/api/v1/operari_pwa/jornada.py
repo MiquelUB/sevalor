@@ -207,6 +207,16 @@ async def assignar_vehicle_a_jornada(
     if not vehicle:
         raise HTTPException(status_code=404, detail="Vehicle no trobat")
 
+    u_res = await db.execute(select(Usuari).where(Usuari.id == uuid.UUID(usuari_id)))
+    usuari = u_res.scalars().first()
+    if not usuari:
+        raise HTTPException(status_code=404, detail="Operari no trobat")
+
+    # Guarda de carnet, CAP i aptitud del vehicle a la PWA (Fase 4 / FR-012)
+    from app.services.flota_service import validar_permis_conduir
+
+    validar_permis_conduir(vehicle, usuari)
+
     if vehicle.odometre_acumulat and payload.km_actuals < vehicle.odometre_acumulat:
         raise HTTPException(
             status_code=422, detail="Els km reportats són inferiors als últims registrats"
@@ -214,12 +224,9 @@ async def assignar_vehicle_a_jornada(
 
     # Actualitzar Vehicle i Usuari
     vehicle.odometre_acumulat = payload.km_actuals
-    u_res = await db.execute(select(Usuari).where(Usuari.id == uuid.UUID(usuari_id)))
-    usuari = u_res.scalars().first()
-    if usuari:
-        usuari.vehicle_assignat_id = vehicle.id
-        if not vehicle.conductor_habitual_id:
-            vehicle.conductor_habitual_id = usuari.id
+    usuari.vehicle_assignat_id = vehicle.id
+    if not vehicle.conductor_habitual_id:
+        vehicle.conductor_habitual_id = usuari.id
 
     await db.flush()
 

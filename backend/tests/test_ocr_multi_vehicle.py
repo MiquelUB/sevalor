@@ -1,5 +1,6 @@
 import pytest
 
+from app.services.flota_service import consolidar_i_validar_ocr_flota
 from app.services.ocr_service import processar_ocr_document_vehicle
 
 
@@ -254,8 +255,163 @@ async def test_ocr_vehicle_2_renting_reals():
     print("Extracció dels fitxers .md reals (vehicle 2) validada al 100%!")
 
 
+@pytest.mark.asyncio
+async def test_ocr_draft_furgoneta_propia_n1_ok():
+    """Fase 5: Valida la Ford Transit (4829-LWT), carnet B, titularitat directa i OPERATIU_OK."""
+    import os
+
+    folder = "demo_docs/Banc_Documents_Sevalor_Complet/demo_docs/02_flota_vehicles/docs_1"
+    if not os.path.exists(folder):
+        folder = os.path.join("..", folder)
+
+    docs_extrets = []
+    for fitxer in sorted(os.listdir(folder)):
+        if fitxer.endswith(".md"):
+            path = os.path.join(folder, fitxer)
+            content = open(path, "rb").read()
+            res = await processar_ocr_document_vehicle(content)
+            res["nom_fitxer"] = fitxer
+            docs_extrets.append(res)
+
+    draft = consolidar_i_validar_ocr_flota(docs_extrets, tenant_cif="B55891234")
+
+    # Identificadors principals
+    assert draft["matricula"] == "4829-LWT"
+    assert draft["bastidor"] == "WF0YXXTTGYNJ58291"
+    assert draft["num_bastidor_vin"] == "WF0YXXTTGYNJ58291"
+    assert draft["marca"] == "Ford"
+    assert "TRANSIT" in (draft["model"] or "").upper()
+
+    # Característiques tècniques i carnet
+    assert draft["carnet_necessari"] == "B"
+    assert draft["categoria_ue"] == "N1"
+    assert draft["mma_kg"] == 3000
+    assert draft["requereix_cap"] is False
+
+    # Titularitat i conciliació multitenant directa
+    assert draft["titular_nif"] == "B55891234"
+    assert draft["regim_adquisicio"] == "PROPIETAT"
+    assert draft["validacio_tenant_cif"] == "COINCIDENT_PROPIETARI"
+
+    # Coherència creuada i semàfor
+    assert draft["coherencia_creuada_vin_matricula"] is True
+    assert draft["estat_semafor"] == "OPERATIU_OK"
+    assert draft["apte_assignacio_pwa"] is True
+    assert draft["estat_itv"] == "FAVORABLE"
+    assert draft["documents_mancants"] == []
+    print("Test furgoneta pròpia N1 (4829-LWT) validat al 100%!")
+
+
+@pytest.mark.asyncio
+async def test_ocr_draft_renting_venciment_imminent():
+    """Fase 5: Valida la Renault Kangoo (7314-LJH), conciliació Arval vs. Tenant (A12),
+
+    detecció de defectes lleus (FAVORABLE_LEUS) i dispars d'alerta crítica a <10 dies.
+    """
+    import os
+
+    folder = "demo_docs/Banc_Documents_Sevalor_Complet/demo_docs/02_flota_vehicles/vehicle_2"
+    if not os.path.exists(folder):
+        folder = os.path.join("..", folder)
+
+    docs_extrets = []
+    for fitxer in sorted(os.listdir(folder)):
+        if fitxer.endswith(".md"):
+            path = os.path.join(folder, fitxer)
+            content = open(path, "rb").read()
+            res = await processar_ocr_document_vehicle(content)
+            res["nom_fitxer"] = fitxer
+            docs_extrets.append(res)
+
+    draft = consolidar_i_validar_ocr_flota(docs_extrets, tenant_cif="B55891234")
+
+    # Identificadors principals
+    assert draft["matricula"] == "7314-LJH"
+    assert draft["bastidor"] == "VF1FW5A0A64829103"
+    assert draft["marca"] == "Renault"
+    assert "KANGOO" in (draft["model"] or "").upper()
+
+    # Conciliació Multitenant (Arval vs Tenant via servei A12 o arrendatari NIF)
+    assert draft["titular_nif"] == "A81573479"
+    assert draft["arrendatari_nif"] == "B55891234"
+    assert draft["regim_adquisicio"] == "RENTING"
+    assert draft["validacio_tenant_cif"] == "COINCIDENT_ARRENDATARI"
+
+    # Detecció de defectes lleus
+    assert draft["estat_itv"] == "FAVORABLE_LEUS"
+
+    # Venciment de pròxima ITV i dispar d'alerta imminent (< 10 dies)
+    assert draft["data_proxima_itv"] == "2026-11-16"
+    assert draft["estat_semafor"] == "ALERTA_VENCIMENT_IMMINENT"
+    assert draft["apte_assignacio_pwa"] is True
+
+    # Comprovar alertes programades: ha d'haver-hi alerta per ITV imminent (< 10 dies)
+    alertes_itv = [
+        a for a in draft.get("alertes_programades", []) if a.get("camp") == "data_proxima_itv"
+    ]
+    assert len(alertes_itv) > 0
+    alerta_itv = alertes_itv[0]
+    assert alerta_itv["dies_restants"] is not None
+    assert alerta_itv["dies_restants"] < 10
+    print("Test renting venciment imminent (7314-LJH) validat al 100%!")
+
+
+@pytest.mark.asyncio
+async def test_ocr_draft_camio_pesant_n3_grua():
+    """Fase 5: Valida l'Iveco Eurocargo (9104-MBB), mma_kg = 18000, assignació automàtica de
+
+    carnet_necessari = "C", requereix_cap = True, tacògraf i TARGETA_TRANSPORT.
+    """
+    import os
+
+    folder = "demo_docs/Banc_Documents_Sevalor_Complet/demo_docs/02_flota_vehicles/camio"
+    if not os.path.exists(folder):
+        folder = os.path.join("..", folder)
+
+    docs_extrets = []
+    for fitxer in sorted(os.listdir(folder)):
+        if fitxer.endswith(".md"):
+            path = os.path.join(folder, fitxer)
+            content = open(path, "rb").read()
+            res = await processar_ocr_document_vehicle(content)
+            res["nom_fitxer"] = fitxer
+            docs_extrets.append(res)
+
+    draft = consolidar_i_validar_ocr_flota(docs_extrets, tenant_cif="B55891234")
+
+    # Identificadors principals
+    assert draft["matricula"] == "9104-MBB"
+    assert draft["bastidor"] == "ZCFA81TN402739184"
+    assert draft["marca"] == "Iveco"
+    assert "EUROCARGO" in (draft["model"] or "").upper()
+
+    # Pesant N3 i regulació de carnet
+    assert draft["categoria_ue"] == "N3"
+    assert draft["mma_kg"] == 18000
+    assert draft["carnet_necessari"] == "C"
+    assert draft["requereix_cap"] is True
+
+    # Equipament homologat (Grua, Tacògraf)
+    equipament = draft.get("equipament_homologat") or []
+    assert any("GRUA" in e for e in equipament)
+    assert any("TACOGRAF" in e for e in equipament)
+
+    # Dades pesants (Tacògraf digital i Targeta de Transport MPC)
+    dades_p = draft.get("dades_pesants") or {}
+    assert "targeta_transport_num" in dades_p
+    assert "12948573" in dades_p["targeta_transport_num"]
+    assert "data_calibratge_tacograf" in dades_p
+
+    # Documentació reglamentària
+    tipus_processats = {d.get("tipus_detectat") for d in draft.get("documents_processats", [])}
+    assert "TARGETA_TRANSPORT" in tipus_processats
+    assert "TARGETA_TRANSPORT" not in draft.get("documents_mancants", [])
+    print("Test camió pesant N3 amb grua (9104-MBB) validat al 100%!")
+
+
 if __name__ == "__main__":
     import asyncio
+
     asyncio.run(test_ocr_targeta_itv_vehicle())
     asyncio.run(test_ocr_polissa_asseguranca())
     asyncio.run(test_ocr_contracte_lloguer())
@@ -263,4 +419,7 @@ if __name__ == "__main__":
     asyncio.run(test_ocr_multi_document_fusion())
     asyncio.run(test_ocr_fitxers_markdown_reals())
     asyncio.run(test_ocr_vehicle_2_renting_reals())
+    asyncio.run(test_ocr_draft_furgoneta_propia_n1_ok())
+    asyncio.run(test_ocr_draft_renting_venciment_imminent())
+    asyncio.run(test_ocr_draft_camio_pesant_n3_grua())
     print("ALL TESTS PASSED CLEANLY.")
