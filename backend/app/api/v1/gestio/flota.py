@@ -16,7 +16,7 @@ from fastapi import (
     UploadFile,
     status,
 )
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -90,17 +90,36 @@ class VehicleCreate(BaseModel):
     consum_adblue_litres: Optional[float] = 0.0
     titular_nif: Optional[str] = Field(None, max_length=20)
     arrendatari_nif: Optional[str] = Field(None, max_length=20)
+    codi_servei_dgt: Optional[str] = Field(None, max_length=10)
     categoria_ue: Optional[str] = Field(None, max_length=10)
     mma_kg: Optional[int] = None
     tara_kg: Optional[int] = None
     carrega_util_kg: Optional[int] = None
-    requereix_cap: bool = False
-    equipament_homologat: List[str] = Field(default_factory=list)
+    mmr_amb_fre_kg: Optional[int] = None
+    requereix_cap: Optional[bool] = False
+    equipament_homologat: Optional[List[str]] = Field(default_factory=list)
+    certificats_prl_requerits: Optional[List[str]] = Field(default_factory=list)
     empresa_renting: Optional[str] = Field(None, max_length=120)
     num_contracte_renting: Optional[str] = Field(None, max_length=80)
     data_venciment_renting: Optional[date] = None
     dades_pesants: Optional[Dict[str, Any]] = None
+    regulacio_pesants: Optional[Dict[str, Any]] = None
+    estat_semafor: Optional[str] = "OPERATIU_OK"
     documents_processats: Optional[List[Dict[str, Any]]] = None
+
+    @field_validator("requereix_cap", mode="before")
+    @classmethod
+    def _coerce_requereix_cap(cls, v: Any) -> bool:
+        return bool(v) if v is not None else False
+
+    @field_validator("equipament_homologat", "certificats_prl_requerits", mode="before")
+    @classmethod
+    def _coerce_lists(cls, v: Any) -> List[str]:
+        if v is None:
+            return []
+        if isinstance(v, list):
+            return [str(x) for x in v]
+        return []
 
 
 class VehicleResponse(VehicleCreate):
@@ -228,6 +247,14 @@ def _build_vehicle_response(
         v_dict["interval_canvi_oli_km"] = 15000
     if v_dict.get("ultim_canvi_oli_km") is None:
         v_dict["ultim_canvi_oli_km"] = 0
+    if v_dict.get("requereix_cap") is None:
+        v_dict["requereix_cap"] = False
+    if v_dict.get("equipament_homologat") is None:
+        v_dict["equipament_homologat"] = []
+    if v_dict.get("certificats_prl_requerits") is None:
+        v_dict["certificats_prl_requerits"] = []
+    if v_dict.get("estat_semafor") is None:
+        v_dict["estat_semafor"] = "OPERATIU_OK"
 
     consum = float(veh.consum_l_100km) if veh.consum_l_100km is not None else None
     mitjana = float(veh.consum_mitjana_historica) if veh.consum_mitjana_historica is not None else None
