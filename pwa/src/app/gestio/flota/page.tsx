@@ -47,6 +47,10 @@ interface VehicleItem {
   horometre_acumulat: number;
   conductor_habitual_id: string | null;
   conductor_nom: string | null;
+  ordre_treball_activa_id?: string | null;
+  ordre_treball_activa_codi?: string | null;
+  ordre_treball_activa_titol?: string | null;
+  operari_assignat_nom?: string | null;
   data_proxima_itv: string | null;
   estat_itv: string;
   data_caducitat_asseguranca: string | null;
@@ -592,7 +596,7 @@ export default function GestioFlotaPage() {
     setEditModel(veh.model || "");
     setEditTipus(veh.tipus || "DIESEL");
     setEditDistintiu(veh.distintiu_ambiental || "C");
-    setEditEstat(veh.estat === "ASSIGNAT" ? "OPERATIU" : (veh.estat || "OPERATIU"));
+    setEditEstat(veh.estat || "OPERATIU");
     setEditConductorId(veh.conductor_habitual_id || "");
     setEditOdometre(veh.odometre_acumulat || 0);
     setEditRegim(veh.regim_adquisicio || "PROPIETAT");
@@ -711,6 +715,8 @@ export default function GestioFlotaPage() {
     if (filtreEstat !== "TOTS") {
       if (filtreEstat === "OPERATIU") {
         if (v.estat !== "OPERATIU" && v.estat !== "ASSIGNAT") return false;
+      } else if (filtreEstat === "ASSIGNAT") {
+        if (v.estat !== "ASSIGNAT" && !v.ordre_treball_activa_codi) return false;
       } else if (v.estat !== filtreEstat) {
         return false;
       }
@@ -722,6 +728,8 @@ export default function GestioFlotaPage() {
       (v.marca || "").toLowerCase().includes(q) ||
       (v.model || "").toLowerCase().includes(q) ||
       (v.conductor_nom || "").toLowerCase().includes(q) ||
+      (v.operari_assignat_nom || "").toLowerCase().includes(q) ||
+      (v.ordre_treball_activa_codi || "").toLowerCase().includes(q) ||
       (v.distintiu_ambiental || "").toLowerCase().includes(q) ||
       (v.regim_adquisicio || "").toLowerCase().includes(q) ||
       (v.companyia_asseguradora || "").toLowerCase().includes(q) ||
@@ -846,6 +854,7 @@ export default function GestioFlotaPage() {
           >
             <option value="TOTS">Tots els estats</option>
             <option value="OPERATIU">Operatiu (Verd)</option>
+            <option value="ASSIGNAT">Assignat a Obra / OT (Blau)</option>
             <option value="LEVE">Operatiu Defectes Lleus</option>
             <option value="DESFAVORABLE">ITV Desfavorable (Immobilitzat)</option>
             <option value="INACTIVAT">ITV Negativa (Grua)</option>
@@ -1066,11 +1075,26 @@ export default function GestioFlotaPage() {
                         )}
                       </td>
 
-                      {/* 5. Custodi / Conductor */}
+                      {/* 5. Custodi / Conductor & OT Activa */}
                       <td className="p-3.5">
-                        <p className="font-semibold text-slate-800 dark:text-slate-200">
-                          {v.conductor_nom || <span className="text-slate-400 italic">Sense assignar</span>}
-                        </p>
+                        <div className="space-y-1">
+                          <p className="font-semibold text-slate-800 dark:text-slate-200">
+                            {v.conductor_nom || v.operari_assignat_nom || (
+                              <span className="text-slate-400 italic">Sense assignar</span>
+                            )}
+                          </p>
+                          {v.ordre_treball_activa_codi && (
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <span
+                                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-mono font-bold bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-300 border border-blue-200 dark:border-blue-800 shadow-sm"
+                                title={`Assignat a l'ordre de treball ${v.ordre_treball_activa_codi}${v.ordre_treball_activa_titol ? `: ${v.ordre_treball_activa_titol}` : ""}`}
+                              >
+                                <span className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse"></span>
+                                {v.ordre_treball_activa_codi}
+                              </span>
+                            </div>
+                          )}
+                        </div>
                       </td>
 
                       {/* 6. Odòmetre Acumulat Continu */}
@@ -1084,7 +1108,9 @@ export default function GestioFlotaPage() {
                       <td className="p-3.5 text-center">
                         <span
                           className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${
-                            v.estat === "OPERATIU" || v.estat === "ASSIGNAT"
+                            v.estat === "ASSIGNAT"
+                              ? "bg-blue-100 text-blue-800 border-blue-300 dark:bg-blue-950 dark:text-blue-300 dark:border-blue-800"
+                              : v.estat === "OPERATIU"
                               ? "bg-emerald-100 text-emerald-800 border-emerald-300 dark:bg-emerald-950 dark:text-emerald-400 dark:border-emerald-800"
                               : v.estat === "LEVE"
                               ? "bg-lime-100 text-lime-800 border-lime-300 dark:bg-lime-950 dark:text-lime-300 dark:border-lime-800"
@@ -1097,7 +1123,11 @@ export default function GestioFlotaPage() {
                               : "bg-slate-100 text-slate-700 border-slate-300 dark:bg-slate-800 dark:text-slate-400"
                           }`}
                         >
-                          {v.estat === "LEVE" ? "Operatiu (Defectes Lleus)" : v.estat === "ASSIGNAT" ? "OPERATIU" : v.estat}
+                          {v.estat === "ASSIGNAT"
+                            ? "Assignat (OT)"
+                            : v.estat === "LEVE"
+                            ? "Operatiu (Defectes Lleus)"
+                            : v.estat}
                         </span>
                       </td>
 
@@ -2072,6 +2102,7 @@ export default function GestioFlotaPage() {
                       className="w-full p-2 rounded-lg bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-slate-100 font-mono text-xs focus:outline-none"
                     >
                       <option value="OPERATIU">Operatiu (Verd)</option>
+                      <option value="ASSIGNAT">Assignat a Obra / OT (Blau)</option>
                       <option value="LEVE">Operatiu Defectes Lleus</option>
                       <option value="EN_TALLER">En Taller</option>
                       <option value="DESFAVORABLE">ITV Desfavorable (Immobilitzat)</option>
@@ -2085,10 +2116,33 @@ export default function GestioFlotaPage() {
 
               {/* BLOC 2: CUSTÒDIA I RÈGIM CONTRACTUAL */}
               <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-800 space-y-3">
-                <h4 className="font-bold text-[11px] uppercase tracking-wider text-slate-500 dark:text-slate-400 flex items-center gap-1.5">
-                  <User className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
-                  Custòdia & Règim Contractual
-                </h4>
+                <div className="flex items-center justify-between">
+                  <h4 className="font-bold text-[11px] uppercase tracking-wider text-slate-500 dark:text-slate-400 flex items-center gap-1.5">
+                    <User className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+                    Custòdia & Règim Contractual
+                  </h4>
+                  {vehicleAEditar?.ordre_treball_activa_codi && (
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-300 border border-blue-200 dark:border-blue-800">
+                      <span className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse"></span>
+                      OT Activa: {vehicleAEditar.ordre_treball_activa_codi}
+                    </span>
+                  )}
+                </div>
+                {vehicleAEditar?.ordre_treball_activa_codi && (
+                  <div className="p-2.5 rounded-lg bg-blue-50/70 dark:bg-blue-950/40 border border-blue-100 dark:border-blue-900/40 text-[11px] text-blue-900 dark:text-blue-200 space-y-0.5">
+                    <p className="font-bold flex items-center gap-1.5">
+                      <span>Ordre de Treball: {vehicleAEditar.ordre_treball_activa_codi}</span>
+                      {vehicleAEditar.ordre_treball_activa_titol && (
+                        <span className="font-normal text-blue-700 dark:text-blue-300">({vehicleAEditar.ordre_treball_activa_titol})</span>
+                      )}
+                    </p>
+                    {vehicleAEditar.operari_assignat_nom && (
+                      <p className="text-[10px] text-blue-800/80 dark:text-blue-300/80">
+                        Responsable / Conductor en obra: <span className="font-semibold">{vehicleAEditar.operari_assignat_nom}</span>
+                      </p>
+                    )}
+                  </div>
+                )}
                 <div className="grid grid-cols-3 gap-3">
                   <div className="space-y-1">
                     <label className="font-bold text-slate-700 dark:text-slate-300">

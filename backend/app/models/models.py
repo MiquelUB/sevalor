@@ -672,8 +672,8 @@ class Vehicle(Base):
         raw_val = getattr(self, "_apte_assignacio_pwa", True)
         return bool(raw_val if raw_val is not None else True)
 
-    @apte_assignacio_pwa.setter
-    def apte_assignacio_pwa(self, val: bool) -> None:
+    @apte_assignacio_pwa.setter  # type: ignore[no-redef]
+    def apte_assignacio_pwa(self, val: bool) -> None:  # type: ignore[no-redef]
         self._apte_assignacio_pwa = bool(val)
 
     created_at: Mapped[datetime] = mapped_column(

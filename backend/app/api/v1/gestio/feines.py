@@ -21,6 +21,7 @@ from app.models.models import (
     OrdreTreball,
     PlanolBase,
     Usuari,
+    Vehicle,
 )
 from app.services.geocoding_service import geocodificar_adreca
 
@@ -266,6 +267,16 @@ async def alta_feina(
     db.add(nova_feina)
     await db.flush()
 
+    # Sincronitzar estat del vehicle a ASSIGNAT si la feina és activa
+    if nova_feina.vehicle_id and nova_feina.estat in ("PENDENT", "ASSIGNADA", "PROGRAMADA", "EN_CURS", "EN_RUTA", "EN_OBRA"):
+        stmt_v = select(Vehicle).where(
+            Vehicle.id == nova_feina.vehicle_id,
+            Vehicle.empresa_id == uuid.UUID(empresa_id),
+        )
+        veh_obj = (await db.execute(stmt_v)).scalars().first()
+        if veh_obj and veh_obj.estat == "OPERATIU":
+            veh_obj.estat = "ASSIGNAT"
+
     # Custòdia d'eines seleccionades per a la feina
     if feina.eina_ids:
         for eina_id in feina.eina_ids:
@@ -491,6 +502,7 @@ async def modificar_feina(
         )
 
     update_data = payload.model_dump(exclude_unset=True)
+    antic_vehicle_id = ordre.vehicle_id
 
     if "titol" in update_data and update_data["titol"]:
         ordre.titol = update_data["titol"].strip()
@@ -680,6 +692,47 @@ async def modificar_feina(
                     quantitat_mermada=0.0,
                 )
                 db.add(nova_linia)
+
+    # Sincronització de l'estat del vehicle
+    nou_vehicle_id = ordre.vehicle_id
+    if antic_vehicle_id != nou_vehicle_id or "estat" in update_data:
+        if antic_vehicle_id and antic_vehicle_id != nou_vehicle_id:
+            stmt_altres = select(OrdreTreball).where(
+                OrdreTreball.vehicle_id == antic_vehicle_id,
+                OrdreTreball.id != ordre.id,
+                OrdreTreball.empresa_id == uuid.UUID(empresa_id),
+                OrdreTreball.estat.in_(["PENDENT", "ASSIGNADA", "PROGRAMADA", "EN_CURS", "EN_RUTA", "EN_OBRA"]),
+            )
+            altres = (await db.execute(stmt_altres)).scalars().first()
+            if not altres:
+                stmt_v_antic = select(Vehicle).where(
+                    Vehicle.id == antic_vehicle_id,
+                    Vehicle.empresa_id == uuid.UUID(empresa_id),
+                )
+                v_antic = (await db.execute(stmt_v_antic)).scalars().first()
+                if v_antic and v_antic.estat == "ASSIGNAT":
+                    v_antic.estat = "OPERATIU"
+
+        if nou_vehicle_id:
+            stmt_v_nou = select(Vehicle).where(
+                Vehicle.id == nou_vehicle_id,
+                Vehicle.empresa_id == uuid.UUID(empresa_id),
+            )
+            v_nou = (await db.execute(stmt_v_nou)).scalars().first()
+            if v_nou:
+                if ordre.estat in ("PENDENT", "ASSIGNADA", "PROGRAMADA", "EN_CURS", "EN_RUTA", "EN_OBRA"):
+                    if v_nou.estat == "OPERATIU":
+                        v_nou.estat = "ASSIGNAT"
+                elif ordre.estat in ("TANCADA", "COMPLETADA", "CANCEL·LADA"):
+                    stmt_altres = select(OrdreTreball).where(
+                        OrdreTreball.vehicle_id == nou_vehicle_id,
+                        OrdreTreball.id != ordre.id,
+                        OrdreTreball.empresa_id == uuid.UUID(empresa_id),
+                        OrdreTreball.estat.in_(["PENDENT", "ASSIGNADA", "PROGRAMADA", "EN_CURS", "EN_RUTA", "EN_OBRA"]),
+                    )
+                    altres = (await db.execute(stmt_altres)).scalars().first()
+                    if not altres and v_nou.estat == "ASSIGNAT":
+                        v_nou.estat = "OPERATIU"
 
     ordre.versio = (ordre.versio or 1) + 1
     await db.commit()
@@ -896,6 +949,24 @@ async def tancar_obra(
         ordre.signatura_client_base64 = payload.signatura_base64
     if hasattr(ordre, "observacions_tancament"):
         ordre.observacions_tancament = payload.observacions
+    # Alliberar el vehicle si no té altres ordres actives
+    if ordre.vehicle_id:
+        stmt_altres = select(OrdreTreball).where(
+            OrdreTreball.vehicle_id == ordre.vehicle_id,
+            OrdreTreball.id != ordre.id,
+            OrdreTreball.empresa_id == uuid.UUID(empresa_id),
+            OrdreTreball.estat.in_(["PENDENT", "ASSIGNADA", "PROGRAMADA", "EN_CURS", "EN_RUTA", "EN_OBRA"]),
+        )
+        altres = (await db.execute(stmt_altres)).scalars().first()
+        if not altres:
+            stmt_v = select(Vehicle).where(
+                Vehicle.id == ordre.vehicle_id,
+                Vehicle.empresa_id == uuid.UUID(empresa_id),
+            )
+            v_obj = (await db.execute(stmt_v)).scalars().first()
+            if v_obj and v_obj.estat == "ASSIGNAT":
+                v_obj.estat = "OPERATIU"
+
     ordre.versio = (ordre.versio or 1) + 1
 
     await db.commit()

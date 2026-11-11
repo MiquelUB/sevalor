@@ -37,7 +37,7 @@ async def sincronitzar_vehicle_al_disc_empresa(
         "model": vehicle.model,
         "tipus": getattr(vehicle, "tipus", "DIESEL"),
         "distintiu_ambiental": getattr(vehicle, "distintiu_ambiental", "C"),
-        "estat": "OPERATIU" if vehicle.estat == "ASSIGNAT" else vehicle.estat,
+        "estat": vehicle.estat,
         "odometre_acumulat": int(vehicle.odometre_acumulat or 0),
         "odometre_inici_contracte": int(getattr(vehicle, "odometre_inici_contracte", 0) or 0),
         "regim_adquisicio": getattr(vehicle, "regim_adquisicio", "PROPIETAT"),

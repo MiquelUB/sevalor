@@ -2,7 +2,7 @@ import math
 import re
 import uuid
 from datetime import date, datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, cast
 
 import filetype  # type: ignore[import-untyped]
 from fastapi import (
@@ -127,6 +127,10 @@ class VehicleResponse(VehicleCreate):
     horometre_acumulat: float
     odometre_acumulat: int
     conductor_nom: Optional[str] = None
+    ordre_treball_activa_id: Optional[uuid.UUID] = None
+    ordre_treball_activa_codi: Optional[str] = None
+    ordre_treball_activa_titol: Optional[str] = None
+    operari_assignat_nom: Optional[str] = None
     consum_format: str = "Sense dades"
     anomalia_consum: bool = False
     anomalia_descartada: bool = False
@@ -204,20 +208,67 @@ async def _obtenir_despeses_vehicles(
     return comb_map, mant_map
 
 
+async def _obtenir_ots_actives_vehicles(
+    db: AsyncSession, empresa_id: uuid.UUID, vehicle_ids: List[uuid.UUID]
+) -> Dict[uuid.UUID, Dict[str, Any]]:
+    """Cerca ordres de treball actives assignades als vehicles indicats."""
+    if not vehicle_ids:
+        return {}
+
+    stmt_ot = (
+        select(OrdreTreball, Usuari.nom, Usuari.cognoms)
+        .outerjoin(Usuari, and_(Usuari.empresa_id == empresa_id, OrdreTreball.cap_de_colla_id == Usuari.id))
+        .where(
+            OrdreTreball.empresa_id == empresa_id,
+            OrdreTreball.vehicle_id.in_(vehicle_ids),
+            OrdreTreball.estat.in_(["PENDENT", "ASSIGNADA", "PROGRAMADA", "EN_CURS", "EN_RUTA", "EN_OBRA"]),
+        )
+        .order_by(OrdreTreball.data_planificacio.desc(), OrdreTreball.created_at.desc())
+    )
+    res_ot = await db.execute(stmt_ot)
+    ots_map: Dict[uuid.UUID, Dict[str, Any]] = {}
+    for ot, u_nom, u_cognoms in res_ot.all():
+        if ot.vehicle_id and ot.vehicle_id not in ots_map:
+            nom_complet = f"{u_nom or ''} {u_cognoms or ''}".strip() or None
+            ots_map[ot.vehicle_id] = {
+                "id": ot.id,
+                "codi": ot.codi,
+                "titol": ot.titol,
+                "estat": ot.estat,
+                "operari_nom": nom_complet,
+            }
+    return ots_map
+
+
 def _build_vehicle_response(
     veh: Vehicle,
     conductor_nom: Optional[str] = None,
     despesa_combustible_acumulada: float = 0.0,
     despesa_manteniment_acumulada: float = 0.0,
     conductor_id_fallback: Optional[uuid.UUID] = None,
+    ot_activa: Optional[Dict[str, Any]] = None,
 ) -> VehicleResponse:
     v_dict = {c.name: getattr(veh, c.name) for c in veh.__table__.columns}
     v_dict["conductor_nom"] = conductor_nom
     v_dict["apte_assignacio_pwa"] = getattr(veh, "apte_assignacio_pwa", True)
     if v_dict.get("conductor_habitual_id") is None and conductor_id_fallback is not None:
         v_dict["conductor_habitual_id"] = conductor_id_fallback
-    if v_dict.get("estat") == "ASSIGNAT":
-        v_dict["estat"] = "OPERATIU"
+
+    # Si hi ha una ordre de treball activa assignada al vehicle
+    if ot_activa:
+        v_dict["ordre_treball_activa_id"] = ot_activa.get("id")
+        v_dict["ordre_treball_activa_codi"] = ot_activa.get("codi")
+        v_dict["ordre_treball_activa_titol"] = ot_activa.get("titol")
+        v_dict["operari_assignat_nom"] = ot_activa.get("operari_nom")
+        if not v_dict.get("conductor_nom") and ot_activa.get("operari_nom"):
+            v_dict["conductor_nom"] = ot_activa.get("operari_nom")
+        if v_dict.get("estat") in ("OPERATIU", "ASSIGNAT"):
+            v_dict["estat"] = "ASSIGNAT"
+    else:
+        v_dict["ordre_treball_activa_id"] = None
+        v_dict["ordre_treball_activa_codi"] = None
+        v_dict["ordre_treball_activa_titol"] = None
+        v_dict["operari_assignat_nom"] = None
 
     if v_dict.get("estat_itv") is None:
         v_dict["estat_itv"] = "FAVORABLE"
@@ -374,7 +425,7 @@ def _build_vehicle_response(
         dies_itv = (veh.data_proxima_itv - avui).days
     v_dict["dies_propera_itv"] = dies_itv
 
-    return VehicleResponse.model_validate(v_dict)
+    return cast(VehicleResponse, VehicleResponse.model_validate(v_dict))
 
 
 @router.get("", response_model=List[VehicleResponse])
@@ -426,6 +477,7 @@ async def llistar_flota(
     rows = result.all()
     veh_ids = [veh.id for veh, _, _, _ in rows]
     comb_map, mant_map = await _obtenir_despeses_vehicles(db, emp_uuid, veh_ids)
+    ots_map = await _obtenir_ots_actives_vehicles(db, emp_uuid, veh_ids)
 
     vehicles = []
     seen_veh_ids = set()
@@ -441,6 +493,7 @@ async def llistar_flota(
                 despesa_combustible_acumulada=comb_map.get(veh.id, 0.0),
                 despesa_manteniment_acumulada=mant_map.get(veh.id, 0.0),
                 conductor_id_fallback=u_id,
+                ot_activa=ots_map.get(veh.id),
             )
         )
 
@@ -462,7 +515,7 @@ async def alta_vehicle(
     if result_mat.scalars().first():
         raise HTTPException(status_code=400, detail="La matrícula ja es troba registrada")
 
-    estat_norm = "OPERATIU" if vehicle.estat == "ASSIGNAT" else vehicle.estat
+    estat_norm = vehicle.estat
     nou_vehicle = Vehicle(
         empresa_id=uuid.UUID(empresa_id),
         matricula=vehicle.matricula.strip().upper(),
@@ -663,7 +716,7 @@ async def editar_vehicle(
     v_db.model = vehicle.model.strip()
     v_db.tipus = vehicle.tipus
     v_db.distintiu_ambiental = vehicle.distintiu_ambiental
-    v_db.estat = "OPERATIU" if vehicle.estat == "ASSIGNAT" else vehicle.estat
+    v_db.estat = vehicle.estat
     if vehicle.odometre_acumulat is not None:
         v_db.odometre_acumulat = vehicle.odometre_acumulat
     v_db.data_proxima_itv = vehicle.data_proxima_itv
@@ -749,11 +802,13 @@ async def editar_vehicle(
             c_nom = f"{u.nom or ''} {u.cognoms or ''}".strip() or None
 
     comb_map, mant_map = await _obtenir_despeses_vehicles(db, emp_uuid, [v_db.id])
+    ots_map = await _obtenir_ots_actives_vehicles(db, emp_uuid, [v_db.id])
     response = _build_vehicle_response(
         v_db,
         c_nom,
         despesa_combustible_acumulada=comb_map.get(v_db.id, 0.0),
         despesa_manteniment_acumulada=mant_map.get(v_db.id, 0.0),
+        ot_activa=ots_map.get(v_db.id),
     )
     await sincronitzar_vehicle_al_disc_empresa(
         db, emp_uuid, v_db, response.model_dump(mode="json")
@@ -1021,12 +1076,14 @@ async def obtenir_vehicle(
     veh, u_id, u_nom, u_cognoms = row
     c_nom = f"{u_nom or ''} {u_cognoms or ''}".strip() or None
     comb_map, mant_map = await _obtenir_despeses_vehicles(db, emp_uuid, [veh.id])
+    ots_map = await _obtenir_ots_actives_vehicles(db, emp_uuid, [veh.id])
     return _build_vehicle_response(
         veh,
         c_nom,
         despesa_combustible_acumulada=comb_map.get(veh.id, 0.0),
         despesa_manteniment_acumulada=mant_map.get(veh.id, 0.0),
         conductor_id_fallback=u_id,
+        ot_activa=ots_map.get(veh.id),
     )
 
 
