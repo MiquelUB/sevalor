@@ -16,7 +16,6 @@ from fastapi import (
     UploadFile,
     status,
 )
-from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -472,15 +471,15 @@ async def descarregar_fitxer_planol(
     )
 
 
-@router.get("/{planol_id}/render")
-@router.get("/planols/{planol_id}/render")
+@router.api_route("/{planol_id}/render", methods=["GET", "HEAD"])
+@router.api_route("/planols/{planol_id}/render", methods=["GET", "HEAD"])
 async def renderitzar_planol_visualitzacio(
     planol_id: uuid.UUID,
     request: Request,
     pagina: int = 0,
     db: AsyncSession = Depends(get_db_with_tenant_context),
 ):
-    """Renderitza el plànol base en format imatge (PNG) d'alta fidelitat per al visualitzador i editor CAD."""
+    """Renderitza el plànol base en format imatge (PNG) en memòria sense deixar fitxers a Hetzner."""
     empresa_id = request.state.empresa_id
     if not empresa_id or empresa_id == "undefined":
         raise HTTPException(status_code=401, detail="No identificat")
@@ -492,82 +491,71 @@ async def renderitzar_planol_visualitzacio(
     if not planol or not planol.fitxer_path:
         raise HTTPException(status_code=404, detail="Fitxer de plànol no trobat")
 
-    real_path = await SovereignStorageGateway.resoldre_fitxer_real_path(
+    raw_bytes, filename = await SovereignStorageGateway.obtenir_bytes_fitxer(
         db, empresa_id, planol.fitxer_path
     )
-    if not real_path or not real_path.is_file():
-        raise HTTPException(status_code=404, detail="Fitxer no trobat al disc dur de l'empresa.")
+    ext = os.path.splitext(filename)[1].lower()
+    if not ext and planol.tipus_fitxer:
+        ext = f".{planol.tipus_fitxer.lower()}"
 
-    fpath = str(real_path)
-    ext = os.path.splitext(fpath)[1].lower()
-
-    # Si és PDF, renderitzem amb PyMuPDF directament a PNG (alta definició 150 DPI per al llenç interactiu)
     if ext == ".pdf":
-        try:
-            import pymupdf
+        import pymupdf
 
-            doc = pymupdf.open(fpath)
-            if len(doc) == 0:
-                raise HTTPException(status_code=400, detail="El document PDF no conté pàgines")
-            idx = min(max(0, pagina), len(doc) - 1)
-            page = doc[idx]
-            pix = page.get_pixmap(dpi=150)
-            png_bytes = pix.tobytes("png")
+        doc = pymupdf.open(stream=raw_bytes, filetype="pdf")
+        if len(doc) == 0:
+            raise HTTPException(status_code=400, detail="El document PDF no conté pàgines")
+        idx = min(max(0, pagina), len(doc) - 1)
+        page = doc[idx]
+        if request.method == "HEAD":
             return Response(
-                content=png_bytes,
+                content=b"",
                 media_type="image/png",
-                headers={
-                    "Cache-Control": "public, max-age=86400",
-                    "Content-Disposition": f'inline; filename="{os.path.basename(fpath)}.png"',
-                    "X-Total-Pages": str(len(doc)),
-                    "X-Page-Width": str(pix.width),
-                    "X-Page-Height": str(pix.height),
-                },
+                headers={"X-Total-Pages": str(len(doc))},
             )
-        except Exception as e:
-            logger.error(f"Error renderitzant PDF {fpath}: {e}")
-            raise HTTPException(
-                status_code=500, detail=f"Error renderitzant el document PDF: {str(e)}"
-            )
-
-    # Si és una imatge directa (PNG, JPG, JPEG, WEBP, SVG)
-    if ext in [".png", ".jpg", ".jpeg", ".webp", ".svg"]:
-        media_types = {
-            ".png": "image/png",
-            ".jpg": "image/jpeg",
-            ".jpeg": "image/jpeg",
-            ".webp": "image/webp",
-            ".svg": "image/svg+xml",
-        }
-        return FileResponse(
-            path=fpath,
-            filename=os.path.basename(fpath),
-            media_type=media_types.get(ext, "image/png"),
-            content_disposition_type="inline",
-            headers={"Cache-Control": "public, max-age=86400"},
+        pix = page.get_pixmap(dpi=150)
+        return Response(
+            content=pix.tobytes("png"),
+            media_type="image/png",
+            headers={
+                "Cache-Control": "no-store",
+                "Content-Disposition": f'inline; filename="{filename}.png"',
+                "X-Total-Pages": str(len(doc)),
+                "X-Page-Width": str(pix.width),
+                "X-Page-Height": str(pix.height),
+            },
         )
 
-    # Si és TIFF, el rasteritzem a PNG amb PyMuPDF
     if ext in [".tif", ".tiff"]:
-        try:
-            import pymupdf
+        import pymupdf
 
-            doc = pymupdf.open(fpath)
-            pix = doc[0].get_pixmap(dpi=150)
-            return Response(
-                content=pix.tobytes("png"),
-                media_type="image/png",
-                headers={"Content-Disposition": f'inline; filename="{os.path.basename(fpath)}.png"'},
-            )
-        except Exception as e:
-            logger.error(f"Error convertint TIFF {fpath}: {e}")
+        doc = pymupdf.open(stream=raw_bytes, filetype="tiff")
+        if len(doc) == 0:
+            raise HTTPException(status_code=400, detail="El fitxer TIFF no conté imatges")
+        page = doc[0]
+        if request.method == "HEAD":
+            return Response(content=b"", media_type="image/png", headers={"X-Total-Pages": "1"})
+        pix = page.get_pixmap(dpi=150)
+        return Response(
+            content=pix.tobytes("png"),
+            media_type="image/png",
+            headers={
+                "Cache-Control": "no-store",
+                "Content-Disposition": f'inline; filename="{filename}.png"',
+                "X-Total-Pages": "1",
+            },
+        )
 
-    # Fallback per a altres formats binaris
-    return FileResponse(
-        path=fpath,
-        filename=os.path.basename(fpath),
-        media_type="application/octet-stream",
-        content_disposition_type="inline",
+    media_types = {
+        ".png": "image/png",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".webp": "image/webp",
+        ".svg": "image/svg+xml",
+    }
+    return Response(
+        content=b"" if request.method == "HEAD" else raw_bytes,
+        media_type=media_types.get(ext, "image/png"),
+        headers={"Cache-Control": "no-store", "X-Total-Pages": "1"},
     )
 
 
@@ -654,6 +642,31 @@ async def crear_carpeta(
     db.add(nova)
     await db.commit()
     return nova
+
+
+@router.delete("/carpetes/{carpeta_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/planols/carpetes/{carpeta_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def eliminar_carpeta(
+    carpeta_id: uuid.UUID,
+    request: Request,
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+):
+    """Elimina una carpeta de plànols i els seus plànols associats."""
+    empresa_id = request.state.empresa_id
+    if not empresa_id or empresa_id == "undefined":
+        raise HTTPException(status_code=401, detail="No identificat")
+
+    stmt = select(CarpetaPlanol).where(
+        CarpetaPlanol.id == carpeta_id,
+        CarpetaPlanol.empresa_id == uuid.UUID(empresa_id),
+    )
+    carpeta = (await db.execute(stmt)).scalars().first()
+    if not carpeta:
+        raise HTTPException(status_code=404, detail="Carpeta no trobada")
+
+    await db.delete(carpeta)
+    await db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 # ---------------------------------------------------------------------------

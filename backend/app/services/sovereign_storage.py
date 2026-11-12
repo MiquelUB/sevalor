@@ -133,13 +133,11 @@ class SovereignStorageGateway:
 
         raw_disc = (getattr(emp, "disc_dur_url", None) or "").strip()
         if raw_disc.startswith("Carpeta Local:"):
-            raw_disc = raw_disc.replace("Carpeta Local:", "").strip()
+            raw_disc = ""
 
-        # Si disc_dur_url és una URL HTTP que apunta a LM Studio (:1234 o idèntica a node_ia_url HTTP), no és un magatzem de fitxers
-        if raw_disc.startswith("http://") or raw_disc.startswith("https://"):
-            node_ia = (getattr(emp, "node_ia_url", None) or "").strip()
-            if ":1234" in raw_disc or (node_ia and raw_disc == node_ia):
-                raw_disc = ""
+        # Només descartem si apunta directament al port per defecte de LM Studio (:1234) sense Agent Vault (:9001 o túnel)
+        if ":1234" in raw_disc:
+            raw_disc = ""
 
         if not raw_disc:
             raw_disc = os.path.join(base_vaults, f"disc_{emp.subdomini or str(emp.id)}")
@@ -367,45 +365,26 @@ class SovereignStorageGateway:
         content_type: str = "application/octet-stream",
     ) -> str:
         """
-        Escriu un fitxer binari (PDF, DXF, WebP, Àudio) garantint la persistència
-        física al disc dur sobirà de l'empresa.
+        Escriu un fitxer binari exclusivament al disc dur del client (LOCAL_FS muntat o HTTP_VAULT).
+        Si l'Agent HTTP del client no respon, l'encua a TRANSIT_QUEUE_DIR per auto-purgar-lo en lliurar-lo.
         """
         subcarpeta = MAPA_CARPETES_CLIENT.get(categoria, categoria)
         nom_net = sanititzar_nom(nom_fitxer)
         mode, base_target, secret = await cls.resoldre_desti_disc_empresa(db, empresa_id)
 
-        # 1. Assegurar persistència física local al disc dur de l'empresa
-        base_vaults = os.getenv("CLIENT_DISKS_MOUNT_ROOT")
-        if not base_vaults:
-            if os.path.exists("/data") and os.access("/data", os.W_OK):
-                base_vaults = "/data"
-            else:
-                base_vaults = os.getenv("CLIENT_DISKS_MOUNT_ROOT", "/tmp/sevalor_client_disks")
-
-        subdom = str(empresa_id)
         if mode == "LOCAL_FS":
-            local_root = Path(base_target)
-        else:
-            if db is not None:
-                emp_uuid = uuid.UUID(str(empresa_id))
-                emp_obj = (await db.execute(select(Empresa).where(Empresa.id == emp_uuid))).scalars().first()
-                if emp_obj and emp_obj.subdomini:
-                    subdom = emp_obj.subdomini
-            local_root = Path(base_vaults) / f"disc_{subdom}"
-        folder = (local_root / subcarpeta).resolve()
-        folder.mkdir(parents=True, exist_ok=True)
-        dest_file = folder / nom_net
-        with open(dest_file, "wb") as f:
-            f.write(content)
-
-        # Si el disc és purament local, retornem la ruta física absoluta immediatament
-        if mode == "LOCAL_FS":
+            folder = (Path(base_target) / subcarpeta).resolve()
+            if not str(folder).startswith(str(Path(base_target).resolve())):
+                raise HTTPException(status_code=400, detail="Ruta de disc invàlida.")
+            folder.mkdir(parents=True, exist_ok=True)
+            dest_file = folder / nom_net
+            dest_file.write_bytes(content)
             return str(dest_file)
 
-        # Si és HTTP_VAULT, intentem enviar-lo al node extern però mantenim còpia local
+        # Mode HTTP_VAULT (Agent Local al PC del client)
         url = f"{base_target}/fitxers/{subcarpeta}"
         try:
-            async with httpx.AsyncClient(timeout=3.0) as client:
+            async with httpx.AsyncClient(timeout=5.0) as client:
                 files = {"fitxer": (nom_net, content, content_type)}
                 data = {"nom_desti": nom_net}
                 resp = await client.post(
@@ -415,17 +394,61 @@ class SovereignStorageGateway:
                     headers={"X-Vault-Token": secret or ""},
                 )
                 if resp.status_code >= 400:
-                    logger.warning("Node remot HTTP retornà %s. Retornant ruta de disc local.", resp.status_code)
-                    return str(dest_file)
+                    raise HTTPException(status_code=resp.status_code, detail=resp.text)
                 return f"vault://{subcarpeta}/{nom_net}"
         except httpx.RequestError as exc:
             logger.warning(
-                "Error enviant fitxer al node remot de %s (%s). S'ha desat al disc dur local %s",
+                "Agent HTTP del client %s desconnectat (%s). Encurant fitxer %s a cua de trànsit...",
                 empresa_id,
                 exc,
-                dest_file,
+                nom_net,
             )
-            return str(dest_file)
+            transit_ref = cls._encuar_paquet_transit(
+                empresa_id=empresa_id,
+                tipus="BINARY",
+                subcarpeta=subcarpeta,
+                identificador=nom_net,
+                payload_bytes=content,
+                content_type=content_type,
+            )
+            try:
+                from app.workers.tasks import drenar_cua_transit_task  # type: ignore
+
+                drenar_cua_transit_task.delay(str(empresa_id))
+            except Exception:
+                pass
+            return transit_ref
+
+    @classmethod
+    async def obtenir_bytes_fitxer(
+        cls,
+        db: AsyncSession,
+        empresa_id: str | uuid.UUID,
+        fitxer_path: str,
+    ) -> Tuple[bytes, str]:
+        """
+        Retorna (content_bytes, filename) tant si el plànol és a LOCAL_FS, a transit:// com a vault:// (HTTP_VAULT).
+        Necessari perquè /render pugui rasteritzar PDFs/imatges sense guardar res permanent a Hetzner.
+        """
+        real_path = await cls.resoldre_fitxer_real_path(db, empresa_id, fitxer_path)
+        if real_path and real_path.is_file():
+            return real_path.read_bytes(), real_path.name
+
+        mode, base_target, secret = await cls.resoldre_desti_disc_empresa(db, empresa_id)
+        if mode == "HTTP_VAULT":
+            rel_path = fitxer_path.replace("vault://", "").replace("transit://", "").lstrip("/")
+            if rel_path.startswith(str(empresa_id) + "/"):
+                rel_path = rel_path[len(str(empresa_id)) + 1 :]
+            url = f"{base_target}/fitxers/{rel_path}"
+            try:
+                async with httpx.AsyncClient(timeout=15.0) as client:
+                    resp = await client.get(url, headers={"X-Vault-Token": secret or ""})
+                    if resp.status_code == 200:
+                        return resp.content, os.path.basename(rel_path)
+            except httpx.RequestError:
+                pass
+
+        raise HTTPException(status_code=404, detail="Fitxer no trobat al disc dur de l'empresa.")
 
     @classmethod
     async def existeix_fitxer_categoria(
@@ -465,7 +488,7 @@ class SovereignStorageGateway:
     ) -> Optional[Path]:
         """
         Localitza de forma exhaustiva i resilient la ruta física real d'un fitxer al disc dur de l'empresa.
-        Cobreix rutes directes, cues de trànsit transit://, rutes lògiques vault:// i fallbacks de demo.
+        Cobreix rutes directes, cues de trànsit transit:// i rutes locals de l'empresa.
         """
         if not fitxer_path:
             return None
@@ -535,23 +558,6 @@ class SovereignStorageGateway:
             planols_dir = root / "05_planols"
             if planols_dir.is_dir():
                 found = list(planols_dir.glob(f"**/{filename}"))
-                if found and found[0].is_file():
-                    return found[0].resolve()
-
-        # 4. Fallback a carpetes de demo_docs
-        cwd = os.getcwd()
-        demo_dirs = [
-            Path(cwd) / "demo_docs" / "05_enginyeria_obres",
-            Path(cwd) / "demo_docs" / "Banc_Documents_Sevalor_Complet" / "demo_docs" / "05_enginyeria_obres",
-            Path(cwd) / "demo_docs" / "Banc_Documents_Sevalor_Complet" / "demo_docs" / "planos",
-            Path(cwd) / "demo_docs",
-        ]
-        for d in demo_dirs:
-            if d.exists():
-                cand = d / filename
-                if cand.is_file():
-                    return cand.resolve()
-                found = list(d.glob(f"**/{filename}"))
                 if found and found[0].is_file():
                     return found[0].resolve()
 

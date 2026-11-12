@@ -296,6 +296,8 @@ export default function GestioPlanolsPage() {
 
   // Fitxer binari carregat en memòria o servit per streaming renderitzat
   const [fitxerBlobUrl, setFitxerBlobUrl] = useState<string | null>(null);
+  const [renderBlobUrl, setRenderBlobUrl] = useState<string | null>(null);
+  const lastPlanolIdRef = useRef<string | null>(null);
   const [carregantFitxer, setCarregantFitxer] = useState(false);
   const [errorCarregaImatge, setErrorCarregaImatge] = useState(false);
   const [numPagina, setNumPagina] = useState<number>(0);
@@ -402,8 +404,18 @@ export default function GestioPlanolsPage() {
     setTotalPagines(1);
     setErrorCarregaImatge(false);
 
+    if (lastPlanolIdRef.current !== planolSeleccionat?.id) {
+      lastPlanolIdRef.current = planolSeleccionat?.id || null;
+      setNumPagina(0);
+      setTotalPagines(1);
+    }
+
     if (!planolSeleccionat?.id) {
       setFitxerBlobUrl(null);
+      setRenderBlobUrl((prev) => {
+        if (prev) URL.revokeObjectURL(prev);
+        return null;
+      });
       setDxfEntities([]);
       setGeoJsonBaseFeatures([]);
       return;
@@ -429,6 +441,10 @@ export default function GestioPlanolsPage() {
           tipus === "JSON";
 
         if (isVectorCad) {
+          setRenderBlobUrl((prev) => {
+            if (prev) URL.revokeObjectURL(prev);
+            return null;
+          });
           const authParam = token ? `?token=${encodeURIComponent(token)}` : "";
           const res = await fetch(`${baseUrl}/gestio/planols/${planolSeleccionat.id}/fitxer${authParam}`, {
             headers,
@@ -457,24 +473,40 @@ export default function GestioPlanolsPage() {
             }
           }
           setCarregantFitxer(false);
-        } else if (tipus === "PDF") {
-          // Consultar nombre total de pàgines del document PDF via HEAD
-          try {
-            const authParam = token ? `?token=${encodeURIComponent(token)}` : "";
-            const resHead = await fetch(
-              `${baseUrl}/gestio/planols/${planolSeleccionat.id}/render${authParam}`,
-              { method: "HEAD", headers, credentials: "include" }
-            );
-            const total = resHead.headers.get("X-Total-Pages");
-            if (total && isSubscribed) {
-              setTotalPagines(parseInt(total, 10) || 1);
-            }
-          } catch {
-            // Continua amb 1 pàgina per defecte
+        } else {
+          // Renderitzar PDF, PNG, JPG, WEBP, SVG o TIFF via GET /render autenticat en memòria
+          setDxfEntities([]);
+          setGeoJsonBaseFeatures([]);
+          const authParam = token ? `?token=${encodeURIComponent(token)}` : "";
+          const renderUrl = `${baseUrl}/gestio/planols/${planolSeleccionat.id}/render?pagina=${numPagina}${authParam ? `&token=${encodeURIComponent(token || "")}` : ""}`;
+          const resImg = await fetch(renderUrl, {
+            headers,
+            credentials: "include",
+          });
+          if (!resImg.ok) {
+            throw new Error(`HTTP ${resImg.status}`);
           }
+          const total = resImg.headers.get("X-Total-Pages");
+          if (total && isSubscribed) {
+            setTotalPagines(parseInt(total, 10) || 1);
+          }
+          const blob = await resImg.blob();
+          if (!isSubscribed) return;
+
+          const objUrl = URL.createObjectURL(blob);
+          setRenderBlobUrl((prev) => {
+            if (prev) URL.revokeObjectURL(prev);
+            return objUrl;
+          });
+          setErrorCarregaImatge(false);
+          setCarregantFitxer(false);
         }
       } catch (err) {
         console.warn("Avís preparant plànol per a visualitzador:", err);
+        if (isSubscribed) {
+          setErrorCarregaImatge(true);
+          setCarregantFitxer(false);
+        }
       }
     };
 
@@ -483,25 +515,29 @@ export default function GestioPlanolsPage() {
     return () => {
       isSubscribed = false;
     };
-  }, [planolSeleccionat?.id]);
+  }, [planolSeleccionat?.id, numPagina]);
 
-  // Drecera de teclat per esborrar element seleccionat (Delete o Backspace)
+  // Drecera de teclat per esborrar element seleccionat o desfer vèrtex en curs (Delete o Backspace)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement)?.tagName?.toLowerCase();
+      if (tag === "input" || tag === "textarea") return;
+
       if ((e.key === "Delete" || e.key === "Backspace") && elementSeleccionat) {
-        const tag = (e.target as HTMLElement)?.tagName?.toLowerCase();
-        if (tag === "input" || tag === "textarea") return;
         e.preventDefault();
         eliminarFeature(
           elementSeleccionat.capaId,
           elementSeleccionat.featureIndex,
           elementSeleccionat.nom
         );
+      } else if ((e.key === "Delete" || e.key === "Backspace") && puntsLiniaEnCurs.length > 0) {
+        e.preventDefault();
+        setPuntsLiniaEnCurs((prev) => prev.slice(0, -1));
       }
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [elementSeleccionat]);
+  }, [elementSeleccionat, puntsLiniaEnCurs.length]);
 
   const toggleVisibilitatCapa = async (capaId: string) => {
     const target = capes.find((c) => c.id === capaId);
@@ -1204,6 +1240,34 @@ export default function GestioPlanolsPage() {
     }
   };
 
+  const handleEliminarCarpeta = async (carpetaId: string, nom: string) => {
+    if (
+      !confirm(
+        `Segur que vols eliminar la carpeta "${nom}"? Aquesta acció esborrarà la carpeta i els seus plànols associats.`
+      )
+    ) {
+      return;
+    }
+    setGuardant(true);
+    setError(null);
+    try {
+      await apiFetch(`/gestio/planols/carpetes/${carpetaId}`, {
+        method: "DELETE",
+      });
+      setMissatgeExit(`Carpeta "${nom}" eliminada correctament.`);
+      setTimeout(() => setMissatgeExit(null), 4000);
+      if (carpetaSeleccionada?.id === carpetaId) {
+        setCarpetaSeleccionada(null);
+        setPlanolSeleccionat(null);
+      }
+      await carregarDades();
+    } catch (err: any) {
+      setError(err.message || "Error en eliminar la carpeta");
+    } finally {
+      setGuardant(false);
+    }
+  };
+
   const handleImportarDirectori = async () => {
     if (!carpetaSeleccionada) return;
     setImportantDirectori(true);
@@ -1405,9 +1469,22 @@ export default function GestioPlanolsPage() {
                             </span>
                             <span className="truncate text-sm">{c.nom}</span>
                           </div>
-                          <span className="text-data-tabular bg-surface-container-highest px-2 py-0.5 rounded-full text-xs">
-                            {planolsCarpeta.length}
-                          </span>
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            <span className="text-data-tabular bg-surface-container-highest px-2 py-0.5 rounded-full text-xs">
+                              {planolsCarpeta.length}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleEliminarCarpeta(c.id, c.nom);
+                              }}
+                              className="p-1 rounded hover:bg-error/20 text-outline hover:text-error transition-colors"
+                              title="Eliminar carpeta"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
                         </div>
 
                         {isSelected && planolsCarpeta.length > 0 && (
@@ -1795,6 +1872,14 @@ export default function GestioPlanolsPage() {
                           </button>
                           <button
                             type="button"
+                            onClick={() => setPuntsLiniaEnCurs((prev) => prev.slice(0, -1))}
+                            className="p-1 rounded hover:bg-surface-container text-outline hover:text-on-surface"
+                            title="Desfer / Esborrar l'últim punt del traçat (Backspace)"
+                          >
+                            <RotateCcw className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            type="button"
                             onClick={() => setPuntsLiniaEnCurs([])}
                             className="p-1 rounded hover:bg-surface-container text-outline hover:text-on-surface"
                             title="Cancel·lar traçat en curs"
@@ -2045,14 +2130,16 @@ export default function GestioPlanolsPage() {
 
                             return (
                               <img
-                                src={`${getApiBaseUrl()}/gestio/planols/${planolSeleccionat.id}/render?pagina=${numPagina}&token=${encodeURIComponent(getAuthToken() || "")}`}
+                                src={renderBlobUrl || ""}
                                 alt={planolSeleccionat.titol}
                                 className="max-w-full max-h-[72vh] object-contain block pointer-events-none select-none rounded-lg"
                                 style={{ opacity: opacitatPlanimetria / 100 }}
                                 onLoad={() => setCarregantFitxer(false)}
                                 onError={() => {
-                                  setCarregantFitxer(false);
-                                  setErrorCarregaImatge(true);
+                                  if (renderBlobUrl) {
+                                    setCarregantFitxer(false);
+                                    setErrorCarregaImatge(true);
+                                  }
                                 }}
                               />
                             );
