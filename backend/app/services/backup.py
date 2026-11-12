@@ -14,12 +14,41 @@ import logging
 import os
 import zipfile
 from datetime import datetime, timezone
+from typing import Any
+
+import httpx
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.services.sovereign_storage import SovereignStorageGateway
 
 logger = logging.getLogger("backup_service")
 
-# Directoris base
+# Directoris base (només per fallback local sense disc remot configurat)
 DATA_BASE = "/data"
 DOCS_BASE = "/docs"
+
+
+async def executar_backup_sobira_empresa(
+    db: AsyncSession,
+    empresa_id: str,
+    ruta_desti_local: str | None = None,
+) -> dict[str, Any]:
+    """Executa còpia de seguretat sobirana: remota al Vault del client o fallback local."""
+    mode, target, secret = await SovereignStorageGateway.resoldre_desti_disc_empresa(db, empresa_id)
+    if mode == "HTTP_VAULT":
+        headers = {"X-Vault-Token": secret} if secret else {}
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            resp = await client.post(
+                f"{target}/backups/tancament-jornada",
+                headers=headers,
+                json={"empresa_id": empresa_id},
+            )
+        if resp.status_code < 400:
+            return {"estat": "COMPLETAT", "mode": "HTTP_VAULT", "vault_response": resp.json()}
+        raise RuntimeError(f"Vault backup HTTP {resp.status_code}: {resp.text}")
+
+    desti = ruta_desti_local or os.path.join(target, "11_configuracio_i_backups", "backups_locals")
+    return executar_backup_empresa(empresa_id, desti)
 
 
 def executar_backup_empresa(

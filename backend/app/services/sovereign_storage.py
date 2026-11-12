@@ -7,10 +7,13 @@ clients, proveïdors, magatzem, factures, plànols, ordres_treball, incidències
 flota_i_operaris, copilot_ia (amb autoaprenentatge) i protocols_i_manuals.
 """
 
+import hashlib
+import hmac
 import json
 import logging
 import os
 import re
+import secrets
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -22,6 +25,7 @@ from fastapi.responses import FileResponse, Response, StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.core.network_utils import resolve_effective_node_url
 from app.models.models import Empresa
 
@@ -103,7 +107,68 @@ def inicialitzar_arbre_carpetes_disc(root_path: str | Path) -> List[str]:
 class SovereignStorageGateway:
     """Passarel·la que enruta totes les lectures i escriptures cap al disc dur del client."""
 
-    TRANSIT_QUEUE_DIR = Path(os.getenv("SOVEREIGN_TRANSIT_QUEUE_DIR", "/tmp/sevalor_transit_queue"))
+    _TRANSIT_ENC_PREFIX = b"SVENC1:"
+    _INITIAL_TRANSIT_DIR = Path(
+        os.getenv("SOVEREIGN_TRANSIT_QUEUE_DIR", "/tmp/sevalor_transit_queue")
+    )
+    TRANSIT_QUEUE_DIR = _INITIAL_TRANSIT_DIR
+
+    @classmethod
+    def _get_transit_queue_dir(cls) -> Path:
+        if cls.TRANSIT_QUEUE_DIR != cls._INITIAL_TRANSIT_DIR:
+            return cls.TRANSIT_QUEUE_DIR
+        return Path(os.getenv("SOVEREIGN_TRANSIT_QUEUE_DIR", str(cls.TRANSIT_QUEUE_DIR)))
+
+    @classmethod
+    def _derive_transit_keys(cls, empresa_id: str | uuid.UUID, nonce: bytes) -> Tuple[bytes, bytes]:
+        master = settings.SECRET_KEY.encode("utf-8")
+        enc_key = hmac.new(master, f"transit-enc:{empresa_id}".encode("utf-8") + nonce, hashlib.sha256).digest()
+        mac_key = hmac.new(master, f"transit-mac:{empresa_id}".encode("utf-8") + nonce, hashlib.sha256).digest()
+        return enc_key, mac_key
+
+    @classmethod
+    def _encrypt_transit_payload(cls, empresa_id: str | uuid.UUID, raw_bytes: bytes) -> bytes:
+        nonce = secrets.token_bytes(16)
+        enc_key, mac_key = cls._derive_transit_keys(empresa_id, nonce)
+        out = bytearray(len(raw_bytes))
+        counter = 0
+        offset = 0
+        while offset < len(raw_bytes):
+            block = hmac.new(enc_key, counter.to_bytes(8, "big"), hashlib.sha256).digest()
+            chunk_len = min(len(block), len(raw_bytes) - offset)
+            for i in range(chunk_len):
+                out[offset + i] = raw_bytes[offset + i] ^ block[i]
+            offset += chunk_len
+            counter += 1
+        ciphertext = bytes(out)
+        tag = hmac.new(mac_key, nonce + ciphertext, hashlib.sha256).digest()
+        return cls._TRANSIT_ENC_PREFIX + nonce + tag + ciphertext
+
+    @classmethod
+    def _decrypt_transit_payload(cls, empresa_id: str | uuid.UUID, stored_bytes: bytes) -> bytes:
+        if not stored_bytes.startswith(cls._TRANSIT_ENC_PREFIX):
+            return stored_bytes
+        body = stored_bytes[len(cls._TRANSIT_ENC_PREFIX) :]
+        if len(body) < 48:
+            raise ValueError("Paquet de cua de trànsit corrupte.")
+        nonce = body[:16]
+        tag = body[16:48]
+        ciphertext = body[48:]
+        enc_key, mac_key = cls._derive_transit_keys(empresa_id, nonce)
+        expected_tag = hmac.new(mac_key, nonce + ciphertext, hashlib.sha256).digest()
+        if not hmac.compare_digest(tag, expected_tag):
+            raise ValueError("Signatura HMAC del paquet de trànsit invàlida.")
+        out = bytearray(len(ciphertext))
+        counter = 0
+        offset = 0
+        while offset < len(ciphertext):
+            block = hmac.new(enc_key, counter.to_bytes(8, "big"), hashlib.sha256).digest()
+            chunk_len = min(len(block), len(ciphertext) - offset)
+            for i in range(chunk_len):
+                out[offset + i] = ciphertext[offset + i] ^ block[i]
+            offset += chunk_len
+            counter += 1
+        return bytes(out)
 
     @staticmethod
     async def resoldre_desti_disc_empresa(
@@ -144,8 +209,16 @@ class SovereignStorageGateway:
 
         if raw_disc.startswith("http://") or raw_disc.startswith("https://"):
             effective = resolve_effective_node_url(raw_disc) or raw_disc
-            secret = getattr(emp, "telegram_webhook_secret", None) or os.getenv(
-                "SEVALOR_VAULT_SECRET", "sevalor-vault-secret-token"
+            vault_tok = getattr(emp, "vault_token", None)
+            legacy_tg_tok = getattr(emp, "telegram_webhook_secret", None)
+            secret = (
+                vault_tok
+                or (
+                    legacy_tg_tok
+                    if legacy_tg_tok and str(legacy_tg_tok).startswith("svlt_")
+                    else None
+                )
+                or os.getenv("SEVALOR_VAULT_SECRET", "sevalor-vault-secret-token")
             )
             return ("HTTP_VAULT", effective.rstrip("/"), secret)
 
@@ -162,8 +235,8 @@ class SovereignStorageGateway:
         payload_bytes: bytes,
         content_type: str = "application/json",
     ) -> str:
-        """Guarda temporalment en cua de trànsit quan l'ordinador del client està apagat."""
-        emp_dir = (cls.TRANSIT_QUEUE_DIR / str(empresa_id)).resolve()
+        """Guarda temporalment i xifrat en cua de trànsit quan l'ordinador del client està apagat."""
+        emp_dir = (cls._get_transit_queue_dir() / str(empresa_id)).resolve()
         emp_dir.mkdir(parents=True, exist_ok=True)
         pkt_id = f"{int(datetime.now(timezone.utc).timestamp() * 1000)}_{uuid.uuid4().hex[:8]}"
         meta_path = emp_dir / f"{pkt_id}.meta.json"
@@ -175,10 +248,11 @@ class SovereignStorageGateway:
             "subcarpeta": subcarpeta,
             "identificador": identificador,
             "content_type": content_type,
+            "encrypted": True,
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
         meta_path.write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
-        data_path.write_bytes(payload_bytes)
+        data_path.write_bytes(cls._encrypt_transit_payload(empresa_id, payload_bytes))
         return f"transit://{empresa_id}/{subcarpeta}/{identificador}"
 
     @classmethod
@@ -186,7 +260,7 @@ class SovereignStorageGateway:
         cls, db: AsyncSession, empresa_id: str | uuid.UUID
     ) -> Dict[str, int]:
         """Envia tots els paquets retinguts a l'Agent HTTP del client i els esborra immediatament d'Hetzner."""
-        emp_dir = (cls.TRANSIT_QUEUE_DIR / str(empresa_id)).resolve()
+        emp_dir = (cls._get_transit_queue_dir() / str(empresa_id)).resolve()
         if not emp_dir.exists():
             return {"enviats": 0, "pendents": 0}
 
@@ -196,14 +270,14 @@ class SovereignStorageGateway:
 
         enviats = 0
         pendents = 0
-        async with httpx.AsyncClient(timeout=5.0) as client:
+        async with httpx.AsyncClient(timeout=10.0) as client:
             for meta_file in sorted(emp_dir.glob("*.meta.json")):
                 bin_file = emp_dir / meta_file.name.replace(".meta.json", ".bin")
                 if not bin_file.exists():
                     meta_file.unlink(missing_ok=True)
                     continue
                 meta = json.loads(meta_file.read_text(encoding="utf-8"))
-                raw_bytes = bin_file.read_bytes()
+                raw_bytes = cls._decrypt_transit_payload(empresa_id, bin_file.read_bytes())
                 try:
                     if meta["tipus"] == "JSON":
                         url = f"{base_target}/entitats/{meta['subcarpeta']}/{meta['identificador']}"
@@ -229,6 +303,13 @@ class SovereignStorageGateway:
                         meta_file.unlink(missing_ok=True)
                         enviats += 1
                     else:
+                        logger.warning(
+                            "Rebutjat drenatge de trànsit per %s (%s): HTTP %s - %s",
+                            empresa_id,
+                            meta.get("identificador"),
+                            resp.status_code,
+                            resp.text[:200],
+                        )
                         pendents += 1
                 except httpx.RequestError:
                     pendents += 1
@@ -237,6 +318,106 @@ class SovereignStorageGateway:
         if emp_dir.exists() and not any(emp_dir.iterdir()):
             emp_dir.rmdir()
         return {"enviats": enviats, "pendents": pendents}
+
+    @classmethod
+    async def drenar_totes_cues_transit(cls, db: AsyncSession) -> Dict[str, int]:
+        """Recorre totes les empreses amb paquets pendents en cua de trànsit i els sincronitza."""
+        root = cls._get_transit_queue_dir()
+        if not root.exists():
+            return {"empreses": 0, "enviats": 0, "pendents": 0}
+        total_empreses = 0
+        total_enviats = 0
+        total_pendents = 0
+        for emp_dir in sorted(root.iterdir()):
+            if not emp_dir.is_dir():
+                continue
+            try:
+                uuid.UUID(emp_dir.name)
+            except ValueError:
+                continue
+            total_empreses += 1
+            res = await cls.drenar_cua_transit_empresa(db, emp_dir.name)
+            total_enviats += res.get("enviats", 0)
+            total_pendents += res.get("pendents", 0)
+        return {"empreses": total_empreses, "enviats": total_enviats, "pendents": total_pendents}
+
+    @staticmethod
+    async def verificar_roundtrip_http_vault(base_url: str, secret: Optional[str]) -> Dict[str, Any]:
+        """Comprova salut, proxy IA opcional i prova real d'escriptura->lectura->esborrat contra client_vault_agent.py."""
+        probe_id = f"_healthcheck_{uuid.uuid4().hex[:8]}"
+        headers = {"X-Vault-Token": secret or ""}
+        ia_proxy_ok = False
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            health_resp = await client.get(f"{base_url}/health")
+            if health_resp.status_code != 200:
+                return {
+                    "ok": False,
+                    "motiu": "ENDPOINT_NO_TROBAT" if health_resp.status_code == 404 else "HTTP_ERROR",
+                    "codi_http": health_resp.status_code,
+                    "missatge": f"L'agent del disc ha respost HTTP {health_resp.status_code} a /health.",
+                }
+            try:
+                health_json = health_resp.json()
+            except Exception:
+                health_json = {}
+
+            try:
+                ia_resp = await client.get(f"{base_url}/v1/models", headers=headers)
+                ia_proxy_ok = ia_resp.status_code == 200
+            except Exception:
+                ia_proxy_ok = False
+
+            put_url = f"{base_url}/entitats/11_configuracio_i_backups/identitat_camaleo/{probe_id}"
+            put_resp = await client.put(
+                put_url,
+                json={"probe": True, "ts": datetime.now(timezone.utc).isoformat()},
+                headers=headers,
+            )
+            if put_resp.status_code in (401, 403):
+                return {
+                    "ok": False,
+                    "motiu": "TOKEN_INVALID",
+                    "codi_http": put_resp.status_code,
+                    "missatge": (
+                        "L'agent de disc dur ha rebutjat el Token Vault (HTTP 403). "
+                        "Assegura't que SEVALOR_VAULT_SECRET a l'ordinador del client coincideixi amb el vault_token de l'empresa."
+                    ),
+                }
+            if put_resp.status_code == 404:
+                return {
+                    "ok": False,
+                    "motiu": "ENDPOINT_NO_TROBAT",
+                    "codi_http": 404,
+                    "missatge": "La URL respon a /health però no implementa /entitats (no és client_vault_agent.py v2).",
+                }
+            if put_resp.status_code >= 400:
+                return {
+                    "ok": False,
+                    "motiu": "ERROR_ESCRIPTURA_DISC",
+                    "codi_http": put_resp.status_code,
+                    "missatge": f"Error escrivint prova al disc del client: HTTP {put_resp.status_code} ({put_resp.text[:160]}).",
+                }
+
+            list_resp = await client.get(
+                f"{base_url}/entitats/11_configuracio_i_backups/identitat_camaleo",
+                headers=headers,
+            )
+            readable = list_resp.status_code == 200
+            await client.delete(put_url, headers=headers)
+            if not readable:
+                return {
+                    "ok": False,
+                    "motiu": "ERROR_LECTURA_DISC",
+                    "codi_http": list_resp.status_code,
+                    "missatge": f"S'ha pogut escriure però no llegir el fitxer de prova (HTTP {list_resp.status_code}).",
+                }
+            return {
+                "ok": True,
+                "codi_http": 200,
+                "ia_proxy_ok": ia_proxy_ok,
+                "vault_root": health_json.get("vault_root"),
+                "disc_a_lliure_gb": health_json.get("disc_a_lliure_gb"),
+            }
 
     @classmethod
     async def desar_entitat_json(
@@ -288,6 +469,11 @@ class SovereignStorageGateway:
                         "X-Vault-Token": secret or "",
                     },
                 )
+                if resp.status_code in (401, 403):
+                    raise HTTPException(
+                        status_code=resp.status_code,
+                        detail="Token Vault rebutjat per l'agent del disc dur (HTTP 403). Verifica SEVALOR_VAULT_SECRET.",
+                    )
                 if resp.status_code >= 400:
                     raise HTTPException(status_code=resp.status_code, detail=resp.text)
                 return f"vault://{subcarpeta}/{id_net}.json"
@@ -393,6 +579,11 @@ class SovereignStorageGateway:
                     data=data,
                     headers={"X-Vault-Token": secret or ""},
                 )
+                if resp.status_code in (401, 403):
+                    raise HTTPException(
+                        status_code=resp.status_code,
+                        detail="Token Vault rebutjat per l'agent del disc dur (HTTP 403). Verifica SEVALOR_VAULT_SECRET.",
+                    )
                 if resp.status_code >= 400:
                     raise HTTPException(status_code=resp.status_code, detail=resp.text)
                 return f"vault://{subcarpeta}/{nom_net}"
@@ -420,6 +611,32 @@ class SovereignStorageGateway:
             return transit_ref
 
     @classmethod
+    def _trobar_fitxer_transit(
+        cls, empresa_id: str | uuid.UUID, fitxer_path: str
+    ) -> Optional[Path]:
+        raw_clean = fitxer_path.replace("file://", "").strip()
+        if not (raw_clean.startswith("transit://") or "transit" in raw_clean):
+            return None
+        emp_str = str(empresa_id)
+        ident = raw_clean.replace("transit://", "").split("/")[-1]
+        emp_dir = (cls._get_transit_queue_dir() / emp_str).resolve()
+        if not emp_dir.exists():
+            return None
+        for meta_file in emp_dir.glob("*.meta.json"):
+            try:
+                meta = json.loads(meta_file.read_text(encoding="utf-8"))
+                if meta.get("identificador") == ident or meta.get("nom_desti") == ident:
+                    bin_file = emp_dir / meta_file.name.replace(".meta.json", ".bin")
+                    if bin_file.is_file():
+                        return bin_file.resolve()
+            except Exception:
+                continue
+        for b in emp_dir.glob("*.bin"):
+            if ident in b.name:
+                return b.resolve()
+        return None
+
+    @classmethod
     async def obtenir_bytes_fitxer(
         cls,
         db: AsyncSession,
@@ -430,6 +647,11 @@ class SovereignStorageGateway:
         Retorna (content_bytes, filename) tant si el plànol és a LOCAL_FS, a transit:// com a vault:// (HTTP_VAULT).
         Necessari perquè /render pugui rasteritzar PDFs/imatges sense guardar res permanent a Hetzner.
         """
+        transit_bin = cls._trobar_fitxer_transit(empresa_id, fitxer_path)
+        if transit_bin and transit_bin.is_file():
+            filename = os.path.basename(fitxer_path.replace("transit://", ""))
+            return cls._decrypt_transit_payload(empresa_id, transit_bin.read_bytes()), filename
+
         real_path = await cls.resoldre_fitxer_real_path(db, empresa_id, fitxer_path)
         if real_path and real_path.is_file():
             return real_path.read_bytes(), real_path.name
@@ -506,22 +728,9 @@ class SovereignStorageGateway:
 
         # 2. Cua de trànsit temporal transit://
         if raw_clean.startswith("transit://") or "transit" in raw_clean:
-            parts = raw_clean.replace("transit://", "").split("/")
-            ident = parts[-1]
-            emp_dir = (cls.TRANSIT_QUEUE_DIR / emp_str).resolve()
-            if emp_dir.exists():
-                for meta_file in emp_dir.glob("*.meta.json"):
-                    try:
-                        meta = json.loads(meta_file.read_text(encoding="utf-8"))
-                        if meta.get("identificador") == ident or meta.get("nom_desti") == ident:
-                            bin_file = emp_dir / meta_file.name.replace(".meta.json", ".bin")
-                            if bin_file.is_file():
-                                return bin_file.resolve()
-                    except Exception:
-                        continue
-                for b in emp_dir.glob("*.bin"):
-                    if ident in b.name:
-                        return b.resolve()
+            found_transit = cls._trobar_fitxer_transit(emp_str, raw_clean)
+            if found_transit is not None:
+                return found_transit
 
         # 3. Exploració exhaustiva dels discos de l'empresa
         subdom = None
@@ -573,6 +782,15 @@ class SovereignStorageGateway:
         disposition: str = "inline",
     ) -> Response:
         """Serveix un fitxer des del disc dur del client cap a la PWA (Streaming Zero-Copy)."""
+        transit_bin = cls._trobar_fitxer_transit(empresa_id, fitxer_path)
+        if transit_bin and transit_bin.is_file():
+            raw_bytes, fname = await cls.obtenir_bytes_fitxer(db, empresa_id, fitxer_path)
+            return Response(
+                content=raw_bytes,
+                media_type=media_type,
+                headers={"Content-Disposition": f'{disposition}; filename="{fname}"'},
+            )
+
         real_path = await cls.resoldre_fitxer_real_path(db, empresa_id, fitxer_path)
         if real_path and real_path.is_file():
             return FileResponse(
@@ -582,11 +800,13 @@ class SovereignStorageGateway:
                 content_disposition_type=disposition,
             )
 
-        # Si no s'ha trobat localment i és un vault remot HTTP
-        if fitxer_path.startswith("vault://"):
+        # Si no s'ha trobat localment (o el paquet transit:// ja ha estat drenat cap al Vault remot)
+        if fitxer_path.startswith("vault://") or fitxer_path.startswith("transit://"):
             mode, base_target, secret = await cls.resoldre_desti_disc_empresa(db, empresa_id)
             if mode == "HTTP_VAULT":
-                rel_path = fitxer_path.replace("vault://", "").lstrip("/")
+                rel_path = fitxer_path.replace("vault://", "").replace("transit://", "").lstrip("/")
+                if rel_path.startswith(str(empresa_id) + "/"):
+                    rel_path = rel_path[len(str(empresa_id)) + 1 :]
                 url = f"{base_target}/fitxers/{rel_path}"
 
                 async def _streamer():

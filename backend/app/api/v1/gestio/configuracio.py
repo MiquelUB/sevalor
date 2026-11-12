@@ -566,10 +566,15 @@ async def pujar_logotip_corporatiu(
 ):
     """Pujada de logotip amb comprovació de Magic Bytes i redimensionament sobirà (EDGE-03)."""
     validar_permisos_gestio(claims, requereix_escriptura=True)
-    empresa_id = claims.get("empresa_id")
+    empresa_id_raw = claims.get("empresa_id")
+    if not empresa_id_raw:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Identificador d'empresa absent al token.",
+        )
+    empresa_id = str(empresa_id_raw)
 
-    if empresa_id:
-        await set_tenant_context(db, empresa_id)
+    await set_tenant_context(db, empresa_id)
 
     # Llegir contingut
     content = await fitxer.read()
@@ -584,17 +589,23 @@ async def pujar_logotip_corporatiu(
 
     # Validació estricta de Magic Bytes (EDGE-03)
     ext = validar_magic_bytes_imatge(content)
+    mime_map = {
+        "png": "image/png",
+        "jpg": "image/jpeg",
+        "jpeg": "image/jpeg",
+        "webp": "image/webp",
+        "svg": "image/svg+xml",
+    }
+    mime_type = mime_map.get(ext.lower(), "image/png")
 
-    # Ruta sobirana Hetzner Alemanya
-    dest_path = f"/docs/{empresa_id}/configuracio/logo_oficial.{ext}"
-    try:
-        dest_dir = os.path.join(HETZNER_BASE_DOCS, str(empresa_id), "configuracio")
-        os.makedirs(dest_dir, exist_ok=True)
-        with open(os.path.join(dest_dir, f"logo_oficial.{ext}"), "wb") as f:
-            f.write(content)
-    except (PermissionError, OSError):
-        # En entorns d'assaig sense volum /docs muntat, conservem la traça de ruta sobirana
-        pass
+    dest_path = await SovereignStorageGateway.pujar_fitxer_binari(
+        db,
+        empresa_id,
+        "configuracio",
+        f"logo_oficial.{ext}",
+        content,
+        content_type=mime_type,
+    )
 
     res = await db.execute(select(Empresa).where(Empresa.id == uuid.UUID(empresa_id)))
     empresa = res.scalar_one_or_none()

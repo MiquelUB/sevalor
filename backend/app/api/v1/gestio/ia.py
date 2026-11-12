@@ -1,5 +1,5 @@
 import os
-import shutil
+import tempfile
 import uuid
 from typing import Any, Dict, Optional
 
@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.db import get_db_with_tenant_context
 from app.core.security import get_current_user_claims, require_roles
 from app.services.memorandum_service import generar_memorandum_tecnic
+from app.services.sovereign_storage import SovereignStorageGateway
 from app.services.whisper_service import transcriure_audio
 
 router = APIRouter(
@@ -100,24 +101,43 @@ async def peritatge_incidencies(
     if not audio.filename:
         raise HTTPException(status_code=400, detail="Audio file required")
 
-    audio_filename = f"{uuid.uuid4()}.webm"
-    audio_path = f"/tmp/{audio_filename}"
+    audio_path: Optional[str] = None
+    foto_path: Optional[str] = None
 
     try:
-        with open(audio_path, "wb") as f:
-            shutil.copyfileobj(audio.file, f)
+        audio_bytes = await audio.read()
+        with tempfile.NamedTemporaryFile(suffix=".webm", delete=False) as tmp_audio:
+            tmp_audio.write(audio_bytes)
+            audio_path = tmp_audio.name
 
         if not verificar_magic_bytes(audio_path, "audio"):
             raise HTTPException(status_code=400, detail="Format d'àudio no vàlid")
 
-        foto_path = None
+        await SovereignStorageGateway.pujar_fitxer_binari(
+            db,
+            empresa_id,
+            "incidencies_audios",
+            f"peritatge_{uuid.uuid4()}.webm",
+            audio_bytes,
+            content_type="audio/webm",
+        )
+
+        foto_sovereign_ref: Optional[str] = None
         if foto and foto.filename:
-            foto_filename = f"{uuid.uuid4()}.jpg"
-            foto_path = f"/tmp/{foto_filename}"
-            with open(foto_path, "wb") as f:
-                shutil.copyfileobj(foto.file, f)
+            foto_bytes = await foto.read()
+            with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp_foto:
+                tmp_foto.write(foto_bytes)
+                foto_path = tmp_foto.name
             if not verificar_magic_bytes(foto_path, "imatge"):
                 raise HTTPException(status_code=400, detail="Format d'imatge no vàlid")
+            foto_sovereign_ref = await SovereignStorageGateway.pujar_fitxer_binari(
+                db,
+                empresa_id,
+                "incidencies_fotos",
+                f"peritatge_{uuid.uuid4()}.jpg",
+                foto_bytes,
+                content_type="image/jpeg",
+            )
 
         # Transcriure àudio
         transcripcio_result = await transcriure_audio(audio_path=audio_path)
@@ -132,7 +152,7 @@ async def peritatge_incidencies(
             ordre_treball_id=uuid.UUID(ordre_treball_id) if ordre_treball_id else None,
             transcripcio=transcripcio_text,
             confianca_acustica=confianca,
-            foto_path=foto_path,
+            foto_path=foto_sovereign_ref,
         )
 
         return PeritatgeOut(
@@ -143,7 +163,7 @@ async def peritatge_incidencies(
             confianca_acustica=float(memo.confianca_acustica),
         )
     finally:
-        if os.path.exists(audio_path):
+        if audio_path and os.path.exists(audio_path):
             os.remove(audio_path)
         if foto_path and os.path.exists(foto_path):
             os.remove(foto_path)

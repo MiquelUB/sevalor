@@ -1198,8 +1198,17 @@ export default function GestioPlanolsPage() {
         throw new Error(errData.detail || "Error en pujar el fitxer");
       }
       const creat = await res.json();
-      setMissatgeExit(`Plànol "${creat.titol}" desat correctament al disc dedicat!`);
-      setTimeout(() => setMissatgeExit(null), 4000);
+      const fp = String(creat.fitxer_path || "");
+      if (fp.startsWith("transit://")) {
+        setMissatgeExit(
+          `Plànol "${creat.titol}" en cua de trànsit temporal (el node de disc dur no ha respost encara). Es sincronitzarà automàticament en recuperar connexió.`
+        );
+      } else if (fp.startsWith("vault://")) {
+        setMissatgeExit(`Plànol "${creat.titol}" desat i verificat al disc dur dedicat de l'empresa!`);
+      } else {
+        setMissatgeExit(`Plànol "${creat.titol}" desat correctament!`);
+      }
+      setTimeout(() => setMissatgeExit(null), 5000);
       await carregarDades();
       if (creat) setPlanolSeleccionat(creat);
 

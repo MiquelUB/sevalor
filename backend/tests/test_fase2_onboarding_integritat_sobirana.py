@@ -125,9 +125,11 @@ async def test_onboarding_integritat_dades_i_persistencia_local_fs(headers, db_s
     assert empresa_db.nif == cif_empresa
     assert empresa_db.subdomini == sub_slug
     assert empresa_db.pla_subscripcio == "ENTERPRISE"
-    assert empresa_db.telegram_webhook_secret is not None
-    assert empresa_db.telegram_webhook_secret.startswith("svlt_")
-    assert len(empresa_db.telegram_webhook_secret) > 20
+    assert empresa_db.vault_token is not None
+    assert empresa_db.vault_token.startswith("svlt_")
+    assert len(empresa_db.vault_token) > 20
+    assert empresa_db.telegram_webhook_secret is None
+    assert tenant_info["vault_token"] == empresa_db.vault_token
 
     res_boss = await db_session.execute(select(Usuari).where(Usuari.id == boss_id))
     boss_db = res_boss.scalars().first()
@@ -224,8 +226,10 @@ async def test_onboarding_integritat_i_persistencia_http_vault(headers, db_sessi
     res_emp = await db_session.execute(select(Empresa).where(Empresa.id == empresa_id))
     emp_db = res_emp.scalars().first()
     assert emp_db is not None
-    assert emp_db.telegram_webhook_secret.startswith("svlt_")
-    vault_token = emp_db.telegram_webhook_secret
+    assert emp_db.vault_token is not None
+    assert emp_db.vault_token.startswith("svlt_")
+    assert emp_db.telegram_webhook_secret is None
+    vault_token = emp_db.vault_token
 
     # Comprovem que s'han fet les crides PUT a l'agent local amb el token correcte
     assert len(recorded_puts) >= 2  # empresa i boss

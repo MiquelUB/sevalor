@@ -21,9 +21,10 @@ RUN pip install --no-cache-dir --upgrade pip && \
 # Copiar el codi de l'aplicació
 COPY . .
 
-# Crear usuari no root per a seguretat Zero-Trust
+# Crear usuari no root per a seguretat Zero-Trust i directori compartit de cua sobirana
 RUN useradd -u 1000 -ms /bin/bash sevalor && \
-    chown -R sevalor:sevalor /app
+    mkdir -p /var/sevalor/transit_queue && \
+    chown -R sevalor:sevalor /app /var/sevalor
 
 USER sevalor
 

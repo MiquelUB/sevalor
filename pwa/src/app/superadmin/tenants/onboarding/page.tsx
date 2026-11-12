@@ -206,6 +206,8 @@ export default function SuperadminTenantOnboardingPage() {
   const [provisioning, setProvisioning] = useState<boolean>(false);
   const [provisionedSuccess, setProvisionedSuccess] = useState<boolean>(false);
   const [invitationUrl, setInvitationUrl] = useState<string | null>(null);
+  const [provisionedVaultToken, setProvisionedVaultToken] = useState<string | null>(null);
+  const [provisionedVaultSync, setProvisionedVaultSync] = useState<any>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   useEffect(() => {
@@ -442,6 +444,8 @@ export default function SuperadminTenantOnboardingPage() {
       setProvisionedSuccess(true);
       const hostAcceso = dominiCustomFinal || `${slugFinal}.projectexinoxano.cat`;
       setInvitationUrl(data?.tenant?.enllac_activacio_2fa || `https://${hostAcceso}/activacio`);
+      setProvisionedVaultToken(data?.tenant?.vault_token || null);
+      setProvisionedVaultSync(data?.vault_sync || null);
     } catch (err: any) {
       setErrorMessage(err.message || "Error durant el provisionament del tenant.");
     } finally {
@@ -1333,6 +1337,7 @@ export default function SuperadminTenantOnboardingPage() {
               <div className="bg-white dark:bg-slate-900 p-3 rounded-lg border border-emerald-200 dark:border-emerald-800 flex items-center justify-between text-xs font-mono">
                 <span className="truncate mr-2 text-slate-800 dark:text-slate-200">{invitationUrl}</span>
                 <button
+                  type="button"
                   onClick={() => navigator.clipboard.writeText(invitationUrl)}
                   className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded text-[11px] font-bold shrink-0 flex items-center gap-1"
                 >
@@ -1340,6 +1345,53 @@ export default function SuperadminTenantOnboardingPage() {
                   <span>Copiar Enllaç</span>
                 </button>
               </div>
+
+              {provisionedVaultToken && (
+                <div className="bg-white dark:bg-slate-900 p-3.5 rounded-lg border border-emerald-300 dark:border-emerald-800 space-y-2 text-xs font-mono">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-bold text-emerald-800 dark:text-emerald-300 uppercase text-[10px] tracking-wider">
+                      Token Segur del Disc Dur (SEVALOR_VAULT_SECRET)
+                    </span>
+                    {provisionedVaultSync?.status && (
+                      <span
+                        className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                          provisionedVaultSync.status === "SYNCED"
+                            ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/50 dark:text-emerald-300"
+                            : "bg-amber-100 text-amber-800 dark:bg-amber-900/50 dark:text-amber-300"
+                        }`}
+                      >
+                        {provisionedVaultSync.status === "SYNCED"
+                          ? "Disc Inicialitzat"
+                          : provisionedVaultSync.status}
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex items-center justify-between gap-2 bg-slate-50 dark:bg-slate-950 p-2 rounded border border-slate-200 dark:border-slate-800">
+                    <code className="truncate text-slate-900 dark:text-slate-100 select-all">
+                      {provisionedVaultToken}
+                    </code>
+                    <button
+                      type="button"
+                      onClick={() => navigator.clipboard.writeText(provisionedVaultToken)}
+                      className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-white rounded text-[11px] font-bold shrink-0 flex items-center gap-1"
+                    >
+                      <Copy className="w-3.5 h-3.5" />
+                      <span>Copiar Token</span>
+                    </button>
+                  </div>
+                  <div className="text-[10px] text-slate-600 dark:text-slate-400">
+                    <span>Executa a l&apos;equip del client: </span>
+                    <code className="bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded select-all">
+                      SEVALOR_VAULT_SECRET={provisionedVaultToken} python3 scripts/client_vault_agent.py
+                    </code>
+                  </div>
+                  {provisionedVaultSync?.missatge && (
+                    <p className="text-[11px] font-sans text-amber-800 dark:text-amber-300">
+                      {provisionedVaultSync.missatge}
+                    </p>
+                  )}
+                </div>
+              )}
             </div>
           )}
         </div>

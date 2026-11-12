@@ -72,7 +72,10 @@ async def test_onboarding_persistencia_100_i_fitxers_inicials_disc(
     assert emp_db.adreca == "Avinguda Generalitat 120, Tortosa"
     assert emp_db.pla_subscripcio == "ENTERPRISE"
     assert emp_db.disc_dur_url == str(disc_client)
-    assert emp_db.telegram_webhook_secret.startswith("svlt_")
+    assert emp_db.vault_token is not None
+    assert emp_db.vault_token.startswith("svlt_")
+    assert emp_db.telegram_webhook_secret is None
+    assert tenant["vault_token"] == emp_db.vault_token
     assert boss_db.nif == dni_boss
     assert boss_db.nif != emp_db.nif
     assert boss_db.nom == "Joan Josep"

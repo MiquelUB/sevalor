@@ -35,6 +35,7 @@ celery_app.conf.update(
     task_reject_on_worker_lost=True,  # Rebutjar si worker es perd
     task_create_missing_queues=True,
     task_queues={
+        "queue_default": {"exchange": "queue_default"},
         "queue_critical": {"exchange": "queue_critical"},
         "queue_documents": {"exchange": "queue_documents"},
         "queue_sync": {"exchange": "queue_sync"},
@@ -42,6 +43,9 @@ celery_app.conf.update(
         "queue_periodic": {"exchange": "queue_periodic"},
     },
     task_routes={
+        "crear_directoris_sobirans_task": {"queue": "queue_default"},
+        "drenar_cua_transit_task": {"queue": "queue_default"},
+        "app.workers.tasks.drenar_totes_cues_transit_task": {"queue": "queue_periodic"},
         "app.workers.tasks.generar_pdf_factura_task": {"queue": "queue_documents"},
         "app.workers.tasks.executar_backup_setmanal_task": {"queue": "queue_periodic"},
         "app.workers.tasks.despatx_outbox_aeat_task": {"queue": "queue_critical"},
@@ -53,6 +57,11 @@ celery_app.conf.update(
     },
     # ── T047-T050 + T041 + Contractes: Celery Beat Schedules ───────────────────────────────
     beat_schedule={
+        # Drenatge automàtic cada 2 minuts de la cua de trànsit xifrada cap al Vault del client
+        "drenar-totes-cues-transit": {
+            "task": "app.workers.tasks.drenar_totes_cues_transit_task",
+            "schedule": crontab(minute="*/2"),
+        },
         # Purga de Buffers Temporals d'Hetzner cap al Disc del Client (Zero-Storage Guarantee)
         "buidar-buffer-diari-cap-a-disc-client": {
             "task": "app.workers.tasks.buidar_buffer_diari_cap_a_disc_client",

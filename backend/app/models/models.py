@@ -102,6 +102,7 @@ class Empresa(Base):
     )
     node_ia_url: Mapped[Optional[str]] = mapped_column(String(255))
     disc_dur_url: Mapped[Optional[str]] = mapped_column(String(255))
+    vault_token: Mapped[Optional[str]] = mapped_column(String(255))
     feature_copilot_ia: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default=text("false")
     )

@@ -229,6 +229,10 @@ export default function EmpresaDetailPage({ params }: { params: { id: string } }
   const [nodeIaStatus, setNodeIaStatus] = useState<any>(null);
   const [discDurTesting, setDiscDurTesting] = useState(false);
   const [discDurStatus, setDiscDurStatus] = useState<any>(null);
+  const [vaultToken, setVaultToken] = useState<string>("");
+  const [rotatingToken, setRotatingToken] = useState(false);
+  const [initializingDisk, setInitializingDisk] = useState(false);
+  const [initDiskStatus, setInitDiskStatus] = useState<any>(null);
 
   // CRM Condicions Comercials & Equips IA (Venda)
   const [tarifaLlicenciaBase, setTarifaLlicenciaBase] = useState<number>(0);
@@ -307,6 +311,7 @@ export default function EmpresaDetailPage({ params }: { params: { id: string } }
           disc_dur_url: data.disc_dur_url || "",
           node_ia_actiu: Boolean(data.node_ia_actiu),
         });
+        setVaultToken(data.vault_token || "");
 
         // CRM fields
         const tBase = Number(data.tarifa_llicencia_base ?? 0);
@@ -385,10 +390,13 @@ export default function EmpresaDetailPage({ params }: { params: { id: string } }
         }),
       });
 
-      // 4. Guardar Feature Flags
+      // 4. Guardar Feature Flags i Vault Token
       await apiFetch(`/superadmin/tenants/${params.id}/feature-flags`, {
         method: "PUT",
-        body: JSON.stringify(features),
+        body: JSON.stringify({
+          ...features,
+          vault_token: vaultToken.trim() || undefined,
+        }),
       });
 
       // 5. Guardar Domini / Subdomini si han canviat
@@ -625,6 +633,7 @@ export default function EmpresaDetailPage({ params }: { params: { id: string } }
           disc_dur_url: rawDiscUrl,
           node_ia_url: features.node_ia_url?.trim() || rawDiscUrl,
           empresa_id: empresaId,
+          vault_token: vaultToken.trim() || undefined,
         }),
       });
       setDiscDurStatus(res);
@@ -639,6 +648,47 @@ export default function EmpresaDetailPage({ params }: { params: { id: string } }
       });
     } finally {
       setDiscDurTesting(false);
+    }
+  };
+
+  const handleRotateVaultToken = async () => {
+    setRotatingToken(true);
+    setErrorMessage(null);
+    try {
+      const res = await apiFetch<any>(`/superadmin/tenants/${params.id}/vault-token/rotate`, {
+        method: "POST",
+        body: JSON.stringify({}),
+      });
+      if (res?.vault_token) {
+        setVaultToken(res.vault_token);
+        setSuccessMessage(
+          "Nou Token de Disc Dur generat. Actualitza SEVALOR_VAULT_SECRET a l'agent local del client."
+        );
+      }
+    } catch (err: any) {
+      setErrorMessage(err.message || "Error rotant el token del disc dur.");
+    } finally {
+      setRotatingToken(false);
+    }
+  };
+
+  const handleInicialitzarDisc = async () => {
+    setInitializingDisk(true);
+    setInitDiskStatus(null);
+    setErrorMessage(null);
+    try {
+      const res = await apiFetch<any>(`/superadmin/tenants/${params.id}/inicialitzar-disc`, {
+        method: "POST",
+        body: JSON.stringify({}),
+      });
+      setInitDiskStatus(res);
+    } catch (err: any) {
+      setInitDiskStatus({
+        status: "ERROR",
+        missatge: err.message || "No s'ha pogut inicialitzar l'arbre del disc dur.",
+      });
+    } finally {
+      setInitializingDisk(false);
     }
   };
 
@@ -2531,6 +2581,73 @@ export default function EmpresaDetailPage({ params }: { params: { id: string } }
                 <p className="text-[10px] text-slate-500 dark:text-slate-400">
                   Indica la URL de l'Agent HTTP Local (Opció A+, ex: http://127.0.0.1:9001 o túnel https://node-empresa.projectexinoxano.cat) o ruta física muntada.
                 </p>
+
+                {/* Token Sobirà de Disc Dur (SEVALOR_VAULT_SECRET) + Re-inicialització */}
+                <div className="pt-2 border-t border-slate-200 dark:border-slate-700/70 space-y-2">
+                  <label className="block text-[10px] font-mono font-bold text-slate-600 dark:text-slate-400 flex items-center gap-1.5 uppercase tracking-wider">
+                    <KeyRound className="w-3.5 h-3.5 text-amber-500" />
+                    <span>Token Autenticació Agent Disc Dur (SEVALOR_VAULT_SECRET)</span>
+                  </label>
+                  <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+                    <input
+                      type="text"
+                      placeholder="svlt_..."
+                      value={vaultToken}
+                      onChange={(e) => setVaultToken(e.target.value)}
+                      className="flex-1 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-white text-xs rounded-xl p-2 font-mono outline-none focus:border-amber-500"
+                    />
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => vaultToken && navigator.clipboard.writeText(vaultToken)}
+                        disabled={!vaultToken}
+                        className="px-3 py-2 rounded-xl bg-slate-700 hover:bg-slate-600 disabled:opacity-40 text-white text-xs font-mono font-bold flex items-center gap-1 cursor-pointer"
+                        title="Copiar Vault Token"
+                      >
+                        <Copy className="w-3.5 h-3.5" />
+                        <span>Copiar</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleRotateVaultToken}
+                        disabled={rotatingToken}
+                        className="px-3 py-2 rounded-xl bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white text-xs font-mono font-bold flex items-center gap-1 cursor-pointer"
+                        title="Generar i desar un nou Vault Token exclusiu per a aquest client"
+                      >
+                        <RefreshCw className={`w-3.5 h-3.5 ${rotatingToken ? "animate-spin" : ""}`} />
+                        <span>{rotatingToken ? "Rotant..." : "Rotar Token"}</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleInicialitzarDisc}
+                        disabled={initializingDisk}
+                        className="px-3 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-xs font-mono font-bold flex items-center gap-1 cursor-pointer"
+                        title="Crea carpetes oficials, fitxers base i drena cua de trànsit pendent"
+                      >
+                        <HardDrive className={`w-3.5 h-3.5 ${initializingDisk ? "animate-spin" : ""}`} />
+                        <span>{initializingDisk ? "Sincronitzant..." : "Inicialitzar / Sincronitzar Disc"}</span>
+                      </button>
+                    </div>
+                  </div>
+                  {initDiskStatus && (
+                    <div
+                      className={`p-2.5 rounded-lg border text-[11px] font-mono ${
+                        initDiskStatus.status === "ERROR"
+                          ? "bg-rose-50 dark:bg-rose-950/60 border-rose-300 text-rose-800 dark:text-rose-200"
+                          : "bg-emerald-50 dark:bg-emerald-950/60 border-emerald-300 text-emerald-800 dark:text-emerald-200"
+                      }`}
+                    >
+                      <strong>{initDiskStatus.status}:</strong> {initDiskStatus.missatge}
+                      {initDiskStatus.drenatge && (
+                        <span>
+                          {" "}
+                          (Cua drenada: {initDiskStatus.drenatge.enviats || 0} enviats,{" "}
+                          {initDiskStatus.drenatge.pendents || 0} pendents)
+                        </span>
+                      )}
+                    </div>
+                  )}
+                </div>
               </div>
 
               {/* Caixes de diagnòstic en viu (Doble Validació: IA + Disc Dur) */}
@@ -2614,8 +2731,16 @@ export default function EmpresaDetailPage({ params }: { params: { id: string } }
                     </div>
                     <p className="text-[11px] font-sans leading-relaxed">{discDurStatus.missatge}</p>
                     {discDurStatus.status === "OK" && discDurStatus.endpoint_resolt && (
-                      <div className="pt-1.5 border-t border-emerald-200 dark:border-emerald-800/60 text-[10px] text-emerald-700 dark:text-emerald-300">
-                        • Sonda resolta a: <code>{discDurStatus.endpoint_resolt}</code> (Codi HTTP {discDurStatus.codi_http})
+                      <div className="pt-1.5 border-t border-emerald-200 dark:border-emerald-800/60 text-[10px] text-emerald-700 dark:text-emerald-300 space-y-0.5">
+                        <div>
+                          • Sonda resolta a: <code>{discDurStatus.endpoint_resolt}</code> (Codi HTTP {discDurStatus.codi_http})
+                        </div>
+                        {discDurStatus.disc_a_lliure_gb !== null && discDurStatus.disc_a_lliure_gb !== undefined && (
+                          <div>
+                            • Espai lliure al Disc Principal: <strong>{discDurStatus.disc_a_lliure_gb} GB</strong>
+                            {discDurStatus.roundtrip_escriptura && " • Prova Escriptura/Lectura/Esborrat OK"}
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>

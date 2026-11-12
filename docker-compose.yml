@@ -59,6 +59,7 @@ services:
       - LM_STUDIO_URL=${LM_STUDIO_URL:-http://host.docker.internal:1234/v1}
       - LM_STUDIO_MODEL=${LM_STUDIO_MODEL:-default}
       - SECRET_KEY=${SECRET_KEY:-sevalor-dev-secret-key-32-chars-long-abc}
+      - SOVEREIGN_TRANSIT_QUEUE_DIR=/var/sevalor/transit_queue
     ports:
       - "127.0.0.1:8001:8000"
     depends_on:
@@ -71,6 +72,7 @@ services:
     user: "1000:1000"
     volumes:
       - ./backend:/app
+      - sevalor_transit_queue:/var/sevalor/transit_queue
     tmpfs:
       - /tmp
     extra_hosts:
@@ -82,12 +84,13 @@ services:
       context: ./backend
     container_name: sevalor_celery_worker
     restart: always
-    command: celery -A app.workers.celery_app worker -Q celery,queue_critical,queue_media,queue_periodic,queue_documents --loglevel=INFO --concurrency=4
+    command: celery -A app.workers.celery_app worker -Q celery,queue_default,queue_critical,queue_media,queue_periodic,queue_documents --loglevel=INFO --concurrency=4
     environment:
       - POSTGRES_SERVER=db
       - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-sevalor}
       - REDIS_URL=redis://:${REDIS_PASSWORD:-}@redis:6379/0
       - SECRET_KEY=${SECRET_KEY:-sevalor-dev-secret-key-32-chars-long-abc}
+      - SOVEREIGN_TRANSIT_QUEUE_DIR=/var/sevalor/transit_queue
     depends_on:
       db:
         condition: service_healthy
@@ -96,6 +99,11 @@ services:
     security_opt:
       - no-new-privileges:true
     user: "1000:1000"
+    volumes:
+      - ./backend:/app
+      - sevalor_transit_queue:/var/sevalor/transit_queue
+    tmpfs:
+      - /tmp
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
@@ -105,15 +113,28 @@ services:
       context: ./backend
     container_name: sevalor_celery_beat
     restart: always
-    command: celery -A app.workers.celery_app beat --loglevel=INFO
+    command: celery -A app.workers.celery_app beat --loglevel=INFO --schedule=/tmp/celerybeat-schedule
     environment:
+      - POSTGRES_SERVER=db
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-sevalor}
       - REDIS_URL=redis://:${REDIS_PASSWORD:-}@redis:6379/0
+      - SECRET_KEY=${SECRET_KEY:-sevalor-dev-secret-key-32-chars-long-abc}
+      - SOVEREIGN_TRANSIT_QUEUE_DIR=/var/sevalor/transit_queue
     depends_on:
+      db:
+        condition: service_healthy
       redis:
         condition: service_healthy
     security_opt:
       - no-new-privileges:true
     user: "1000:1000"
+    volumes:
+      - ./backend:/app
+      - sevalor_transit_queue:/var/sevalor/transit_queue
+    tmpfs:
+      - /tmp
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
 
   # 6. Bot de Telegram (canal amb el client final)
   bot:
@@ -202,3 +223,4 @@ services:
 volumes:
   sevalor_pgdata:
   sevalor_stalwart_data:
+  sevalor_transit_queue:

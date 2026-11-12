@@ -1,8 +1,15 @@
+import asyncio
+import concurrent.futures
 import logging
 import os
+from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
-from typing import List
+from typing import Any, List, cast
 
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.pool import NullPool
+
+from app.core.config import settings
 from app.core.db import AsyncSessionLocal, set_tenant_context
 from app.workers.celery_app import celery_app
 
@@ -17,6 +24,64 @@ async def get_worker_session(
 
 
 logger = logging.getLogger("workers.tasks")
+
+
+def _run_async_in_worker(
+    coro_factory: Callable[[AsyncSession], Awaitable[Any]],
+    *,
+    empresa_id: str | None = None,
+    is_superadmin: bool = False,
+) -> Any:
+    """Executa una corutina amb motor NullPool aïllat tant dins Celery com dins pytest async."""
+
+    async def _runner() -> Any:
+        worker_engine = create_async_engine(settings.get_database_url(), poolclass=NullPool)
+        session_maker = async_sessionmaker(
+            bind=worker_engine,
+            class_=AsyncSession,
+            autocommit=False,
+            autoflush=False,
+            expire_on_commit=False,
+        )
+        try:
+            async with session_maker() as session:
+                await set_tenant_context(session, empresa_id, is_superadmin=is_superadmin, role="BOSS")
+                result = await coro_factory(session)
+                await session.commit()
+                return result
+        finally:
+            await worker_engine.dispose()
+
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(_runner())
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        return pool.submit(asyncio.run, _runner()).result()
+
+
+def _save_sovereign_bytes_sync(
+    empresa_id: str,
+    categoria: str,
+    nom_fitxer: str,
+    contingut: bytes,
+    mime_type: str,
+) -> str:
+    """Desa bytes a través de SovereignStorageGateway des d'una tasca Celery síncrona."""
+    from app.services.sovereign_storage import SovereignStorageGateway
+
+    async def _upload(session: AsyncSession) -> str:
+        return await SovereignStorageGateway.pujar_fitxer_binari(
+            session,
+            empresa_id,
+            categoria,
+            nom_fitxer,
+            contingut,
+            content_type=mime_type,
+        )
+
+    return cast(str, _run_async_in_worker(_upload, empresa_id=empresa_id, is_superadmin=False))
 
 
 def crear_directoris_sobirans(
@@ -39,45 +104,56 @@ def crear_directoris_sobirans_task(empresa_id: str) -> List[str]:
 
 
 @celery_app.task(name="drenar_cua_transit_task", queue="queue_default")
-def drenar_cua_transit_task(empresa_id: str) -> dict:
+def drenar_cua_transit_task(empresa_id: str) -> dict[str, Any]:
     """Tasca Celery de reintent per purgar la cua de trànsit temporal cap al node del client."""
-    import asyncio
-
-    from app.core.db import AsyncSessionLocal
     from app.services.sovereign_storage import SovereignStorageGateway
 
-    async def _drenar():
-        async with AsyncSessionLocal() as session:
-            return await SovereignStorageGateway.drenar_cua_transit_empresa(session, empresa_id)
+    async def _drenar(session: AsyncSession) -> dict[str, Any]:
+        return await SovereignStorageGateway.drenar_cua_transit_empresa(session, empresa_id)
 
     try:
-        loop = asyncio.get_running_loop()
-        loop.create_task(_drenar())
-        return {"status": "ENQUEUED_IN_LOOP"}
-    except RuntimeError:
-        return asyncio.run(_drenar())
+        return cast(dict[str, Any], _run_async_in_worker(_drenar, empresa_id=empresa_id, is_superadmin=False))
     except Exception as exc:
         logger.warning("Error drenant cua de trànsit per %s: %s", empresa_id, exc)
         return {"error": str(exc)}
 
 
+@celery_app.task(name="app.workers.tasks.drenar_totes_cues_transit_task", queue="queue_periodic")
+def drenar_totes_cues_transit_task() -> dict[str, Any]:
+    """Tasca periòdica Celery Beat per drenar totes les cues de trànsit pendents."""
+    from app.services.sovereign_storage import SovereignStorageGateway
+
+    async def _drenar_totes(session: AsyncSession) -> dict[str, Any]:
+        return await SovereignStorageGateway.drenar_totes_cues_transit(session)
+
+    try:
+        return cast(dict[str, Any], _run_async_in_worker(_drenar_totes, empresa_id=None, is_superadmin=True))
+    except Exception as exc:
+        logger.warning("Error drenant cues de trànsit globals: %s", exc)
+        return {"error": str(exc)}
+
+
 @celery_app.task(name="generar_informe_planol_pdf", queue="queue_documents")
 def generar_informe_planol_pdf(planol_id: str, empresa_id: str):
-    import os
+    import io
 
     from reportlab.lib.pagesizes import A4
     from reportlab.pdfgen import canvas
 
-    path_dir = f"/tmp/docs/{empresa_id}/planols"
-    os.makedirs(path_dir, exist_ok=True)
-
-    file_path = f"{path_dir}/{planol_id}_export.pdf"
-
-    c = canvas.Canvas(file_path, pagesize=A4)
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=A4)
     c.drawString(100, 800, f"Caixetí Oficial de Plànol: {planol_id}")
     c.drawString(100, 780, f"Empresa: {empresa_id}")
     c.drawString(100, 760, "Processat asíncronament via Celery (Spec 010)")
     c.save()
+
+    file_path = _save_sovereign_bytes_sync(
+        empresa_id=empresa_id,
+        categoria="planols_informes",
+        nom_fitxer=f"{planol_id}_export.pdf",
+        contingut=buf.getvalue(),
+        mime_type="application/pdf",
+    )
 
     return {"status": "SUCCESS", "path": file_path}
 
@@ -93,17 +169,13 @@ def generar_informe_post_obra(
     (Phase 4 / F4-T04) Genera l'informe oficial en PDF post-intervenció
     amb signatura, hores, materials i fotos de qualitat (Spec 010 / Spec 013).
     """
-    import os
+    import io
 
     from reportlab.lib.pagesizes import A4
     from reportlab.pdfgen import canvas
 
-    path_dir = f"/tmp/docs/{empresa_id}/informes"
-    os.makedirs(path_dir, exist_ok=True)
-
-    file_path = f"{path_dir}/informe_ot_{ordre_treball_id}.pdf"
-
-    c = canvas.Canvas(file_path, pagesize=A4)
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=A4)
     c.setFont("Helvetica-Bold", 16)
     c.drawString(50, 800, "SEVALOR — INFORME OFICIAL D'OBRA I POST-INTERVENCIÓ")
     c.setFont("Helvetica", 11)
@@ -113,7 +185,7 @@ def generar_informe_post_obra(
     c.drawString(50, 715, "Estat: FINALITZADA / CONCILIADA")
     c.drawString(50, 695, "Protocol de 3 Fotos: VERIFICAT (Inicial, Intermèdia, Final)")
     c.drawString(
-        50, 675, "Certificació de Sobirania: Hetzner Falkenstein (Zero Public Cloud Egress)"
+        50, 675, "Certificació de Sobirania: Emmagatzematge Dedicat (Zero Public Cloud Egress)"
     )
 
     if dades_informe:
@@ -121,6 +193,14 @@ def generar_informe_post_obra(
         c.drawString(50, 625, f"Despeses / Materials: {dades_informe.get('cost_materials', 0.0)} €")
 
     c.save()
+
+    file_path = _save_sovereign_bytes_sync(
+        empresa_id=empresa_id,
+        categoria="ots_informes",
+        nom_fitxer=f"informe_ot_{ordre_treball_id}.pdf",
+        contingut=buf.getvalue(),
+        mime_type="application/pdf",
+    )
 
     return {
         "status": "COMPLETED",
@@ -163,14 +243,21 @@ def sincronitzar_documents_vectorials(empresa_id: str, document_ids: list[str] =
 @celery_app.task(name="generar_backup_pgdump", queue="queue_critical")
 def generar_backup_pgdump(empresa_id: str):
     import gzip
-    import os
+    import io
 
-    path_dir = f"/tmp/data/{empresa_id}/backups"
-    os.makedirs(path_dir, exist_ok=True)
-    file_path = f"{path_dir}/backup_{empresa_id}.sql.gz"
+    buf = io.BytesIO()
+    with gzip.GzipFile(fileobj=buf, mode="wb") as gz:
+        gz.write(
+            f"-- SEVALOR PostgreSQL Database Backup\n-- Empresa: {empresa_id}\n".encode("utf-8")
+        )
 
-    with gzip.open(file_path, "wt", encoding="utf-8") as f:
-        f.write(f"-- SEVALOR PostgreSQL Database Backup\n-- Empresa: {empresa_id}\n")
+    file_path = _save_sovereign_bytes_sync(
+        empresa_id=empresa_id,
+        categoria="backups",
+        nom_fitxer=f"backup_{empresa_id}.sql.gz",
+        contingut=buf.getvalue(),
+        mime_type="application/gzip",
+    )
 
     return {"status": "COMPLETED", "file_path": file_path, "empresa_id": empresa_id}
 
@@ -643,7 +730,6 @@ def generar_informe_setmanal():
     Reservat exclusivament al rol BOSS.
     """
     import asyncio
-    import os
     from datetime import datetime, timedelta, timezone
 
     async def process():
@@ -679,17 +765,29 @@ def generar_informe_setmanal():
                     obertes = row[1] if row else 0
                     hores = float(row[2]) if row else 0.0
 
-                # Desar informe al directori sobirà
-                informe_dir = f"/docs/{empresa_id}/informes/"
-                os.makedirs(informe_dir, exist_ok=True)
+                # Desar informe al disc dur sobirà de l'empresa via Passarel·la Sobirana
+                from app.services.sovereign_storage import SovereignStorageGateway
+
                 nom_fitxer = f"informe_setmanal_{now_utc.strftime('%Y%m%d')}.txt"
-                with open(os.path.join(informe_dir, nom_fitxer), "w") as f:
-                    f.write(f"Informe Setmanal Sevalor — {now_utc.strftime('%Y-%m-%d')}\n")
-                    f.write(f"Empresa: {empresa_id}\n\n")
-                    f.write(f"OTs tancades: {tancades}\n")
-                    f.write(f"OTs en curs/pendent: {obertes}\n")
-                    f.write(f"Hores totals treballades: {hores:.1f}h\n")
-                logger.info(f"Informe setmanal generat per empresa {empresa_id}: {nom_fitxer}")
+                contingut = (
+                    f"Informe Setmanal Sevalor — {now_utc.strftime('%Y-%m-%d')}\n"
+                    f"Empresa: {empresa_id}\n\n"
+                    f"OTs tancades: {tancades}\n"
+                    f"OTs en curs/pendent: {obertes}\n"
+                    f"Hores totals treballades: {hores:.1f}h\n"
+                ).encode("utf-8")
+                async with get_worker_session(empresa_id) as session_write:
+                    dest_informe = await SovereignStorageGateway.pujar_fitxer_binari(
+                        session_write,
+                        empresa_id,
+                        "ots_informes",
+                        nom_fitxer,
+                        contingut,
+                        content_type="text/plain",
+                    )
+                logger.info(
+                    f"Informe setmanal generat per empresa {empresa_id}: {dest_informe}"
+                )
             except Exception as exc:
                 logger.error(f"Error generant informe setmanal per empresa {empresa.id}: {exc}")
 

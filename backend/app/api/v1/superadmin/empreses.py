@@ -16,6 +16,7 @@ from app.core.db import get_db_with_tenant_context, set_tenant_context
 from app.core.security import require_roles
 from app.models.models import Empresa
 from app.services.easypanel_service import EasypanelService
+from app.services.sovereign_storage import SovereignStorageGateway
 
 logger = logging.getLogger("superadmin.empreses")
 
@@ -293,6 +294,22 @@ async def obtenir_logotip_empresa(
                 "Cache-Control": "public, max-age=3600",
             },
         )
+
+    if empresa.logotip_path and (
+        empresa.logotip_path.startswith("vault://")
+        or empresa.logotip_path.startswith("transit://")
+    ):
+        try:
+            raw_bytes, detected_mime = await SovereignStorageGateway.obtenir_bytes_fitxer(
+                db, str(empresa.id), empresa.logotip_path
+            )
+            return Response(
+                content=raw_bytes,
+                media_type=detected_mime or "image/png",
+                headers={"Cache-Control": "public, max-age=3600"},
+            )
+        except Exception as exc:
+            logger.warning("No s'ha pogut llegir logotip sobirà (%s): %s", empresa.logotip_path, exc)
 
     # SVG vectorial dinàmic de contingència amb inicials de l'empresa
     nom_text = (empresa.nom or "SEVALOR").strip()

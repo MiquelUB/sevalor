@@ -151,6 +151,7 @@ class OnboardingTenantRequest(BaseModel):
     boss_telefon: Optional[str] = Field(None, max_length=30)
     feature_flags: Optional[Dict[str, bool]] = None
     logotip_base64: Optional[str] = None
+    vault_token: Optional[str] = Field(None, min_length=8, max_length=255)
 
     @model_validator(mode="after")
     def validar_copilot_prompt(self) -> "OnboardingTenantRequest":
@@ -174,6 +175,7 @@ class VerificarDiscDurRequest(BaseModel):
     node_ia_url: Optional[str] = Field(None, min_length=1, max_length=255)
     disc_dur_url: Optional[str] = Field(None, min_length=1, max_length=255)
     empresa_id: Optional[str] = None
+    vault_token: Optional[str] = Field(None, min_length=1, max_length=255)
 
 
 class UpdateDominiTenantRequest(BaseModel):
@@ -218,6 +220,11 @@ class UpdateFeatureFlagsRequest(BaseModel):
     node_ia_url: Optional[str] = None
     disc_dur_url: Optional[str] = None
     node_ia_actiu: Optional[bool] = None
+    vault_token: Optional[str] = Field(None, min_length=8, max_length=255)
+
+
+class RotateVaultTokenRequest(BaseModel):
+    vault_token: Optional[str] = Field(None, min_length=8, max_length=255)
 
 
 class VerificarDnsRequest(BaseModel):
@@ -537,9 +544,10 @@ async def verificar_node_ia(
 @router.post("/verificar-disc-dur", response_model=Dict[str, Any])
 async def verificar_disc_dur(
     payload: VerificarDiscDurRequest,
+    db: AsyncSession = Depends(get_db_with_tenant_context),
     claims: Dict[str, Any] = Depends(require_roles(["SUPERADMIN"])),
 ) -> Dict[str, Any]:
-    """Verifica en viu la connectivitat amb el disc dur dedicat i l'arxiu històric de plànols de l'empresa."""
+    """Verifica en viu la connectivitat real (escriptura->lectura->esborrat) amb el disc dur dedicat."""
     raw_url = (payload.disc_dur_url or payload.node_ia_url or "").strip()
     if not raw_url:
         return {
@@ -554,34 +562,66 @@ async def verificar_disc_dur(
         t0 = time.perf_counter()
         os.makedirs(raw_url, exist_ok=True)
         creades = inicialitzar_arbre_carpetes_disc(raw_url)
-        fitxers = 0
+        probe_path = os.path.join(raw_url, "11_configuracio_i_backups", "identitat_camaleo", "_healthcheck_probe.tmp")
         try:
-            for _r, _d, files in os.walk(raw_url):
-                fitxers += len(files)
-                if fitxers > 500:
-                    break
-        except OSError:
-            pass
+            with open(probe_path, "w", encoding="utf-8") as f:
+                f.write("ok")
+            with open(probe_path, "r", encoding="utf-8") as f:
+                _ = f.read()
+            os.remove(probe_path)
+        except OSError as exc:
+            return {
+                "status": "ERROR",
+                "motiu": "ERROR_PERMISOS_DISC",
+                "missatge": f"No s'ha pogut escriure al directori local '{raw_url}': {exc}",
+                "latencia_ms": int((time.perf_counter() - t0) * 1000),
+            }
+
+        mount_root = os.getenv("CLIENT_DISKS_MOUNT_ROOT")
+        en_docker = os.path.exists("/.dockerenv")
+        ruta_efimera = bool(
+            en_docker
+            and not (mount_root and os.path.abspath(raw_url).startswith(os.path.abspath(mount_root)))
+            and not os.path.abspath(raw_url).startswith("/data/")
+        )
         lat = int((time.perf_counter() - t0) * 1000)
         return {
             "status": "OK",
             "motiu": "DISC_OPERATIU",
-            "missatge": f"Disc dur del client operatiu amb estructura sobirana inicialitzada ({len(creades)} carpetes, {lat} ms).",
+            "missatge": (
+                f"Directori operatiu ({len(creades)} carpetes, {lat} ms). ATENCIÓ: ruta local dins contenidor Docker sense Agent HTTP; en producció usa l'URL http(s) de client_vault_agent.py."
+                if ruta_efimera
+                else f"Disc dur del client operatiu amb estructura sobirana inicialitzada ({len(creades)} carpetes, {lat} ms)."
+            ),
             "endpoint_resolt": raw_url,
             "tipus_resposta": "Carpeta de Disc Dur Dedicat",
             "codi_http": 200,
             "latencia_ms": lat,
             "url_efectiva": raw_url,
             "carpetes_creades": len(creades),
+            "avis_docker_efimer": ruta_efimera,
         }
 
     if not (raw_url.startswith("http://") or raw_url.startswith("https://")):
         return {
             "status": "ERROR",
             "motiu": "URL_INVALIDA",
-            "missatge": "L'adreça del disc dur ha de començar per http://, https:// o seleccionar una carpeta local des de la plataforma.",
+            "missatge": "L'adreça del disc dur ha de començar per http://, https:// o seleccionar una carpeta local muntada.",
             "latencia_ms": None,
         }
+
+    vault_secret: Optional[str] = payload.vault_token.strip() if payload.vault_token else None
+    if not vault_secret and payload.empresa_id:
+        emp = await _resolve_empresa(db, payload.empresa_id)
+        if emp:
+            vault_secret = getattr(emp, "vault_token", None) or (
+                emp.telegram_webhook_secret
+                if getattr(emp, "telegram_webhook_secret", None)
+                and str(emp.telegram_webhook_secret).startswith("svlt_")
+                else None
+            )
+    if not vault_secret:
+        vault_secret = os.getenv("SEVALOR_VAULT_SECRET", "sevalor-vault-secret-token")
 
     candidate_bases = get_candidate_node_urls(raw_url)
     if not candidate_bases:
@@ -590,66 +630,58 @@ async def verificar_disc_dur(
     start = time.perf_counter()
     last_error_motiu = "CONNEXIO_FALLIDA"
     last_error_msg = "No s'ha pogut establir connexió amb el disc dur dedicat de l'empresa."
+    last_codi_http: Optional[int] = None
 
-    async with httpx.AsyncClient(timeout=4.0) as client:
-        for base in candidate_bases:
-            test_urls = [
-                f"{base}/docs/planols",
-                f"{base}/docs",
-                f"{base}/storage",
-                f"{base}/health",
-                f"{base}/",
-            ]
-            for url in test_urls:
-                try:
-                    t0 = time.perf_counter()
-                    resp = await client.get(url)
-                    latencia = int((time.perf_counter() - t0) * 1000)
-                    if resp.status_code < 500:
-                        tipus_resposta = (
-                            "Arxiu Mestre de Plànols / Docs"
-                            if "docs" in url
-                            else "Node Local Operatiu"
-                        )
-                        return {
-                            "status": "OK",
-                            "motiu": "DISC_OPERATIU",
-                            "missatge": (
-                                f"Connexió establerta amb el disc dur dedicat de la seu ({latencia} ms). "
-                                "L'arxiu històric està disponible per servir dades en temps real a les PWA."
-                            ),
-                            "endpoint_resolt": url,
-                            "tipus_resposta": tipus_resposta,
-                            "codi_http": resp.status_code,
-                            "latencia_ms": latencia,
-                            "url_efectiva": base,
-                        }
-                    else:
-                        last_error_motiu = "HTTP_ERROR"
-                        last_error_msg = f"El servidor de disc dur ha retornat un codi d'error HTTP {resp.status_code}."
-                except (httpx.ConnectTimeout, httpx.ReadTimeout):
-                    last_error_motiu = "TIMEOUT"
-                    last_error_msg = (
-                        "Temps d'espera esgotat (4s). Comprova que l'ordinador dedicat està encès "
-                        "i que el servei d'arxius/disc dur està accessible."
-                    )
-                    break
-                except httpx.ConnectError:
-                    last_error_motiu = "PORT_TANCAT"
-                    last_error_msg = (
-                        "Connexió rebutjada. El port està tancat o l'ordinador dedicat "
-                        "no està en marxa a la IP/port indicats."
-                    )
-                    break
-                except Exception as e:
-                    last_error_motiu = "ERROR_XARXA"
-                    last_error_msg = f"Error de xarxa en accedir al disc dur: {str(e)}"
+    for base in candidate_bases:
+        try:
+            t0 = time.perf_counter()
+            check_res = await SovereignStorageGateway.verificar_roundtrip_http_vault(base, vault_secret)
+            latencia = int((time.perf_counter() - t0) * 1000)
+            if check_res.get("ok"):
+                return {
+                    "status": "OK",
+                    "motiu": "DISC_OPERATIU",
+                    "missatge": (
+                        f"Connexió i prova real d'escriptura/lectura verificades al disc dur del client ({latencia} ms)."
+                    ),
+                    "endpoint_resolt": f"{base}/entitats",
+                    "tipus_resposta": "Agent HTTP Sobirà (Opció A+)",
+                    "codi_http": 200,
+                    "latencia_ms": latencia,
+                    "url_efectiva": base,
+                    "ia_proxy_ok": check_res.get("ia_proxy_ok", False),
+                    "vault_root": check_res.get("vault_root"),
+                    "disc_a_lliure_gb": check_res.get("disc_a_lliure_gb"),
+                    "roundtrip_escriptura": True,
+                }
+            last_error_motiu = str(check_res.get("motiu") or "HTTP_ERROR")
+            last_error_msg = str(check_res.get("missatge") or last_error_msg)
+            last_codi_http = check_res.get("codi_http")
+            if last_error_motiu in ("TOKEN_INVALID", "ENDPOINT_NO_TROBAT"):
+                break
+        except (httpx.ConnectTimeout, httpx.ReadTimeout):
+            last_error_motiu = "TIMEOUT"
+            last_error_msg = (
+                "Temps d'espera esgotat. Comprova que l'ordinador dedicat està encès "
+                "i que client_vault_agent.py o el túnel Cloudflare estan actius."
+            )
+            break
+        except httpx.ConnectError:
+            last_error_motiu = "PORT_TANCAT"
+            last_error_msg = (
+                "Connexió rebutjada. El port està tancat o client_vault_agent.py "
+                "no està en marxa a la URL indicada."
+            )
+        except Exception as e:
+            last_error_motiu = "ERROR_XARXA"
+            last_error_msg = f"Error de xarxa en accedir al disc dur: {str(e)}"
 
     total_latency = int((time.perf_counter() - start) * 1000)
     return {
         "status": "ERROR",
         "motiu": last_error_motiu,
         "missatge": last_error_msg,
+        "codi_http": last_codi_http,
         "latencia_ms": total_latency,
     }
 
@@ -978,7 +1010,11 @@ async def crear_nou_tenant(
             detail="El format 'Carpeta Local:' no és vàlid. Indica la URL de l'Agent HTTP Local (ex: https://node-empresa.projectexinoxano.cat) o ruta física muntada.",
         )
 
-    vault_token_unic = f"svlt_{secrets.token_urlsafe(24)}"
+    vault_token_unic = (
+        payload.vault_token.strip()
+        if payload.vault_token and payload.vault_token.strip()
+        else f"svlt_{secrets.token_urlsafe(24)}"
+    )
     adreca_norm = payload.adreca.strip() if payload.adreca and payload.adreca.strip() else None
     telefon_boss_norm = (
         payload.boss_telefon.strip()
@@ -1009,8 +1045,9 @@ async def crear_nou_tenant(
         agent_prompt_system=agent_prompt_final,
         node_ia_url=node_ia_url_final,
         disc_dur_url=disc_dur_url_final,
+        vault_token=vault_token_unic,
         node_ia_actiu=bool(node_ia_url_final or disc_dur_url_final),
-        telegram_webhook_secret=vault_token_unic,
+        telegram_webhook_secret=None,
         data_onboarding=datetime.now(timezone.utc),
         feature_copilot_ia=copilot_actiu,
         feature_flota=payload.feature_flags.get("flota_avancada", True)
@@ -1095,11 +1132,35 @@ async def crear_nou_tenant(
                 "No s'ha pogut persistir el logotip al disc del client durant l'alta: %s", e
             )
 
-    await SovereignStorageGateway.inicialitzar_dades_onboarding_empresa(
-        db=db,
-        empresa=nova_empresa,
-        boss=nou_boss,
-    )
+    vault_sync: Dict[str, Any]
+    try:
+        rutes_init = await SovereignStorageGateway.inicialitzar_dades_onboarding_empresa(
+            db=db,
+            empresa=nova_empresa,
+            boss=nou_boss,
+        )
+        tots_transit = any(str(v).startswith("transit://") for v in rutes_init.values())
+        vault_sync = {
+            "status": "QUEUED" if tots_transit else "SYNCED",
+            "files": rutes_init,
+            "missatge": (
+                "Agent de disc offline durant l'alta; fitxers inicials encuats a cua de trànsit per sincronització automàtica."
+                if tots_transit
+                else "Fitxa empresa, Boss i prompt desats al disc sobirà des del minut 1."
+            ),
+        }
+    except HTTPException as vault_exc:
+        logger.warning(
+            "Inicialització de disc per %s rebutjada (%s): %s",
+            nova_empresa.id,
+            vault_exc.status_code,
+            vault_exc.detail,
+        )
+        vault_sync = {
+            "status": "TOKEN_MISMATCH" if vault_exc.status_code in (401, 403) else "ERROR",
+            "codi_http": vault_exc.status_code,
+            "missatge": str(vault_exc.detail),
+        }
 
     emp_id_str = str(nou_id)
 
@@ -1142,9 +1203,11 @@ async def crear_nou_tenant(
             "estat_inicial": payload.estat_inicial,
             "node_ia_url": nova_empresa.node_ia_url,
             "disc_dur_url": getattr(nova_empresa, "disc_dur_url", None),
+            "vault_token": vault_token_unic,
             "node_ia_actiu": nova_empresa.node_ia_actiu,
             "logotip_path": nova_empresa.logotip_path,
         },
+        "vault_sync": vault_sync,
         "easypanel": easypanel_res,
     }
 
@@ -1312,6 +1375,13 @@ async def obtenir_tenant(
         "feature_telegram": bool(emp.feature_telegram),
         "node_ia_url": emp.node_ia_url,
         "disc_dur_url": getattr(emp, "disc_dur_url", None),
+        "vault_token": getattr(emp, "vault_token", None)
+        or (
+            emp.telegram_webhook_secret
+            if getattr(emp, "telegram_webhook_secret", None)
+            and str(emp.telegram_webhook_secret).startswith("svlt_")
+            else None
+        ),
         "node_ia_actiu": bool(emp.node_ia_actiu),
         "features": {
             "copilot_ia": bool(emp.feature_copilot_ia),
@@ -1657,6 +1727,30 @@ async def recuperar_dades_empresa_zip(
         )
         zf.writestr("tiquets_suport.json", json.dumps(tiquets_suport, indent=2, ensure_ascii=False))
 
+        for cat_key, arc_dir in (("configuracio", "configuracio"), ("operaris", "operaris")):
+            try:
+                entitats_cat = await SovereignStorageGateway.llegir_entitats_json(
+                    db, emp_uuid, cat_key
+                )
+                if entitats_cat:
+                    zf.writestr(
+                        f"arxius_disc/{arc_dir}.json",
+                        json.dumps(entitats_cat, indent=2, ensure_ascii=False),
+                    )
+            except Exception:
+                pass
+
+        if emp.logotip_path and (
+            emp.logotip_path.startswith("vault://") or emp.logotip_path.startswith("transit://")
+        ):
+            try:
+                logo_bytes, logo_name = await SovereignStorageGateway.obtenir_bytes_fitxer(
+                    db, emp_uuid, emp.logotip_path
+                )
+                zf.writestr(f"arxius_disc/{logo_name}", logo_bytes)
+            except Exception:
+                pass
+
         for prefix in ("/data", "/docs", "/tmp/data", "/tmp/docs"):
             folder = os.path.join(prefix, empresa_id)
             if os.path.exists(folder):
@@ -1700,6 +1794,8 @@ async def update_feature_flags(
         empresa.disc_dur_url = payload.disc_dur_url.strip() if payload.disc_dur_url else None
     if payload.node_ia_actiu is not None:
         empresa.node_ia_actiu = payload.node_ia_actiu
+    if payload.vault_token is not None:
+        empresa.vault_token = payload.vault_token.strip() if payload.vault_token else None
     empresa.updated_at = datetime.now(timezone.utc)
 
     await db.commit()
@@ -1715,7 +1811,73 @@ async def update_feature_flags(
             "node_ia_actiu": empresa.node_ia_actiu,
             "node_ia_url": empresa.node_ia_url,
             "disc_dur_url": getattr(empresa, "disc_dur_url", None),
+            "vault_token": getattr(empresa, "vault_token", None),
         },
+    }
+
+
+@router.post("/{empresa_id}/vault-token/rotate", response_model=Dict[str, Any])
+async def rotar_vault_token(
+    empresa_id: str,
+    payload: Optional[RotateVaultTokenRequest] = None,
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+    claims: Dict[str, Any] = Depends(require_roles(["SUPERADMIN"])),
+) -> Dict[str, Any]:
+    """Genera o actualitza el token dedicat del Disc Dur Sobirà (independent de Telegram)."""
+    empresa = await _resolve_empresa(db, empresa_id)
+    if not empresa:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Empresa no trobada.")
+
+    nou_token = (
+        payload.vault_token.strip()
+        if payload and payload.vault_token and payload.vault_token.strip()
+        else f"svlt_{secrets.token_urlsafe(24)}"
+    )
+    empresa.vault_token = nou_token
+    empresa.updated_at = datetime.now(timezone.utc)
+    await db.commit()
+
+    return {
+        "status": "OK",
+        "empresa_id": str(empresa.id),
+        "vault_token": nou_token,
+    }
+
+
+@router.post("/{empresa_id}/inicialitzar-disc", response_model=Dict[str, Any])
+async def inicialitzar_disc_empresa(
+    empresa_id: str,
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+    claims: Dict[str, Any] = Depends(require_roles(["SUPERADMIN"])),
+) -> Dict[str, Any]:
+    """Bolca les fitxes inicials (empresa.json, boss.json, system_prompt.txt) al disc dur i drena cua de trànsit."""
+    empresa = await _resolve_empresa(db, empresa_id)
+    if not empresa:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Empresa no trobada.")
+
+    if not getattr(empresa, "vault_token", None):
+        empresa.vault_token = f"svlt_{secrets.token_urlsafe(24)}"
+        await db.commit()
+
+    boss_res = await db.execute(
+        select(Usuari)
+        .where(Usuari.empresa_id == empresa.id, Usuari.rol == "BOSS")
+        .order_by(Usuari.created_at.asc())
+    )
+    boss = boss_res.scalars().first()
+
+    rutes = await SovereignStorageGateway.inicialitzar_dades_onboarding_empresa(
+        db=db, empresa=empresa, boss=boss
+    )
+    drain_stats = await SovereignStorageGateway.drenar_cua_transit_empresa(db, empresa.id)
+    tots_transit = any(str(v).startswith("transit://") for v in rutes.values())
+
+    return {
+        "status": "QUEUED" if tots_transit else "SYNCED",
+        "empresa_id": str(empresa.id),
+        "vault_token": empresa.vault_token,
+        "files": rutes,
+        "transit_drain": drain_stats,
     }
 
 
