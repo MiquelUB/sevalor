@@ -135,10 +135,11 @@ class SovereignStorageGateway:
         if raw_disc.startswith("Carpeta Local:"):
             raw_disc = raw_disc.replace("Carpeta Local:", "").strip()
 
-        # Si disc_dur_url apunta a LM Studio (:1234) o és idèntica a node_ia_url, no és un magatzem de fitxers
-        node_ia = (getattr(emp, "node_ia_url", None) or "").strip()
-        if raw_disc and (raw_disc == node_ia or ":1234" in raw_disc):
-            raw_disc = ""
+        # Si disc_dur_url és una URL HTTP que apunta a LM Studio (:1234 o idèntica a node_ia_url HTTP), no és un magatzem de fitxers
+        if raw_disc.startswith("http://") or raw_disc.startswith("https://"):
+            node_ia = (getattr(emp, "node_ia_url", None) or "").strip()
+            if ":1234" in raw_disc or (node_ia and raw_disc == node_ia):
+                raw_disc = ""
 
         if not raw_disc:
             raw_disc = os.path.join(base_vaults, f"disc_{emp.subdomini or str(emp.id)}")
@@ -381,11 +382,16 @@ class SovereignStorageGateway:
             else:
                 base_vaults = os.getenv("CLIENT_DISKS_MOUNT_ROOT", "/tmp/sevalor_client_disks")
 
-        emp_uuid = uuid.UUID(str(empresa_id))
-        emp_obj = (await db.execute(select(Empresa).where(Empresa.id == emp_uuid))).scalars().first()
-        subdom = emp_obj.subdomini if emp_obj and emp_obj.subdomini else str(empresa_id)
-
-        local_root = Path(base_target) if mode == "LOCAL_FS" else (Path(base_vaults) / f"disc_{subdom}")
+        subdom = str(empresa_id)
+        if mode == "LOCAL_FS":
+            local_root = Path(base_target)
+        else:
+            if db is not None:
+                emp_uuid = uuid.UUID(str(empresa_id))
+                emp_obj = (await db.execute(select(Empresa).where(Empresa.id == emp_uuid))).scalars().first()
+                if emp_obj and emp_obj.subdomini:
+                    subdom = emp_obj.subdomini
+            local_root = Path(base_vaults) / f"disc_{subdom}"
         folder = (local_root / subcarpeta).resolve()
         folder.mkdir(parents=True, exist_ok=True)
         dest_file = folder / nom_net
