@@ -55,3 +55,13 @@ async def test_alta_planol(admin_session, headers, boss_token):
         res_dup = await ac.post("/api/v1/gestio/planols", json=payload, headers=headers)
         assert res_dup.status_code == 400
         assert "registrat" in res_dup.json()["detail"]
+
+        # Eliminar plànol (DELETE)
+        planol_id = data["id"]
+        res_del = await ac.delete(f"/api/v1/gestio/planols/{planol_id}", headers=headers)
+        assert res_del.status_code == 204
+
+        # Verificar que ja no surt al llistat
+        res_after = await ac.get(f"/api/v1/gestio/planols?carpeta_id={carpeta_id}", headers=headers)
+        assert res_after.status_code == 200
+        assert len(res_after.json()) == 0

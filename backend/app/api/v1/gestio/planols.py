@@ -27,7 +27,7 @@ class PlanolCreate(BaseModel):
     codi_referencia: str = Field(..., max_length=50)
     carpeta_id: uuid.UUID
     tipus_fitxer: str = Field(..., max_length=20)
-    fitxer_path: str = Field("/docs/planols/default.dxf", max_length=500)
+    fitxer_path: Optional[str] = Field(None, max_length=500)
     mida_bytes: int = Field(0)
     es_georeferenciat: bool = Field(False)
 
@@ -173,7 +173,9 @@ async def alta_planol(
         codi_referencia=planol.codi_referencia,
         carpeta_id=planol.carpeta_id,
         tipus_fitxer=planol.tipus_fitxer,
-        fitxer_path=planol.fitxer_path,
+        fitxer_path=planol.fitxer_path
+        if planol.fitxer_path and not planol.fitxer_path.startswith("/docs/")
+        else f"vault://05_planols/arxius_base/{planol.codi_referencia}.{planol.tipus_fitxer.lower()}",
         mida_bytes=planol.mida_bytes,
         es_georeferenciat=planol.es_georeferenciat,
     )
@@ -324,21 +326,18 @@ async def importar_planols_directori(
     if payload.ruta_origen and os.path.isdir(payload.ruta_origen):
         candidats.append(payload.ruta_origen)
 
-    candidats.extend(
-        [
-            "/media/akaun/Project_1/Sevalormante_docs/planols",
-            "/media/akaun/Project_1/Sevalormante_docs",
-            os.path.join(
-                os.getcwd(),
-                "demo_docs",
-                "Banc_Documents_Sevalor_Complet",
-                "demo_docs",
-                "05_enginyeria_obres",
-            ),
-            os.path.join(os.getcwd(), "demo_docs"),
-            f"/docs/{empresa_id}/planols",
-        ]
-    )
+    mode, dest_dir, _ = await SovereignStorageGateway.resoldre_desti_disc_empresa(db, empresa_id)
+    if mode == "LOCAL_FS" and os.path.isdir(dest_dir):
+        candidats.extend(
+            [
+                os.path.join(dest_dir, "05_planols", "arxius_base"),
+                os.path.join(dest_dir, "05_planols"),
+            ]
+        )
+
+    demo_dir = os.path.join(os.getcwd(), "demo_docs", "05_enginyeria_obres")
+    if os.path.isdir(demo_dir):
+        candidats.append(demo_dir)
 
     importats = []
     allowed_exts = {".pdf", ".dxf", ".dwg", ".geojson", ".kml", ".png", ".jpg"}
@@ -445,6 +444,39 @@ async def descarregar_fitxer_planol(
         media_type=media_type,
         disposition=content_disposition_type,
     )
+
+
+@router.delete("/{planol_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/planols/{planol_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def eliminar_planol(
+    planol_id: uuid.UUID,
+    request: Request,
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+):
+    """Elimina un plànol i les seves capes vectorials vinculades."""
+    empresa_id = request.state.empresa_id
+    if not empresa_id or empresa_id == "undefined":
+        raise HTTPException(status_code=401, detail="No identificat")
+
+    stmt = select(PlanolBase).where(
+        PlanolBase.id == planol_id, PlanolBase.empresa_id == uuid.UUID(empresa_id)
+    )
+    planol = (await db.execute(stmt)).scalars().first()
+    if not planol:
+        raise HTTPException(status_code=404, detail="Plànol no trobat")
+
+    # Esborrar capes vectorials vinculades
+    stmt_capes = select(CapaVectorial).where(
+        CapaVectorial.planol_base_id == planol_id,
+        CapaVectorial.empresa_id == uuid.UUID(empresa_id),
+    )
+    capes = (await db.execute(stmt_capes)).scalars().all()
+    for c in capes:
+        await db.delete(c)
+
+    await db.delete(planol)
+    await db.commit()
+    return None
 
 
 # ---------------------------------------------------------------------------

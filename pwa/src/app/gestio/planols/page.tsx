@@ -170,6 +170,7 @@ export default function GestioPlanolsPage() {
 
   // Fitxers i carpeta d'origen
   const [fitxerPujada, setFitxerPujada] = useState<File | null>(null);
+  const [isDraggingFile, setIsDraggingFile] = useState(false);
   const [importantDirectori, setImportantDirectori] = useState(false);
   const [missatgeExit, setMissatgeExit] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -670,6 +671,28 @@ export default function GestioPlanolsPage() {
 
   useEffect(() => {
     carregarDades();
+
+    const handleGlobalDragOver = (e: DragEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+    };
+
+    const handleGlobalDrop = (e: DragEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const files = e.dataTransfer?.files;
+      if (files && files.length > 0) {
+        handleFitxerCanviat(files[0]);
+        setModalNouPlanol(true);
+      }
+    };
+
+    window.addEventListener("dragover", handleGlobalDragOver);
+    window.addEventListener("drop", handleGlobalDrop);
+    return () => {
+      window.removeEventListener("dragover", handleGlobalDragOver);
+      window.removeEventListener("drop", handleGlobalDrop);
+    };
   }, []);
 
   const handleFitxerCanviat = (file: File) => {
@@ -719,52 +742,46 @@ export default function GestioPlanolsPage() {
   const handlePujarFitxerPlanol = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!carpetaSeleccionada) return;
+    if (!fitxerPujada) {
+      setError(
+        "Cal seleccionar o arrossegar un fitxer cartogràfic real (.pdf, .dxf, .dwg, .geojson, .kml)."
+      );
+      return;
+    }
     setGuardant(true);
     setError(null);
     try {
-      if (fitxerPujada) {
-        const formData = new FormData();
-        formData.append("carpeta_id", carpetaSeleccionada.id);
-        formData.append("fitxer", fitxerPujada);
-        if (nouPlanol.titol) formData.append("titol", nouPlanol.titol);
-        if (nouPlanol.codi_referencia) formData.append("codi_referencia", nouPlanol.codi_referencia);
-        if (nouPlanol.tipus_fitxer) formData.append("tipus_fitxer", nouPlanol.tipus_fitxer);
-        if (nouPlanol.projeccio) formData.append("projeccio", nouPlanol.projeccio);
-        formData.append("es_georeferenciat", String(nouPlanol.es_georeferenciat));
+      const formData = new FormData();
+      formData.append("carpeta_id", carpetaSeleccionada.id);
+      formData.append("fitxer", fitxerPujada);
+      if (nouPlanol.titol) formData.append("titol", nouPlanol.titol);
+      if (nouPlanol.codi_referencia) formData.append("codi_referencia", nouPlanol.codi_referencia);
+      if (nouPlanol.tipus_fitxer) formData.append("tipus_fitxer", nouPlanol.tipus_fitxer);
+      if (nouPlanol.projeccio) formData.append("projeccio", nouPlanol.projeccio);
+      formData.append("es_georeferenciat", String(nouPlanol.es_georeferenciat));
 
-        const baseUrl = getApiBaseUrl();
-        const token = getAuthToken();
-        const tenantId = extractTenantId();
+      const baseUrl = getApiBaseUrl();
+      const token = getAuthToken();
+      const tenantId = extractTenantId();
 
-        const res = await fetch(`${baseUrl}/gestio/planols/upload`, {
-          method: "POST",
-          headers: {
-            ...(token ? { Authorization: `Bearer ${token}` } : {}),
-            ...(tenantId ? { "X-Empresa-ID": tenantId } : {}),
-          },
-          body: formData,
-        });
+      const res = await fetch(`${baseUrl}/gestio/planols/upload`, {
+        method: "POST",
+        headers: {
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          ...(tenantId ? { "X-Empresa-ID": tenantId } : {}),
+        },
+        body: formData,
+      });
 
-        if (!res.ok) {
-          const errData = await res.json().catch(() => ({}));
-          throw new Error(errData.detail || "Error en pujar el fitxer");
-        }
-        const creat = await res.json();
-        setMissatgeExit(`Plànol "${creat.titol}" carregat correctament!`);
-        setTimeout(() => setMissatgeExit(null), 4000);
-        await carregarDades();
-        if (creat) setPlanolSeleccionat(creat);
-      } else {
-        const creat = await apiFetch<Planol>("/gestio/planols", {
-          method: "POST",
-          body: JSON.stringify({
-            ...nouPlanol,
-            carpeta_id: carpetaSeleccionada.id,
-          }),
-        });
-        await carregarDades();
-        if (creat) setPlanolSeleccionat(creat);
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.detail || "Error en pujar el fitxer");
       }
+      const creat = await res.json();
+      setMissatgeExit(`Plànol "${creat.titol}" desat correctament al disc dedicat!`);
+      setTimeout(() => setMissatgeExit(null), 4000);
+      await carregarDades();
+      if (creat) setPlanolSeleccionat(creat);
 
       setModalNouPlanol(false);
       setFitxerPujada(null);
@@ -777,6 +794,27 @@ export default function GestioPlanolsPage() {
       });
     } catch (err: any) {
       setError(err.message || "Error al registrar el plànol");
+    } finally {
+      setGuardant(false);
+    }
+  };
+
+  const handleEliminarPlanol = async (planolId: string, titol: string) => {
+    if (!confirm(`Segur que vols eliminar el plànol "${titol}"? Aquesta acció no es pot desfer.`)) {
+      return;
+    }
+    setGuardant(true);
+    setError(null);
+    try {
+      await apiFetch(`/gestio/planols/${planolId}`, {
+        method: "DELETE",
+      });
+      setMissatgeExit(`Plànol "${titol}" eliminat correctament.`);
+      setTimeout(() => setMissatgeExit(null), 4000);
+      setPlanolSeleccionat(null);
+      await carregarDades();
+    } catch (err: any) {
+      setError(err.message || "Error en eliminar el plànol");
     } finally {
       setGuardant(false);
     }
@@ -1085,16 +1123,30 @@ export default function GestioPlanolsPage() {
               />
 
               {planolSeleccionat?.id && (
-                <a
-                  href={`${getApiBaseUrl()}/gestio/planols/${planolSeleccionat.id}/fitxer`}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-outline-variant bg-surface-container-low text-on-surface hover:bg-surface-container text-xs font-semibold transition-colors"
-                  title="Obrir fitxer de plànol en pestanya nova"
-                >
-                  <ExternalLink className="w-3.5 h-3.5 text-primary" />
-                  <span>Obrir Fitxer</span>
-                </a>
+                <>
+                  <a
+                    href={`${getApiBaseUrl()}/gestio/planols/${planolSeleccionat.id}/fitxer`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-outline-variant bg-surface-container-low text-on-surface hover:bg-surface-container text-xs font-semibold transition-colors"
+                    title="Obrir fitxer de plànol en pestanya nova"
+                  >
+                    <ExternalLink className="w-3.5 h-3.5 text-primary" />
+                    <span>Obrir Fitxer</span>
+                  </a>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      handleEliminarPlanol(planolSeleccionat.id, planolSeleccionat.titol)
+                    }
+                    disabled={guardant}
+                    className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-error/30 bg-error/10 hover:bg-error/20 text-error text-xs font-semibold transition-colors disabled:opacity-50"
+                    title="Eliminar aquest plànol"
+                  >
+                    <Trash2 className="w-3.5 h-3.5 text-error" />
+                    <span>Eliminar Plànol</span>
+                  </button>
+                </>
               )}
 
               {/* Botó Carregar de Carpeta d'Origen */}
@@ -2039,8 +2091,31 @@ export default function GestioPlanolsPage() {
                 </label>
                 <div
                   onClick={() => fileInputRef.current?.click()}
+                  onDragOver={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                  }}
+                  onDragEnter={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    setIsDraggingFile(true);
+                  }}
+                  onDragLeave={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    setIsDraggingFile(false);
+                  }}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    setIsDraggingFile(false);
+                    const dropped = e.dataTransfer.files?.[0];
+                    if (dropped) handleFitxerCanviat(dropped);
+                  }}
                   className={`p-4 rounded-xl border-2 border-dashed transition-all cursor-pointer text-center ${
-                    fitxerPujada
+                    isDraggingFile
+                      ? "border-primary bg-primary/10 text-primary scale-[1.01]"
+                      : fitxerPujada
                       ? "border-emerald-500/60 bg-emerald-500/5 text-emerald-800 dark:text-emerald-300"
                       : "border-outline-variant hover:border-primary/60 bg-surface-container-low"
                   }`}
@@ -2148,11 +2223,14 @@ export default function GestioPlanolsPage() {
                 <button
                   type="submit"
                   disabled={
-                    guardant || !nouPlanol.titol.trim() || !nouPlanol.codi_referencia.trim()
+                    guardant ||
+                    !fitxerPujada ||
+                    !nouPlanol.titol.trim() ||
+                    !nouPlanol.codi_referencia.trim()
                   }
                   className="px-4 py-2 rounded-lg bg-primary hover:bg-primary-container text-white text-xs font-bold shadow disabled:opacity-50"
                 >
-                  {guardant ? "Desant..." : "Pujar Plànol"}
+                  {guardant ? "Pujant..." : "Pujar Plànol"}
                 </button>
               </div>
             </form>
