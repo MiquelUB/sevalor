@@ -33,6 +33,8 @@ import {
   ZoomOut,
   Maximize2,
   Move,
+  ChevronLeft,
+  ChevronRight,
 } from "lucide-react";
 import { useGestio } from "@/lib/gestio-context";
 import { apiFetch, getAuthToken, extractTenantId, getApiBaseUrl } from "@/lib/api";
@@ -290,10 +292,14 @@ export default function GestioPlanolsPage() {
   const draggedItemRef = useRef<DraggedItem | null>(null);
   const [justDragged, setJustDragged] = useState(false);
   const innerCanvasRef = useRef<HTMLDivElement>(null);
+  const artboardRef = useRef<HTMLDivElement>(null);
 
-  // Fitxer binari carregat en memòria com a Blob URL per visualització segura
+  // Fitxer binari carregat en memòria o servit per streaming renderitzat
   const [fitxerBlobUrl, setFitxerBlobUrl] = useState<string | null>(null);
   const [carregantFitxer, setCarregantFitxer] = useState(false);
+  const [errorCarregaImatge, setErrorCarregaImatge] = useState(false);
+  const [numPagina, setNumPagina] = useState<number>(0);
+  const [totalPagines, setTotalPagines] = useState<number>(1);
   const [dxfEntities, setDxfEntities] = useState<DxfEntity[]>([]);
   const [geoJsonBaseFeatures, setGeoJsonBaseFeatures] = useState<any[]>([]);
 
@@ -392,8 +398,10 @@ export default function GestioPlanolsPage() {
     setDraggedItem(null);
     setIsPanning(false);
     setElementSeleccionat(null);
+    setNumPagina(0);
+    setTotalPagines(1);
+    setErrorCarregaImatge(false);
 
-    // Carregar fitxer binari real del plànol de manera autenticada via Blob URL (evita 401 i problemes CORS)
     if (!planolSeleccionat?.id) {
       setFitxerBlobUrl(null);
       setDxfEntities([]);
@@ -402,10 +410,9 @@ export default function GestioPlanolsPage() {
     }
 
     let isSubscribed = true;
-    let createdUrl: string | null = null;
     setCarregantFitxer(true);
 
-    const carregarFitxerPlanol = async () => {
+    const carregarDadesPlanol = async () => {
       try {
         const baseUrl = getApiBaseUrl();
         const token = getAuthToken();
@@ -414,31 +421,25 @@ export default function GestioPlanolsPage() {
         if (token) headers["Authorization"] = `Bearer ${token}`;
         if (tenantId) headers["X-Empresa-ID"] = tenantId;
 
-        const res = await fetch(`${baseUrl}/gestio/planols/${planolSeleccionat.id}/fitxer`, {
-          headers,
-        });
-
-        if (!res.ok) {
-          throw new Error(`HTTP ${res.status}`);
-        }
-
-        const blob = await res.blob();
-        if (!isSubscribed) return;
-
-        const objUrl = URL.createObjectURL(blob);
-        createdUrl = objUrl;
-        setFitxerBlobUrl(objUrl);
-
         const tipus = (planolSeleccionat.tipus_fitxer || "").toUpperCase();
-        if (tipus === "DXF" || tipus === "DWG") {
-          const text = await blob.text();
-          if (isSubscribed) {
+        const isVectorCad =
+          tipus === "DXF" ||
+          tipus === "DWG" ||
+          tipus === "GEOJSON" ||
+          tipus === "JSON";
+
+        if (isVectorCad) {
+          const res = await fetch(`${baseUrl}/gestio/planols/${planolSeleccionat.id}/fitxer`, {
+            headers,
+          });
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          const text = await res.text();
+          if (!isSubscribed) return;
+
+          if (tipus === "DXF" || tipus === "DWG") {
             const parsed = parseDxfEntities(text);
             setDxfEntities(parsed);
-          }
-        } else if (tipus === "GEOJSON" || tipus === "JSON") {
-          const text = await blob.text();
-          if (isSubscribed) {
+          } else {
             try {
               const parsed = JSON.parse(text);
               const feats = parsed.features || (parsed.type === "Feature" ? [parsed] : []);
@@ -447,28 +448,31 @@ export default function GestioPlanolsPage() {
               setGeoJsonBaseFeatures([]);
             }
           }
+          setCarregantFitxer(false);
+        } else if (tipus === "PDF") {
+          // Consultar nombre total de pàgines del document PDF via HEAD
+          try {
+            const resHead = await fetch(
+              `${baseUrl}/gestio/planols/${planolSeleccionat.id}/render?token=${encodeURIComponent(token || "")}`,
+              { method: "HEAD", headers }
+            );
+            const total = resHead.headers.get("X-Total-Pages");
+            if (total && isSubscribed) {
+              setTotalPagines(parseInt(total, 10) || 1);
+            }
+          } catch {
+            // Continua amb 1 pàgina per defecte
+          }
         }
       } catch (err) {
-        console.warn("Avís carregant blob del plànol, aplicant URL directa fallback:", err);
-        if (isSubscribed) {
-          const token = getAuthToken();
-          const fallback = `${getApiBaseUrl()}/gestio/planols/${planolSeleccionat.id}/fitxer${
-            token ? `?token=${encodeURIComponent(token)}` : ""
-          }`;
-          setFitxerBlobUrl(fallback);
-        }
-      } finally {
-        if (isSubscribed) setCarregantFitxer(false);
+        console.warn("Avís preparant plànol per a visualitzador:", err);
       }
     };
 
-    carregarFitxerPlanol();
+    carregarDadesPlanol();
 
     return () => {
       isSubscribed = false;
-      if (createdUrl) {
-        URL.revokeObjectURL(createdUrl);
-      }
     };
   }, [planolSeleccionat?.id]);
 
@@ -736,8 +740,9 @@ export default function GestioPlanolsPage() {
     const handleMouseMove = (e: MouseEvent) => {
       const activeDrag = draggedItemRef.current;
       if (activeDrag) {
-        if (!innerCanvasRef.current) return;
-        const rect = innerCanvasRef.current.getBoundingClientRect();
+        const targetEl = artboardRef.current || innerCanvasRef.current;
+        if (!targetEl) return;
+        const rect = targetEl.getBoundingClientRect();
         const rawX = ((e.clientX - rect.left) / rect.width) * 100;
         const rawY = ((e.clientY - rect.top) / rect.height) * 100;
         const clampedX = Math.round(Math.max(0, Math.min(100, rawX)) * 10) / 10;
@@ -853,9 +858,10 @@ export default function GestioPlanolsPage() {
 
   const handleCanvasClick = (e: React.MouseEvent<HTMLDivElement>) => {
     if (einaDibuix === "punter" || justDragged || isPanning) return;
-    if (!innerCanvasRef.current) return;
+    const targetEl = artboardRef.current || innerCanvasRef.current;
+    if (!targetEl) return;
 
-    const rect = innerCanvasRef.current.getBoundingClientRect();
+    const rect = targetEl.getBoundingClientRect();
     const rawX = ((e.clientX - rect.left) / rect.width) * 100;
     const rawY = ((e.clientY - rect.top) / rect.height) * 100;
     const x = Math.round(Math.max(0, Math.min(100, rawX)) * 10) / 10;
@@ -1604,6 +1610,32 @@ export default function GestioPlanolsPage() {
                         <ShieldCheck className="w-3.5 h-3.5" />
                         <span>Base Immutable (No Destructiu)</span>
                       </div>
+
+                      {totalPagines > 1 && (
+                        <div className="flex items-center gap-1 bg-surface-container-low px-2 py-0.5 rounded-lg border border-outline-variant/30 text-xs">
+                          <button
+                            type="button"
+                            onClick={() => setNumPagina((p) => Math.max(0, p - 1))}
+                            disabled={numPagina <= 0}
+                            className="p-1 rounded hover:bg-surface-container text-on-surface disabled:opacity-30"
+                            title="Pàgina anterior"
+                          >
+                            <ChevronLeft className="w-3.5 h-3.5" />
+                          </button>
+                          <span className="font-mono text-[11px] font-bold text-on-surface px-1">
+                            Pàg. {numPagina + 1} / {totalPagines}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => setNumPagina((p) => Math.min(totalPagines - 1, p + 1))}
+                            disabled={numPagina >= totalPagines - 1}
+                            className="p-1 rounded hover:bg-surface-container text-on-surface disabled:opacity-30"
+                            title="Pàgina següent"
+                          >
+                            <ChevronRight className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      )}
                     </div>
 
                     {/* Tools Selector */}
@@ -1849,174 +1881,179 @@ export default function GestioPlanolsPage() {
                         transformOrigin: "center center",
                         transition: isPanning || draggedItem ? "none" : "transform 0.15s ease-out",
                       }}
-                      className="w-full h-full relative"
+                      className="w-full h-full relative flex items-center justify-center p-4 min-h-[480px]"
                     >
-                      {/* Immutable Base Blueprint Layer */}
+                      {/* Technical CAD Grid Background */}
                       <div
-                        className="absolute inset-0 w-full h-full pointer-events-none transition-opacity duration-200"
-                        style={{ opacity: opacitatPlanimetria / 100 }}
-                      >
-                        {/* Technical CAD Grid Background */}
+                        className="absolute inset-0 w-full h-full opacity-20 pointer-events-none"
+                        style={{
+                          backgroundImage:
+                            "radial-gradient(circle, #38bdf8 1px, transparent 1px), linear-gradient(to right, #0369a1 1px, transparent 1px), linear-gradient(to bottom, #0369a1 1px, transparent 1px)",
+                          backgroundSize: "20px 20px, 100px 100px, 100px 100px",
+                        }}
+                      />
+
+                      {planolSeleccionat && (
                         <div
-                          className="absolute inset-0 w-full h-full opacity-25"
-                          style={{
-                            backgroundImage:
-                              "radial-gradient(circle, #38bdf8 1px, transparent 1px), linear-gradient(to right, #0369a1 1px, transparent 1px), linear-gradient(to bottom, #0369a1 1px, transparent 1px)",
-                            backgroundSize: "20px 20px, 100px 100px, 100px 100px",
-                          }}
-                        />
+                          ref={artboardRef}
+                          className="relative inline-flex items-center justify-center max-w-full max-h-full rounded-xl overflow-hidden shadow-2xl border border-outline-variant/30 bg-[#060c14]"
+                        >
+                          {/* Spinner de càrrega */}
+                          {carregantFitxer && (
+                            <div className="absolute inset-0 z-30 flex flex-col items-center justify-center bg-black/60 backdrop-blur-xs text-white">
+                              <RefreshCw className="w-8 h-8 animate-spin text-primary mb-2" />
+                              <span className="text-xs font-mono font-bold">Carregant plànol...</span>
+                            </div>
+                          )}
 
-                        {planolSeleccionat && (
-                          <div className="w-full h-full flex items-center justify-center relative">
-                            {carregantFitxer && (
-                              <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-black/60 backdrop-blur-xs text-white">
-                                <RefreshCw className="w-8 h-8 animate-spin text-primary mb-2" />
-                                <span className="text-xs font-mono font-bold">Carregant plànol de disc...</span>
-                              </div>
-                            )}
+                          {/* Base Blueprint */}
+                          {(() => {
+                            const tipusNormalitzat = (planolSeleccionat.tipus_fitxer || "").toUpperCase();
+                            const isDxf = tipusNormalitzat === "DXF" || tipusNormalitzat === "DWG";
+                            const isGeoJson = tipusNormalitzat === "GEOJSON" || tipusNormalitzat === "JSON";
 
-                            {planolSeleccionat.tipus_fitxer === "PDF" ? (
-                              fitxerBlobUrl ? (
-                                <iframe
-                                  src={`${fitxerBlobUrl}#toolbar=0&navpanes=0`}
-                                  title={planolSeleccionat.titol}
-                                  className="w-full h-full border-0 pointer-events-none opacity-90"
-                                />
-                              ) : (
-                                <div className="flex flex-col items-center justify-center h-full text-slate-400 text-xs">
-                                  <FileText className="w-12 h-12 text-primary/50 mb-2" />
-                                  <span>{planolSeleccionat.titol}</span>
-                                </div>
-                              )
-                            ) : ["PNG", "JPG", "JPEG", "WEBP", "SVG"].includes(
-                                planolSeleccionat.tipus_fitxer
-                              ) ? (
-                              fitxerBlobUrl ? (
-                                <img
-                                  src={fitxerBlobUrl}
-                                  alt={planolSeleccionat.titol}
-                                  className="max-w-full max-h-full object-contain pointer-events-none select-none"
-                                />
-                              ) : (
-                                <div className="flex flex-col items-center justify-center h-full text-slate-400 text-xs">
-                                  <FileText className="w-12 h-12 text-primary/50 mb-2" />
-                                  <span>Carregant imatge de plànol...</span>
-                                </div>
-                              )
-                            ) : (
-                              <div className="w-full h-full relative flex items-center justify-center">
-                                {dxfEntities.length > 0 ? (
-                                  <svg
-                                    className="w-full h-full pointer-events-none select-none"
-                                    viewBox="0 0 100 100"
-                                    preserveAspectRatio="xMidYMid meet"
-                                  >
-                                    {dxfEntities.map((ent, eIdx) => {
-                                      if (
-                                        ent.type === "line" &&
-                                        ent.x1 !== undefined &&
-                                        ent.y1 !== undefined &&
-                                        ent.x2 !== undefined &&
-                                        ent.y2 !== undefined
-                                      ) {
-                                        return (
-                                          <line
-                                            key={`dxf-${eIdx}`}
-                                            x1={ent.x1}
-                                            y1={ent.y1}
-                                            x2={ent.x2}
-                                            y2={ent.y2}
-                                            stroke={ent.color || "#38bdf8"}
-                                            strokeWidth={0.35}
-                                            strokeLinecap="round"
-                                          />
-                                        );
-                                      }
-                                      if (ent.type === "circle") {
-                                        const cx = ent.cx ?? ent.x1;
-                                        const cy = ent.cy ?? ent.y1;
-                                        return (
-                                          <circle
-                                            key={`dxf-${eIdx}`}
-                                            cx={cx}
-                                            cy={cy}
-                                            r={Math.max(0.6, ent.r || 1)}
-                                            fill="none"
-                                            stroke={ent.color || "#38bdf8"}
-                                            strokeWidth={0.35}
-                                          />
-                                        );
-                                      }
-                                      return null;
-                                    })}
-                                  </svg>
-                                ) : geoJsonBaseFeatures.length > 0 ? (
-                                  <svg
-                                    className="w-full h-full pointer-events-none select-none"
-                                    viewBox="0 0 100 100"
-                                    preserveAspectRatio="xMidYMid meet"
-                                  >
-                                    {geoJsonBaseFeatures.map((feat, gIdx) => {
-                                      if (feat.geometry?.type === "LineString") {
-                                        const pts = (feat.geometry.coordinates || [])
-                                          .map((coord: number[]) => `${coord[0]},${coord[1]}`)
-                                          .join(" ");
-                                        return (
-                                          <polyline
-                                            key={`base-geo-${gIdx}`}
-                                            points={pts}
-                                            fill="none"
-                                            stroke="#64748b"
-                                            strokeWidth={0.5}
-                                          />
-                                        );
-                                      }
-                                      if (feat.geometry?.type === "Point") {
-                                        const [gx, gy] = feat.geometry.coordinates || [0, 0];
-                                        return (
-                                          <circle
-                                            key={`base-geo-${gIdx}`}
-                                            cx={gx}
-                                            cy={gy}
-                                            r={1.2}
-                                            fill="#64748b"
-                                          />
-                                        );
-                                      }
-                                      return null;
-                                    })}
-                                  </svg>
-                                ) : (
-                                  <div className="flex flex-col items-center justify-center p-8 text-center text-slate-300">
-                                    <div className="p-4 rounded-2xl bg-primary/10 border border-primary/30 mb-3">
-                                      <Activity className="w-10 h-10 text-primary animate-pulse" />
+                            if (isDxf || isGeoJson) {
+                              return (
+                                <div
+                                  className="w-[850px] h-[600px] max-w-full max-h-[72vh] relative flex items-center justify-center bg-slate-950/80 pointer-events-none select-none"
+                                  style={{ opacity: opacitatPlanimetria / 100 }}
+                                >
+                                  {dxfEntities.length > 0 ? (
+                                    <svg
+                                      className="w-full h-full pointer-events-none select-none"
+                                      viewBox="0 0 100 100"
+                                      preserveAspectRatio="xMidYMid meet"
+                                    >
+                                      {dxfEntities.map((ent, eIdx) => {
+                                        if (
+                                          ent.type === "line" &&
+                                          ent.x1 !== undefined &&
+                                          ent.y1 !== undefined &&
+                                          ent.x2 !== undefined &&
+                                          ent.y2 !== undefined
+                                        ) {
+                                          return (
+                                            <line
+                                              key={`dxf-${eIdx}`}
+                                              x1={ent.x1}
+                                              y1={ent.y1}
+                                              x2={ent.x2}
+                                              y2={ent.y2}
+                                              stroke={ent.color || "#38bdf8"}
+                                              strokeWidth={0.35}
+                                              strokeLinecap="round"
+                                            />
+                                          );
+                                        }
+                                        if (ent.type === "circle") {
+                                          const cx = ent.cx ?? ent.x1;
+                                          const cy = ent.cy ?? ent.y1;
+                                          return (
+                                            <circle
+                                              key={`dxf-${eIdx}`}
+                                              cx={cx}
+                                              cy={cy}
+                                              r={Math.max(0.6, ent.r || 1)}
+                                              fill="none"
+                                              stroke={ent.color || "#38bdf8"}
+                                              strokeWidth={0.35}
+                                            />
+                                          );
+                                        }
+                                        return null;
+                                      })}
+                                    </svg>
+                                  ) : geoJsonBaseFeatures.length > 0 ? (
+                                    <svg
+                                      className="w-full h-full pointer-events-none select-none"
+                                      viewBox="0 0 100 100"
+                                      preserveAspectRatio="xMidYMid meet"
+                                    >
+                                      {geoJsonBaseFeatures.map((feat, gIdx) => {
+                                        if (feat.geometry?.type === "LineString") {
+                                          const pts = (feat.geometry.coordinates || [])
+                                            .map((coord: number[]) => `${coord[0]},${coord[1]}`)
+                                            .join(" ");
+                                          return (
+                                            <polyline
+                                              key={`base-geo-${gIdx}`}
+                                              points={pts}
+                                              fill="none"
+                                              stroke="#64748b"
+                                              strokeWidth={0.5}
+                                            />
+                                          );
+                                        }
+                                        if (feat.geometry?.type === "Point") {
+                                          const [gx, gy] = feat.geometry.coordinates || [0, 0];
+                                          return (
+                                            <circle
+                                              key={`base-geo-${gIdx}`}
+                                              cx={gx}
+                                              cy={gy}
+                                              r={1.2}
+                                              fill="#64748b"
+                                            />
+                                          );
+                                        }
+                                        return null;
+                                      })}
+                                    </svg>
+                                  ) : (
+                                    <div className="flex flex-col items-center justify-center p-8 text-center text-slate-300">
+                                      <Activity className="w-10 h-10 text-primary animate-pulse mb-2" />
+                                      <h4 className="text-sm font-bold text-white mb-1">
+                                        Planimetria Vectorial CAD: {planolSeleccionat.titol}
+                                      </h4>
+                                      <p className="text-xs text-slate-400 font-mono">
+                                        Ref: {planolSeleccionat.codi_referencia} · Format:{" "}
+                                        {planolSeleccionat.tipus_fitxer}
+                                      </p>
                                     </div>
-                                    <h4 className="text-sm font-bold text-white mb-1">
-                                      Planimetria Vectorial CAD: {planolSeleccionat.titol}
-                                    </h4>
-                                    <p className="text-xs text-slate-400 font-mono">
-                                      Ref: {planolSeleccionat.codi_referencia} · Format:{" "}
-                                      {planolSeleccionat.tipus_fitxer} · Projecció:{" "}
-                                      {planolSeleccionat.projeccio || "ETRS89 UTM 31N"}
-                                    </p>
-                                    <p className="text-[11px] text-emerald-400 mt-2 font-mono flex items-center gap-1">
-                                      <ShieldCheck className="w-3.5 h-3.5" /> Fitxer base original preservat
-                                      intacte (No destructiu)
-                                    </p>
-                                  </div>
-                                )}
-                              </div>
-                            )}
-                          </div>
-                        )}
-                      </div>
+                                  )}
+                                </div>
+                              );
+                            }
 
-                      {/* Vector Layers SVG Overlay */}
-                      <svg
-                        className="absolute inset-0 w-full h-full pointer-events-none select-none"
-                        viewBox="0 0 100 100"
-                        preserveAspectRatio="none"
-                      >
+                            return (
+                              <img
+                                src={`${getApiBaseUrl()}/gestio/planols/${planolSeleccionat.id}/render?pagina=${numPagina}&token=${encodeURIComponent(getAuthToken() || "")}`}
+                                alt={planolSeleccionat.titol}
+                                className="max-w-full max-h-[72vh] object-contain block pointer-events-none select-none rounded-lg"
+                                style={{ opacity: opacitatPlanimetria / 100 }}
+                                onLoad={() => setCarregantFitxer(false)}
+                                onError={() => {
+                                  setCarregantFitxer(false);
+                                  setErrorCarregaImatge(true);
+                                }}
+                              />
+                            );
+                          })()}
+
+                          {errorCarregaImatge && (
+                            <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/80 text-center p-4 z-20">
+                              <FileText className="w-10 h-10 text-rose-400 mb-2" />
+                              <p className="text-xs text-white font-bold mb-1">
+                                No s&apos;ha pogut renderitzar la vista prèvia del plànol
+                              </p>
+                              <a
+                                href={`${getApiBaseUrl()}/gestio/planols/${planolSeleccionat.id}/fitxer?token=${encodeURIComponent(getAuthToken() || "")}`}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="text-primary text-xs underline font-bold mt-1 inline-flex items-center gap-1"
+                              >
+                                <ExternalLink className="w-3.5 h-3.5" />
+                                <span>Obrir fitxer original en nova pestanya</span>
+                              </a>
+                            </div>
+                          )}
+
+                          {/* Vector Layers SVG Overlay */}
+                          <svg
+                            className="absolute inset-0 w-full h-full pointer-events-none select-none"
+                            viewBox="0 0 100 100"
+                            preserveAspectRatio="none"
+                          >
                         {/* Capes visibles */}
                         {capes
                           .filter((c) => c.visible)
@@ -2314,6 +2351,8 @@ export default function GestioPlanolsPage() {
                         )}
                       </svg>
                     </div>
+                  )}
+                </div>
 
                     {/* Canvas Bottom Instruction Banner */}
                     <div className="absolute bottom-2 left-2 right-2 flex items-center justify-between pointer-events-none text-[11px] font-mono">
