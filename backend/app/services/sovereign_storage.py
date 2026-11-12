@@ -119,15 +119,21 @@ class SovereignStorageGateway:
             res = await db.execute(select(Empresa).where(Empresa.id == emp_uuid))
             emp = res.scalars().first()
 
-        base_vaults = os.getenv("CLIENT_DISKS_MOUNT_ROOT", "/tmp/sevalor_client_disks")
+        base_vaults = os.getenv("CLIENT_DISKS_MOUNT_ROOT")
+        if not base_vaults:
+            if os.path.exists("/data") and os.access("/data", os.W_OK):
+                base_vaults = "/data"
+            else:
+                base_vaults = os.getenv("CLIENT_DISKS_MOUNT_ROOT", "/tmp/sevalor_client_disks")
+
         if not emp:
             raw_disc = os.path.join(base_vaults, f"disc_{emp_uuid}")
             inicialitzar_arbre_carpetes_disc(raw_disc)
             return ("LOCAL_FS", str(Path(raw_disc).resolve()), None)
 
-        raw_disc = (getattr(emp, "disc_dur_url", None) or getattr(emp, "node_ia_url", None) or "").strip()
+        raw_disc = (getattr(emp, "disc_dur_url", None) or "").strip()
         if raw_disc.startswith("Carpeta Local:"):
-            raw_disc = ""
+            raw_disc = raw_disc.replace("Carpeta Local:", "").strip()
 
         if not raw_disc:
             raw_disc = os.path.join(base_vaults, f"disc_{emp.subdomini or str(emp.id)}")
@@ -471,8 +477,49 @@ class SovereignStorageGateway:
                 headers={"Content-Disposition": f'{disposition}; filename="{filename}"'},
             )
 
+        # Si és ruta en cua de trànsit temporal
+        if fitxer_path.startswith("transit://"):
+            parts = fitxer_path.replace("transit://", "").split("/")
+            if len(parts) >= 3:
+                emp_id = parts[0]
+                ident = parts[-1]
+                emp_dir = (cls.TRANSIT_QUEUE_DIR / emp_id).resolve()
+                if emp_dir.exists():
+                    for meta_file in emp_dir.glob("*.meta.json"):
+                        try:
+                            meta = json.loads(meta_file.read_text(encoding="utf-8"))
+                            if meta.get("identificador") == ident:
+                                bin_file = emp_dir / meta_file.name.replace(".meta.json", ".bin")
+                                if bin_file.exists():
+                                    return FileResponse(
+                                        path=str(bin_file),
+                                        filename=ident,
+                                        media_type=media_type,
+                                        content_disposition_type=disposition,
+                                    )
+                        except Exception:
+                            continue
+
         # Si és ruta física al disc dur muntat del client
         fpath = os.path.abspath(fitxer_path)
+        if not os.path.exists(fpath):
+            mode, base_target, _ = await cls.resoldre_desti_disc_empresa(db, empresa_id)
+            if mode == "LOCAL_FS":
+                candidate = Path(base_target) / "05_planols" / "arxius_base" / os.path.basename(fitxer_path)
+                if candidate.exists():
+                    fpath = str(candidate.resolve())
+            if not os.path.exists(fpath):
+                # Comprovar a demo_docs si és un plànol de demo existent
+                for demo_folder in [
+                    os.path.join(os.getcwd(), "demo_docs", "05_enginyeria_obres"),
+                    os.path.join(os.getcwd(), "demo_docs", "Banc_Documents_Sevalor_Complet", "demo_docs", "05_enginyeria_obres"),
+                    os.path.join(os.getcwd(), "demo_docs", "Banc_Documents_Sevalor_Complet", "demo_docs", "planos"),
+                ]:
+                    demo_cand = os.path.join(demo_folder, os.path.basename(fitxer_path))
+                    if os.path.exists(demo_cand):
+                        fpath = demo_cand
+                        break
+
         if not os.path.exists(fpath):
             raise HTTPException(
                 status_code=404, detail="Fitxer no trobat al disc dur de l'empresa."

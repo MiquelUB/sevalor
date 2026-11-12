@@ -335,12 +335,17 @@ async def importar_planols_directori(
             ]
         )
 
-    demo_dir = os.path.join(os.getcwd(), "demo_docs", "05_enginyeria_obres")
-    if os.path.isdir(demo_dir):
-        candidats.append(demo_dir)
+    demo_dirs = [
+        os.path.join(os.getcwd(), "demo_docs", "05_enginyeria_obres"),
+        os.path.join(os.getcwd(), "demo_docs", "Banc_Documents_Sevalor_Complet", "demo_docs", "05_enginyeria_obres"),
+        os.path.join(os.getcwd(), "demo_docs", "Banc_Documents_Sevalor_Complet", "demo_docs", "planos"),
+    ]
+    for d in demo_dirs:
+        if os.path.isdir(d):
+            candidats.append(d)
 
     importats = []
-    allowed_exts = {".pdf", ".dxf", ".dwg", ".geojson", ".kml", ".png", ".jpg"}
+    allowed_exts = {".pdf", ".dxf", ".dwg", ".geojson", ".kml", ".png", ".jpg", ".jpeg", ".webp", ".svg"}
 
     for dir_path in candidats:
         if not os.path.exists(dir_path) or not os.path.isdir(dir_path):
@@ -426,7 +431,10 @@ async def descarregar_fitxer_planol(
         ".png": "image/png",
         ".jpg": "image/jpeg",
         ".jpeg": "image/jpeg",
+        ".webp": "image/webp",
         ".svg": "image/svg+xml",
+        ".tif": "image/tiff",
+        ".tiff": "image/tiff",
         ".dxf": "application/dxf",
         ".dwg": "application/acad",
         ".geojson": "application/geo+json",
@@ -435,7 +443,9 @@ async def descarregar_fitxer_planol(
     }
     media_type = media_types.get(ext, "application/octet-stream")
     content_disposition_type = (
-        "inline" if ext in [".pdf", ".png", ".jpg", ".jpeg", ".svg"] else "attachment"
+        "inline"
+        if ext in [".pdf", ".png", ".jpg", ".jpeg", ".webp", ".svg", ".geojson", ".json"]
+        else "attachment"
     )
     return await SovereignStorageGateway.servir_fitxer(
         db=db,
@@ -473,6 +483,13 @@ async def eliminar_planol(
     capes = (await db.execute(stmt_capes)).scalars().all()
     for c in capes:
         await db.delete(c)
+
+    # Esborrar físicament el fitxer del disc dur si existeix
+    if planol.fitxer_path and os.path.exists(planol.fitxer_path):
+        try:
+            os.remove(planol.fitxer_path)
+        except OSError:
+            pass
 
     await db.delete(planol)
     await db.commit()

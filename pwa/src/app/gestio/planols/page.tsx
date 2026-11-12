@@ -104,6 +104,160 @@ const DISCIPLINES_DEFECTE = [
   { id: "INCIDENCIA", label: "Anotacions i Incidències", color: "#ef4444" },
 ];
 
+interface DxfEntity {
+  type: "line" | "circle";
+  x1: number;
+  y1: number;
+  x2?: number;
+  y2?: number;
+  cx?: number;
+  cy?: number;
+  r?: number;
+  color?: string;
+}
+
+function parseDxfEntities(dxfContent: string): DxfEntity[] {
+  if (!dxfContent) return [];
+  const lines = dxfContent.split(/\r?\n/);
+  const rawEntities: DxfEntity[] = [];
+  let inEntities = false;
+  let currentEntity: string | null = null;
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+
+  let curObj: any = {};
+
+  const saveCurrent = () => {
+    if (
+      currentEntity === "LINE" &&
+      curObj.x1 !== undefined &&
+      curObj.y1 !== undefined &&
+      curObj.x2 !== undefined &&
+      curObj.y2 !== undefined
+    ) {
+      minX = Math.min(minX, curObj.x1, curObj.x2);
+      maxX = Math.max(maxX, curObj.x1, curObj.x2);
+      minY = Math.min(minY, curObj.y1, curObj.y2);
+      maxY = Math.max(maxY, curObj.y1, curObj.y2);
+      rawEntities.push({
+        type: "line",
+        x1: curObj.x1,
+        y1: curObj.y1,
+        x2: curObj.x2,
+        y2: curObj.y2,
+      });
+    } else if (
+      currentEntity === "CIRCLE" &&
+      curObj.x1 !== undefined &&
+      curObj.y1 !== undefined &&
+      curObj.r !== undefined
+    ) {
+      const r = curObj.r;
+      minX = Math.min(minX, curObj.x1 - r);
+      maxX = Math.max(maxX, curObj.x1 + r);
+      minY = Math.min(minY, curObj.y1 - r);
+      maxY = Math.max(maxY, curObj.y1 + r);
+      rawEntities.push({ type: "circle", x1: curObj.x1, y1: curObj.y1, r });
+    }
+    curObj = {};
+  };
+
+  for (let i = 0; i < lines.length - 1; i += 2) {
+    const code = lines[i].trim();
+    const val = lines[i + 1].trim();
+
+    if (code === "0") {
+      if (val === "SECTION") {
+        inEntities = false;
+      } else if (val === "ENDSEC") {
+        saveCurrent();
+        inEntities = false;
+        currentEntity = null;
+      } else if (inEntities) {
+        saveCurrent();
+        currentEntity = val;
+      }
+    } else if (code === "2" && val === "ENTITIES") {
+      inEntities = true;
+    } else if (inEntities && currentEntity) {
+      const numVal = parseFloat(val);
+      if (currentEntity === "LINE") {
+        if (code === "10") curObj.x1 = numVal;
+        else if (code === "20") curObj.y1 = numVal;
+        else if (code === "11") curObj.x2 = numVal;
+        else if (code === "21") curObj.y2 = numVal;
+      } else if (currentEntity === "CIRCLE") {
+        if (code === "10") curObj.x1 = numVal;
+        else if (code === "20") curObj.y1 = numVal;
+        else if (code === "40") curObj.r = numVal;
+      } else if (currentEntity === "LWPOLYLINE" || currentEntity === "POLYLINE") {
+        if (code === "10") {
+          if (
+            curObj.lastX !== undefined &&
+            curObj.lastY !== undefined &&
+            curObj.curX !== undefined &&
+            curObj.curY !== undefined
+          ) {
+            minX = Math.min(minX, curObj.lastX, curObj.curX);
+            maxX = Math.max(maxX, curObj.lastX, curObj.curX);
+            minY = Math.min(minY, curObj.lastY, curObj.curY);
+            maxY = Math.max(maxY, curObj.lastY, curObj.curY);
+            rawEntities.push({
+              type: "line",
+              x1: curObj.lastX,
+              y1: curObj.lastY,
+              x2: curObj.curX,
+              y2: curObj.curY,
+            });
+            curObj.lastX = curObj.curX;
+            curObj.lastY = curObj.curY;
+          }
+          curObj.curX = numVal;
+        } else if (code === "20") {
+          curObj.curY = numVal;
+          if (curObj.lastX === undefined) {
+            curObj.lastX = curObj.curX;
+            curObj.lastY = curObj.curY;
+          }
+        }
+      }
+    }
+  }
+  saveCurrent();
+
+  if (rawEntities.length === 0 || !isFinite(minX) || !isFinite(maxX) || minX === maxX) {
+    return [];
+  }
+
+  const rangeX = maxX - minX || 1;
+  const rangeY = maxY - minY || 1;
+
+  return rawEntities.map((ent) => {
+    if (ent.type === "line") {
+      return {
+        type: "line",
+        x1: Math.round((((ent.x1 - minX) / rangeX) * 90 + 5) * 10) / 10,
+        y1: Math.round((95 - ((ent.y1 - minY) / rangeY) * 90) * 10) / 10,
+        x2: Math.round(((((ent.x2 ?? 0) - minX) / rangeX) * 90 + 5) * 10) / 10,
+        y2: Math.round((95 - (((ent.y2 ?? 0) - minY) / rangeY) * 90) * 10) / 10,
+      };
+    } else {
+      const cx = Math.round((((ent.x1 - minX) / rangeX) * 90 + 5) * 10) / 10;
+      const cy = Math.round((95 - ((ent.y1 - minY) / rangeY) * 90) * 10) / 10;
+      return {
+        type: "circle",
+        x1: cx,
+        y1: cy,
+        cx,
+        cy,
+        r: Math.max(0.8, Math.round((((ent.r ?? 1) / Math.max(rangeX, rangeY)) * 90) * 10) / 10),
+      };
+    }
+  });
+}
+
 interface DraggedItem {
   capaId: string;
   featureIndex: number;
@@ -137,6 +291,12 @@ export default function GestioPlanolsPage() {
   const [justDragged, setJustDragged] = useState(false);
   const innerCanvasRef = useRef<HTMLDivElement>(null);
 
+  // Fitxer binari carregat en memòria com a Blob URL per visualització segura
+  const [fitxerBlobUrl, setFitxerBlobUrl] = useState<string | null>(null);
+  const [carregantFitxer, setCarregantFitxer] = useState(false);
+  const [dxfEntities, setDxfEntities] = useState<DxfEntity[]>([]);
+  const [geoJsonBaseFeatures, setGeoJsonBaseFeatures] = useState<any[]>([]);
+
   // Capes vectorials del plànol seleccionat
   const [capes, setCapes] = useState<CapaVectorialUI[]>([]);
   const [capaActivaId, setCapaActivaId] = useState<string | null>(null);
@@ -144,8 +304,13 @@ export default function GestioPlanolsPage() {
   const [desantCapa, setDesantCapa] = useState(false);
   const [exportantPdf, setExportantPdf] = useState(false);
 
-  // Eines d'edició
-  const [einaDibuix, setEinaDibuix] = useState<"punter" | "canonada" | "punt">("punter");
+  // Eines d'edició (Punter, Traçar canonada, Punt i Esborrador)
+  const [einaDibuix, setEinaDibuix] = useState<"punter" | "canonada" | "punt" | "esborrar">("punter");
+  const [elementSeleccionat, setElementSeleccionat] = useState<{
+    capaId: string;
+    featureIndex: number;
+    nom?: string;
+  } | null>(null);
   const [puntsLiniaEnCurs, setPuntsLiniaEnCurs] = useState<Array<{ x: number; y: number }>>([]);
   const canvasRef = useRef<HTMLDivElement>(null);
 
@@ -226,7 +391,104 @@ export default function GestioPlanolsPage() {
     draggedItemRef.current = null;
     setDraggedItem(null);
     setIsPanning(false);
+    setElementSeleccionat(null);
+
+    // Carregar fitxer binari real del plànol de manera autenticada via Blob URL (evita 401 i problemes CORS)
+    if (!planolSeleccionat?.id) {
+      setFitxerBlobUrl(null);
+      setDxfEntities([]);
+      setGeoJsonBaseFeatures([]);
+      return;
+    }
+
+    let isSubscribed = true;
+    let createdUrl: string | null = null;
+    setCarregantFitxer(true);
+
+    const carregarFitxerPlanol = async () => {
+      try {
+        const baseUrl = getApiBaseUrl();
+        const token = getAuthToken();
+        const tenantId = extractTenantId();
+        const headers: Record<string, string> = {};
+        if (token) headers["Authorization"] = `Bearer ${token}`;
+        if (tenantId) headers["X-Empresa-ID"] = tenantId;
+
+        const res = await fetch(`${baseUrl}/gestio/planols/${planolSeleccionat.id}/fitxer`, {
+          headers,
+        });
+
+        if (!res.ok) {
+          throw new Error(`HTTP ${res.status}`);
+        }
+
+        const blob = await res.blob();
+        if (!isSubscribed) return;
+
+        const objUrl = URL.createObjectURL(blob);
+        createdUrl = objUrl;
+        setFitxerBlobUrl(objUrl);
+
+        const tipus = (planolSeleccionat.tipus_fitxer || "").toUpperCase();
+        if (tipus === "DXF" || tipus === "DWG") {
+          const text = await blob.text();
+          if (isSubscribed) {
+            const parsed = parseDxfEntities(text);
+            setDxfEntities(parsed);
+          }
+        } else if (tipus === "GEOJSON" || tipus === "JSON") {
+          const text = await blob.text();
+          if (isSubscribed) {
+            try {
+              const parsed = JSON.parse(text);
+              const feats = parsed.features || (parsed.type === "Feature" ? [parsed] : []);
+              setGeoJsonBaseFeatures(feats);
+            } catch {
+              setGeoJsonBaseFeatures([]);
+            }
+          }
+        }
+      } catch (err) {
+        console.warn("Avís carregant blob del plànol, aplicant URL directa fallback:", err);
+        if (isSubscribed) {
+          const token = getAuthToken();
+          const fallback = `${getApiBaseUrl()}/gestio/planols/${planolSeleccionat.id}/fitxer${
+            token ? `?token=${encodeURIComponent(token)}` : ""
+          }`;
+          setFitxerBlobUrl(fallback);
+        }
+      } finally {
+        if (isSubscribed) setCarregantFitxer(false);
+      }
+    };
+
+    carregarFitxerPlanol();
+
+    return () => {
+      isSubscribed = false;
+      if (createdUrl) {
+        URL.revokeObjectURL(createdUrl);
+      }
+    };
   }, [planolSeleccionat?.id]);
+
+  // Drecera de teclat per esborrar element seleccionat (Delete o Backspace)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.key === "Delete" || e.key === "Backspace") && elementSeleccionat) {
+        const tag = (e.target as HTMLElement)?.tagName?.toLowerCase();
+        if (tag === "input" || tag === "textarea") return;
+        e.preventDefault();
+        eliminarFeature(
+          elementSeleccionat.capaId,
+          elementSeleccionat.featureIndex,
+          elementSeleccionat.nom
+        );
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [elementSeleccionat]);
 
   const toggleVisibilitatCapa = async (capaId: string) => {
     const target = capes.find((c) => c.id === capaId);
@@ -337,6 +599,93 @@ export default function GestioPlanolsPage() {
     } catch (err: any) {
       setError("Error eliminant la capa: " + (err.message || err));
     }
+  };
+
+  const eliminarFeature = async (
+    capaId: string,
+    featureIndex: number,
+    nomFeature?: string
+  ) => {
+    const capa = capes.find((c) => c.id === capaId);
+    if (!capa || !planolSeleccionat) return;
+    if (capa.es_immutable) {
+      setError("Aquesta capa és immutable i els seus elements no es poden esborrar.");
+      setTimeout(() => setError(null), 3500);
+      return;
+    }
+
+    const currentFeatures = [...(capa.geometries_geojson?.features || [])];
+    if (featureIndex < 0 || featureIndex >= currentFeatures.length) return;
+
+    const targetFeat = currentFeatures[featureIndex];
+    const nom =
+      nomFeature ||
+      targetFeat?.properties?.nom ||
+      targetFeat?.properties?.etiqueta ||
+      (targetFeat?.geometry?.type === "LineString" ? "Traçat de xarxa" : "Element");
+
+    currentFeatures.splice(featureIndex, 1);
+
+    const updatedCapa: CapaVectorialUI = {
+      ...capa,
+      geometries_geojson: {
+        ...capa.geometries_geojson,
+        features: currentFeatures,
+      },
+    };
+
+    setCapes((prev) => prev.map((c) => (c.id === capaId ? updatedCapa : c)));
+    if (
+      elementSeleccionat?.capaId === capaId &&
+      elementSeleccionat?.featureIndex === featureIndex
+    ) {
+      setElementSeleccionat(null);
+    }
+
+    await desarCanvisCapa(updatedCapa);
+    setMissatgeExit(`"${nom}" esborrat correctament de la capa "${capa.nom}".`);
+    setTimeout(() => setMissatgeExit(null), 3000);
+  };
+
+  const eliminarVertex = async (
+    capaId: string,
+    featureIndex: number,
+    vertexIndex: number
+  ) => {
+    const capa = capes.find((c) => c.id === capaId);
+    if (!capa || !planolSeleccionat || capa.es_immutable) return;
+
+    const currentFeatures = [...(capa.geometries_geojson?.features || [])];
+    const feat = currentFeatures[featureIndex];
+    if (!feat || feat.geometry?.type !== "LineString") return;
+
+    const coords = [...(feat.geometry.coordinates || [])];
+    if (coords.length <= 2) {
+      eliminarFeature(capaId, featureIndex, "Traçat de xarxa");
+      return;
+    }
+
+    coords.splice(vertexIndex, 1);
+    currentFeatures[featureIndex] = {
+      ...feat,
+      geometry: {
+        ...feat.geometry,
+        coordinates: coords,
+      },
+    };
+
+    const updatedCapa: CapaVectorialUI = {
+      ...capa,
+      geometries_geojson: {
+        ...capa.geometries_geojson,
+        features: currentFeatures,
+      },
+    };
+
+    setCapes((prev) => prev.map((c) => (c.id === capaId ? updatedCapa : c)));
+    await desarCanvisCapa(updatedCapa);
+    setMissatgeExit("Vèrtex de traçat eliminat.");
+    setTimeout(() => setMissatgeExit(null), 2500);
   };
 
   const startDrag = (
@@ -1125,7 +1474,7 @@ export default function GestioPlanolsPage() {
               {planolSeleccionat?.id && (
                 <>
                   <a
-                    href={`${getApiBaseUrl()}/gestio/planols/${planolSeleccionat.id}/fitxer`}
+                    href={`${getApiBaseUrl()}/gestio/planols/${planolSeleccionat.id}/fitxer?token=${encodeURIComponent(getAuthToken() || "")}`}
                     target="_blank"
                     rel="noreferrer"
                     className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-outline-variant bg-surface-container-low text-on-surface hover:bg-surface-container text-xs font-semibold transition-colors"
@@ -1317,7 +1666,56 @@ export default function GestioPlanolsPage() {
                           <MapPin className="w-3.5 h-3.5" />
                           <span>Afegir Element</span>
                         </button>
+
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setEinaDibuix("esborrar");
+                            setPuntsLiniaEnCurs([]);
+                          }}
+                          className={`flex items-center gap-1 px-2.5 py-1 rounded text-xs font-semibold transition-all ${
+                            einaDibuix === "esborrar"
+                              ? "bg-error text-white shadow-xs"
+                              : "text-on-surface-variant hover:text-error"
+                          }`}
+                          title="Mode Esborrar: fes clic sobre qualsevol punt o traçat per eliminar-lo"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                          <span>Esborrar</span>
+                        </button>
                       </div>
+
+                      {/* Element Seleccionat Pill & Delete Shortcut */}
+                      {elementSeleccionat && (
+                        <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-error/10 border border-error/30 text-error">
+                          <span className="text-[11px] font-bold truncate max-w-[140px]">
+                            {elementSeleccionat.nom}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              eliminarFeature(
+                                elementSeleccionat.capaId,
+                                elementSeleccionat.featureIndex,
+                                elementSeleccionat.nom
+                              )
+                            }
+                            className="px-2 py-0.5 rounded bg-error text-white text-[10px] font-bold hover:bg-error/90 flex items-center gap-1 transition-colors"
+                            title="Eliminar aquest element (o prem tecla Supr / Backspace)"
+                          >
+                            <Trash2 className="w-3 h-3" />
+                            <span>Eliminar</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setElementSeleccionat(null)}
+                            className="p-0.5 rounded hover:bg-error/20 text-error"
+                            title="Deseleccionar"
+                          >
+                            <X className="w-3 h-3" />
+                          </button>
+                        </div>
+                      )}
 
                       {/* Controls while drawing a polyline */}
                       {puntsLiniaEnCurs.length > 0 && (
@@ -1469,43 +1867,144 @@ export default function GestioPlanolsPage() {
                         />
 
                         {planolSeleccionat && (
-                          <div className="w-full h-full flex items-center justify-center">
+                          <div className="w-full h-full flex items-center justify-center relative">
+                            {carregantFitxer && (
+                              <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-black/60 backdrop-blur-xs text-white">
+                                <RefreshCw className="w-8 h-8 animate-spin text-primary mb-2" />
+                                <span className="text-xs font-mono font-bold">Carregant plànol de disc...</span>
+                              </div>
+                            )}
+
                             {planolSeleccionat.tipus_fitxer === "PDF" ? (
-                              <object
-                                data={`${getApiBaseUrl()}/gestio/planols/${planolSeleccionat.id}/fitxer#toolbar=0&navpanes=0`}
-                                type="application/pdf"
-                                className="w-full h-full pointer-events-none opacity-90"
-                              >
+                              fitxerBlobUrl ? (
+                                <iframe
+                                  src={`${fitxerBlobUrl}#toolbar=0&navpanes=0`}
+                                  title={planolSeleccionat.titol}
+                                  className="w-full h-full border-0 pointer-events-none opacity-90"
+                                />
+                              ) : (
                                 <div className="flex flex-col items-center justify-center h-full text-slate-400 text-xs">
                                   <FileText className="w-12 h-12 text-primary/50 mb-2" />
                                   <span>{planolSeleccionat.titol}</span>
                                 </div>
-                              </object>
-                            ) : ["PNG", "JPG", "JPEG", "WEBP"].includes(
+                              )
+                            ) : ["PNG", "JPG", "JPEG", "WEBP", "SVG"].includes(
                                 planolSeleccionat.tipus_fitxer
                               ) ? (
-                              <img
-                                src={`${getApiBaseUrl()}/gestio/planols/${planolSeleccionat.id}/fitxer`}
-                                alt={planolSeleccionat.titol}
-                                className="max-w-full max-h-full object-contain pointer-events-none"
-                              />
-                            ) : (
-                              <div className="flex flex-col items-center justify-center p-8 text-center text-slate-300">
-                                <div className="p-4 rounded-2xl bg-primary/10 border border-primary/30 mb-3">
-                                  <Activity className="w-10 h-10 text-primary animate-pulse" />
+                              fitxerBlobUrl ? (
+                                <img
+                                  src={fitxerBlobUrl}
+                                  alt={planolSeleccionat.titol}
+                                  className="max-w-full max-h-full object-contain pointer-events-none select-none"
+                                />
+                              ) : (
+                                <div className="flex flex-col items-center justify-center h-full text-slate-400 text-xs">
+                                  <FileText className="w-12 h-12 text-primary/50 mb-2" />
+                                  <span>Carregant imatge de plànol...</span>
                                 </div>
-                                <h4 className="text-sm font-bold text-white mb-1">
-                                  Planimetria Vectorial CAD: {planolSeleccionat.titol}
-                                </h4>
-                                <p className="text-xs text-slate-400 font-mono">
-                                  Ref: {planolSeleccionat.codi_referencia} · Format:{" "}
-                                  {planolSeleccionat.tipus_fitxer} · Projecció:{" "}
-                                  {planolSeleccionat.projeccio || "ETRS89 UTM 31N"}
-                                </p>
-                                <p className="text-[11px] text-emerald-400 mt-2 font-mono flex items-center gap-1">
-                                  <ShieldCheck className="w-3.5 h-3.5" /> Fitxer base original preservat
-                                  intacte (No destructiu)
-                                </p>
+                              )
+                            ) : (
+                              <div className="w-full h-full relative flex items-center justify-center">
+                                {dxfEntities.length > 0 ? (
+                                  <svg
+                                    className="w-full h-full pointer-events-none select-none"
+                                    viewBox="0 0 100 100"
+                                    preserveAspectRatio="xMidYMid meet"
+                                  >
+                                    {dxfEntities.map((ent, eIdx) => {
+                                      if (
+                                        ent.type === "line" &&
+                                        ent.x1 !== undefined &&
+                                        ent.y1 !== undefined &&
+                                        ent.x2 !== undefined &&
+                                        ent.y2 !== undefined
+                                      ) {
+                                        return (
+                                          <line
+                                            key={`dxf-${eIdx}`}
+                                            x1={ent.x1}
+                                            y1={ent.y1}
+                                            x2={ent.x2}
+                                            y2={ent.y2}
+                                            stroke={ent.color || "#38bdf8"}
+                                            strokeWidth={0.35}
+                                            strokeLinecap="round"
+                                          />
+                                        );
+                                      }
+                                      if (ent.type === "circle") {
+                                        const cx = ent.cx ?? ent.x1;
+                                        const cy = ent.cy ?? ent.y1;
+                                        return (
+                                          <circle
+                                            key={`dxf-${eIdx}`}
+                                            cx={cx}
+                                            cy={cy}
+                                            r={Math.max(0.6, ent.r || 1)}
+                                            fill="none"
+                                            stroke={ent.color || "#38bdf8"}
+                                            strokeWidth={0.35}
+                                          />
+                                        );
+                                      }
+                                      return null;
+                                    })}
+                                  </svg>
+                                ) : geoJsonBaseFeatures.length > 0 ? (
+                                  <svg
+                                    className="w-full h-full pointer-events-none select-none"
+                                    viewBox="0 0 100 100"
+                                    preserveAspectRatio="xMidYMid meet"
+                                  >
+                                    {geoJsonBaseFeatures.map((feat, gIdx) => {
+                                      if (feat.geometry?.type === "LineString") {
+                                        const pts = (feat.geometry.coordinates || [])
+                                          .map((coord: number[]) => `${coord[0]},${coord[1]}`)
+                                          .join(" ");
+                                        return (
+                                          <polyline
+                                            key={`base-geo-${gIdx}`}
+                                            points={pts}
+                                            fill="none"
+                                            stroke="#64748b"
+                                            strokeWidth={0.5}
+                                          />
+                                        );
+                                      }
+                                      if (feat.geometry?.type === "Point") {
+                                        const [gx, gy] = feat.geometry.coordinates || [0, 0];
+                                        return (
+                                          <circle
+                                            key={`base-geo-${gIdx}`}
+                                            cx={gx}
+                                            cy={gy}
+                                            r={1.2}
+                                            fill="#64748b"
+                                          />
+                                        );
+                                      }
+                                      return null;
+                                    })}
+                                  </svg>
+                                ) : (
+                                  <div className="flex flex-col items-center justify-center p-8 text-center text-slate-300">
+                                    <div className="p-4 rounded-2xl bg-primary/10 border border-primary/30 mb-3">
+                                      <Activity className="w-10 h-10 text-primary animate-pulse" />
+                                    </div>
+                                    <h4 className="text-sm font-bold text-white mb-1">
+                                      Planimetria Vectorial CAD: {planolSeleccionat.titol}
+                                    </h4>
+                                    <p className="text-xs text-slate-400 font-mono">
+                                      Ref: {planolSeleccionat.codi_referencia} · Format:{" "}
+                                      {planolSeleccionat.tipus_fitxer} · Projecció:{" "}
+                                      {planolSeleccionat.projeccio || "ETRS89 UTM 31N"}
+                                    </p>
+                                    <p className="text-[11px] text-emerald-400 mt-2 font-mono flex items-center gap-1">
+                                      <ShieldCheck className="w-3.5 h-3.5" /> Fitxer base original preservat
+                                      intacte (No destructiu)
+                                    </p>
+                                  </div>
+                                )}
                               </div>
                             )}
                           </div>
@@ -1533,8 +2032,35 @@ export default function GestioPlanolsPage() {
                                     const pts = (feat.geometry.coordinates || [])
                                       .map((coord: number[]) => `${coord[0]},${coord[1]}`)
                                       .join(" ");
+                                    const isLineSelected =
+                                      elementSeleccionat?.capaId === capa.id &&
+                                      elementSeleccionat?.featureIndex === fIdx;
+                                    const nomFeat =
+                                      feat.properties?.nom ||
+                                      feat.properties?.etiqueta ||
+                                      `Traçat #${fIdx + 1}`;
+
                                     return (
                                       <g key={feat.properties?.id || `feat-line-${fIdx}`}>
+                                        {/* Haló de selecció activa */}
+                                        {isLineSelected && (
+                                          <polyline
+                                            points={pts}
+                                            fill="none"
+                                            stroke="#38bdf8"
+                                            strokeWidth={
+                                              capa.gruix_linia
+                                                ? capa.gruix_linia * 0.35 + 2.5
+                                                : 3.5
+                                            }
+                                            strokeLinecap="round"
+                                            strokeLinejoin="round"
+                                            opacity={0.7}
+                                            className="pointer-events-none animate-pulse"
+                                          />
+                                        )}
+
+                                        {/* Traçat visible */}
                                         <polyline
                                           points={pts}
                                           fill="none"
@@ -1545,6 +2071,38 @@ export default function GestioPlanolsPage() {
                                           strokeLinecap="round"
                                           strokeLinejoin="round"
                                         />
+
+                                        {/* Àrea interactiva invisible per seleccionar o esborrar el traçat */}
+                                        <polyline
+                                          points={pts}
+                                          fill="none"
+                                          stroke="transparent"
+                                          strokeWidth={Math.max(
+                                            5,
+                                            (capa.gruix_linia || 1) * 2.5
+                                          )}
+                                          strokeLinecap="round"
+                                          strokeLinejoin="round"
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            if (einaDibuix === "esborrar" && !capa.es_immutable) {
+                                              eliminarFeature(capa.id, fIdx, nomFeat);
+                                            } else if (einaDibuix === "punter") {
+                                              setElementSeleccionat({
+                                                capaId: capa.id,
+                                                featureIndex: fIdx,
+                                                nom: nomFeat,
+                                              });
+                                            }
+                                          }}
+                                          className={
+                                            !capa.es_immutable &&
+                                            (einaDibuix === "esborrar" || einaDibuix === "punter")
+                                              ? "pointer-events-auto cursor-pointer"
+                                              : "pointer-events-none"
+                                          }
+                                        />
+
                                         {(feat.geometry.coordinates || []).map(
                                           (c: number[], cIdx: number) => {
                                             const isVertexDragged =
@@ -1587,7 +2145,7 @@ export default function GestioPlanolsPage() {
                                                   className="pointer-events-none"
                                                 />
 
-                                                {/* Àrea d'interacció ampliada (Halo invisible per agafar fàcilment) */}
+                                                {/* Àrea d'interacció ampliada per agafar o esborrar vèrtex */}
                                                 <circle
                                                   cx={c[0]}
                                                   cy={c[1]}
@@ -1607,9 +2165,20 @@ export default function GestioPlanolsPage() {
                                                       );
                                                     }
                                                   }}
+                                                  onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    if (
+                                                      einaDibuix === "esborrar" &&
+                                                      !capa.es_immutable
+                                                    ) {
+                                                      eliminarVertex(capa.id, fIdx, cIdx);
+                                                    }
+                                                  }}
                                                   className={
-                                                    einaDibuix === "punter" && !capa.es_immutable
-                                                      ? "pointer-events-auto cursor-grab active:cursor-grabbing hover:opacity-100"
+                                                    !capa.es_immutable &&
+                                                    (einaDibuix === "punter" ||
+                                                      einaDibuix === "esborrar")
+                                                      ? "pointer-events-auto cursor-pointer active:cursor-grabbing hover:opacity-100"
                                                       : "pointer-events-none"
                                                   }
                                                 />
@@ -1630,6 +2199,9 @@ export default function GestioPlanolsPage() {
                                       draggedItem?.capaId === capa.id &&
                                       draggedItem?.featureIndex === fIdx &&
                                       draggedItem?.type === "point";
+                                    const isPointSelected =
+                                      elementSeleccionat?.capaId === capa.id &&
+                                      elementSeleccionat?.featureIndex === fIdx;
 
                                     return (
                                       <g
@@ -1639,12 +2211,43 @@ export default function GestioPlanolsPage() {
                                             startDrag(e, capa.id, fIdx, "point", px, py);
                                           }
                                         }}
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          if (
+                                            einaDibuix === "esborrar" &&
+                                            !capa.es_immutable
+                                          ) {
+                                            eliminarFeature(capa.id, fIdx, nomElement);
+                                          } else if (einaDibuix === "punter") {
+                                            setElementSeleccionat({
+                                              capaId: capa.id,
+                                              featureIndex: fIdx,
+                                              nom: nomElement,
+                                            });
+                                          }
+                                        }}
                                         className={
-                                          einaDibuix === "punter" && !capa.es_immutable
-                                            ? "pointer-events-auto cursor-grab hover:opacity-95 active:cursor-grabbing"
+                                          !capa.es_immutable &&
+                                          (einaDibuix === "punter" ||
+                                            einaDibuix === "esborrar")
+                                            ? "pointer-events-auto cursor-pointer hover:opacity-95 active:cursor-grabbing"
                                             : "pointer-events-none"
                                         }
                                       >
+                                        {/* Haló de selecció activa */}
+                                        {isPointSelected && (
+                                          <circle
+                                            cx={px}
+                                            cy={py}
+                                            r={4.2}
+                                            fill="none"
+                                            stroke="#38bdf8"
+                                            strokeWidth="1.2"
+                                            strokeDasharray="1.5,1.5"
+                                            className="pointer-events-none animate-spin"
+                                          />
+                                        )}
+
                                         {/* Anell d'arrossegament actiu */}
                                         {isPointDragged && (
                                           <circle
@@ -1727,7 +2330,14 @@ export default function GestioPlanolsPage() {
                           <span className="text-sky-300">🖐️ Desplaçant plànol...</span>
                         ) : einaDibuix === "punter" ? (
                           <span>
-                            ✋ <b>Punter:</b> Arrossega les icones o vèrtexs per moure&apos;ls. Arrossega el fons per desplaçar el plànol. Roda del ratolí per fer zoom.
+                            ✋ <b>Punter:</b> Clica sobre elements per seleccionar-los o arrossega per moure. Prem <b>Supr</b> per eliminar l&apos;element seleccionat.
+                          </span>
+                        ) : einaDibuix === "esborrar" ? (
+                          <span className="text-rose-300 font-bold flex items-center gap-1.5">
+                            <Trash2 className="w-3.5 h-3.5" />
+                            <span>
+                              Mode Esborrar actiu: fes clic sobre qualsevol punt, vèrtex o traçat per eliminar-lo.
+                            </span>
                           </span>
                         ) : einaDibuix === "canonada" ? (
                           <span>
@@ -1891,6 +2501,79 @@ export default function GestioPlanolsPage() {
                     )}
                   </div>
 
+                  {/* Selected Layer Elements List (Permet esborrar elements individuals) */}
+                  {capaActiva && (
+                    <div className="p-2.5 rounded-xl bg-surface-container-low/60 border border-outline-variant/30 space-y-2">
+                      <div className="flex items-center justify-between text-xs font-semibold text-on-surface">
+                        <span className="flex items-center gap-1.5">
+                          <Activity className="w-3.5 h-3.5 text-primary" />
+                          <span>Elements ({capaActiva.geometries_geojson?.features?.length || 0})</span>
+                        </span>
+                        {elementSeleccionat && elementSeleccionat.capaId === capaActiva.id && (
+                          <span className="text-[10px] text-primary font-mono font-bold">1 actiu</span>
+                        )}
+                      </div>
+
+                      <div className="max-h-36 overflow-y-auto space-y-1 pr-1 custom-scrollbar">
+                        {(capaActiva.geometries_geojson?.features || []).length === 0 ? (
+                          <p className="text-[11px] text-outline italic py-1">Cap element en aquesta capa.</p>
+                        ) : (
+                          (capaActiva.geometries_geojson?.features || []).map((feat, fIdx) => {
+                            const nomFeat =
+                              feat.properties?.nom ||
+                              feat.properties?.etiqueta ||
+                              (feat.geometry?.type === "LineString"
+                                ? `Traçat #${fIdx + 1}`
+                                : `Punt #${fIdx + 1}`);
+                            const isSelected =
+                              elementSeleccionat?.capaId === capaActiva.id &&
+                              elementSeleccionat?.featureIndex === fIdx;
+
+                            return (
+                              <div
+                                key={`layer-elem-${fIdx}`}
+                                onClick={() =>
+                                  setElementSeleccionat({
+                                    capaId: capaActiva.id,
+                                    featureIndex: fIdx,
+                                    nom: nomFeat,
+                                  })
+                                }
+                                className={`flex items-center justify-between px-2 py-1 rounded-lg text-[11px] cursor-pointer transition-colors ${
+                                  isSelected
+                                    ? "bg-primary/10 border border-primary/30 text-primary font-bold"
+                                    : "bg-surface-container-lowest hover:bg-surface-container text-on-surface"
+                                }`}
+                              >
+                                <div className="flex items-center gap-1.5 truncate">
+                                  {feat.geometry?.type === "LineString" ? (
+                                    <Activity className="w-3 h-3 text-secondary shrink-0" />
+                                  ) : (
+                                    <MapPin className="w-3 h-3 text-primary shrink-0" />
+                                  )}
+                                  <span className="truncate">{nomFeat}</span>
+                                </div>
+                                {!capaActiva.es_immutable && (
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      eliminarFeature(capaActiva.id, fIdx, nomFeat);
+                                    }}
+                                    className="p-1 hover:bg-error/20 text-outline hover:text-error rounded transition-colors"
+                                    title="Eliminar aquest element"
+                                  >
+                                    <Trash2 className="w-3 h-3" />
+                                  </button>
+                                )}
+                              </div>
+                            );
+                          })
+                        )}
+                      </div>
+                    </div>
+                  )}
+
                   {/* Actions & Non-destructive Spec 015 Guarantee */}
                   <div className="pt-sm border-t border-outline-variant/20 space-y-2">
                     <button
@@ -1978,16 +2661,30 @@ export default function GestioPlanolsPage() {
                             {p.projeccio || "—"}
                           </td>
                           <td className="p-2.5 text-right">
-                            <a
-                              href={`${getApiBaseUrl()}/gestio/planols/${p.id}/fitxer`}
-                              target="_blank"
-                              rel="noreferrer"
-                              onClick={(e) => e.stopPropagation()}
-                              className="inline-flex items-center gap-1 text-[11px] font-bold text-primary hover:underline"
-                            >
-                              <ExternalLink className="w-3 h-3" />
-                              <span>Obrir</span>
-                            </a>
+                            <div className="inline-flex items-center gap-2">
+                              <a
+                                href={`${getApiBaseUrl()}/gestio/planols/${p.id}/fitxer?token=${encodeURIComponent(getAuthToken() || "")}`}
+                                target="_blank"
+                                rel="noreferrer"
+                                onClick={(e) => e.stopPropagation()}
+                                className="inline-flex items-center gap-1 text-[11px] font-bold text-primary hover:underline"
+                                title="Obrir fitxer original"
+                              >
+                                <ExternalLink className="w-3 h-3" />
+                                <span>Obrir</span>
+                              </a>
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleEliminarPlanol(p.id, p.titol);
+                                }}
+                                className="p-1 rounded hover:bg-error/20 text-outline hover:text-error transition-colors"
+                                title="Eliminar plànol de la base de dades i del disc dur"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
                           </td>
                         </tr>
                       ))}
