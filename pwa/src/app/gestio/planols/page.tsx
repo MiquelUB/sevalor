@@ -429,10 +429,18 @@ export default function GestioPlanolsPage() {
           tipus === "JSON";
 
         if (isVectorCad) {
-          const res = await fetch(`${baseUrl}/gestio/planols/${planolSeleccionat.id}/fitxer`, {
+          const authParam = token ? `?token=${encodeURIComponent(token)}` : "";
+          const res = await fetch(`${baseUrl}/gestio/planols/${planolSeleccionat.id}/fitxer${authParam}`, {
             headers,
+            credentials: "include",
           });
-          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          if (!res.ok) {
+            console.warn(`Avís: fitxer vectorial ${planolSeleccionat.id} no disponible (HTTP ${res.status})`);
+            setDxfEntities([]);
+            setGeoJsonBaseFeatures([]);
+            setCarregantFitxer(false);
+            return;
+          }
           const text = await res.text();
           if (!isSubscribed) return;
 
@@ -452,9 +460,10 @@ export default function GestioPlanolsPage() {
         } else if (tipus === "PDF") {
           // Consultar nombre total de pàgines del document PDF via HEAD
           try {
+            const authParam = token ? `?token=${encodeURIComponent(token)}` : "";
             const resHead = await fetch(
-              `${baseUrl}/gestio/planols/${planolSeleccionat.id}/render?token=${encodeURIComponent(token || "")}`,
-              { method: "HEAD", headers }
+              `${baseUrl}/gestio/planols/${planolSeleccionat.id}/render${authParam}`,
+              { method: "HEAD", headers, credentials: "include" }
             );
             const total = resHead.headers.get("X-Total-Pages");
             if (total && isSubscribed) {
@@ -850,11 +859,22 @@ export default function GestioPlanolsPage() {
     setPan({ x: 0, y: 0 });
   };
 
-  const handleWheel = (e: React.WheelEvent) => {
-    e.preventDefault();
-    const delta = e.deltaY > 0 ? -0.15 : 0.15;
-    setZoom((prev) => Math.max(0.5, Math.min(3.5, Math.round((prev + delta) * 100) / 100)));
-  };
+  // Zoom interactiu no passiu sobre el llenç per interceptar preventDefault sense warnings de navegador
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const delta = e.deltaY > 0 ? -0.15 : 0.15;
+      setZoom((prev) => Math.max(0.5, Math.min(3.5, Math.round((prev + delta) * 100) / 100)));
+    };
+
+    canvas.addEventListener("wheel", onWheel, { passive: false });
+    return () => {
+      canvas.removeEventListener("wheel", onWheel);
+    };
+  }, []);
 
   const handleCanvasClick = (e: React.MouseEvent<HTMLDivElement>) => {
     if (einaDibuix === "punter" || justDragged || isPanning) return;
@@ -1027,7 +1047,7 @@ export default function GestioPlanolsPage() {
   useEffect(() => {
     carregarDades();
 
-    const handleGlobalDragOver = (e: DragEvent) => {
+    const handleGlobalDragPrevent = (e: DragEvent) => {
       e.preventDefault();
       e.stopPropagation();
     };
@@ -1042,10 +1062,12 @@ export default function GestioPlanolsPage() {
       }
     };
 
-    window.addEventListener("dragover", handleGlobalDragOver);
+    window.addEventListener("dragenter", handleGlobalDragPrevent);
+    window.addEventListener("dragover", handleGlobalDragPrevent);
     window.addEventListener("drop", handleGlobalDrop);
     return () => {
-      window.removeEventListener("dragover", handleGlobalDragOver);
+      window.removeEventListener("dragenter", handleGlobalDragPrevent);
+      window.removeEventListener("dragover", handleGlobalDragPrevent);
       window.removeEventListener("drop", handleGlobalDrop);
     };
   }, []);
@@ -1057,9 +1079,16 @@ export default function GestioPlanolsPage() {
     const ext = (file.name.split(".").pop() || "").toUpperCase();
     let format = "DXF";
     if (ext === "PDF") format = "PDF";
+    else if (ext === "PNG") format = "PNG";
+    else if (ext === "JPG" || ext === "JPEG") format = "JPG";
+    else if (ext === "WEBP") format = "WEBP";
+    else if (ext === "SVG") format = "SVG";
+    else if (ext === "TIF" || ext === "TIFF") format = "TIFF";
     else if (ext === "GEOJSON" || ext === "JSON") format = "GEOJSON";
     else if (ext === "KML") format = "KML";
     else if (ext === "DWG") format = "DWG";
+    else if (ext === "DXF") format = "DXF";
+    else format = ext || "DXF";
 
     setNouPlanol((prev) => ({
       ...prev,
@@ -1803,7 +1832,6 @@ export default function GestioPlanolsPage() {
                   {/* Canvas Viewport */}
                   <div
                     ref={canvasRef}
-                    onWheel={handleWheel}
                     onMouseDown={(e) => {
                       if (einaDibuix === "punter" && e.button === 0 && !draggedItemRef.current) {
                         setIsPanning(true);
@@ -2036,15 +2064,28 @@ export default function GestioPlanolsPage() {
                               <p className="text-xs text-white font-bold mb-1">
                                 No s&apos;ha pogut renderitzar la vista prèvia del plànol
                               </p>
-                              <a
-                                href={`${getApiBaseUrl()}/gestio/planols/${planolSeleccionat.id}/fitxer?token=${encodeURIComponent(getAuthToken() || "")}`}
-                                target="_blank"
-                                rel="noreferrer"
-                                className="text-primary text-xs underline font-bold mt-1 inline-flex items-center gap-1"
-                              >
-                                <ExternalLink className="w-3.5 h-3.5" />
-                                <span>Obrir fitxer original en nova pestanya</span>
-                              </a>
+                              <div className="flex items-center gap-3 mt-2">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setErrorCarregaImatge(false);
+                                    setCarregantFitxer(true);
+                                  }}
+                                  className="px-3 py-1.5 rounded-lg bg-primary text-white text-xs font-bold inline-flex items-center gap-1.5 hover:opacity-90 transition-opacity"
+                                >
+                                  <RefreshCw className="w-3.5 h-3.5" />
+                                  <span>Reintentar</span>
+                                </button>
+                                <a
+                                  href={`${getApiBaseUrl()}/gestio/planols/${planolSeleccionat.id}/fitxer?token=${encodeURIComponent(getAuthToken() || "")}`}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="text-primary text-xs underline font-bold inline-flex items-center gap-1"
+                                >
+                                  <ExternalLink className="w-3.5 h-3.5" />
+                                  <span>Obrir fitxer original</span>
+                                </a>
+                              </div>
                             </div>
                           )}
 

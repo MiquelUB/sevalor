@@ -3,7 +3,6 @@ import os
 import re
 import uuid
 from datetime import datetime
-from pathlib import Path
 from typing import List, Optional
 
 from fastapi import (
@@ -246,22 +245,23 @@ async def pujar_planol_fitxer(
     base_name, file_ext = os.path.splitext(filename)
     file_ext = file_ext.lower().lstrip(".")
 
-    detected_type = tipus_fitxer
-    if not detected_type:
-        ext_map = {
-            "pdf": "PDF",
-            "dxf": "DXF",
-            "dwg": "DWG",
-            "geojson": "GEOJSON",
-            "json": "GEOJSON",
-            "kml": "KML",
-            "png": "PNG",
-            "jpg": "JPG",
-            "jpeg": "JPG",
-            "tif": "TIFF",
-            "tiff": "TIFF",
-        }
-        detected_type = ext_map.get(file_ext, "DXF")
+    ext_map = {
+        "pdf": "PDF",
+        "dxf": "DXF",
+        "dwg": "DWG",
+        "geojson": "GEOJSON",
+        "json": "GEOJSON",
+        "kml": "KML",
+        "png": "PNG",
+        "jpg": "JPG",
+        "jpeg": "JPG",
+        "webp": "WEBP",
+        "svg": "SVG",
+        "tif": "TIFF",
+        "tiff": "TIFF",
+    }
+    # Si l'extensió és coneguda al mapa, l'apliquem prioritàriament per evitar falsos DXF
+    detected_type = ext_map.get(file_ext) or (tipus_fitxer.upper() if tipus_fitxer else "DXF")
 
     safe_id = str(uuid.uuid4())[:8]
     clean_filename = re.sub(r"[^\w\-.]", "_", filename)
@@ -422,6 +422,7 @@ async def importar_planols_directori(
 
 
 @router.get("/{planol_id}/fitxer")
+@router.get("/planols/{planol_id}/fitxer")
 async def descarregar_fitxer_planol(
     planol_id: uuid.UUID,
     request: Request,
@@ -491,27 +492,13 @@ async def renderitzar_planol_visualitzacio(
     if not planol or not planol.fitxer_path:
         raise HTTPException(status_code=404, detail="Fitxer de plànol no trobat")
 
-    fpath = os.path.abspath(planol.fitxer_path)
-    if not os.path.exists(fpath):
-        mode, base_target, _ = await SovereignStorageGateway.resoldre_desti_disc_empresa(db, empresa_id)
-        if mode == "LOCAL_FS":
-            candidate = Path(base_target) / "05_planols" / "arxius_base" / os.path.basename(planol.fitxer_path)
-            if candidate.exists():
-                fpath = str(candidate.resolve())
-        if not os.path.exists(fpath):
-            for demo_folder in [
-                os.path.join(os.getcwd(), "demo_docs", "05_enginyeria_obres"),
-                os.path.join(os.getcwd(), "demo_docs", "Banc_Documents_Sevalor_Complet", "demo_docs", "05_enginyeria_obres"),
-                os.path.join(os.getcwd(), "demo_docs", "Banc_Documents_Sevalor_Complet", "demo_docs", "planos"),
-            ]:
-                demo_cand = os.path.join(demo_folder, os.path.basename(planol.fitxer_path))
-                if os.path.exists(demo_cand):
-                    fpath = demo_cand
-                    break
-
-    if not os.path.exists(fpath):
+    real_path = await SovereignStorageGateway.resoldre_fitxer_real_path(
+        db, empresa_id, planol.fitxer_path
+    )
+    if not real_path or not real_path.is_file():
         raise HTTPException(status_code=404, detail="Fitxer no trobat al disc dur de l'empresa.")
 
+    fpath = str(real_path)
     ext = os.path.splitext(fpath)[1].lower()
 
     # Si és PDF, renderitzem amb PyMuPDF directament a PNG (alta definició 150 DPI per al llenç interactiu)
