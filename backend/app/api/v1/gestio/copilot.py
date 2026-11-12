@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.db import get_db_with_tenant_context
-from app.core.network_utils import resolve_effective_node_url
+from app.core.network_utils import build_node_ia_headers, resolve_effective_node_url
 from app.core.security import get_current_user_claims, require_roles
 from app.models.models import (
     AlertaGarantiaRecompra,
@@ -636,6 +636,7 @@ async def cridar_lm_studio(
     context_addicional: Optional[str] = None,
     empresa: Optional[Empresa] = None,
     node_ia_url: Optional[str] = None,
+    vault_token: Optional[str] = None,
 ) -> Optional[str]:
     """Cridar el node d'IA local dedicat de l'empresa. Zero egress a Hetzner."""
     raw_target = (
@@ -670,6 +671,8 @@ async def cridar_lm_studio(
         settings, "LMSTUDIO_MODEL", "qwen2.5-vl-7b-instruct"
     )
     api_key = getattr(settings, "LM_STUDIO_API_KEY", "lm-studio")
+    eff_vault_token = vault_token or (getattr(empresa, "vault_token", None) if empresa else None)
+    headers = build_node_ia_headers(api_key=api_key, vault_token=eff_vault_token)
 
     payload = {
         "model": model_name,
@@ -686,7 +689,7 @@ async def cridar_lm_studio(
             resp = await client.post(
                 endpoint,
                 json=payload,
-                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                headers=headers,
             )
             if resp.status_code == 200:
                 data = resp.json()
@@ -747,6 +750,10 @@ async def cridar_lm_studio_amb_tools(
 
     model_name = getattr(settings, "LM_STUDIO_MODEL", "qwen2.5-vl-7b-instruct")
     api_key = getattr(settings, "LM_STUDIO_API_KEY", "lm-studio")
+    headers = build_node_ia_headers(
+        api_key=api_key,
+        vault_token=getattr(empresa, "vault_token", None),
+    )
 
     messages = [
         {"role": "system", "content": system_prompt},
@@ -767,7 +774,7 @@ async def cridar_lm_studio_amb_tools(
             resp = await client.post(
                 endpoint,
                 json=payload,
-                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                headers=headers,
             )
             if resp.status_code != 200:
                 return None, None, None, None
@@ -812,10 +819,7 @@ async def cridar_lm_studio_amb_tools(
                 resp_synth = await client.post(
                     endpoint,
                     json=payload_synthesis,
-                    headers={
-                        "Authorization": f"Bearer {api_key}",
-                        "Content-Type": "application/json",
-                    },
+                    headers=headers,
                 )
                 if resp_synth.status_code == 200:
                     synth_json = resp_synth.json()

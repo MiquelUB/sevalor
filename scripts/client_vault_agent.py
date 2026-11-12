@@ -8,14 +8,17 @@ S'executa a l'ordinador dedicat de l'oficina del client:
 """
 
 import hashlib
+import hmac
 import json
+import logging
 import os
 import re
 import shutil
 import zipfile
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, AsyncGenerator, Dict, List
 
 import httpx
 from fastapi import (
@@ -32,15 +35,16 @@ from fastapi import (
 )
 from fastapi.responses import FileResponse
 
-app = FastAPI(title="Sevalor Client Disk Vault Agent (Opció A+)", version="2.0.0")
+logger = logging.getLogger("sevalor_vault_agent")
 
+_DEFAULT_INSECURE_SECRET = "sevalor-vault-secret-token"
 VAULT_PRIMARY_A = Path(
-    os.getenv("SEVALOR_VAULT_PATH_A", os.getenv("SEVALOR_VAULT_PATH", "/media/akaun/Project_1/Sevalormante_docs"))
+    os.getenv("SEVALOR_VAULT_PATH_A", os.getenv("SEVALOR_VAULT_PATH", "./sevalor_vault_A"))
 ).resolve()
 VAULT_SECONDARY_B = Path(
-    os.getenv("SEVALOR_VAULT_PATH_B", "/media/akaun/Project_1/Sevalormante_backup_B")
+    os.getenv("SEVALOR_VAULT_PATH_B", "./sevalor_vault_B")
 ).resolve()
-VAULT_SECRET = os.getenv("SEVALOR_VAULT_SECRET", "sevalor-vault-secret-token")
+VAULT_SECRET = os.getenv("SEVALOR_VAULT_SECRET", _DEFAULT_INSECURE_SECRET)
 LOCAL_LLM_BASE_URL = os.getenv("SEVALOR_LOCAL_LLM_URL", "http://127.0.0.1:1234").rstrip("/")
 
 # 31 Carpetes Oficials idèntiques a MAPA_CARPETES_CLIENT (sovereign_storage.py)
@@ -93,17 +97,25 @@ def inicialitzar_estructura_disc() -> None:
     (VAULT_SECONDARY_B / "backups_jornada").mkdir(parents=True, exist_ok=True)
 
 
-@app.on_event("startup")
-async def on_startup() -> None:
+@asynccontextmanager
+async def _lifespan(_: FastAPI) -> AsyncGenerator[None, None]:
+    if not VAULT_SECRET or VAULT_SECRET == _DEFAULT_INSECURE_SECRET:
+        logger.warning(
+            "⚠️ SEVALOR_VAULT_SECRET utilitza el valor per defecte o és buit; configura el vault_token únic de l'empresa abans d'exposar la passarel·la."
+        )
     inicialitzar_estructura_disc()
+    yield
+
+
+app = FastAPI(title="Sevalor Client Disk Vault Agent (Opció A+)", version="2.1.0", lifespan=_lifespan)
 
 
 def verificar_token_passarella(x_vault_token: str = Header(default="")) -> None:
     """Seguretat Zero-Trust: valida el token de passarel·la configurat per a l'empresa."""
-    if not x_vault_token or x_vault_token != VAULT_SECRET:
+    if not x_vault_token or not VAULT_SECRET or not hmac.compare_digest(x_vault_token, VAULT_SECRET):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Token de passarel·la invàlid per accedir al disc dur local.",
+            detail="Token de passarel·la invàlid per accedir a la passarel·la local de l'empresa.",
         )
 
 
@@ -188,7 +200,11 @@ async def executar_backup_tancament_jornada(payload: Dict[str, Any]) -> Dict[str
     }
 
 
-@app.api_route("/v1/{llm_path:path}", methods=["GET", "POST"])
+@app.api_route(
+    "/v1/{llm_path:path}",
+    methods=["GET", "POST"],
+    dependencies=[Depends(verificar_token_passarella)],
+)
 async def proxy_copilot_local(llm_path: str, request: Request) -> Response:
     """Proxy unificat cap a Ollama / LM Studio local (127.0.0.1:1234) pel mateix túnel."""
     target_url = f"{LOCAL_LLM_BASE_URL}/v1/{llm_path.lstrip('/')}"

@@ -15,7 +15,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.core.network_utils import resolve_effective_node_url
+from app.core.network_utils import build_node_ia_headers, resolve_effective_node_url
 from app.models.models import ConsultaXatCopilot, Empresa, OrdreTreball, Usuari
 from app.services.subagents.base import BaseSubagent
 from app.services.subagents.subagent_auditoria_marge import SubagentAuditoriaMarge
@@ -190,6 +190,7 @@ class CopilotDispatcher:
         rol_usuari: str,
         usuari_id: uuid.UUID,
         historial: Optional[List[dict]] = None,
+        vault_token: Optional[str] = None,
     ) -> Tuple[Optional[str], Optional[str], Optional[dict], Optional[dict], List[dict], BaseSubagent]:
         """Executa un bucle multi-round (fins a 3 rondes) amb LM Studio."""
         messages: List[Dict[str, Any]] = [{"role": "system", "content": system_content}]
@@ -201,10 +202,7 @@ class CopilotDispatcher:
 
         messages.append({"role": "user", "content": pregunta})
 
-        headers = {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        }
+        headers = build_node_ia_headers(api_key=api_key, vault_token=vault_token)
 
         current_messages = list(messages)
         last_tool_name: Optional[str] = None
@@ -463,6 +461,7 @@ class CopilotDispatcher:
                     rol_usuari=rol_usuari,
                     usuari_id=usuari_id,
                     historial=historial,
+                    vault_token=getattr(empresa, "vault_token", None),
                 )
             except httpx.TimeoutException:
                 logger.warning(f"Timeout (15s) connectant a LM Studio a {endpoint}. Fallback sobirà activat.")

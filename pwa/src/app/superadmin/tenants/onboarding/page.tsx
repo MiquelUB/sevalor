@@ -24,6 +24,7 @@ import {
   Eye,
   Palette,
   Check,
+  HardDrive,
 } from "lucide-react";
 import { apiFetch } from "@/lib/api";
 
@@ -281,8 +282,9 @@ export default function SuperadminTenantOnboardingPage() {
   };
 
   const handleVerificarNodeIa = async () => {
-    if (!nodeIaUrl.trim()) {
-      setErrorMessage("Introdueix l'adreça URL del node dedicat d'IA (ex: http://192.168.1.100:1234).");
+    const targetUrl = nodeIaUrl.trim() || discDurUrl.trim();
+    if (!targetUrl) {
+      setErrorMessage("Introdueix l'adreça URL del node dedicat d'IA o de la passarel·la del client.");
       return;
     }
     setNodeIaTesting(true);
@@ -291,7 +293,7 @@ export default function SuperadminTenantOnboardingPage() {
     try {
       const res = await apiFetch<any>("/superadmin/tenants/verificar-node-ia", {
         method: "POST",
-        body: JSON.stringify({ node_ia_url: nodeIaUrl.trim() }),
+        body: JSON.stringify({ node_ia_url: targetUrl }),
       });
       setNodeIaStatus(res);
     } catch (err: any) {
@@ -386,8 +388,8 @@ export default function SuperadminTenantOnboardingPage() {
         if (!agentPrompt.trim() || agentPrompt.trim().length < 5) {
           throw new Error("El prompt de sistema de Copilot (agent_prompt_system) és obligatori quan la IA està activada.");
         }
-        if (!nodeIaUrl.trim()) {
-          throw new Error("Cal indicar l'adreça URL del node d'IA dedicat quan la IA està activada.");
+        if (!nodeIaUrl.trim() && !discDurUrl.trim()) {
+          throw new Error("Cal indicar l'adreça URL del node d'IA dedicat o de la passarel·la quan la IA està activada.");
         }
       }
 
@@ -1185,6 +1187,31 @@ export default function SuperadminTenantOnboardingPage() {
               </div>
             </div>
 
+            {/* SECCIÓ PASSAREL·LA DE DISC DUR SOBIRÀ (SEMPRE VISIBLE) */}
+            <div className="pt-3 border-t border-slate-200 dark:border-slate-800 space-y-3">
+              <div className="p-4 rounded-xl border border-emerald-200 dark:border-emerald-900 bg-emerald-50/40 dark:bg-emerald-950/25 space-y-2.5">
+                <div className="flex items-center justify-between flex-wrap gap-2">
+                  <span className="text-xs font-bold text-emerald-900 dark:text-emerald-200 flex items-center gap-1.5">
+                    <HardDrive className="w-4 h-4 text-emerald-600" />
+                    <span>Passarel·la Client: Disc Dur Sobirà &amp; Proxy Unificat (Opció A+)</span>
+                  </span>
+                  <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-emerald-200 dark:bg-emerald-900 text-emerald-800 dark:text-emerald-200 font-bold">
+                    Zero Mock · Client Disk
+                  </span>
+                </div>
+                <p className="text-[11px] text-slate-600 dark:text-slate-400">
+                  URL HTTPS del túnel de l&apos;ordinador dedicat de l&apos;empresa (executant <code>client_vault_agent.py</code> al port 9001). Gestiona tant l&apos;arxiu de documents com el proxy segur <code>/v1/*</code> cap al Copilot local.
+                </p>
+                <input
+                  type="text"
+                  placeholder="ex: https://disc-empresa.projectexinoxano.cat o http://127.0.0.1:9001"
+                  value={discDurUrl}
+                  onChange={(e) => setDiscDurUrl(e.target.value)}
+                  className="w-full p-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 font-mono text-xs font-bold"
+                />
+              </div>
+            </div>
+
             {/* SECCIÓ DEDICADA A COPILOT IA (NOMÉS SI ESTÀ ACTIVAT) */}
             {featureFlags.copilot_ia && (
               <div className="pt-3 border-t border-slate-200 dark:border-slate-800 space-y-4">
@@ -1192,7 +1219,7 @@ export default function SuperadminTenantOnboardingPage() {
                   <div className="flex items-center justify-between flex-wrap gap-2">
                     <span className="text-xs font-bold text-indigo-900 dark:text-indigo-200 flex items-center gap-1.5">
                       <Cpu className="w-4 h-4 text-indigo-600" />
-                      <span>Node d'IA Dedicat del Client (LM Studio / Ollama)</span>
+                      <span>Node d&apos;IA Dedicat del Client (LM Studio / Ollama o Passarel·la Unificada)</span>
                     </span>
                     <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-indigo-200 dark:bg-indigo-900 text-indigo-800 dark:text-indigo-200 font-bold">
                       Sobirania de Dades &amp; RGPD
@@ -1200,13 +1227,13 @@ export default function SuperadminTenantOnboardingPage() {
                   </div>
 
                   <p className="text-[11px] text-slate-600 dark:text-slate-400">
-                    Introdueix la IP o URL de la màquina dedicada que allotja el model local. Hetzner mai processarà dades d'IA per a aquest client.
+                    Si el Copilot passa pel mateix túnel de la passarel·la (<code>client_vault_agent.py</code>), pots deixar-ho buit i s&apos;unificarà automàticament amb l&apos;URL del Disc Dur Sobirà, o bé indicar una URL específica per al node d&apos;IA.
                   </p>
 
                   <div className="flex items-center gap-2">
                     <input
                       type="text"
-                      placeholder="http://192.168.1.100:1234 o http://localhost:11434"
+                      placeholder="https://disc-empresa.projectexinoxano.cat o http://192.168.1.100:1234"
                       value={nodeIaUrl}
                       onChange={(e) => setNodeIaUrl(e.target.value)}
                       className="flex-1 p-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 font-mono text-xs font-bold"
@@ -1220,23 +1247,6 @@ export default function SuperadminTenantOnboardingPage() {
                       <Activity className={`w-3.5 h-3.5 ${nodeIaTesting ? "animate-spin" : ""}`} />
                       <span>{nodeIaTesting ? "Comprovant..." : "Provar Connexió Node IA"}</span>
                     </button>
-                  </div>
-
-                  <div className="pt-2 border-t border-indigo-200/50 dark:border-indigo-900/50">
-                    <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1 flex items-center justify-between text-xs">
-                      <span>URL de l'Agent HTTP de Disc Dur Dedicat (Opció A+)</span>
-                      <span className="text-[10px] text-indigo-600 dark:text-indigo-400 font-mono">Port 9001 o Túnel</span>
-                    </label>
-                    <input
-                      type="text"
-                      placeholder="ex: https://node-empresa.projectexinoxano.cat o http://127.0.0.1:9001"
-                      value={discDurUrl}
-                      onChange={(e) => setDiscDurUrl(e.target.value)}
-                      className="w-full p-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 font-mono text-xs font-bold"
-                    />
-                    <p className="text-[10px] text-slate-500 mt-1">
-                      Si es deixa buit, s'unificarà automàticament amb la URL del Node IA de l'empresa.
-                    </p>
                   </div>
 
                   {/* Badge & Caixa de diagnòstic viu */}
@@ -1379,11 +1389,13 @@ export default function SuperadminTenantOnboardingPage() {
                       <span>Copiar Token</span>
                     </button>
                   </div>
-                  <div className="text-[10px] text-slate-600 dark:text-slate-400">
-                    <span>Executa a l&apos;equip del client: </span>
-                    <code className="bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded select-all">
-                      SEVALOR_VAULT_SECRET={provisionedVaultToken} python3 scripts/client_vault_agent.py
-                    </code>
+                  <div className="space-y-1 text-[10px] text-slate-600 dark:text-slate-400">
+                    <div>
+                      <span>Instal·lació producció a l&apos;equip dedicat del client: </span>
+                      <code className="bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded select-all block mt-1">
+                        bash scripts/install_client_gateway.sh --token {provisionedVaultToken} --disk-a /ruta/disc_principal --disk-b /ruta/disc_mirall
+                      </code>
+                    </div>
                   </div>
                   {provisionedVaultSync?.missatge && (
                     <p className="text-[11px] font-sans text-amber-800 dark:text-amber-300">

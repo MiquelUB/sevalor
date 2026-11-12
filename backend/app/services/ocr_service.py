@@ -18,7 +18,7 @@ from typing import Any, Dict, List, Optional
 import httpx
 
 from app.core.config import settings
-from app.core.network_utils import resolve_effective_node_url
+from app.core.network_utils import build_node_ia_headers, resolve_effective_node_url
 
 logger = logging.getLogger("ocr_service")
 
@@ -151,6 +151,7 @@ async def _cridar_ia_vision(
     imatge_b64: Optional[str] = None,
     max_tokens: int = 2000,
     node_ia_url: Optional[str] = None,
+    vault_token: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     """Crida el node local dedicat de l'empresa per extreure dades estructurades. Zero fallback a Hetzner."""
     lm_url = resolve_effective_node_url(node_ia_url)
@@ -181,11 +182,12 @@ async def _cridar_ia_vision(
     }
 
     try:
+        headers = build_node_ia_headers(api_key=api_key, vault_token=vault_token)
         async with httpx.AsyncClient(timeout=45.0) as client:
             resp = await client.post(
                 endpoint,
                 json=payload,
-                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                headers=headers,
             )
             if resp.status_code == 200:
                 data = resp.json()
@@ -212,6 +214,7 @@ async def processar_ocr_document_operari(
     file_input: bytes | str,
     node_ia_url: Optional[str] = None,
     filename: Optional[str] = None,
+    vault_token: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Extracció OCR d'un document d'operari (.md, .pdf, .jpg, .png, .txt, .doc, .docx):
     DNI/NIE, Permís de Conduir, Certificat PRL, Certificat CAP o Fitxa/Contracte RRHH.
@@ -507,7 +510,9 @@ async def processar_ocr_document_operari(
         elif len(file_bytes) > 0 and not text:
             b64 = base64.b64encode(file_bytes).decode("utf-8")
 
-        ai_res = await _cridar_ia_vision(prompt, text, b64, node_ia_url=node_ia_url)
+        ai_res = await _cridar_ia_vision(
+            prompt, text, b64, node_ia_url=node_ia_url, vault_token=vault_token
+        )
         if ai_res and isinstance(ai_res, dict):
             for k in (
                 "tipus_document", "nif", "nom", "cognoms", "data_naixement", "dni_caducitat",
@@ -764,15 +769,20 @@ async def processar_dni_ocr(
     file_bytes: bytes,
     node_ia_url: Optional[str] = None,
     filename: Optional[str] = None,
+    vault_token: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Extracció OCR de DNI / NIE i documentació d'operari amb compatibilitat retroactiva."""
     doc_extret = await processar_ocr_document_operari(
-        file_bytes, node_ia_url=node_ia_url, filename=filename
+        file_bytes, node_ia_url=node_ia_url, filename=filename, vault_token=vault_token
     )
     return consolidar_i_validar_ocr_operari([doc_extret])
 
 
-async def processar_albara_ocr(file_bytes: bytes, node_ia_url: Optional[str] = None) -> Dict[str, Any]:
+async def processar_albara_ocr(
+    file_bytes: bytes,
+    node_ia_url: Optional[str] = None,
+    vault_token: Optional[str] = None,
+) -> Dict[str, Any]:
     """Extracció OCR d'Albarà de proveïdor o material."""
     text = _extreure_text_de_fitxer(file_bytes)
     resultat: Dict[str, Any] = {
@@ -1028,7 +1038,9 @@ async def processar_albara_ocr(file_bytes: bytes, node_ia_url: Optional[str] = N
         elif len(file_bytes) > 0:
             b64 = base64.b64encode(file_bytes).decode("utf-8")
 
-        ai_res = await _cridar_ia_vision(prompt, text, b64, max_tokens=2000, node_ia_url=node_ia_url)
+        ai_res = await _cridar_ia_vision(
+            prompt, text, b64, max_tokens=2000, node_ia_url=node_ia_url, vault_token=vault_token
+        )
         if ai_res:
             for k in ("proveidor_nif", "proveidor_nom", "numero_albara", "data_albara"):
                 if ai_res.get(k) and not resultat.get(k):
@@ -1075,7 +1087,11 @@ COMPANYIES_ASSEGURANCES_CONEGUDES = [
 ]
 
 
-async def processar_ocr_document_vehicle(file_input: bytes | str, node_ia_url: Optional[str] = None) -> Dict[str, Any]:
+async def processar_ocr_document_vehicle(
+    file_input: bytes | str,
+    node_ia_url: Optional[str] = None,
+    vault_token: Optional[str] = None,
+) -> Dict[str, Any]:
     """Extracció OCR completa de Permís de Circulació, Targeta ITV o Pòlissa d'Assegurança de vehicle."""
     file_bytes = b""
     if isinstance(file_input, bytes):
@@ -1663,7 +1679,9 @@ async def processar_ocr_document_vehicle(file_input: bytes | str, node_ia_url: O
             else:
                 b64 = base64.b64encode(file_bytes).decode("utf-8")
 
-        ai_res = await _cridar_ia_vision(prompt, text, b64, node_ia_url=node_ia_url)
+        ai_res = await _cridar_ia_vision(
+            prompt, text, b64, node_ia_url=node_ia_url, vault_token=vault_token
+        )
         if ai_res:
             for k in resultat:
                 if ai_res.get(k) is not None and not resultat.get(k):
@@ -1760,7 +1778,11 @@ async def processar_ocr_document_vehicle(file_input: bytes | str, node_ia_url: O
     return resultat
 
 
-async def processar_ocr_proveidor(file_bytes: bytes, node_ia_url: Optional[str] = None) -> Dict[str, Any]:
+async def processar_ocr_proveidor(
+    file_bytes: bytes,
+    node_ia_url: Optional[str] = None,
+    vault_token: Optional[str] = None,
+) -> Dict[str, Any]:
     """Extracció OCR per a alta ràpida de proveïdors a 1-clic."""
     text = _extreure_text_de_fitxer(file_bytes)
     resultat: Dict[str, Any] = {
@@ -1808,7 +1830,9 @@ async def processar_ocr_proveidor(file_bytes: bytes, node_ia_url: Optional[str] 
         b64 = None
         if not text and len(file_bytes) > 0:
             b64 = base64.b64encode(file_bytes).decode("utf-8")
-        ai_res = await _cridar_ia_vision(prompt, text, b64, node_ia_url=node_ia_url)
+        ai_res = await _cridar_ia_vision(
+            prompt, text, b64, node_ia_url=node_ia_url, vault_token=vault_token
+        )
         if ai_res:
             for k in ("nif", "rao_social", "adreca", "telefon", "email"):
                 if ai_res.get(k) and not resultat.get(k):
@@ -1820,7 +1844,11 @@ async def processar_ocr_proveidor(file_bytes: bytes, node_ia_url: Optional[str] 
     return resultat
 
 
-async def processar_tiquet_ocr(file_bytes: bytes, node_ia_url: Optional[str] = None) -> Dict[str, Any]:
+async def processar_tiquet_ocr(
+    file_bytes: bytes,
+    node_ia_url: Optional[str] = None,
+    vault_token: Optional[str] = None,
+) -> Dict[str, Any]:
     """Extracció OCR de tiquets de carburant i despeses de camp."""
     text = _extreure_text_de_fitxer(file_bytes)
     resultat: Dict[str, Any] = {
@@ -1861,7 +1889,9 @@ async def processar_tiquet_ocr(file_bytes: bytes, node_ia_url: Optional[str] = N
         b64 = None
         if not text and len(file_bytes) > 0:
             b64 = base64.b64encode(file_bytes).decode("utf-8")
-        ai_res = await _cridar_ia_vision(prompt, text, b64, node_ia_url=node_ia_url)
+        ai_res = await _cridar_ia_vision(
+            prompt, text, b64, node_ia_url=node_ia_url, vault_token=vault_token
+        )
         if ai_res:
             if ai_res.get("import_euros") is not None:
                 try:

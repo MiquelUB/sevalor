@@ -4,7 +4,7 @@ import os
 import socket
 import struct
 import urllib.parse
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 
 def get_docker_host_gateways() -> List[str]:
@@ -78,3 +78,19 @@ def resolve_effective_node_url(raw_url: Optional[str]) -> Optional[str]:
                 return c
 
     return candidates[0]
+
+
+def build_node_ia_headers(
+    api_key: Optional[str] = None,
+    vault_token: Optional[str] = None,
+    extra: Optional[Dict[str, str]] = None,
+) -> Dict[str, str]:
+    """Construeix les capçaleres HTTP cap al node IA / passarel·la sobirana de l'empresa."""
+    headers: Dict[str, str] = {"Content-Type": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    if vault_token and vault_token.strip():
+        headers["X-Vault-Token"] = vault_token.strip()
+    if extra:
+        headers.update(extra)
+    return headers

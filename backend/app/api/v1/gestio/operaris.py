@@ -828,10 +828,12 @@ async def _executar_ocr_operari_i_desar_al_disc(
     """
     emp_uuid = uuid.UUID(str(empresa_id))
     node_ia_url: Optional[str] = None
+    vault_token: Optional[str] = None
     try:
         emp_obj = await db.get(Empresa, emp_uuid)
         if emp_obj:
             node_ia_url = getattr(emp_obj, "node_ia_url", None)
+            vault_token = getattr(emp_obj, "vault_token", None)
     except Exception:
         pass
 
@@ -845,6 +847,7 @@ async def _executar_ocr_operari_i_desar_al_disc(
             file_bytes,
             node_ia_url=node_ia_url,
             filename=upload.filename,
+            vault_token=vault_token,
         )
         doc_uuid = uuid.uuid4()
         safe_filename = f"rrhh_{operari_id or 'draft'}_{doc_uuid.hex[:10]}{ext}"

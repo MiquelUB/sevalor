@@ -595,7 +595,11 @@ export default function EmpresaDetailPage({ params }: { params: { id: string } }
     try {
       const res = await apiFetch<any>("/superadmin/tenants/verificar-node-ia", {
         method: "POST",
-        body: JSON.stringify({ node_ia_url: rawUrl }),
+        body: JSON.stringify({
+          node_ia_url: rawUrl,
+          empresa_id: empresaId,
+          vault_token: vaultToken.trim() || undefined,
+        }),
       });
       setNodeIaStatus(res);
       if (res.status === "OK") {

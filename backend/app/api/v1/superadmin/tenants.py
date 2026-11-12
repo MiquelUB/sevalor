@@ -24,7 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.db import get_db_with_tenant_context
-from app.core.network_utils import get_candidate_node_urls
+from app.core.network_utils import build_node_ia_headers, get_candidate_node_urls
 from app.core.security import require_roles
 from app.models.models import (
     Client,
@@ -169,6 +169,8 @@ class OnboardingTenantRequest(BaseModel):
 
 class VerificarNodeIaRequest(BaseModel):
     node_ia_url: str = Field(..., min_length=5, max_length=255)
+    empresa_id: Optional[str] = None
+    vault_token: Optional[str] = Field(None, min_length=1, max_length=255)
 
 
 class VerificarDiscDurRequest(BaseModel):
@@ -445,12 +447,34 @@ async def verificar_dns_domini(
     }
 
 
+async def _resolver_vault_secret_verificacio(
+    db: AsyncSession,
+    empresa_id: Optional[str],
+    explicit_token: Optional[str],
+) -> Optional[str]:
+    """Resol el vault_token per provar connexions contra la passarel·la del client."""
+    vault_secret = explicit_token.strip() if (explicit_token and explicit_token.strip()) else None
+    if not vault_secret and empresa_id:
+        emp = await _resolve_empresa(db, empresa_id)
+        if emp:
+            vault_secret = getattr(emp, "vault_token", None) or (
+                emp.telegram_webhook_secret
+                if getattr(emp, "telegram_webhook_secret", None)
+                and str(emp.telegram_webhook_secret).startswith("svlt_")
+                else None
+            )
+    if not vault_secret:
+        vault_secret = os.getenv("SEVALOR_VAULT_SECRET") or None
+    return vault_secret
+
+
 @router.post("/verificar-node-ia", response_model=Dict[str, Any])
 async def verificar_node_ia(
     payload: VerificarNodeIaRequest,
+    db: AsyncSession = Depends(get_db_with_tenant_context),
     claims: Dict[str, Any] = Depends(require_roles(["SUPERADMIN"])),
 ) -> Dict[str, Any]:
-    """Verifica en viu la connectivitat amb el node dedicat d'IA (LM Studio / Ollama) amb diagnòstic de causa arrel."""
+    """Verifica en viu la connectivitat amb el node dedicat d'IA (LM Studio / Ollama o proxy passarel·la)."""
     raw_url = payload.node_ia_url.strip()
     if not (raw_url.startswith("http://") or raw_url.startswith("https://")):
         return {
@@ -460,6 +484,13 @@ async def verificar_node_ia(
             "models": [],
             "latencia_ms": None,
         }
+
+    vault_secret = await _resolver_vault_secret_verificacio(
+        db=db,
+        empresa_id=payload.empresa_id,
+        explicit_token=payload.vault_token,
+    )
+    probe_headers = build_node_ia_headers(vault_token=vault_secret)
 
     candidate_bases = get_candidate_node_urls(raw_url)
     if not candidate_bases:
@@ -479,7 +510,7 @@ async def verificar_node_ia(
             for url in test_urls:
                 try:
                     t0 = time.perf_counter()
-                    resp = await client.get(url)
+                    resp = await client.get(url, headers=probe_headers)
                     latencia = int((time.perf_counter() - t0) * 1000)
                     if resp.status_code == 200:
                         models: List[str] = []
@@ -507,6 +538,18 @@ async def verificar_node_ia(
                             "models": models,
                             "latencia_ms": latencia,
                             "url_efectiva": base,
+                        }
+                    elif resp.status_code in (401, 403):
+                        return {
+                            "status": "ERROR",
+                            "motiu": "TOKEN_INVALID",
+                            "missatge": (
+                                "La passarel·la ha rebutjat el Token Vault (HTTP 403). "
+                                "Verifica que SEVALOR_VAULT_SECRET al PC client coincideixi amb el vault_token de l'empresa."
+                            ),
+                            "models": [],
+                            "latencia_ms": latencia,
+                            "codi_http": resp.status_code,
                         }
                     else:
                         last_error_motiu = "HTTP_ERROR"
@@ -610,18 +653,13 @@ async def verificar_disc_dur(
             "latencia_ms": None,
         }
 
-    vault_secret: Optional[str] = payload.vault_token.strip() if payload.vault_token else None
-    if not vault_secret and payload.empresa_id:
-        emp = await _resolve_empresa(db, payload.empresa_id)
-        if emp:
-            vault_secret = getattr(emp, "vault_token", None) or (
-                emp.telegram_webhook_secret
-                if getattr(emp, "telegram_webhook_secret", None)
-                and str(emp.telegram_webhook_secret).startswith("svlt_")
-                else None
-            )
+    vault_secret = await _resolver_vault_secret_verificacio(
+        db=db,
+        empresa_id=payload.empresa_id,
+        explicit_token=payload.vault_token,
+    )
     if not vault_secret:
-        vault_secret = os.getenv("SEVALOR_VAULT_SECRET", "sevalor-vault-secret-token")
+        vault_secret = "sevalor-vault-secret-token"
 
     candidate_bases = get_candidate_node_urls(raw_url)
     if not candidate_bases:

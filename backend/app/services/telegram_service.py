@@ -7,7 +7,7 @@ from sqlalchemy import text as sa_text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.core.network_utils import resolve_effective_node_url
+from app.core.network_utils import build_node_ia_headers, resolve_effective_node_url
 from app.models.models import Client, Empresa, TokenInvitacioTelegram
 
 logger = logging.getLogger("telegram_service")
@@ -173,15 +173,17 @@ class TelegramService:
             "max_tokens": 400,
         }
 
+        headers = build_node_ia_headers(
+            api_key=api_key,
+            vault_token=getattr(emp_obj, "vault_token", None) if emp_obj else None,
+        )
+
         try:
             async with httpx.AsyncClient(timeout=35.0) as http_client:
                 resp = await http_client.post(
                     endpoint,
                     json=payload,
-                    headers={
-                        "Authorization": f"Bearer {api_key}",
-                        "Content-Type": "application/json",
-                    },
+                    headers=headers,
                 )
                 if resp.status_code == 200:
                     resultat = resp.json()

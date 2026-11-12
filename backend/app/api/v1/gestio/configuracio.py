@@ -19,7 +19,7 @@ from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db, set_tenant_context
-from app.core.network_utils import resolve_effective_node_url
+from app.core.network_utils import build_node_ia_headers, resolve_effective_node_url
 from app.core.security import get_current_user_claims
 from app.models.models import Empresa, SlotJornada, Usuari
 from app.services.sovereign_storage import SovereignStorageGateway
@@ -1353,9 +1353,10 @@ async def provar_connexio_node_ia(
     endpoint = f"{base_url}/models" if base_url.endswith("/v1") else f"{base_url}/v1/models"
 
     start_time = time_lib.time()
+    headers = build_node_ia_headers(vault_token=getattr(empresa, "vault_token", None))
     try:
         async with httpx.AsyncClient(timeout=4.0) as client:
-            resp = await client.get(endpoint)
+            resp = await client.get(endpoint, headers=headers)
             latencia_ms = int((time_lib.time() - start_time) * 1000)
             if resp.status_code == 200:
                 data = resp.json()

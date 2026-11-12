@@ -4,7 +4,7 @@ from typing import Any, Dict, List, Optional
 import httpx
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
-from app.core.network_utils import resolve_effective_node_url
+from app.core.network_utils import build_node_ia_headers, resolve_effective_node_url
 
 logger = logging.getLogger("llm_client")
 
@@ -14,11 +14,17 @@ class LLMClientError(Exception):
 
 
 class LLMClient:
-    def __init__(self, base_url: Optional[str] = None, timeout: int = 30):
+    def __init__(
+        self,
+        base_url: Optional[str] = None,
+        timeout: int = 30,
+        vault_token: Optional[str] = None,
+    ):
         resolved = resolve_effective_node_url(base_url)
         url: Optional[str] = str(resolved).rstrip("/") if (resolved and str(resolved).strip()) else None
         self.base_url = url
         self.timeout = timeout
+        self.vault_token = vault_token.strip() if (vault_token and vault_token.strip()) else None
 
         # Max input length to prevent injection or context limit issues
         self.MAX_PROMPT_LENGTH = 8000
@@ -59,8 +65,9 @@ class LLMClient:
             payload["max_tokens"] = max_tokens
 
         try:
+            headers = build_node_ia_headers(vault_token=self.vault_token)
             async with httpx.AsyncClient(timeout=self.timeout) as client:
-                response = await client.post(url, json=payload)
+                response = await client.post(url, json=payload, headers=headers)
                 response.raise_for_status()
                 return response.json()  # type: ignore
         except httpx.HTTPStatusError as e:
