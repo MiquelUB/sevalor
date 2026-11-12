@@ -368,6 +368,7 @@ class SubagentGeneralRag(BaseSubagent):
     ) -> Tuple[str, Optional[str], Optional[dict], Optional[dict], List[dict]]:
         pregunta_lower = pregunta.lower()
         enllacos: List[dict] = []
+        tool_args: dict[str, Any] = {}
 
         # 1. Salutacions i cortesia bàsica (Greetings)
         salutacions = [

@@ -639,6 +639,7 @@ class SubagentPlanificacioEquip(BaseSubagent):
     ) -> Tuple[str, Optional[str], Optional[dict], Optional[dict], List[dict]]:
         q = pregunta.lower()
         enllacos = [{"titol": "Ordres de Treball", "url": "/gestio"}]
+        tool_args: dict[str, Any] = {}
 
 
         # 1. Cerca d'OT específica

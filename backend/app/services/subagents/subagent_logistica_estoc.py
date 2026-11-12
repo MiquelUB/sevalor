@@ -2,7 +2,7 @@
 
 import re
 import uuid
-from typing import Any, List, Optional, Tuple
+from typing import Any, List, Optional, Sequence, Tuple
 
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -200,7 +200,7 @@ class SubagentLogisticaEstoc(BaseSubagent):
             if w in sinonims_map:
                 search_tokens.update(sinonims_map[w])
 
-        articles = []
+        articles: Sequence[Article] = []
         if search_tokens:
             clauses = []
             for token in search_tokens:
@@ -603,6 +603,7 @@ class SubagentLogisticaEstoc(BaseSubagent):
     ) -> Tuple[str, Optional[str], Optional[dict], Optional[dict], List[dict]]:
         pregunta_lower = pregunta.lower()
         enllacos: List[dict] = [{"titol": "Inventari de Magatzem", "url": "/gestio/magatzem"}]
+        tool_args: dict[str, Any] = {}
 
         # 1. Alertes de baix estoc / ruptura d'estoc
         if any(

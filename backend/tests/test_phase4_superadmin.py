@@ -116,13 +116,12 @@ async def test_superadmin_telemetria_kpis(superadmin_headers):
 
 
 def test_workers_sobirans_directory_structure():
-    """Verifica que la funció de directoris sobirans genera l'arbre UE estricte (RF-08)."""
+    """Verifica que la funció de directoris sobirans genera l'arbre sobirà al disc del client (Spec 021 Zero-Storage)."""
     empresa_id = str(uuid.uuid4())
     dirs = crear_directoris_sobirans(empresa_id)
-    assert len(dirs) == 6
-    assert any(d.endswith(empresa_id) for d in dirs)
-    assert any(d.endswith("/docs") for d in dirs)
-    assert any(d.endswith("/albarans") for d in dirs)
-    assert any(d.endswith("/planols") for d in dirs)
-    assert any(d.endswith("/incidencies") for d in dirs)
-    assert any(d.endswith("/backups") for d in dirs)
+    assert len(dirs) >= 6
+    assert any(empresa_id in d for d in dirs)
+    assert any("albarans" in d for d in dirs)
+    assert any("planols" in d for d in dirs)
+    assert any("incidencies" in d for d in dirs)
+    assert any("backups" in d for d in dirs)

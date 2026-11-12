@@ -87,10 +87,12 @@ export default function ConfiguracioPage() {
 
   const [pestanyaActiva, setPestanyaActiva] = useState<PestanyaConfig>("jornada");
 
-  // Estat d'Empresa & Marca Camaleònica (carregat del backend)
+  // Estat d'Empresa & Marca Camaleònica (carregat del backend - Zero Mock)
   const [nomEmpresa, setNomEmpresa] = useState("");
   const [nifEmpresa, setNifEmpresa] = useState("");
   const [adrecaEmpresa, setAdrecaEmpresa] = useState("");
+  const [subdominiEmpresa, setSubdominiEmpresa] = useState("");
+  const [dominiCustomEmpresa, setDominiCustomEmpresa] = useState<string | null>(null);
   const [monograma, setMonograma] = useState("--");
   const [primariHsl, setPrimariHsl] = useState("210 100% 15%");
   const [secundariHsl, setSecundariHsl] = useState("38 92% 50%");
@@ -99,21 +101,29 @@ export default function ConfiguracioPage() {
   const [logotipCarregat, setLogotipCarregat] = useState<string | null>(null);
 
   useEffect(() => {
-    // Carregar dades de l'empresa des del backend
     apiFetch("/gestio/configuracio/empresa")
       .then((data: any) => {
         if (data.nom) setNomEmpresa(data.nom);
         if (data.nif) setNifEmpresa(data.nif);
         if (data.adreca) setAdrecaEmpresa(data.adreca);
+        if (data.subdomini) setSubdominiEmpresa(data.subdomini);
+        if (data.domini_custom) setDominiCustomEmpresa(data.domini_custom);
         if (data.monograma) setMonograma(data.monograma);
         if (data.primari_hsl) setPrimariHsl(data.primari_hsl);
         if (data.secundari_hsl) setSecundariHsl(data.secundari_hsl);
         if (data.accent_hsl) setAccentHsl(data.accent_hsl);
+        if (data.id && data.logotip_path) {
+          setLogotipCarregat(`/api/v1/public/tenant/${data.id}/logo`);
+        }
       })
       .catch(() => {
-        console.error("Error carregant configuració");
+        console.error("Error carregant configuració d'empresa");
       });
   }, []);
+
+  const fqdnEmpresa =
+    dominiCustomEmpresa ||
+    (subdominiEmpresa ? `${subdominiEmpresa}.projectexinoxano.cat` : "Sense subdomini assignat");
 
   // IA ADN de Marca
   const [adnPrompt, setAdnPrompt] = useState("");
@@ -599,7 +609,10 @@ export default function ConfiguracioPage() {
                 </span>
               </div>
               <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-                {nomEmpresa} • NIF: {nifEmpresa} • Subdomini: <span className="font-mono text-emerald-600 dark:text-emerald-400">penedes.sevalor.cat</span>
+                {nomEmpresa || "Sense nom"} • NIF: {nifEmpresa || "—"} • Adreça: {adrecaEmpresa || "No especificada"} • Domini:{" "}
+                <span className="font-mono text-emerald-600 dark:text-emerald-400">
+                  {fqdnEmpresa}
+                </span>
               </p>
             </div>
           </div>

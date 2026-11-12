@@ -61,53 +61,51 @@ def validar_magic_bytes_imatge(content: bytes) -> tuple[str, str]:
     )
 
 
+async def desar_fitxer_logotip_sobira(
+    db: AsyncSession, empresa_id: str | uuid.UUID, content: bytes, ext: str, mime_type: str = "image/png"
+) -> str:
+    """Emmagatzema el logotip corporatiu al disc sobirà del client via SovereignStorageGateway."""
+    from app.services.sovereign_storage import SovereignStorageGateway
+
+    return await SovereignStorageGateway.pujar_fitxer_binari(
+        db=db,
+        empresa_id=empresa_id,
+        categoria="configuracio",
+        nom_fitxer=f"logo_oficial.{ext}",
+        content=content,
+        content_type=mime_type,
+    )
+
+
 def desar_fitxer_logotip(empresa_id: str, content: bytes, ext: str) -> str:
-    """Emmagatzema físicament el logotip corporatiu al disc sobirà d'Hetzner."""
-    candidats = [
-        HETZNER_BASE_DOCS,
-        "/tmp/sevalor_docs",
-        "/tmp/docs",
-    ]
-    canonical_path = f"/docs/{empresa_id}/configuracio/logo_oficial.{ext}"
-    saved = False
-
-    for base in candidats:
-        try:
-            target_dir = os.path.join(base, str(empresa_id), "configuracio")
-            os.makedirs(target_dir, exist_ok=True)
-            target_file = os.path.join(target_dir, f"logo_oficial.{ext}")
-            with open(target_file, "wb") as f:
-                f.write(content)
-            saved = True
-            break
-        except (PermissionError, OSError):
-            continue
-
-    if not saved:
-        logger.warning(
-            f"No s'ha pogut escriure el logotip a disc per a {empresa_id}, es conserva la ruta canònica."
-        )
-
-    return canonical_path
+    """Emmagatzema físicament el logotip corporatiu al disc sobirà del client (sense Hetzner)."""
+    base_vaults = os.getenv("CLIENT_DISKS_MOUNT_ROOT", "/tmp/sevalor_client_disks")
+    target_dir = os.path.join(base_vaults, f"disc_{empresa_id}", "11_configuracio_i_backups", "identitat_camaleo")
+    os.makedirs(target_dir, exist_ok=True)
+    target_file = os.path.join(target_dir, f"logo_oficial.{ext}")
+    with open(target_file, "wb") as f:
+        f.write(content)
+    return str(target_file)
 
 
 def resoldre_fitxer_logotip_local(
     logotip_path: Optional[str], empresa_id: str
 ) -> Optional[str]:
-    """Cerca la ubicació física real del fitxer al servidor."""
+    """Cerca la ubicació física real del fitxer al disc dur sobirà."""
     if logotip_path and os.path.exists(logotip_path):
         return logotip_path
 
-    candidats = [
-        HETZNER_BASE_DOCS,
-        "/tmp/sevalor_docs",
-        "/tmp/docs",
-    ]
-    for base in candidats:
+    base_vaults = os.getenv("CLIENT_DISKS_MOUNT_ROOT", "/tmp/sevalor_client_disks")
+    for base in [base_vaults, "/tmp/sevalor_docs", "/tmp/docs"]:
         for ext in ["png", "jpg", "jpeg", "webp", "svg"]:
-            p = os.path.join(base, str(empresa_id), "configuracio", f"logo_oficial.{ext}")
+            p = os.path.join(
+                base, f"disc_{empresa_id}", "11_configuracio_i_backups", "identitat_camaleo", f"logo_oficial.{ext}"
+            )
             if os.path.exists(p):
                 return p
+            p_old = os.path.join(base, str(empresa_id), "configuracio", f"logo_oficial.{ext}")
+            if os.path.exists(p_old):
+                return p_old
     return None
 
 
@@ -242,7 +240,7 @@ async def pujar_logotip_empresa(
         )
 
     ext, mime_type = validar_magic_bytes_imatge(content)
-    dest_path = desar_fitxer_logotip(str(empresa.id), content, ext)
+    dest_path = await desar_fitxer_logotip_sobira(db, empresa.id, content, ext, mime_type)
 
     empresa.logotip_path = dest_path
     empresa.favicon_path = dest_path

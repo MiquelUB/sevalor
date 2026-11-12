@@ -42,7 +42,8 @@ class SearxngService:
     """Servei asíncron de cerca sobre instància SearXNG."""
 
     def __init__(self, base_url: Optional[str] = None) -> None:
-        self.base_url = (base_url or getattr(settings, "SEARXNG_URL", "http://localhost:8888")).rstrip("/")
+        raw_url = base_url or getattr(settings, "SEARXNG_URL", "http://localhost:8888") or "http://localhost:8888"
+        self.base_url = str(raw_url).rstrip("/")
 
     async def cercar(
         self,
@@ -106,6 +107,6 @@ class SearxngService:
         """Cerca específica per trobar la pàgina web oficial d'una empresa censada."""
         q = f'"{rao_social}" {municipi} web'
         resultats = await self.cercar(q, max_results=2, timeout=2.5)
-        if resultats:
-            return resultats[0]["url"]
+        if resultats and resultats[0].get("url"):
+            return str(resultats[0]["url"])
         return None

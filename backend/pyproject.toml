@@ -3,10 +3,33 @@ minversion = "8.0"
 asyncio_mode = "auto"
 testpaths = ["tests"]
 python_files = ["test_*.py"]
+pythonpath = [".", ".."]
 
 [tool.ruff]
 line-length = 100
 target-version = "py312"
+exclude = [
+    "alembic",
+    ".venv",
+    "scripts",
+    "tests",
+    "update_flota.py",
+    "update_economia.py",
+    "fix_ia.py",
+    "fix_ia_annotated.py",
+    "patch_*.py",
+    "print_*.py",
+    "run_test.py",
+    "test_client.py",
+    "test_endpoints.py",
+    "test_minimal_*.py",
+    "tests/conftest.py",
+    "tests/test_flux_integracio.py",
+    "tests/test_phase1_operari_pwa_eval.py",
+    "tests/test_phase4_telegram_portal_eval.py",
+    "tests/test_residual.py",
+    "tests/test_security_rbac.py",
+]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I"]

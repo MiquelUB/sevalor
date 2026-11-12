@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import re
+import secrets
 import shutil
 import socket
 import time
@@ -36,7 +37,10 @@ from app.models.models import (
     Usuari,
 )
 from app.services.easypanel_service import EasypanelService
-from app.services.sovereign_storage import inicialitzar_arbre_carpetes_disc
+from app.services.sovereign_storage import (
+    SovereignStorageGateway,
+    inicialitzar_arbre_carpetes_disc,
+)
 
 logger = logging.getLogger("superadmin.tenants")
 
@@ -114,6 +118,7 @@ class EquipIAVenutItem(BaseModel):
 class OnboardingTenantRequest(BaseModel):
     rao_social: str = Field(..., min_length=2, max_length=100)
     nif: str = Field(..., min_length=9, max_length=20)
+    adreca: Optional[str] = Field(None, max_length=300)
     slug: Optional[str] = Field(None, min_length=2, max_length=63, pattern=r"^[a-z0-9-]+$")
     subdomini: Optional[str] = Field(None, min_length=2, max_length=63, pattern=r"^[a-z0-9-]+$")
     domini_custom: Optional[str] = Field(
@@ -127,7 +132,7 @@ class OnboardingTenantRequest(BaseModel):
     node_ia_url: Optional[str] = None
     disc_dur_url: Optional[str] = None
     estat_inicial: str = Field("TRIAL", pattern="^(TRIAL|ACTIU)$")
-    pla_subscripcio: str = Field("STARTER", pattern="^(STARTER|PRO|ENTERPRISE|CUSTOM)$")
+    pla_subscripcio: str = Field("PRO", pattern="^(STARTER|PRO|ENTERPRISE|CUSTOM)$")
     quota_operaris: Optional[int] = Field(None, ge=1, le=500)
     quota_buffer_mb: int = Field(500, ge=50, le=50000)
     quota_disc_gb: int = Field(10, ge=1, le=1000)
@@ -139,11 +144,11 @@ class OnboardingTenantRequest(BaseModel):
     tarifa_config_ia: Optional[float] = Field(0.0, ge=0.0)
     equips_ia_venuts: Optional[List[EquipIAVenutItem]] = None
     notes_crm: Optional[str] = None
-    boss_nif: str
-    boss_nom: str
-    boss_cognoms: str
+    boss_nif: str = Field(..., min_length=9, max_length=20)
+    boss_nom: str = Field(..., min_length=1, max_length=100)
+    boss_cognoms: str = Field(..., min_length=1, max_length=150)
     boss_email: str = Field(..., pattern=r"^[\w\.-]+@[\w\.-]+\.\w+$")
-    boss_telefon: Optional[str] = None
+    boss_telefon: Optional[str] = Field(None, max_length=30)
     feature_flags: Optional[Dict[str, bool]] = None
     logotip_base64: Optional[str] = None
 
@@ -956,48 +961,36 @@ async def crear_nou_tenant(
     node_ia_url_final = (
         payload.node_ia_url.strip() if (payload.node_ia_url and copilot_actiu) else None
     )
-    disc_dur_url_final = payload.disc_dur_url.strip() if payload.disc_dur_url else None
-    if disc_dur_url_final and (
-        disc_dur_url_final.startswith("/")
-        or (len(disc_dur_url_final) > 2 and disc_dur_url_final[1] == ":")
-    ):
-        try:
-            os.makedirs(disc_dur_url_final, exist_ok=True)
-            inicialitzar_arbre_carpetes_disc(disc_dur_url_final)
-        except OSError:
-            pass
-
-    node_ia_actiu_final = bool((node_ia_url_final or disc_dur_url_final) and copilot_actiu)
     agent_prompt_final = (
         payload.agent_prompt_system.strip()
         if (payload.agent_prompt_system and copilot_actiu)
         else None
     )
+    # Unificació d'URL del Node Local (Opció A+): si disc_dur_url no s'especifica però node_ia_url sí, s'unifiquen
+    disc_dur_url_final = (
+        payload.disc_dur_url.strip()
+        if payload.disc_dur_url and payload.disc_dur_url.strip()
+        else (node_ia_url_final if node_ia_url_final else None)
+    )
+    if disc_dur_url_final and disc_dur_url_final.startswith("Carpeta Local:"):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="El format 'Carpeta Local:' no és vàlid. Indica la URL de l'Agent HTTP Local (ex: https://node-empresa.projectexinoxano.cat) o ruta física muntada.",
+        )
 
-    logotip_path = None
-    if payload.logotip_base64:
-        import base64
-
-        try:
-            raw_b64 = payload.logotip_base64
-            if "," in raw_b64:
-                raw_b64 = raw_b64.split(",", 1)[1]
-            content_bytes = base64.b64decode(raw_b64)
-            if len(content_bytes) <= 10 * 1024 * 1024:
-                from app.api.v1.superadmin.empreses import (
-                    desar_fitxer_logotip,
-                    validar_magic_bytes_imatge,
-                )
-
-                ext, _mime = validar_magic_bytes_imatge(content_bytes)
-                logotip_path = desar_fitxer_logotip(str(nou_id), content_bytes, ext)
-        except Exception as e:
-            logger.warning(f"No s'ha pogut processar el logotip base64 durant onboarding: {e}")
+    vault_token_unic = f"svlt_{secrets.token_urlsafe(24)}"
+    adreca_norm = payload.adreca.strip() if payload.adreca and payload.adreca.strip() else None
+    telefon_boss_norm = (
+        payload.boss_telefon.strip()
+        if payload.boss_telefon and payload.boss_telefon.strip()
+        else None
+    )
 
     nova_empresa = Empresa(
         id=nou_id,
         nom=payload.rao_social.strip(),
         nif=payload.nif.strip().upper(),
+        adreca=adreca_norm,
         subdomini=subdomini_norm,
         domini_custom=domini_custom_norm,
         estat_domini=estat_domini,
@@ -1016,7 +1009,8 @@ async def crear_nou_tenant(
         agent_prompt_system=agent_prompt_final,
         node_ia_url=node_ia_url_final,
         disc_dur_url=disc_dur_url_final,
-        node_ia_actiu=node_ia_actiu_final,
+        node_ia_actiu=bool(node_ia_url_final or disc_dur_url_final),
+        telegram_webhook_secret=vault_token_unic,
         data_onboarding=datetime.now(timezone.utc),
         feature_copilot_ia=copilot_actiu,
         feature_flota=payload.feature_flags.get("flota_avancada", True)
@@ -1031,8 +1025,8 @@ async def crear_nou_tenant(
         primari_hsl=payload.primari_hsl or "210 100% 15%",
         secundari_hsl=payload.secundari_hsl or "38 92% 50%",
         accent_hsl=payload.accent_hsl or "190 90% 50%",
-        logotip_path=logotip_path,
-        favicon_path=logotip_path,
+        logotip_path=None,
+        favicon_path=None,
     )
     db.add(nova_empresa)
 
@@ -1044,7 +1038,7 @@ async def crear_nou_tenant(
         nom=payload.boss_nom.strip(),
         cognoms=payload.boss_cognoms.strip(),
         email=str(payload.boss_email).strip().lower(),
-        telefon=payload.boss_telefon.strip() if payload.boss_telefon else "+34",
+        telefon=telefon_boss_norm,
         rol="BOSS",
         estat="ACTIU",
         totp_activat=False,
@@ -1069,6 +1063,44 @@ async def crear_nou_tenant(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Error en BD: {str(e)}"
         )
 
+    # Persistència immediata al Disc Dur Sobirà del Client (Minut 1)
+    logotip_vault_path: Optional[str] = None
+    if payload.logotip_base64:
+        import base64
+
+        try:
+            raw_b64 = (
+                payload.logotip_base64.split(",", 1)[1]
+                if "," in payload.logotip_base64
+                else payload.logotip_base64
+            )
+            content_bytes = base64.b64decode(raw_b64)
+            if len(content_bytes) <= 10 * 1024 * 1024:
+                from app.api.v1.superadmin.empreses import validar_magic_bytes_imatge
+
+                ext, mime_type = validar_magic_bytes_imatge(content_bytes)
+                logotip_vault_path = await SovereignStorageGateway.pujar_fitxer_binari(
+                    db=db,
+                    empresa_id=nou_id,
+                    categoria="configuracio",
+                    nom_fitxer=f"logo_oficial.{ext}",
+                    content=content_bytes,
+                    content_type=mime_type,
+                )
+                nova_empresa.logotip_path = logotip_vault_path
+                nova_empresa.favicon_path = logotip_vault_path
+                await db.commit()
+        except Exception as e:
+            logger.warning(
+                "No s'ha pogut persistir el logotip al disc del client durant l'alta: %s", e
+            )
+
+    await SovereignStorageGateway.inicialitzar_dades_onboarding_empresa(
+        db=db,
+        empresa=nova_empresa,
+        boss=nou_boss,
+    )
+
     emp_id_str = str(nou_id)
 
     try:
@@ -1088,7 +1120,7 @@ async def crear_nou_tenant(
         "exp": expire,
     }
     jwt_token = jwt.encode(payload_jwt, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
-    domini_base = domini_custom_norm or f"{subdomini_norm}.sevalor.app"
+    domini_base = domini_custom_norm or f"{subdomini_norm}.projectexinoxano.cat"
     enllac_activacio = f"https://{domini_base}/activacio?token={jwt_token}"
 
     return {

@@ -119,10 +119,12 @@ export default function SuperadminTenantOnboardingPage() {
   // Pas 1: Dades Fiscals & Marca Camaleó
   const [raoSocial, setRaoSocial] = useState<string>("");
   const [nif, setNif] = useState<string>("");
+  const [adrecaFiscal, setAdrecaFiscal] = useState<string>("");
   const [vertical, setVertical] = useState<string>("");
   const [magatzemFamilies, setMagatzemFamilies] = useState<string>("");
   const [agentPrompt, setAgentPrompt] = useState<string>("");
   const [nodeIaUrl, setNodeIaUrl] = useState<string>("");
+  const [discDurUrl, setDiscDurUrl] = useState<string>("");
   const [nodeIaTesting, setNodeIaTesting] = useState<boolean>(false);
   const [nodeIaStatus, setNodeIaStatus] = useState<{
     status: "OK" | "ERROR";
@@ -131,7 +133,9 @@ export default function SuperadminTenantOnboardingPage() {
     models?: string[];
     latencia_ms?: number | null;
   } | null>(null);
-  const [responsable, setResponsable] = useState<string>("");
+  const [bossNif, setBossNif] = useState<string>("");
+  const [bossNom, setBossNom] = useState<string>("");
+  const [bossCognoms, setBossCognoms] = useState<string>("");
   const [emailGerent, setEmailGerent] = useState<string>("");
   const [telefon, setTelefon] = useState<string>("");
   const [primariHsl, setPrimariHsl] = useState<string>("142 71% 25%");
@@ -186,6 +190,7 @@ export default function SuperadminTenantOnboardingPage() {
 
   // Pas 4: Llicència Inicial & Quotes d'Operaris
   const [estatInicial, setEstatInicial] = useState<"TRIAL" | "ACTIU">("TRIAL");
+  const [plaSubscripcio, setPlaSubscripcio] = useState<"STARTER" | "PRO" | "ENTERPRISE" | "CUSTOM">("PRO");
   const [quotaOperaris, setQuotaOperaris] = useState<number>(10);
   const [featureFlags, setFeatureFlags] = useState({
     copilot_ia: true,
@@ -232,7 +237,7 @@ export default function SuperadminTenantOnboardingPage() {
     .replace(/\/.*$/, "")
     .replace(/[^a-z0-9.-]/g, "");
 
-  const fqdnResultant = dominiCustomNet || `${slugCalculat}.sevalor.cat`;
+  const fqdnResultant = dominiCustomNet || `${slugCalculat}.projectexinoxano.cat`;
 
   // Extracció de peces del domini per a la instrucció DNS CNAME
   const dominiParts = dominiCustomNet ? dominiCustomNet.split(".").filter(Boolean) : [];
@@ -303,10 +308,10 @@ export default function SuperadminTenantOnboardingPage() {
     setDryRunSuccess(null);
     setErrorMessage(null);
 
-    if (!raoSocial.trim() || !nif.trim() || !emailGerent.trim()) {
+    if (!raoSocial.trim() || !nif.trim() || !emailGerent.trim() || !bossNif.trim() || !bossNom.trim() || !bossCognoms.trim()) {
       setDryRunRunning(false);
       setDryRunSuccess(false);
-      setErrorMessage("Cal indicar Raó Social, NIF i Email del gerent abans de verificar.");
+      setErrorMessage("Cal indicar Raó Social, CIF d'empresa, DNI/NIE del Gerent, Nom, Cognoms i Email abans de verificar.");
       return;
     }
 
@@ -342,8 +347,11 @@ export default function SuperadminTenantOnboardingPage() {
   const handleResetForm = () => {
     setRaoSocial("");
     setNif("");
+    setAdrecaFiscal("");
     setVertical("");
-    setResponsable("");
+    setBossNif("");
+    setBossNom("");
+    setBossCognoms("");
     setEmailGerent("");
     setTelefon("");
     setSlug("");
@@ -353,10 +361,12 @@ export default function SuperadminTenantOnboardingPage() {
     setDryRunSuccess(null);
     setErrorMessage(null);
     setNodeIaUrl("");
+    setDiscDurUrl("");
     setNodeIaTesting(false);
     setNodeIaStatus(null);
     setAgentPrompt("");
     setEstatInicial("TRIAL");
+    setPlaSubscripcio("PRO");
     setQuotaOperaris(10);
     handleClearLogo();
     setPasActual(1);
@@ -366,8 +376,8 @@ export default function SuperadminTenantOnboardingPage() {
     setProvisioning(true);
     setErrorMessage(null);
     try {
-      if (!raoSocial.trim() || !nif.trim() || !emailGerent.trim()) {
-        throw new Error("Cal omplir Raó Social, NIF i Email del gerent.");
+      if (!raoSocial.trim() || !nif.trim() || !emailGerent.trim() || !bossNif.trim() || !bossNom.trim() || !bossCognoms.trim()) {
+        throw new Error("Cal omplir Raó Social, CIF d'empresa, DNI/NIE del Gerent, Nom, Cognoms i Email.");
       }
 
       if (featureFlags.copilot_ia) {
@@ -379,27 +389,26 @@ export default function SuperadminTenantOnboardingPage() {
         }
       }
 
-      const nomParts = responsable.trim().split(" ");
-      const nom = nomParts[0] || "Gerent";
-      const cognoms = nomParts.slice(1).join(" ") || "General";
-
       const slugFinal = slugCalculat;
       const dominiCustomFinal = dominiCustomNet || undefined;
+      const urlNodeUnificat = discDurUrl.trim() || nodeIaUrl.trim() || undefined;
 
       const data = await apiFetch<any>("/superadmin/tenants/onboarding", {
         method: "POST",
         body: JSON.stringify({
           rao_social: raoSocial.trim(),
           nif: nif.trim().toUpperCase(),
+          adreca: adrecaFiscal.trim() || undefined,
           slug: slugFinal,
           subdomini: slugFinal,
           domini_custom: dominiCustomFinal,
           vertical: vertical.trim() || "Manteniment i Serveis Tècnics",
           magatzem_families_default: magatzemFamilies.trim() || undefined,
           agent_prompt_system: featureFlags.copilot_ia ? agentPrompt.trim() : undefined,
-          node_ia_url: featureFlags.copilot_ia ? nodeIaUrl.trim() : undefined,
+          node_ia_url: featureFlags.copilot_ia ? (nodeIaUrl.trim() || urlNodeUnificat) : undefined,
+          disc_dur_url: urlNodeUnificat,
           estat_inicial: estatInicial,
-          pla_subscripcio: "PRO",
+          pla_subscripcio: plaSubscripcio,
           quota_operaris: Number(quotaOperaris),
           quota_buffer_mb: 500,
           quota_disc_gb: 10,
@@ -407,11 +416,11 @@ export default function SuperadminTenantOnboardingPage() {
           secundari_hsl: secundariHsl.trim(),
           accent_hsl: accentHsl.trim(),
           logotip_base64: logoBase64 || undefined,
-          boss_nif: nif.trim().toUpperCase(),
-          boss_nom: nom,
-          boss_cognoms: cognoms,
+          boss_nif: bossNif.trim().toUpperCase(),
+          boss_nom: bossNom.trim(),
+          boss_cognoms: bossCognoms.trim(),
           boss_email: emailGerent.trim().toLowerCase(),
-          boss_telefon: telefon.trim() || "+34600000000",
+          boss_telefon: telefon.trim() || undefined,
           feature_flags: featureFlags,
         }),
       });
@@ -431,7 +440,7 @@ export default function SuperadminTenantOnboardingPage() {
       }
 
       setProvisionedSuccess(true);
-      const hostAcceso = dominiCustomFinal || `${slugFinal}.sevalor.cat`;
+      const hostAcceso = dominiCustomFinal || `${slugFinal}.projectexinoxano.cat`;
       setInvitationUrl(data?.tenant?.enllac_activacio_2fa || `https://${hostAcceso}/activacio`);
     } catch (err: any) {
       setErrorMessage(err.message || "Error durant el provisionament del tenant.");
@@ -538,6 +547,19 @@ export default function SuperadminTenantOnboardingPage() {
 
               <div className="sm:col-span-2">
                 <label className="block font-semibold text-slate-600 dark:text-slate-400 mb-1">
+                  Adreça Fiscal de l'Empresa
+                </label>
+                <input
+                  type="text"
+                  value={adrecaFiscal}
+                  onChange={(e) => setAdrecaFiscal(e.target.value)}
+                  placeholder="ex. Polígon Industrial Sud, Nau 4, Amposta"
+                  className="w-full p-2.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-200 font-medium"
+                />
+              </div>
+
+              <div className="sm:col-span-2">
+                <label className="block font-semibold text-slate-600 dark:text-slate-400 mb-1">
                   Vertical del Negoci (Especialitat)
                 </label>
                 <input
@@ -553,16 +575,46 @@ export default function SuperadminTenantOnboardingPage() {
               </div>
 
               <div>
-                <label className="block font-semibold text-slate-600 dark:text-slate-400 mb-1">Responsable Gerència (Boss)</label>
+                <label className="block font-semibold text-slate-600 dark:text-slate-400 mb-1">DNI / NIE del Gerent (Boss)</label>
                 <input
                   type="text"
-                  value={responsable}
-                  onChange={(e) => setResponsable(e.target.value)}
-                  placeholder="Nom i cognoms del gerent"
+                  value={bossNif}
+                  onChange={(e) => setBossNif(e.target.value)}
+                  placeholder="ex. 47891234X"
+                  className="w-full p-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-200 font-mono font-bold"
+                />
+              </div>
+              <div>
+                <label className="block font-semibold text-slate-600 dark:text-slate-400 mb-1">Nom del Gerent</label>
+                <input
+                  type="text"
+                  value={bossNom}
+                  onChange={(e) => setBossNom(e.target.value)}
+                  placeholder="ex. Miquel"
                   className="w-full p-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-200"
                 />
               </div>
               <div>
+                <label className="block font-semibold text-slate-600 dark:text-slate-400 mb-1">Cognoms del Gerent</label>
+                <input
+                  type="text"
+                  value={bossCognoms}
+                  onChange={(e) => setBossCognoms(e.target.value)}
+                  placeholder="ex. Pons"
+                  className="w-full p-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-200"
+                />
+              </div>
+              <div>
+                <label className="block font-semibold text-slate-600 dark:text-slate-400 mb-1">Telèfon Directe del Gerent</label>
+                <input
+                  type="tel"
+                  value={telefon}
+                  onChange={(e) => setTelefon(e.target.value)}
+                  placeholder="ex. +34611223344"
+                  className="w-full p-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-200 font-mono"
+                />
+              </div>
+              <div className="sm:col-span-2">
                 <label className="block font-semibold text-slate-600 dark:text-slate-400 mb-1">Correu d'Activació Inicial (2FA)</label>
                 <input
                   type="email"
@@ -1015,7 +1067,26 @@ export default function SuperadminTenantOnboardingPage() {
               </div>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-xs">
+              <div>
+                <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">
+                  Pla de Subscripció
+                </label>
+                <select
+                  value={plaSubscripcio}
+                  onChange={(e) => setPlaSubscripcio(e.target.value as "STARTER" | "PRO" | "ENTERPRISE" | "CUSTOM")}
+                  className="w-full p-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-mono font-bold"
+                >
+                  <option value="STARTER">STARTER (Fins a 5 operaris)</option>
+                  <option value="PRO">PRO (Fins a 15 operaris)</option>
+                  <option value="ENTERPRISE">ENTERPRISE (Fins a 50 operaris)</option>
+                  <option value="CUSTOM">CUSTOM (Personalitzat)</option>
+                </select>
+                <span className="text-[10px] text-slate-400 block mt-0.5">
+                  Paquet base comercial de l'empresa
+                </span>
+              </div>
+
               <div>
                 <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">
                   Estat Inicial de la Llicència
@@ -1145,6 +1216,23 @@ export default function SuperadminTenantOnboardingPage() {
                       <Activity className={`w-3.5 h-3.5 ${nodeIaTesting ? "animate-spin" : ""}`} />
                       <span>{nodeIaTesting ? "Comprovant..." : "Provar Connexió Node IA"}</span>
                     </button>
+                  </div>
+
+                  <div className="pt-2 border-t border-indigo-200/50 dark:border-indigo-900/50">
+                    <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1 flex items-center justify-between text-xs">
+                      <span>URL de l'Agent HTTP de Disc Dur Dedicat (Opció A+)</span>
+                      <span className="text-[10px] text-indigo-600 dark:text-indigo-400 font-mono">Port 9001 o Túnel</span>
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="ex: https://node-empresa.projectexinoxano.cat o http://127.0.0.1:9001"
+                      value={discDurUrl}
+                      onChange={(e) => setDiscDurUrl(e.target.value)}
+                      className="w-full p-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 font-mono text-xs font-bold"
+                    />
+                    <p className="text-[10px] text-slate-500 mt-1">
+                      Si es deixa buit, s'unificarà automàticament amb la URL del Node IA de l'empresa.
+                    </p>
                   </div>
 
                   {/* Badge & Caixa de diagnòstic viu */}

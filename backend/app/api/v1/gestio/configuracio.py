@@ -332,6 +332,7 @@ async def obtenir_dades_empresa(
         "agent_prompt_system": empresa.agent_prompt_system,
         "adreca": empresa.adreca,
         "subdomini": empresa.subdomini,
+        "domini_custom": empresa.domini_custom,
         "primari_hsl": empresa.primari_hsl,
         "secundari_hsl": empresa.secundari_hsl,
         "accent_hsl": empresa.accent_hsl,

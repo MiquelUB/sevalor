@@ -175,6 +175,7 @@ const PALETES_PREDEFINIDES = [
 ];
 
 export default function EmpresaDetailPage({ params }: { params: { id: string } }) {
+  const empresaId = params.id;
   const [tenant, setTenant] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -228,8 +229,6 @@ export default function EmpresaDetailPage({ params }: { params: { id: string } }
   const [nodeIaStatus, setNodeIaStatus] = useState<any>(null);
   const [discDurTesting, setDiscDurTesting] = useState(false);
   const [discDurStatus, setDiscDurStatus] = useState<any>(null);
-  const [localFolderFilesCount, setLocalFolderFilesCount] = useState<number | null>(null);
-  const folderInputRef = useRef<HTMLInputElement>(null);
 
   // CRM Condicions Comercials & Equips IA (Venda)
   const [tarifaLlicenciaBase, setTarifaLlicenciaBase] = useState<number>(0);
@@ -607,161 +606,36 @@ export default function EmpresaDetailPage({ params }: { params: { id: string } }
     }
   };
 
-  const handleSeleccionarCarpetaLocal = async () => {
-    setErrorMessage(null);
-    try {
-      if (typeof window !== "undefined" && "showDirectoryPicker" in window) {
-        const dirHandle = await (window as any).showDirectoryPicker({ mode: "read" });
-        let count = 0;
-        for await (const _entry of dirHandle.values()) {
-          count += 1;
-          if (count >= 500) break;
-        }
-        const folderLabel = `Carpeta Local: ${dirHandle.name}`;
-        setLocalFolderFilesCount(count);
-        setFeatures((prev) => ({
-          ...prev,
-          disc_dur_url: prev.disc_dur_url?.trim() || folderLabel,
-          node_ia_actiu: true,
-        }));
-        setDiscDurStatus({
-          status: "OK",
-          motiu: "DISC_LOCAL_VINCULAT",
-          missatge: `Disc dur local enllaçat directament des de la plataforma (${count} elements detectats a '${dirHandle.name}').`,
-          endpoint_resolt: folderLabel,
-          codi_http: 200,
-          latencia_ms: 2,
-        });
-        return;
-      }
-    } catch (err: any) {
-      if (err?.name === "AbortError") return;
-    }
-    folderInputRef.current?.click();
-  };
-
-  const handleFolderInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files;
-    if (!files || files.length === 0) return;
-    const firstPath = (files[0] as any).webkitRelativePath || files[0].name;
-    const folderName = firstPath.split("/")[0] || "Disc_Dur_Local";
-    const folderLabel = `Carpeta Local: ${folderName}`;
-    setLocalFolderFilesCount(files.length);
-    setFeatures((prev) => ({
-      ...prev,
-      disc_dur_url: prev.disc_dur_url?.trim() || folderLabel,
-      node_ia_actiu: true,
-    }));
-    setDiscDurStatus({
-      status: "OK",
-      motiu: "DISC_LOCAL_VINCULAT",
-      missatge: `Disc dur local verificat des de la plataforma (${files.length} fitxers/plànols accessibles a '${folderName}').`,
-      endpoint_resolt: folderLabel,
-      codi_http: 200,
-      latencia_ms: 1,
-    });
-  };
-
   const handleVerificarDiscDur = async () => {
     const rawDiscUrl = (features.disc_dur_url || features.node_ia_url || "").trim();
-    if (!rawDiscUrl) {
-      setErrorMessage("Introdueix l'adreça del disc dur dedicat o selecciona una carpeta local des de la plataforma.");
+    if (!rawDiscUrl || rawDiscUrl.startsWith("Carpeta Local:")) {
+      setErrorMessage(
+        "Introdueix l'adreça HTTP(S) de l'Agent Local del client (ex: https://node-empresa.projectexinoxano.cat)."
+      );
       return;
     }
     setDiscDurTesting(true);
     setDiscDurStatus(null);
     setErrorMessage(null);
 
-    // 1. Si és una carpeta local seleccionada des del navegador
-    if (rawDiscUrl.startsWith("Carpeta Local:") || localFolderFilesCount !== null) {
-      setDiscDurStatus({
-        status: "OK",
-        motiu: "DISC_LOCAL_VINCULAT",
-        missatge: `Carpeta local del disc dur verificada des de la plataforma (${localFolderFilesCount ?? "múltiples"} fitxers disponibles).`,
-        endpoint_resolt: rawDiscUrl,
-        codi_http: 200,
-        latencia_ms: 1,
-      });
-      setFeatures((prev) => ({ ...prev, node_ia_actiu: true }));
-      setDiscDurTesting(false);
-      return;
-    }
-
-    // 2. Sonda HTTP directa des de la plataforma (navegador del client -> 127.0.0.1 / LAN)
-    if (rawDiscUrl.startsWith("http://") || rawDiscUrl.startsWith("https://")) {
-      const base = rawDiscUrl.replace(/\/+$/, "");
-      const isLocalDiscUrl =
-        /^https?:\/\/(127\.0\.0\.1|localhost|192\.168\.|10\.|172\.(1[6-9]|2\d|3[0-1])\.)/i.test(base);
-      const testUrls = [
-        `${base}/docs/planols`,
-        `${base}/docs`,
-        `${base}/storage`,
-        `${base}/v1/models`,
-        `${base}/`,
-      ];
-      for (const url of testUrls) {
-        try {
-          const t0 = performance.now();
-          const ctrl = new AbortController();
-          const timer = setTimeout(() => ctrl.abort(), 3500);
-          const resp = await fetch(url, {
-            method: "GET",
-            mode: "cors",
-            signal: ctrl.signal,
-          });
-          clearTimeout(timer);
-          const latencia = Math.max(1, Math.round(performance.now() - t0));
-          if (resp.status < 500) {
-            setDiscDurStatus({
-              status: "OK",
-              motiu: "DISC_OPERATIU",
-              missatge: `Connexió establerta directament des de la plataforma amb el disc dur dedicat (${latencia} ms). L'arxiu històric està operatiu per servir dades en temps real.`,
-              endpoint_resolt: url,
-              codi_http: resp.status,
-              latencia_ms: latencia,
-            });
-            setFeatures((prev) => ({ ...prev, node_ia_actiu: true }));
-            setDiscDurTesting(false);
-            return;
-          }
-        } catch {
-          // Següent ruta
-        }
-      }
-
-      if (isLocalDiscUrl) {
-        setDiscDurStatus({
-          status: "ERROR",
-          motiu: "DISC_LOCAL_NO_RESPON",
-          missatge: `El navegador no ha pogut connectar amb ${base}. Pots clicar el botó 'Seleccionar Carpeta' per enllaçar directament la carpeta del teu disc dur des de la plataforma.`,
-          latencia_ms: null,
-        });
-        setDiscDurTesting(false);
-        return;
-      }
-    }
-
-    // 3. Fallback al backend (per a rutes físiques del servidor o URLs sense CORS)
     try {
       const res = await apiFetch<any>("/superadmin/tenants/verificar-disc-dur", {
         method: "POST",
         body: JSON.stringify({
           disc_dur_url: rawDiscUrl,
           node_ia_url: features.node_ia_url?.trim() || rawDiscUrl,
-          empresa_id: params.id,
+          empresa_id: empresaId,
         }),
       });
       setDiscDurStatus(res);
       if (res.status === "OK") {
-        if (!features.node_ia_actiu) {
-          setFeatures((prev) => ({ ...prev, node_ia_actiu: true }));
-        }
+        setFeatures((prev) => ({ ...prev, disc_dur_url: rawDiscUrl, node_ia_actiu: true }));
       }
     } catch (err: any) {
       setDiscDurStatus({
         status: "ERROR",
-        motiu: "ERROR_XARXA",
-        missatge: err.message || "Error contactant amb el disc dur dedicat de l'empresa.",
+        motiu: "NODE_OFFLINE",
+        missatge: err.message || "No s'ha pogut connectar amb l'Agent de Disc Dur del client.",
       });
     } finally {
       setDiscDurTesting(false);
@@ -2628,12 +2502,12 @@ export default function EmpresaDetailPage({ params }: { params: { id: string } }
               <div className="p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-800/30 space-y-2">
                 <label className="block text-[11px] font-mono font-bold text-slate-700 dark:text-slate-300 flex items-center gap-1.5">
                   <HardDrive className="w-3.5 h-3.5 text-emerald-500" />
-                  <span>2. Adreça o Carpeta del Disc Dur Dedicat (Arxiu Històric i Plànols)</span>
+                  <span>2. URL de l'Agent HTTP de Disc Dur Dedicat (Opció A+ / Túnel)</span>
                 </label>
                 <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
                   <input
                     type="text"
-                    placeholder="Ex: http://127.0.0.1:1234/docs, http://127.0.0.1:8080 o selecciona carpeta local"
+                    placeholder="Ex: http://127.0.0.1:9001 o https://node-empresa.projectexinoxano.cat"
                     value={features.disc_dur_url}
                     onChange={(e) => {
                       setFeatures({ ...features, disc_dur_url: e.target.value });
@@ -2641,26 +2515,7 @@ export default function EmpresaDetailPage({ params }: { params: { id: string } }
                     }}
                     className="flex-1 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-white text-xs rounded-xl p-2.5 font-mono focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 outline-none"
                   />
-                  <input
-                    ref={folderInputRef}
-                    type="file"
-                    // @ts-expect-error webkitdirectory is standard in modern browsers
-                    webkitdirectory="true"
-                    directory="true"
-                    multiple
-                    onChange={handleFolderInputChange}
-                    className="hidden"
-                  />
                   <div className="flex items-center gap-2 shrink-0">
-                    <button
-                      type="button"
-                      onClick={handleSeleccionarCarpetaLocal}
-                      className="px-3 py-2.5 rounded-xl bg-slate-200 hover:bg-slate-300 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 text-xs font-mono font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer"
-                      title="Selecciona una carpeta del disc dur local directament des de la plataforma"
-                    >
-                      <FolderOpen className="w-3.5 h-3.5 text-amber-500" />
-                      <span>Seleccionar Carpeta</span>
-                    </button>
                     <button
                       type="button"
                       onClick={handleVerificarDiscDur}
@@ -2674,7 +2529,7 @@ export default function EmpresaDetailPage({ params }: { params: { id: string } }
                   </div>
                 </div>
                 <p className="text-[10px] text-slate-500 dark:text-slate-400">
-                  Pots introduir una adreça HTTP local del disc dur o vincular directament la carpeta física del teu ordinador amb el botó <strong>Seleccionar Carpeta</strong>.
+                  Indica la URL de l'Agent HTTP Local (Opció A+, ex: http://127.0.0.1:9001 o túnel https://node-empresa.projectexinoxano.cat) o ruta física muntada.
                 </p>
               </div>
 

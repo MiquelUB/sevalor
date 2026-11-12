@@ -1,6 +1,7 @@
 """Seguretat, control d'accés basat en rols (RBAC) i dependències d'autorització."""
 
-from typing import Any, Callable, Dict, List
+from datetime import datetime, timedelta, timezone
+from typing import Any, Callable, Dict, List, Optional
 
 import jwt
 from fastapi import Depends, HTTPException, Request, status
@@ -128,3 +129,22 @@ def require_financial_access_checker(
 require_financial_access = require_financial_access_checker
 require_boss = require_roles(["BOSS"])
 require_enginyer_or_boss = require_roles(["BOSS", "ENGINYER"])
+
+
+def create_access_token(
+    data: Dict[str, Any], expires_delta: Optional[timedelta] = None
+) -> str:
+    """Genera un token JWT d'accés codificant les dades rebudes."""
+    to_encode = data.copy()
+    if expires_delta:
+        expire = datetime.now(timezone.utc) + expires_delta
+    elif "exp" not in to_encode:
+        expire = datetime.now(timezone.utc) + timedelta(minutes=15)
+    else:
+        expire = None
+
+    if expire:
+        to_encode["exp"] = expire
+
+    return str(jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM))
+

@@ -106,6 +106,16 @@ app.add_middleware(SlowAPIMiddleware)
 
 
 @app.middleware("http")
+async def normalitzar_prefix_api_v1(request: Request, call_next):  # type: ignore[no-untyped-def]
+    """Normalitza peticions amb prefix redundant /api/v1/api/v1 procedents de clients de test o proxys."""
+    path = request.scope.get("path", "")
+    if path.startswith("/api/v1/api/v1"):
+        request.scope["path"] = path[len("/api/v1") :]
+    return await call_next(request)
+
+
+
+@app.middleware("http")
 async def metrics_middleware(request, call_next):  # type: ignore[no-untyped-def]
     """Mesura durada i codi d'estat reals de cada petició (només metadades, cap dada de negoci)."""
     import time as _time

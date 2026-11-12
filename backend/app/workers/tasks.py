@@ -24,31 +24,41 @@ def crear_directoris_sobirans(
     base_data_dir: str | None = None,
     base_docs_dir: str | None = None,
 ) -> List[str]:
-    """Crea l'arbre de directoris sobirans per a una empresa (Spec 021 RF-08)."""
-    data_prefix = str(base_data_dir or os.getenv("SOVEREIGN_DATA_PATH", "/data"))
-    str(base_docs_dir or os.getenv("SOVEREIGN_DOCS_PATH", "/docs"))
+    """Crea l'arbre de directoris sobirans per a una empresa exclusivament al disc del client (Spec 021 Zero-Storage)."""
+    from app.services.sovereign_storage import inicialitzar_arbre_carpetes_disc
+
+    base_vaults = os.getenv("CLIENT_DISKS_MOUNT_ROOT", "/tmp/sevalor_client_disks")
+    empresa_disk = os.path.join(base_vaults, f"disc_{empresa_id}")
+    return inicialitzar_arbre_carpetes_disc(empresa_disk)
+
+
+@celery_app.task(name="crear_directoris_sobirans_task", queue="queue_default")
+def crear_directoris_sobirans_task(empresa_id: str) -> List[str]:
+    """Tasca Celery per inicialitzar directoris sobirans al disc del client."""
+    return crear_directoris_sobirans(empresa_id)
+
+
+@celery_app.task(name="drenar_cua_transit_task", queue="queue_default")
+def drenar_cua_transit_task(empresa_id: str) -> dict:
+    """Tasca Celery de reintent per purgar la cua de trànsit temporal cap al node del client."""
+    import asyncio
+
+    from app.core.db import AsyncSessionLocal
+    from app.services.sovereign_storage import SovereignStorageGateway
+
+    async def _drenar():
+        async with AsyncSessionLocal() as session:
+            return await SovereignStorageGateway.drenar_cua_transit_empresa(session, empresa_id)
 
     try:
-        os.makedirs(data_prefix, exist_ok=True)
-    except OSError:
-        data_prefix = "/tmp/data"
-
-    dirs = [
-        f"{data_prefix}/{empresa_id}",
-        f"{data_prefix}/{empresa_id}/docs",
-        f"{data_prefix}/{empresa_id}/docs/albarans",
-        f"{data_prefix}/{empresa_id}/docs/planols",
-        f"{data_prefix}/{empresa_id}/incidencies",
-        f"{data_prefix}/{empresa_id}/backups",
-    ]
-    creades = []
-    for d in dirs:
-        try:
-            os.makedirs(d, exist_ok=True)
-            creades.append(d)
-        except OSError as e:
-            logger.warning("No s'ha pogut crear %s: %s", d, e)
-    return creades
+        loop = asyncio.get_running_loop()
+        loop.create_task(_drenar())
+        return {"status": "ENQUEUED_IN_LOOP"}
+    except RuntimeError:
+        return asyncio.run(_drenar())
+    except Exception as exc:
+        logger.warning("Error drenant cua de trànsit per %s: %s", empresa_id, exc)
+        return {"error": str(exc)}
 
 
 @celery_app.task(name="generar_informe_planol_pdf", queue="queue_documents")

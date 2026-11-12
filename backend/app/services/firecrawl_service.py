@@ -1879,10 +1879,10 @@ class FirecrawlMultiChannelService:
                     break
                 lot = await asyncio.gather(*(un(it) for it in brut[i:i + 5]), return_exceptions=True)
                 for r in lot:
-                    if isinstance(r, Exception):
+                    if isinstance(r, BaseException):
                         logger.warning("candidat fallit: %r", r)
                         embut["error"] += 1
-                    elif r:
+                    elif isinstance(r, dict):
                         validats.append(r)
 
         logger.info("embut descoberta cp=%s vertical=%s %s", cp, vertical, dict(embut))
