@@ -20,6 +20,7 @@ from app.models.models import (
     Empresa,
     Incidencia,
     OrdreTreball,
+    OrdreTreballOperari,
     RegistreJornadaLaboral,
     Usuari,
     Vehicle,
@@ -424,7 +425,15 @@ async def _build_operari_response(
     # 3. Coordenades segons feines actives
     stmt_ot = select(OrdreTreball).where(
         OrdreTreball.empresa_id == emp_uuid,
-        OrdreTreball.cap_de_colla_id == op.id,
+        or_(
+            OrdreTreball.cap_de_colla_id == op.id,
+            OrdreTreball.id.in_(
+                select(OrdreTreballOperari.ordre_treball_id).where(
+                    OrdreTreballOperari.operari_id == op.id,
+                    OrdreTreballOperari.empresa_id == emp_uuid,
+                )
+            ),
+        ),
         OrdreTreball.estat.in_(["EN_CURS", "EN_RUTA", "EN_OBRA", "ASSIGNADA", "PROGRAMADA"]),
     ).order_by(OrdreTreball.created_at.desc())
     ot_res = await db.execute(stmt_ot)
@@ -1380,7 +1389,15 @@ async def get_feines_operari(
         select(OrdreTreball)
         .where(
             OrdreTreball.empresa_id == uuid.UUID(empresa_id),
-            OrdreTreball.cap_de_colla_id == operari_id,
+            or_(
+                OrdreTreball.cap_de_colla_id == operari_id,
+                OrdreTreball.id.in_(
+                    select(OrdreTreballOperari.ordre_treball_id).where(
+                        OrdreTreballOperari.operari_id == operari_id,
+                        OrdreTreballOperari.empresa_id == uuid.UUID(empresa_id),
+                    )
+                ),
+            ),
         )
         .order_by(OrdreTreball.created_at.desc())
     )

@@ -80,7 +80,9 @@ export function QuadrillesTauler({
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3.5">
           {operaris.map((operari) => {
-            const assignedFeines = feines.filter((f) => f.cap_de_colla_id === operari.id);
+            const assignedFeines = feines.filter(
+              (f) => f.cap_de_colla_id === operari.id || f.operaris_ids?.includes(operari.id)
+            );
             const isSelected = selectedOperariId === operari.id;
             const isDragOver = dragOverOperariId === operari.id;
 
@@ -170,6 +172,13 @@ export function QuadrillesTauler({
                             </span>
                             <span className="text-[11px] text-slate-700 dark:text-slate-300 truncate">
                               {feina.titol}
+                            </span>
+                            <span className={`text-[9px] font-mono px-1 py-0.2 rounded font-bold shrink-0 ${
+                              feina.cap_de_colla_id === operari.id
+                                ? "bg-primary/10 text-primary"
+                                : "bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300"
+                            }`}>
+                              {feina.cap_de_colla_id === operari.id ? "Cap" : "Colla"}
                             </span>
                           </div>
                           <div className="flex items-center gap-1 shrink-0 ml-1">

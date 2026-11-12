@@ -6,7 +6,7 @@ from typing import Any, List, Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from pydantic import BaseModel, ConfigDict
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db_with_tenant_context
@@ -18,6 +18,7 @@ from app.models.models import (
     FullaPicking,
     LiniaPicking,
     OrdreTreball,
+    OrdreTreballOperari,
     Vehicle,
 )
 
@@ -111,7 +112,15 @@ async def llistar_les_meves_feines(
         .outerjoin(Client, OrdreTreball.client_id == Client.id)
         .where(
             OrdreTreball.empresa_id == uuid.UUID(empresa_id),
-            OrdreTreball.cap_de_colla_id == uuid.UUID(usuari_id),
+            or_(
+                OrdreTreball.cap_de_colla_id == uuid.UUID(usuari_id),
+                OrdreTreball.id.in_(
+                    select(OrdreTreballOperari.ordre_treball_id).where(
+                        OrdreTreballOperari.operari_id == uuid.UUID(usuari_id),
+                        OrdreTreballOperari.empresa_id == uuid.UUID(empresa_id),
+                    )
+                ),
+            ),
             OrdreTreball.estat.in_(["PENDENT", "ASSIGNADA", "PROGRAMADA", "EN_CURS", "EN_RUTA", "EN_OBRA", "PAUSADA"]),
         )
         .order_by(OrdreTreball.data_planificacio.asc())
@@ -150,7 +159,15 @@ async def obtenir_detall_feina(
             .where(
                 OrdreTreball.id == feina_id,
                 OrdreTreball.empresa_id == uuid.UUID(empresa_id),
-                OrdreTreball.cap_de_colla_id == uuid.UUID(usuari_id),
+                or_(
+                    OrdreTreball.cap_de_colla_id == uuid.UUID(usuari_id),
+                    OrdreTreball.id.in_(
+                        select(OrdreTreballOperari.ordre_treball_id).where(
+                            OrdreTreballOperari.operari_id == uuid.UUID(usuari_id),
+                            OrdreTreballOperari.empresa_id == uuid.UUID(empresa_id),
+                        )
+                    ),
+                ),
             )
         )
         result = await db.execute(stmt)

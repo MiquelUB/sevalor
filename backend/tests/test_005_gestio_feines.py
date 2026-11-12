@@ -522,3 +522,104 @@ async def test_modificar_feina_amb_planols_eines_i_picking(admin_session, header
         assert len(final_data["eines"]) == 1
 
 
+@pytest.mark.asyncio
+async def test_assignacio_colla_multi_operaris_sense_duplicar(admin_session, headers, boss_token):
+    """Verifica l'assignació d'una colla (Cap de Colla + múltiples operaris) a una única feina sense duplicar."""
+    token, empresa_id = boss_token
+    emp_uuid = uuid.UUID(empresa_id)
+
+    # 1. Crear empresa i client
+    emp_nif = "B" + str(uuid.uuid4())[:8].upper()
+    admin_session.add(Empresa(
+        id=emp_uuid, nom='Empresa Test Colla', nif=emp_nif, subdomini='testcolla-' + str(uuid.uuid4())[:5], pla_subscripcio='PRO', estat_pagament='ACTIU'
+    ))
+    await admin_session.flush()
+
+    client_id = uuid.uuid4()
+    admin_session.add(Client(
+        id=client_id, empresa_id=emp_uuid, codi='CLI-COLLA', rao_social='Comunitat Regants Colla', nif='G99112233'
+    ))
+
+    # 2. Crear 3 operaris: 1 Cap de Colla + 2 operaris de suport
+    op1_id = uuid.uuid4()
+    op2_id = uuid.uuid4()
+    op3_id = uuid.uuid4()
+
+    admin_session.add(Usuari(
+        id=op1_id, empresa_id=emp_uuid, nif='NIF-CAP', nom='Manel', cognoms='Capdevila', rol='CAP_DE_COLLA', estat='ACTIU', telefon='600111222'
+    ))
+    admin_session.add(Usuari(
+        id=op2_id, empresa_id=emp_uuid, nif='NIF-OP2', nom='Carles', cognoms='Camp', rol='OPERARI', estat='ACTIU', telefon='600333444'
+    ))
+    admin_session.add(Usuari(
+        id=op3_id, empresa_id=emp_uuid, nif='NIF-OP3', nom='Laura', cognoms='Font', rol='OPERARI', estat='ACTIU', telefon='600555666'
+    ))
+    await admin_session.flush()
+
+    # 3. Donar d'alta feina assignant el Cap de Colla (op1) i la colla sencera ([op1, op2, op3])
+    payload = {
+        "codi": "OT-COLLA-01",
+        "client_id": str(client_id),
+        "titol": "Reparació Bomba Principal Sector 4",
+        "adreca": "Finca Les Oliveres, Parcel·la 12",
+        "descripcio": "Intervenció d'alta complexitat que requereix quadrilla de 3 tècnics",
+        "estat": "PENDENT",
+        "data_planificacio": "2027-02-15",
+        "cap_de_colla_id": str(op1_id),
+        "operaris_ids": [str(op1_id), str(op2_id), str(op3_id)],
+    }
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        res = await ac.post("/api/v1/gestio/feines", json=payload, headers=headers)
+        assert res.status_code == 201, f"Expected 201, got {res.status_code}: {res.text}"
+        data = res.json()
+
+        # Comprovar que la feina s'ha assignat al cap de colla com a responsable
+        assert data["cap_de_colla_id"] == str(op1_id)
+        assert "Manel" in data["cap_de_colla_nom"]
+        assert data["estat"] == "ASSIGNADA"
+
+        # Comprovar la colla assignada (sense duplicats)
+        operaris_assignats = data.get("operaris_assignats", [])
+        assert len(operaris_assignats) == 3, f"Expected 3 members in colla, got {len(operaris_assignats)}"
+        
+        # El cap de colla ha de tenir es_cap_de_colla = True
+        cap_item = next((op for op in operaris_assignats if op["id"] == str(op1_id)), None)
+        assert cap_item is not None
+        assert cap_item["es_cap_de_colla"] is True
+
+        # Els altres operaris han de tenir es_cap_de_colla = False
+        op2_item = next((op for op in operaris_assignats if op["id"] == str(op2_id)), None)
+        assert op2_item is not None
+        assert op2_item["es_cap_de_colla"] is False
+
+        op3_item = next((op for op in operaris_assignats if op["id"] == str(op3_id)), None)
+        assert op3_item is not None
+        assert op3_item["es_cap_de_colla"] is False
+
+        # 4. Comprovar que NO s'ha duplicat l'ordre de treball (NOMÉS 1 feina a la base de dades)
+        res_list = await ac.get("/api/v1/gestio/feines", headers=headers)
+        assert res_list.status_code == 200
+        feines_colla = [f for f in res_list.json() if f["codi"] == "OT-COLLA-01"]
+        assert len(feines_colla) == 1, "La feina no s'ha de duplicar!"
+
+        # 5. Comprovar modificació de la colla (PUT)
+        # Traiem op3 i canviem data
+        ot_id = data["id"]
+        versio_actual = data["versio"]
+        payload_update = {
+            "cap_de_colla_id": str(op1_id),
+            "operaris_ids": [str(op1_id), str(op2_id)],  # op3 eliminat de la colla
+            "versio": versio_actual,
+        }
+        res_put = await ac.put(f"/api/v1/gestio/feines/{ot_id}", json=payload_update, headers=headers)
+        assert res_put.status_code == 200, res_put.text
+        data_put = res_put.json()
+        assert len(data_put["operaris_assignats"]) == 2
+        ids_actualitzats = [op["id"] for op in data_put["operaris_assignats"]]
+        assert str(op3_id) not in ids_actualitzats
+        assert str(op1_id) in ids_actualitzats
+        assert str(op2_id) in ids_actualitzats
+
+
+

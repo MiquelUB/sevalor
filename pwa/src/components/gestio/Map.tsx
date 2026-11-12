@@ -50,6 +50,15 @@ export interface EinaItem {
   estat: string;
 }
 
+export interface OperariAssignat {
+  id: string;
+  nom: string;
+  cognoms?: string | null;
+  rol?: string | null;
+  es_cap_de_colla?: boolean;
+  telefon?: string | null;
+}
+
 export interface Feina {
   id: string;
   codi: string;
@@ -61,6 +70,8 @@ export interface Feina {
   longitud?: number | null;
   cap_de_colla_id?: string | null;
   cap_de_colla_nom?: string | null;
+  operaris_assignats?: OperariAssignat[];
+  operaris_ids?: string[];
   client_nom?: string | null;
   descripcio?: string | null;
   data_planificacio?: string | null;
@@ -258,8 +269,10 @@ export default function GestioMap({
     const pos = projectCoords(coords.lat, coords.lng);
     const assignedOp = operaris.find((op) => op.id === f.cap_de_colla_id);
     const isSelected = selectedFeinaId === f.id;
-    const isLinkedToSelectedOperari =
-      selectedOperariId && f.cap_de_colla_id === selectedOperariId;
+    const isLinkedToSelectedOperari = Boolean(
+      selectedOperariId &&
+        (f.cap_de_colla_id === selectedOperariId || f.operaris_ids?.includes(selectedOperariId))
+    );
 
     return {
       feina: f,
@@ -283,7 +296,9 @@ export default function GestioMap({
   const pinsQuadrilles = operaris
     .filter((o) => o.estat === "ACTIU")
     .map((op, idx) => {
-      const assignedJobs = feines.filter((f) => f.cap_de_colla_id === op.id);
+      const assignedJobs = feines.filter(
+        (f) => f.cap_de_colla_id === op.id || f.operaris_ids?.includes(op.id)
+      );
       let lat = op.latitud ?? null;
       let lng = op.longitud ?? null;
 
@@ -412,12 +427,16 @@ export default function GestioMap({
   };
 
   // Llistat filtrat de feines
+  const isOperariAssignedToFeina = (f: Feina, opId: string) =>
+    f.cap_de_colla_id === opId || Boolean(f.operaris_ids?.includes(opId));
+
   const feinesFiltrades = feines.filter((f) => {
-    if (filtreOperariId && f.cap_de_colla_id !== filtreOperariId) {
+    if (filtreOperariId && !isOperariAssignedToFeina(f, filtreOperariId)) {
       return false;
     }
-    if (tabSidebarFeines === "PENDENTS") return !f.cap_de_colla_id;
-    if (tabSidebarFeines === "ASSIGNADES") return !!f.cap_de_colla_id;
+    const hasColla = Boolean(f.cap_de_colla_id || (f.operaris_ids && f.operaris_ids.length > 0));
+    if (tabSidebarFeines === "PENDENTS") return !hasColla;
+    if (tabSidebarFeines === "ASSIGNADES") return hasColla;
     return true; // "TOTES"
   });
 
@@ -469,7 +488,7 @@ export default function GestioMap({
 
           <div className="flex-1 overflow-y-auto space-y-2 pr-1">
             {operaris.map((op) => {
-              const assigned = feines.filter((f) => f.cap_de_colla_id === op.id);
+              const assigned = feines.filter((f) => isOperariAssignedToFeina(f, op.id));
               const isSelected = selectedOperariId === op.id;
 
               return (
@@ -551,7 +570,7 @@ export default function GestioMap({
             >
               <option value="">Tots els operaris ({operaris.length})</option>
               {operaris.map((op) => {
-                const count = feines.filter((f) => f.cap_de_colla_id === op.id).length;
+                const count = feines.filter((f) => isOperariAssignedToFeina(f, op.id)).length;
                 return (
                   <option key={op.id} value={op.id}>
                     {op.nom} {op.cognoms || ""} ({count} feines)
@@ -572,7 +591,7 @@ export default function GestioMap({
                   : "text-slate-500 hover:text-slate-800 dark:hover:text-slate-200"
               }`}
             >
-              Pend. ({feines.filter((f) => !f.cap_de_colla_id).length})
+              Pend. ({feines.filter((f) => !f.cap_de_colla_id && (!f.operaris_ids || f.operaris_ids.length === 0)).length})
             </button>
             <button
               type="button"
@@ -583,7 +602,7 @@ export default function GestioMap({
                   : "text-slate-500 hover:text-slate-800 dark:hover:text-slate-200"
               }`}
             >
-              Assig. ({feines.filter((f) => !!f.cap_de_colla_id).length})
+              Assig. ({feines.filter((f) => !!f.cap_de_colla_id || (f.operaris_ids && f.operaris_ids.length > 0)).length})
             </button>
             <button
               type="button"
@@ -1170,6 +1189,21 @@ export default function GestioMap({
                     <span>Sense assignar (Pendent d'adjudicar)</span>
                   </div>
                 )}
+
+                {selectedFeina.operaris_assignats && selectedFeina.operaris_assignats.filter((op) => !op.es_cap_de_colla).length > 0 && (
+                  <div className="mt-2 pt-2 border-t border-slate-700/60">
+                    <div className="text-[10px] text-slate-400 uppercase font-bold mb-1 flex items-center justify-between">
+                      <span>Operaris de Colla ({selectedFeina.operaris_assignats.filter((op) => !op.es_cap_de_colla).length})</span>
+                    </div>
+                    <div className="flex flex-wrap gap-1">
+                      {selectedFeina.operaris_assignats.filter((op) => !op.es_cap_de_colla).map((m) => (
+                        <span key={m.id} className="text-[10px] px-2 py-0.5 rounded bg-slate-700 text-slate-200">
+                          {m.nom} {m.cognoms ? m.cognoms[0] + "." : ""}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
 
               {/* Informació de Materials de Picking i Eines */}
@@ -1316,12 +1350,12 @@ export default function GestioMap({
                 <div className="flex items-center justify-between text-[11px] mb-1">
                   <span className="text-slate-400 font-bold">Feines Actives Assignades:</span>
                   <span className="font-mono text-emerald-400 font-bold">
-                    {feines.filter((f) => f.cap_de_colla_id === selectedOperari.id).length}
+                    {feines.filter((f) => isOperariAssignedToFeina(f, selectedOperari.id)).length}
                   </span>
                 </div>
                 <div className="max-h-32 overflow-y-auto space-y-1 pr-1">
                   {feines
-                    .filter((f) => f.cap_de_colla_id === selectedOperari.id)
+                    .filter((f) => isOperariAssignedToFeina(f, selectedOperari.id))
                     .map((af) => (
                       <div
                         key={af.id}
@@ -1330,9 +1364,12 @@ export default function GestioMap({
                       >
                         <span className="font-mono text-emerald-400 font-bold">{af.codi}</span>
                         <span className="truncate max-w-[140px] text-slate-300">{af.titol}</span>
+                        <span className="text-[9px] font-mono px-1 py-0.2 rounded bg-slate-700 text-slate-300">
+                          {af.cap_de_colla_id === selectedOperari.id ? "CAP" : "COLLA"}
+                        </span>
                       </div>
                     ))}
-                  {feines.filter((f) => f.cap_de_colla_id === selectedOperari.id).length === 0 && (
+                  {feines.filter((f) => isOperariAssignedToFeina(f, selectedOperari.id)).length === 0 && (
                     <div className="text-[10px] text-slate-500 py-1 text-center">
                       Cap feina assignada actualment.
                     </div>

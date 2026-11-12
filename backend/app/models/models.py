@@ -1021,6 +1021,39 @@ class OrdreTreball(Base):
     __mapper_args__ = {"version_id_col": versio}
 
 
+class OrdreTreballOperari(Base):
+    __tablename__ = "ordres_treball_operaris"
+    __table_args__ = (
+        UniqueConstraint(
+            "empresa_id", "ordre_treball_id", "operari_id", name="uq_ordres_treball_operaris"
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+        server_default=text("gen_random_uuid()"),
+    )
+    empresa_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("empreses.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    ordre_treball_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("ordres_treball.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    operari_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("usuaris.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    es_cap_de_colla: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=text("false"), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        server_default=text("now()"),
+    )
+
+
 class FullaPicking(Base):
     __tablename__ = "fulles_picking"
 

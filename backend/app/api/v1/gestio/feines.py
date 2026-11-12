@@ -5,7 +5,7 @@ from typing import Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import func, or_, select
+from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db_with_tenant_context
@@ -19,6 +19,7 @@ from app.models.models import (
     FullaPicking,
     LiniaPicking,
     OrdreTreball,
+    OrdreTreballOperari,
     PlanolBase,
     Usuari,
     Vehicle,
@@ -52,6 +53,16 @@ class EinaItem(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class OperariAssignatItem(BaseModel):
+    id: uuid.UUID
+    nom: str
+    cognoms: Optional[str] = None
+    rol: Optional[str] = None
+    es_cap_de_colla: bool = False
+    telefon: Optional[str] = None
+    model_config = ConfigDict(from_attributes=True)
+
+
 class FeinaCreate(BaseModel):
     codi: str = Field(..., max_length=20)
     client_id: uuid.UUID
@@ -66,6 +77,7 @@ class FeinaCreate(BaseModel):
     hora_inici_prevista: Optional[datetime] = None
     hora_fi_prevista: Optional[datetime] = None
     cap_de_colla_id: Optional[uuid.UUID] = None
+    operaris_ids: Optional[List[uuid.UUID]] = None
     vehicle_id: Optional[uuid.UUID] = None
     latitud: Optional[float] = None
     longitud: Optional[float] = None
@@ -84,6 +96,8 @@ class FeinaResponse(FeinaCreate):
     planol_codi: Optional[str] = None
     linies_picking: List[LiniaPickingItem] = []
     eines: List[EinaItem] = []
+    operaris_assignats: List[OperariAssignatItem] = []
+    operaris_ids: List[uuid.UUID] = []
     model_config = ConfigDict(from_attributes=True)
 
 
@@ -99,6 +113,7 @@ class FeinaUpdate(BaseModel):
     hora_inici_prevista: Optional[datetime] = None
     hora_fi_prevista: Optional[datetime] = None
     cap_de_colla_id: Optional[uuid.UUID] = None
+    operaris_ids: Optional[List[uuid.UUID]] = None
     vehicle_id: Optional[uuid.UUID] = None
     latitud: Optional[float] = None
     longitud: Optional[float] = None
@@ -139,10 +154,11 @@ async def llistar_feines(
     result = await db.execute(stmt)
     rows = result.all()
 
-    # Precarregar Fulles de picking i Eines en batch per a totes les OTs retornades
+    # Precarregar Fulles de picking, Eines i Operaris de Colla en batch per a totes les OTs retornades
     ot_ids = [ordre.id for ordre, _, _, _ in rows]
     picking_by_ot: Dict[uuid.UUID, List[LiniaPickingItem]] = collections.defaultdict(list)
     eines_by_ot: Dict[uuid.UUID, List[EinaItem]] = collections.defaultdict(list)
+    operaris_by_ot: Dict[uuid.UUID, List[OperariAssignatItem]] = collections.defaultdict(list)
 
     if ot_ids:
         # 1. Carregar Fulles de picking i línies d'articles en batch
@@ -190,6 +206,29 @@ async def llistar_feines(
                     )
                 )
 
+        # 3. Carregar Operaris de la Colla vinculats a les OTs en batch
+        ops_stmt = (
+            select(OrdreTreballOperari, Usuari)
+            .join(Usuari, OrdreTreballOperari.operari_id == Usuari.id)
+            .where(
+                OrdreTreballOperari.ordre_treball_id.in_(ot_ids),
+                OrdreTreballOperari.empresa_id == uuid.UUID(empresa_id),
+            )
+            .order_by(OrdreTreballOperari.es_cap_de_colla.desc(), Usuari.nom.asc())
+        )
+        ops_res = (await db.execute(ops_stmt)).all()
+        for oto, u in ops_res:
+            operaris_by_ot[oto.ordre_treball_id].append(
+                OperariAssignatItem(
+                    id=u.id,
+                    nom=u.nom,
+                    cognoms=u.cognoms,
+                    rol=u.rol,
+                    es_cap_de_colla=oto.es_cap_de_colla,
+                    telefon=u.telefon,
+                )
+            )
+
     feines = []
     for ordre, client, operari, planol in rows:
         f_resp = FeinaResponse.model_validate(ordre)
@@ -211,6 +250,23 @@ async def llistar_feines(
         f_resp.linies_picking = picking_by_ot.get(ordre.id, [])
         f_resp.eines = eines_by_ot.get(ordre.id, [])
         f_resp.eina_ids = [e.id for e in f_resp.eines]
+
+        # Assignar membres de colla
+        assigned_ops = operaris_by_ot.get(ordre.id, [])
+        if not assigned_ops and operari:
+            # Fallback legacy si la feina té cap_de_colla_id però no tenia fila a ordres_treball_operaris
+            assigned_ops = [
+                OperariAssignatItem(
+                    id=operari.id,
+                    nom=operari.nom,
+                    cognoms=operari.cognoms,
+                    rol=operari.rol,
+                    es_cap_de_colla=True,
+                    telefon=operari.telefon,
+                )
+            ]
+        f_resp.operaris_assignats = assigned_ops
+        f_resp.operaris_ids = [op.id for op in assigned_ops]
 
         feines.append(f_resp)
 
@@ -254,7 +310,9 @@ async def alta_feina(
         titol=feina.titol,
         adreca=feina.adreca,
         descripcio=feina.descripcio,
-        estat=feina.estat,
+        estat="ASSIGNADA"
+        if (feina.cap_de_colla_id or feina.operaris_ids) and feina.estat == "PENDENT"
+        else feina.estat,
         data_planificacio=feina.data_planificacio,
         hora_inici_prevista=feina.hora_inici_prevista,
         hora_fi_prevista=feina.hora_fi_prevista,
@@ -290,6 +348,25 @@ async def alta_feina(
                 eina_obj.ordre_treball_id = nova_feina.id
                 if feina.cap_de_colla_id:
                     eina_obj.custodiat_per_operari_id = feina.cap_de_colla_id
+
+    # Assignació de Quadrilla / Colla (Cap de Colla Responsable + Operaris de suport sense duplicats)
+    operaris_a_assignar: Dict[uuid.UUID, bool] = {}
+    if feina.cap_de_colla_id:
+        operaris_a_assignar[feina.cap_de_colla_id] = True
+    if feina.operaris_ids:
+        for op_id in feina.operaris_ids:
+            if op_id not in operaris_a_assignar:
+                operaris_a_assignar[op_id] = False
+
+    for op_id, es_cap in operaris_a_assignar.items():
+        db.add(
+            OrdreTreballOperari(
+                empresa_id=uuid.UUID(empresa_id),
+                ordre_treball_id=nova_feina.id,
+                operari_id=op_id,
+                es_cap_de_colla=es_cap,
+            )
+        )
 
     await db.commit()
     await db.refresh(nova_feina)
@@ -448,6 +525,43 @@ async def build_feina_response(
     ]
     f_resp.eina_ids = [e.id for e in eines_db]
 
+    # Operaris assignats a la Colla
+    op_stmt = (
+        select(OrdreTreballOperari, Usuari)
+        .join(Usuari, OrdreTreballOperari.operari_id == Usuari.id)
+        .where(
+            OrdreTreballOperari.ordre_treball_id == ordre.id,
+            OrdreTreballOperari.empresa_id == empresa_id,
+        )
+        .order_by(OrdreTreballOperari.es_cap_de_colla.desc(), Usuari.nom.asc())
+    )
+    op_rows = (await db.execute(op_stmt)).all()
+    assigned_ops: List[OperariAssignatItem] = []
+    for oto, u in op_rows:
+        assigned_ops.append(
+            OperariAssignatItem(
+                id=u.id,
+                nom=u.nom,
+                cognoms=u.cognoms,
+                rol=u.rol,
+                es_cap_de_colla=oto.es_cap_de_colla,
+                telefon=u.telefon,
+            )
+        )
+    if not assigned_ops and ordre.cap_de_colla_id and u_obj:
+        assigned_ops.append(
+            OperariAssignatItem(
+                id=u_obj.id,
+                nom=u_obj.nom,
+                cognoms=u_obj.cognoms,
+                rol=u_obj.rol,
+                es_cap_de_colla=True,
+                telefon=u_obj.telefon,
+            )
+        )
+    f_resp.operaris_assignats = assigned_ops
+    f_resp.operaris_ids = [op.id for op in assigned_ops]
+
     return f_resp
 
 
@@ -533,6 +647,40 @@ async def modificar_feina(
             ordre.estat = "ASSIGNADA"
         elif not nou_cap and ordre.estat == "ASSIGNADA":
             ordre.estat = "PENDENT"
+
+    # Sincronització de Colla / Operaris de suport (sense duplicats)
+    if "operaris_ids" in update_data or "cap_de_colla_id" in update_data:
+        cap_id = ordre.cap_de_colla_id
+        target_operaris_ids = update_data.get("operaris_ids")
+        if target_operaris_ids is None:
+            stmt_curr_ops = select(OrdreTreballOperari.operari_id).where(
+                OrdreTreballOperari.ordre_treball_id == ordre.id,
+                OrdreTreballOperari.empresa_id == uuid.UUID(empresa_id),
+            )
+            target_operaris_ids = list((await db.execute(stmt_curr_ops)).scalars().all())
+
+        operaris_map = {}
+        if cap_id:
+            operaris_map[cap_id] = True
+        for op_id in target_operaris_ids:
+            if op_id not in operaris_map:
+                operaris_map[op_id] = False
+
+        stmt_del_ops = delete(OrdreTreballOperari).where(
+            OrdreTreballOperari.ordre_treball_id == ordre.id,
+            OrdreTreballOperari.empresa_id == uuid.UUID(empresa_id),
+        )
+        await db.execute(stmt_del_ops)
+
+        for op_id, es_cap in operaris_map.items():
+            db.add(
+                OrdreTreballOperari(
+                    empresa_id=uuid.UUID(empresa_id),
+                    ordre_treball_id=ordre.id,
+                    operari_id=op_id,
+                    es_cap_de_colla=es_cap,
+                )
+            )
 
     # Adreça i coordenades
     if "adreca" in update_data and update_data["adreca"]:
@@ -892,6 +1040,33 @@ async def drop_and_go(
         ordre.cap_de_colla_id = payload.cap_de_colla_id
         if ordre.estat == "PENDENT":
             ordre.estat = "ASSIGNADA"
+
+        # Demote former cap in colla
+        stmt_demote = (
+            update(OrdreTreballOperari)
+            .where(
+                OrdreTreballOperari.ordre_treball_id == ordre.id,
+                OrdreTreballOperari.empresa_id == uuid.UUID(empresa_id),
+            )
+            .values(es_cap_de_colla=False)
+        )
+        await db.execute(stmt_demote)
+
+        # Ensure new cap is present and marked as cap
+        stmt_del_new = delete(OrdreTreballOperari).where(
+            OrdreTreballOperari.ordre_treball_id == ordre.id,
+            OrdreTreballOperari.empresa_id == uuid.UUID(empresa_id),
+            OrdreTreballOperari.operari_id == payload.cap_de_colla_id,
+        )
+        await db.execute(stmt_del_new)
+        db.add(
+            OrdreTreballOperari(
+                empresa_id=uuid.UUID(empresa_id),
+                ordre_treball_id=ordre.id,
+                operari_id=payload.cap_de_colla_id,
+                es_cap_de_colla=True,
+            )
+        )
     if payload.data_programada is not None:
         ordre.data_planificacio = payload.data_programada
 

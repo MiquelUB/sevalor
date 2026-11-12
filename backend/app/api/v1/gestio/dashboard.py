@@ -13,6 +13,7 @@ from app.models.models import (
     EstocMagatzem,
     Incidencia,
     OrdreTreball,
+    OrdreTreballOperari,
     RegistreJornadaLaboral,
     Usuari,
     Vehicle,
@@ -60,14 +61,23 @@ async def get_dashboard_hud(
 
     # Teams on field:
     # 1. Caps de colla o operaris assignats a feines actives (PENDENT, ASSIGNADA, PROGRAMADA, EN_CURS, EN_OBRA, EN_RUTA)
-    # 2. Operaris amb fitxatge / registre de jornada obert avui
-    # 3. Operaris en servei operatiu al camp (EN_SERVEI, EN_RUTA, EN_OBRA)
+    # 2. Membres de colla a ordres_treball_operaris en feines actives
+    # 3. Operaris amb fitxatge / registre de jornada obert avui
+    # 4. Operaris en servei operatiu al camp (EN_SERVEI, EN_RUTA, EN_OBRA)
     q_ots = (
         select(OrdreTreball.cap_de_colla_id.label("usuari_id"))
         .where(
             OrdreTreball.empresa_id == emp_uuid,
             OrdreTreball.estat.in_(["ASSIGNADA", "PROGRAMADA", "EN_CURS", "EN_OBRA", "EN_RUTA"]),
             OrdreTreball.cap_de_colla_id.is_not(None),
+        )
+    )
+    q_colla = (
+        select(OrdreTreballOperari.operari_id.label("usuari_id"))
+        .join(OrdreTreball, OrdreTreballOperari.ordre_treball_id == OrdreTreball.id)
+        .where(
+            OrdreTreballOperari.empresa_id == emp_uuid,
+            OrdreTreball.estat.in_(["ASSIGNADA", "PROGRAMADA", "EN_CURS", "EN_OBRA", "EN_RUTA"]),
         )
     )
     q_jornada = (
@@ -89,7 +99,7 @@ async def get_dashboard_hud(
         )
     )
 
-    stmt_teams_union = union(q_ots, q_jornada, q_servei).subquery()
+    stmt_teams_union = union(q_ots, q_colla, q_jornada, q_servei).subquery()
     stmt_teams = select(func.count(stmt_teams_union.c.usuari_id))
     res_teams = await db.execute(stmt_teams)
     teams_on_field = res_teams.scalar() or 0

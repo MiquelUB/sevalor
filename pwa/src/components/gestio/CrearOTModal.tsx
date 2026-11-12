@@ -6,6 +6,8 @@ import {
   Save,
   Building2,
   User,
+  Users,
+  ShieldCheck,
   FileText,
   Calendar,
   Clock,
@@ -59,6 +61,23 @@ export function CrearOTModal({ onClose, onSuccess }: CrearOTModalProps) {
   // Horaris previstos
   const [horaInici, setHoraInici] = useState("");
   const [horaFi, setHoraFi] = useState("");
+
+  // Colla operaris state (suport / equip addicional)
+  const [collaOperariIds, setCollaOperariIds] = useState<string[]>([]);
+  const [selectedCollaCandidate, setSelectedCollaCandidate] = useState<string>("");
+
+  const addOperariToColla = (opId?: string) => {
+    const idToAdd = opId || selectedCollaCandidate;
+    if (!idToAdd || idToAdd === formData.cap_de_colla_id) return;
+    if (!collaOperariIds.includes(idToAdd)) {
+      setCollaOperariIds((prev) => [...prev, idToAdd]);
+    }
+    setSelectedCollaCandidate("");
+  };
+
+  const removeOperariFromColla = (idToRemove: string) => {
+    setCollaOperariIds((prev) => prev.filter((id) => id !== idToRemove));
+  };
 
   // Picking lines state
   const [liniesPicking, setLiniesPicking] = useState<{ article_id: string; quantitat: number }[]>([]);
@@ -236,16 +255,24 @@ export function CrearOTModal({ onClose, onSuccess }: CrearOTModalProps) {
         ? `${formData.data_planificacio}T${horaFi}:00`
         : null;
 
+      const allOperarisIds = Array.from(
+        new Set([formData.cap_de_colla_id, ...collaOperariIds].filter(Boolean))
+      );
+
       const payload = {
         ...formData,
         planol_id: formData.planol_id || null,
-        estat: formData.cap_de_colla_id ? "ASSIGNADA" : formData.estat || "PENDENT",
+        estat:
+          formData.cap_de_colla_id || collaOperariIds.length > 0
+            ? "ASSIGNADA"
+            : formData.estat || "PENDENT",
         latitud: geo.lat,
         longitud: geo.lng,
         hora_inici_prevista: horaIniciDate,
         hora_fi_prevista: horaFiDate,
         vehicle_id: formData.vehicle_id ? formData.vehicle_id : null,
         cap_de_colla_id: formData.cap_de_colla_id ? formData.cap_de_colla_id : null,
+        operaris_ids: allOperarisIds.length > 0 ? allOperarisIds : null,
         finca_id: formData.finca_id ? formData.finca_id : null,
         eina_ids: selectedEinaIds.length > 0 ? selectedEinaIds : null,
       };
@@ -1044,22 +1071,139 @@ export function CrearOTModal({ onClose, onSuccess }: CrearOTModalProps) {
                 </div>
 
                 <div className="space-y-xs">
-                  <label className="font-label-caps text-on-surface-variant uppercase flex items-center gap-1">
-                    <User className="w-3.5 h-3.5" /> Cap de Colla / Operari Assignat
+                  <label className="font-label-caps text-on-surface-variant uppercase flex items-center justify-between text-[11px]">
+                    <span className="flex items-center gap-1">
+                      <User className="w-3.5 h-3.5 text-primary" /> Cap de Colla (Responsable Principal)
+                    </span>
+                    <span className="text-[10px] font-mono text-primary font-bold">Líder d&apos;intervenció</span>
                   </label>
                   <select
                     required
                     value={formData.cap_de_colla_id}
-                    onChange={(e) => setFormData({ ...formData, cap_de_colla_id: e.target.value })}
+                    onChange={(e) => {
+                      const newCap = e.target.value;
+                      setFormData({ ...formData, cap_de_colla_id: newCap });
+                      setCollaOperariIds((prev) => prev.filter((id) => id !== newCap));
+                    }}
                     className="w-full p-sm bg-surface-container-low rounded-lg border border-outline-variant focus:border-primary outline-none text-sm"
                   >
-                    <option value="">Assignar operari...</option>
+                    <option value="">Seleccionar Cap de Colla...</option>
                     {operaris.map((op) => (
                       <option key={op.id} value={op.id}>
-                        {op.nom} {op.cognoms} - {op.rol}
+                        {op.nom} {op.cognoms} — {op.rol}
                       </option>
                     ))}
                   </select>
+                </div>
+
+                {/* Assignació de Colla / Quadrilla (Múltiples treballadors a la mateixa feina) */}
+                <div className="space-y-xs pt-1">
+                  <label className="font-label-caps text-on-surface-variant uppercase flex items-center justify-between text-[11px]">
+                    <span className="flex items-center gap-1">
+                      <Users className="w-3.5 h-3.5 text-primary" /> Treballadors de la Colla (Equip Operari)
+                    </span>
+                    <span className="text-[10px] font-mono text-on-surface-variant font-bold">
+                      {collaOperariIds.length + (formData.cap_de_colla_id ? 1 : 0)} assignats
+                    </span>
+                  </label>
+
+                  <div className="flex gap-2">
+                    <select
+                      value={selectedCollaCandidate}
+                      onChange={(e) => setSelectedCollaCandidate(e.target.value)}
+                      className="flex-1 p-sm bg-surface-container-low rounded-lg border border-outline-variant focus:border-primary outline-none text-xs"
+                    >
+                      <option value="">Afegir un altre operari a la colla...</option>
+                      {operaris
+                        .filter(
+                          (op) =>
+                            op.id !== formData.cap_de_colla_id &&
+                            !collaOperariIds.includes(op.id)
+                        )
+                        .map((op) => (
+                          <option key={op.id} value={op.id}>
+                            {op.nom} {op.cognoms} — {op.rol}
+                          </option>
+                        ))}
+                    </select>
+                    <button
+                      type="button"
+                      disabled={!selectedCollaCandidate}
+                      onClick={() => addOperariToColla()}
+                      className="px-3 py-1.5 rounded-lg bg-primary text-white text-xs font-bold hover:bg-primary/90 disabled:opacity-40 transition-colors flex items-center gap-1 cursor-pointer"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      <span>Afegir</span>
+                    </button>
+                  </div>
+
+                  {/* Llista de membres de la colla seleccionats */}
+                  <div className="space-y-1.5 pt-1">
+                    {/* Element del Cap de Colla */}
+                    {formData.cap_de_colla_id && (() => {
+                      const capOp = operaris.find((o) => o.id === formData.cap_de_colla_id);
+                      return capOp ? (
+                        <div className="p-2 rounded-lg bg-primary/10 border border-primary/30 flex items-center justify-between text-xs">
+                          <div className="flex items-center gap-2">
+                            <div className="w-6 h-6 rounded-full bg-primary text-white flex items-center justify-center font-bold text-[10px]">
+                              {capOp.nom[0]}
+                            </div>
+                            <span className="font-bold text-on-surface dark:text-white">
+                              {capOp.nom} {capOp.cognoms || ""}
+                            </span>
+                          </div>
+                          <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded-full bg-primary text-white">
+                            CAP DE COLLA · RESPONSABLE
+                          </span>
+                        </div>
+                      ) : null;
+                    })()}
+
+                    {/* Altres membres de la colla */}
+                    {collaOperariIds.map((cId) => {
+                      const memberOp = operaris.find((o) => o.id === cId);
+                      if (!memberOp) return null;
+                      return (
+                        <div
+                          key={cId}
+                          className="p-2 rounded-lg bg-surface-container-low border border-outline-variant/30 flex items-center justify-between text-xs hover:border-outline-variant transition-colors"
+                        >
+                          <div className="flex items-center gap-2">
+                            <div className="w-6 h-6 rounded-full bg-surface-container-high text-on-surface flex items-center justify-center font-bold text-[10px]">
+                              {memberOp.nom[0]}
+                            </div>
+                            <div>
+                              <span className="font-medium text-on-surface dark:text-white block">
+                                {memberOp.nom} {memberOp.cognoms || ""}
+                              </span>
+                              <span className="text-[10px] text-on-surface-variant font-mono">
+                                {memberOp.rol || "Operari de suport"}
+                              </span>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-surface-container-high text-on-surface-variant">
+                              OPERARI COLLA
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => removeOperariFromColla(cId)}
+                              className="p-1 rounded text-outline hover:text-error hover:bg-error/10 transition-colors cursor-pointer"
+                              title="Treure aquest operari de la colla"
+                            >
+                              <X className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+
+                    <p className="text-[11px] text-on-surface-variant italic pt-1">
+                      {collaOperariIds.length > 0
+                        ? `Aquesta feina s'assignarà com a única Ordre de Treball compartida per la colla (${collaOperariIds.length + 1} treballadors), evitant duplicar tasques.`
+                        : "Sense altres membres a la colla (feina individual assignada exclusivament al Cap de Colla)."}
+                    </p>
+                  </div>
                 </div>
 
                 <div className="space-y-xs">
@@ -1100,9 +1244,11 @@ export function CrearOTModal({ onClose, onSuccess }: CrearOTModalProps) {
                     </p>
                   </div>
                   <div>
-                    <p className="text-on-primary-container">Dotació Material</p>
+                    <p className="text-on-primary-container">Colla / Quadrilla</p>
                     <p className="font-data-tabular font-bold text-sm">
-                      {liniesPicking.length} art. · {selectedEinaIds.length} eines
+                      {formData.cap_de_colla_id
+                        ? `${1 + collaOperariIds.length} treballadors`
+                        : "Pendent"}
                     </p>
                   </div>
                 </div>
