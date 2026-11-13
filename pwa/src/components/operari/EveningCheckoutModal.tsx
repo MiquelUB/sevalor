@@ -1,9 +1,11 @@
 "use client";
 
-import React, { useState } from "react";
-import { FileCheck2, Gauge, Square, X, AlertCircle, ShieldAlert } from "lucide-react";
+import React, { useState, useEffect } from "react";
+import Link from "next/link";
+import { FileCheck2, Gauge, Square, X, AlertCircle, ShieldAlert, Camera, CheckCircle2 } from "lucide-react";
 import { localDB } from "@/lib/db";
 import { getAuthToken } from "@/lib/api";
+import { CAMERA_LIVE_INPUT_PROPS, compressImageToWebP } from "@/lib/media";
 import { JornadaActivaState } from "./ControlHorariBar";
 
 interface EveningCheckoutModalProps {
@@ -19,11 +21,39 @@ export default function EveningCheckoutModal({
   onClose,
   onFinished,
 }: EveningCheckoutModalProps) {
-  const [kmFinals, setKmFinals] = useState("");
+  const [fotoOdometreFinal, setFotoOdometreFinal] = useState<Blob | null>(null);
+  const [orphanCount, setOrphanCount] = useState<number>(0);
+  const [pendingTicketsCount, setPendingTicketsCount] = useState<number>(0);
   const [custodiaPaperConfirmada, setCustodiaPaperConfirmada] = useState(false);
   const [materialsRetornatsConfirmats, setMaterialsRetornatsConfirmats] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    let active = true;
+    const verificarBloquejos = async () => {
+      try {
+        const orphans = await localDB.camera_captures.filter((c) => !c.assignada).count();
+        const pendTiquets = await localDB.tiquets
+          .filter((t) => t.estat_sync === "PENDENT" || t.estat_sync === "ERROR")
+          .count();
+        const pendQueue = await localDB.sync_queue
+          .filter((q) => q.acció === "CREAR_TIQUET")
+          .count();
+        if (active) {
+          setOrphanCount(orphans);
+          setPendingTicketsCount(pendTiquets + pendQueue);
+        }
+      } catch {
+        // Ignorar errors puntuals d'IndexedDB
+      }
+    };
+    verificarBloquejos();
+    return () => {
+      active = false;
+    };
+  }, [isOpen]);
 
   if (!isOpen || !jornada) return null;
 
@@ -42,6 +72,28 @@ export default function EveningCheckoutModal({
   };
 
   const handleConfirmarTancament = async () => {
+    const orphans = await localDB.camera_captures.filter((c) => !c.assignada).count();
+    if (orphans > 0) {
+      setOrphanCount(orphans);
+      setError("Imatges sense assignar, assigna abans de tancar");
+      return;
+    }
+
+    const pendTiquets = await localDB.tiquets
+      .filter((t) => t.estat_sync === "PENDENT" || t.estat_sync === "ERROR")
+      .count();
+    const pendQueue = await localDB.sync_queue.filter((q) => q.acció === "CREAR_TIQUET").count();
+    if (pendTiquets + pendQueue > 0) {
+      setPendingTicketsCount(pendTiquets + pendQueue);
+      setError("Sincronitzant tiquets amb el servidor... Espera la confirmació de pujada abans de tancar.");
+      return;
+    }
+
+    if (!fotoOdometreFinal) {
+      setError("És obligatori capturar en viu la fotografia de l'odòmetre final del vehicle.");
+      return;
+    }
+
     if (!custodiaPaperConfirmada) {
       setError("És obligatori confirmar la custòdia física dels tiquets en paper (FR-009).");
       return;
@@ -55,8 +107,34 @@ export default function EveningCheckoutModal({
 
       if (navigator.onLine) {
         const token = getAuthToken();
-        const headers: Record<string, string> = { "Content-Type": "application/json" };
-        if (token) headers["Authorization"] = `Bearer ${token}`;
+        const authHeaders: Record<string, string> = {};
+        if (token) authHeaders["Authorization"] = `Bearer ${token}`;
+
+        const formOdo = new FormData();
+        formOdo.append("foto_odometre", fotoOdometreFinal, `odometre_fi_${Date.now()}.webp`);
+        formOdo.append("moment", "FI");
+        const odoRes = await fetch(`/api/v1/operari/jornada/${jornada.id}/odometre-foto`, {
+          method: "POST",
+          headers: authHeaders,
+          credentials: "include",
+          body: formOdo,
+        });
+        if (!odoRes.ok) {
+          const errOdo = await odoRes.json().catch(() => ({}));
+          throw new Error(errOdo.detail || "Error pujant la fotografia de l'odòmetre final.");
+        }
+
+        const headers: Record<string, string> = {
+          "Content-Type": "application/json",
+          ...authHeaders,
+        };
+
+        await fetch("/api/v1/operari/tiquets/checkout-custodia", {
+          method: "POST",
+          headers,
+          credentials: "include",
+          body: JSON.stringify({}),
+        });
 
         const res = await fetch(`/api/v1/operari/jornada/${jornada.id}/fi`, {
           method: "POST",
@@ -84,7 +162,7 @@ export default function EveningCheckoutModal({
             tipus: "FI",
             latitud: coords.latitud,
             longitud: coords.longitud,
-            km_finals: kmFinals ? parseInt(kmFinals, 10) : null,
+            odometre_foto_final: true,
             custodia_paper_confirmada: true,
             materials_retornats: materialsRetornatsConfirmats,
             timestamp: nowIso,
@@ -93,6 +171,9 @@ export default function EveningCheckoutModal({
           intents: 0,
         });
       }
+
+      // Buidar safata diària de tiquets un cop confirmada la custòdia
+      await localDB.tiquets.toCollection().modify({ custodia_confirmada: true }).catch(() => {});
 
       // Actualitzar el registre local
       await localDB.fichajes.update(jornada.id, {
@@ -149,20 +230,61 @@ export default function EveningCheckoutModal({
             </div>
           )}
 
-          {/* Odòmetre final */}
+          {orphanCount > 0 && (
+            <div className="p-3 rounded-xl bg-amber-500/15 border border-amber-500/40 text-amber-800 dark:text-amber-300 text-xs font-bold flex items-center justify-between gap-2">
+              <span>Imatges sense assignar ({orphanCount}), assigna abans de tancar</span>
+              <Link
+                href="/operari/camera"
+                onClick={onClose}
+                className="px-2.5 py-1 rounded-lg bg-amber-600 text-white text-[11px] font-bold shrink-0"
+              >
+                Assignar ara
+              </Link>
+            </div>
+          )}
+
+          {pendingTicketsCount > 0 && (
+            <div className="p-3 rounded-xl bg-error-container text-on-error-container text-xs font-bold border border-error/30">
+              Hi ha {pendingTicketsCount} tiquet(s) pendents de pujada al servidor. Espera la sincronització abans de tancar.
+            </div>
+          )}
+
+          {/* Odòmetre final en viu (Spec 015/020 Zero-Tecleig) */}
           <div>
             <label className="text-xs font-bold uppercase text-on-surface flex items-center gap-1.5 mb-1.5">
               <Gauge className="w-4 h-4 text-primary" />
-              Quilòmetres Finals del Vehicle (Odòmetre)
+              Fotografia Odòmetre Final del Vehicle *
             </label>
-            <input
-              type="number"
-              data-testid="input-checkout-km"
-              value={kmFinals}
-              onChange={(e) => setKmFinals(e.target.value)}
-              placeholder="Ex: 124680"
-              className="w-full min-h-[46px] p-2.5 rounded-xl border border-outline-variant bg-surface-container-low text-on-surface text-sm font-mono font-bold"
-            />
+            <label
+              data-testid="input-checkout-odometre-foto"
+              className={`w-full min-h-[54px] p-3 rounded-xl border-2 border-dashed flex items-center justify-center gap-2 cursor-pointer transition-colors ${
+                fotoOdometreFinal
+                  ? "border-secondary-container bg-secondary-container/10 text-secondary"
+                  : "border-outline-variant bg-surface-container-low text-on-surface-variant"
+              }`}
+            >
+              {fotoOdometreFinal ? (
+                <CheckCircle2 className="w-5 h-5" />
+              ) : (
+                <Camera className="w-5 h-5" />
+              )}
+              <span className="text-xs font-bold">
+                {fotoOdometreFinal
+                  ? "Foto odòmetre final capturada ✓"
+                  : "Capturar Odòmetre Final (Càmera en viu)"}
+              </span>
+              <input
+                {...CAMERA_LIVE_INPUT_PROPS}
+                className="hidden"
+                onChange={async (e) => {
+                  const file = e.target.files?.[0];
+                  if (!file) return;
+                  const blob = await compressImageToWebP(file);
+                  setFotoOdometreFinal(blob);
+                  setError(null);
+                }}
+              />
+            </label>
           </div>
 
           {/* Confirmació de Retorn de Materials */}
@@ -201,7 +323,13 @@ export default function EveningCheckoutModal({
           <button
             type="button"
             data-testid="btn-confirmar-checkout-jornada"
-            disabled={loading || !custodiaPaperConfirmada}
+            disabled={
+              loading ||
+              !custodiaPaperConfirmada ||
+              !fotoOdometreFinal ||
+              orphanCount > 0 ||
+              pendingTicketsCount > 0
+            }
             onClick={handleConfirmarTancament}
             className="w-full min-h-[52px] bg-error text-on-error font-bold rounded-xl flex items-center justify-center gap-2 uppercase text-xs tracking-wider disabled:opacity-50 active:scale-95 transition-all shadow-md mt-2"
           >

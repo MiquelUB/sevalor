@@ -1,26 +1,27 @@
-"""Configuració de Celery 5.3+ per a processament asíncron a Sevalor Suite.
-
-Compleix Spec 024 i Spec 03 Bloc 9:
-- Topologia de cues aïllades: queue_documents, queue_media, queue_sync, queue_critical, queue_periodic
-- Broker Redis 7
-- Multi-tenancy RLS estricte a cada tasca
-- Beat schedules: alerta flota (T047), tancament jornades (T048),
-  purga tokens (T049), backup sobirà (T050), informe setmanal (T041)
-"""
+"""Configuració de Celery amb 3 cues de prioritat i enrutament per defecte (Spec 024 RF-01)."""
 
 import os
 
 from celery import Celery
 from celery.schedules import crontab
+from kombu import Exchange, Queue
 
-REDIS_URL = os.getenv("REDIS_URL", "redis://:sevalor_redis_pass@127.0.0.1:6380/0")
+from app.core.config import settings
+
+REDIS_URL = os.getenv("REDIS_URL", settings.REDIS_URL)
 
 celery_app = Celery(
     "sevalor_workers",
     broker=REDIS_URL,
     backend=REDIS_URL,
-    include=["app.workers.tasks", "app.workers.comptabilitat_tasks"],
+    include=[
+        "app.workers.tasks",
+        "app.workers.comptabilitat_tasks",
+        "app.workers.contractes_tasks",
+    ],
 )
+
+default_exchange = Exchange("sevalor", type="direct")
 
 celery_app.conf.update(
     task_serializer="json",
@@ -34,26 +35,42 @@ celery_app.conf.update(
     task_acks_late=True,  # Reassignar tasca si el worker cau
     task_reject_on_worker_lost=True,  # Rebutjar si worker es perd
     task_create_missing_queues=True,
-    task_queues={
-        "queue_default": {"exchange": "queue_default"},
-        "queue_critical": {"exchange": "queue_critical"},
-        "queue_documents": {"exchange": "queue_documents"},
-        "queue_sync": {"exchange": "queue_sync"},
-        "queue_media": {"exchange": "queue_media"},
-        "queue_periodic": {"exchange": "queue_periodic"},
-    },
+    task_queues=(
+        Queue("queue_alerts", default_exchange, routing_key="queue_alerts", priority=10),
+        Queue("queue_documents", default_exchange, routing_key="queue_documents", priority=5),
+        Queue("queue_periodic", default_exchange, routing_key="queue_periodic", priority=1),
+        # Cues de compatibilitat amb tasques històriques
+        Queue("queue_default", default_exchange, routing_key="queue_default", priority=3),
+        Queue("queue_critical", default_exchange, routing_key="queue_critical", priority=9),
+        Queue("queue_sync", default_exchange, routing_key="queue_sync", priority=4),
+        Queue("queue_media", default_exchange, routing_key="queue_media", priority=5),
+    ),
+    task_default_queue="queue_documents",
+    task_default_exchange="sevalor",
+    task_default_routing_key="queue_documents",
     task_routes={
+        # Rutes canòniques Spec 024 (Pla 3)
+        "comptabilitat.processar_tiquet_ocr_a_gestio": {"queue": "queue_documents"},
+        "workers.transcriure_audio_whisper_local": {"queue": "queue_documents"},
+        "workers.enviar_alerta_telegram_critica": {"queue": "queue_alerts"},
+        "workers.executar_backup_setmanal_tenant": {"queue": "queue_periodic"},
+        "comptabilitat.processar_outbox_aeat": {"queue": "queue_periodic"},
+        # Rutes existents mantingudes per retrocompatibilitat
         "crear_directoris_sobirans_task": {"queue": "queue_default"},
         "drenar_cua_transit_task": {"queue": "queue_default"},
         "app.workers.tasks.drenar_totes_cues_transit_task": {"queue": "queue_periodic"},
         "app.workers.tasks.generar_pdf_factura_task": {"queue": "queue_documents"},
         "app.workers.tasks.executar_backup_setmanal_task": {"queue": "queue_periodic"},
-        "app.workers.tasks.despatx_outbox_aeat_task": {"queue": "queue_critical"},
-        "app.workers.tasks.transcriure_audio_task": {"queue": "queue_media"},
+        "app.workers.tasks.despatx_outbox_aeat_task": {"queue": "queue_alerts"},
+        "app.workers.tasks.transcriure_audio_task": {"queue": "queue_documents"},
         "app.workers.tasks.generar_informe_setmanal": {"queue": "queue_documents"},
         "app.workers.tasks.purgar_tokens_expirats": {"queue": "queue_periodic"},
         "app.workers.tasks.revisar_contractes_manteniment": {"queue": "queue_periodic"},
+        "app.workers.contractes_tasks.revisar_contractes_manteniment": {"queue": "queue_periodic"},
         "app.workers.tasks.buidar_buffer_diari_cap_a_disc_client": {"queue": "queue_periodic"},
+        "app.workers.comptabilitat_tasks.processar_tiquet_ocr_a_gestio_task": {
+            "queue": "queue_documents"
+        },
         "app.workers.comptabilitat_tasks.executar_auditoria_diaria_financera_tenant": {
             "queue": "queue_periodic"
         },
@@ -61,7 +78,6 @@ celery_app.conf.update(
             "queue": "queue_periodic"
         },
     },
-    # ── T047-T050 + T041 + Contractes: Celery Beat Schedules ───────────────────────────────
     beat_schedule={
         # Drenatge automàtic cada 2 minuts de la cua de trànsit xifrada cap al Vault del client
         "drenar-totes-cues-transit": {
@@ -102,7 +118,7 @@ celery_app.conf.update(
         },
         # T050: Còpia de Seguretat Setmanal Sobirana — diumenges 02:00 UTC
         "backup-setmanal-sobirania": {
-            "task": "app.workers.tasks.generar_backup_pgdump",
+            "task": "workers.executar_backup_setmanal_tenant",
             "schedule": crontab(hour=2, minute=0, day_of_week=0),
             "kwargs": {"empresa_id": None},
         },

@@ -78,6 +78,28 @@ interface ErrorTrace {
   creat_a: string;
 }
 
+interface AlertaSeguretatItem {
+  id: string;
+  tipus: string;
+  gravetat: string;
+  origen: string;
+  detall: string;
+  resolta: boolean;
+  creat_a: string | null;
+  resolta_a: string | null;
+}
+
+interface RegistreBaixaCertificatItem {
+  id: string;
+  tenant_id: string;
+  nif_hash: string;
+  certificat_path: string;
+  estat: string;
+  custodia_anys: number;
+  periode_gracia_dies: number;
+  creat_a: string | null;
+}
+
 function formatTempsRelatiu(isoString?: string | null): string {
   if (!isoString) return "Sense activitat recent";
   try {
@@ -124,6 +146,10 @@ export default function SuperadminTelemetriaPage() {
 
   const [tracesError, setTracesError] = useState<ErrorTrace[]>([]);
   const [mostrantTraces, setMostrantTraces] = useState<boolean>(false);
+  const [alertesSeguretat, setAlertesSeguretat] = useState<AlertaSeguretatItem[]>([]);
+  const [baixesCertificats, setBaixesCertificats] = useState<RegistreBaixaCertificatItem[]>([]);
+  const [desantSnapshot, setDesantSnapshot] = useState<boolean>(false);
+  const [darrerSnapshotMsg, setDarrerSnapshotMsg] = useState<string | null>(null);
 
   const intervalRef = useRef<NodeJS.Timeout | null>(null);
 
@@ -188,9 +214,53 @@ export default function SuperadminTelemetriaPage() {
     }
   };
 
+  const fetchAlertesISeguretat = async () => {
+    try {
+      const [alertesData, baixesData] = await Promise.all([
+        apiFetch<AlertaSeguretatItem[]>("/superadmin/telemetria/alertes?limit=25"),
+        apiFetch<RegistreBaixaCertificatItem[]>("/superadmin/telemetria/baixes-certificats?limit=25"),
+      ]);
+      setAlertesSeguretat(Array.isArray(alertesData) ? alertesData : []);
+      setBaixesCertificats(Array.isArray(baixesData) ? baixesData : []);
+    } catch {
+      // Ignorar si no hi ha connectivitat temporalment
+    }
+  };
+
+  const resoldreAlerta = async (alertaId: string) => {
+    try {
+      await apiFetch(`/superadmin/telemetria/alertes/${alertaId}/resoldre`, {
+        method: "PATCH",
+      });
+      await fetchAlertesISeguretat();
+    } catch {
+      // Ignorar error puntual
+    }
+  };
+
+  const capturarSnapshotSistema = async () => {
+    setDesantSnapshot(true);
+    setDarrerSnapshotMsg(null);
+    try {
+      const res = await apiFetch<any>("/superadmin/telemetria/snapshots", {
+        method: "POST",
+      });
+      setDarrerSnapshotMsg(
+        `Instantània desada a superadmin_telemetry (CPU ${res.cpu_utilization_percent}%)`
+      );
+    } catch (e) {
+      setDarrerSnapshotMsg(
+        e instanceof Error ? e.message : "Error en desar la instantània de telemetria"
+      );
+    } finally {
+      setDesantSnapshot(false);
+    }
+  };
+
   useEffect(() => {
     setMounted(true);
     fetchTelemetria();
+    fetchAlertesISeguretat();
   }, []);
 
   // Comptador de segons des de l'últim refresc i auto-refresc periòdic (cada 30s)
@@ -782,6 +852,123 @@ export default function SuperadminTelemetriaPage() {
             )}
           </div>
         )}
+      </div>
+
+      {/* SECCIÓ 5: ALERTES DE SEGURETAT / CPU WHISPER & BAIXES CERTIFICADES */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <div className="p-5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 space-y-4 shadow-sm">
+          <div className="flex items-center justify-between gap-2">
+            <div>
+              <h3 className="text-sm font-bold font-mono uppercase tracking-wider text-slate-700 dark:text-slate-300 flex items-center gap-2">
+                <ShieldAlert className="w-4 h-4 text-amber-500" />
+                <span>Alertes CPU / Seguretat (superadmin_telemetry)</span>
+              </h3>
+              <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                Saturació faster-whisper INT8 (&gt;90% CPU) i incidències de clúster
+              </p>
+            </div>
+            <button
+              onClick={capturarSnapshotSistema}
+              disabled={desantSnapshot}
+              className="px-3 py-1 rounded-lg bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 text-xs font-mono font-bold border border-slate-300 dark:border-slate-700 transition-colors disabled:opacity-50"
+            >
+              {desantSnapshot ? "Desant..." : "Capturar Instantània"}
+            </button>
+          </div>
+
+          {darrerSnapshotMsg && (
+            <p className="text-[11px] font-mono text-emerald-700 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 rounded-lg px-3 py-1.5">
+              {darrerSnapshotMsg}
+            </p>
+          )}
+
+          {alertesSeguretat.length === 0 ? (
+            <p className="text-xs font-mono text-slate-500 p-4 rounded-xl bg-slate-50 dark:bg-slate-950/40 border border-slate-200 dark:border-slate-800 text-center">
+              Cap alerta activa a superadmin_telemetry.alertes_seguretat.
+            </p>
+          ) : (
+            <div className="space-y-2">
+              {alertesSeguretat.map((al) => (
+                <div
+                  key={al.id}
+                  className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/70 border border-slate-200 dark:border-slate-700 font-mono text-xs flex items-start justify-between gap-3"
+                >
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2">
+                      <span
+                        className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
+                          al.gravetat === "CRITICA"
+                            ? "bg-rose-100 text-rose-700 dark:bg-rose-950 dark:text-rose-300"
+                            : "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300"
+                        }`}
+                      >
+                        {al.gravetat}
+                      </span>
+                      <span className="font-bold text-slate-800 dark:text-slate-200">
+                        {al.tipus}
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-slate-600 dark:text-slate-300">{al.detall}</p>
+                    <p className="text-[10px] text-slate-400">
+                      Origen: {al.origen} • {formatTempsRelatiu(al.creat_a)}
+                    </p>
+                  </div>
+                  {al.resolta ? (
+                    <span className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400 shrink-0">
+                      RESOLTA
+                    </span>
+                  ) : (
+                    <button
+                      onClick={() => resoldreAlerta(al.id)}
+                      className="px-2 py-1 rounded bg-emerald-600 hover:bg-emerald-700 text-white text-[10px] font-bold shrink-0"
+                    >
+                      Resoldre
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div className="p-5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 space-y-4 shadow-sm">
+          <div>
+            <h3 className="text-sm font-bold font-mono uppercase tracking-wider text-slate-700 dark:text-slate-300 flex items-center gap-2">
+              <Layers className="w-4 h-4 text-blue-500" />
+              <span>Registre de Baixes Certificades (RGPD Art. 17)</span>
+            </h3>
+            <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+              Custòdia anonimitzada de certificats de destrucció a superadmin_telemetry
+            </p>
+          </div>
+
+          {baixesCertificats.length === 0 ? (
+            <p className="text-xs font-mono text-slate-500 p-4 rounded-xl bg-slate-50 dark:bg-slate-950/40 border border-slate-200 dark:border-slate-800 text-center">
+              Cap baixa certificada registrada a superadmin_telemetry.registre_baixes_certificats.
+            </p>
+          ) : (
+            <div className="space-y-2">
+              {baixesCertificats.map((b) => (
+                <div
+                  key={b.id}
+                  className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/70 border border-slate-200 dark:border-slate-700 font-mono text-xs space-y-1"
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="font-bold text-slate-800 dark:text-slate-200">
+                      Tenant {b.tenant_id.slice(0, 8)}… • {b.estat}
+                    </span>
+                    <span className="text-[10px] text-slate-400">
+                      Custòdia {b.custodia_anys}a • Gràcia {b.periode_gracia_dies}d
+                    </span>
+                  </div>
+                  <p className="text-[10px] text-slate-500 truncate">
+                    NIF Hash: {b.nif_hash}
+                  </p>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );

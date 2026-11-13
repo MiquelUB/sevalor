@@ -116,6 +116,12 @@ class TiquetAuditoriaRequestDTO(BaseModel):
     accio: str  # APROVAT, REBUTJAT
     custodia_paper_confirmada: Optional[bool] = None
     ordre_treball_id: Optional[uuid.UUID] = None
+    desblocatge_targeta_vehicle: bool = True
+    nif_emissor: Optional[str] = None
+    nif_comprador: Optional[str] = None
+    import_total: Optional[Decimal] = None
+    desglose_carburant_eur: Optional[Decimal] = None
+    desglose_adblue_eur: Optional[Decimal] = None
 
 
 class TiquetDespesaResponseDTO(BaseModel):
@@ -126,15 +132,53 @@ class TiquetDespesaResponseDTO(BaseModel):
     ordre_treball_id: Optional[uuid.UUID] = None
     data_tiquet: date
     nif_emissor: Optional[str] = None
+    nif_comprador: Optional[str] = None
     rao_social: Optional[str] = None
     base_imposable: Decimal
     iva_pct: Decimal
     quota_iva: Decimal
     import_total: Decimal
+    subcompte_pgc: str = "629000"
     estat_aprovacio: str
     estat_fiscal: str
     requereix_aprovacio_boss: bool
     custodia_paper_confirmada: bool
+    nom_fitxer_visible: Optional[str] = None
+
+
+class OTDesglossamentCostosDTO(BaseModel):
+    materials_picking_pmp_eur: float
+    mermes_imputades_eur: float
+    tiquets_camp_ocr_eur: float
+    ma_obra_real_eur: float
+    flota_real_eur: float
+
+
+class OTCostMargeDTO(BaseModel):
+    ordre_treball_id: str
+    codi: Optional[str] = None
+    titol: Optional[str] = None
+    ingressos_nets_eur: float
+    desglossament_costos: OTDesglossamentCostosDTO
+    cost_total_real_eur: float
+    marge_brut_eur: float
+    marge_brut_pct: float
+    alerta_desviacio_marge: bool
+
+
+class DespesaComptableDTO(BaseModel):
+    id: uuid.UUID
+    ordre_treball_id: Optional[uuid.UUID] = None
+    tiquet_id: Optional[uuid.UUID] = None
+    merma_id: Optional[uuid.UUID] = None
+    concepte: str
+    subcompte: str
+    base_imposable: Decimal
+    quota_iva: Decimal
+    import_total: Decimal
+    estat: str
+    origen: str
+    created_at: datetime
 
 
 class Norma43ConciliarRequestDTO(BaseModel):

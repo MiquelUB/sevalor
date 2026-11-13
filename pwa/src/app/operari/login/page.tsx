@@ -1,8 +1,8 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import { Delete, ShieldAlert, Sun, Moon, User, ArrowRight, Settings, Globe } from "lucide-react";
+import { Delete, ShieldAlert, Sun, Moon, User, ArrowRight, Settings, Globe, Smartphone, KeyRound, Send } from "lucide-react";
 import {
   createSentinelBlock,
   verifySentinelBlock,
@@ -11,6 +11,8 @@ import { apiFetch, setAuthToken, getApiBaseUrl } from "@/lib/api";
 import { useChameleon } from "@/lib/chameleon";
 
 const NIF_STORAGE_KEY = "sevalor_operari_nif";
+const DEVICE_TOKEN_KEY = "sevalor_device_token";
+const DISPOSITIU_REF_KEY = "sevalor_dispositiu_ref";
 const SENTINEL_SALT_KEY = "sevalor_sentinel_salt";
 const SENTINEL_CIPHER_KEY = "sevalor_sentinel_cipher";
 const SENTINEL_IV_KEY = "sevalor_sentinel_iv";
@@ -24,6 +26,14 @@ export default function OperariLoginPage() {
   const [showConfig, setShowConfig] = useState(false);
   const [apiUrl, setApiUrl] = useState("");
   const [isOffline, setIsOffline] = useState(false);
+  const [deviceEnrolled, setDeviceEnrolled] = useState<boolean>(false);
+  const [showEnrollPanel, setShowEnrollPanel] = useState<boolean>(false);
+  const [otpRequested, setOtpRequested] = useState<boolean>(false);
+  const [otpCode, setOtpCode] = useState<string>("");
+  const [enrollLoading, setEnrollLoading] = useState<boolean>(false);
+  const [infoMessage, setInfoMessage] = useState<string | null>(null);
+  const [failedAttempts, setFailedAttempts] = useState<number>(0);
+  const [lockSeconds, setLockSeconds] = useState<number>(0);
   const router = useRouter();
 
   // Mode Clar / Fosc
@@ -43,6 +53,8 @@ export default function OperariLoginPage() {
     if (savedNif) {
       setNif(savedNif);
     }
+    const existingToken = localStorage.getItem(DEVICE_TOKEN_KEY);
+    setDeviceEnrolled(Boolean(existingToken));
 
     setApiUrl(getApiBaseUrl());
     setIsOffline(typeof navigator !== "undefined" && !navigator.onLine);
@@ -76,11 +88,21 @@ export default function OperariLoginPage() {
     setError(null);
   };
 
+  useEffect(() => {
+    if (lockSeconds <= 0) return;
+    const timer = setInterval(() => {
+      setLockSeconds((prev) => (prev <= 1 ? 0 : prev - 1));
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [lockSeconds]);
+
   const handleDigit = (digit: string) => {
+    if (lockSeconds > 0 || loading) return;
     if (pin.length < 4) {
       const nouPin = pin + digit;
       setPin(nouPin);
       setError(null);
+      setInfoMessage(null);
     }
   };
 
@@ -127,6 +149,8 @@ export default function OperariLoginPage() {
 
       const response = await apiFetch<{
         access_token: string;
+        requereix_rexifrat_idb?: boolean;
+        dispositiu_referencia?: string | null;
         usuari: { id: string; nom: string; rol: string };
       }>("/operari_auth/login", {
         method: "POST",
@@ -140,32 +164,42 @@ export default function OperariLoginPage() {
       });
 
       if (response && response.access_token) {
+        setFailedAttempts(0);
         setAuthToken(response.access_token);
         if (response.usuari) {
           localStorage.setItem("sevalor_user", JSON.stringify(response.usuari));
+        }
+        if (response.dispositiu_referencia) {
+          localStorage.setItem(DISPOSITIU_REF_KEY, response.dispositiu_referencia);
         }
         const isHttps = typeof window !== "undefined" && window.location.protocol === "https:";
         const secureFlag = isHttps ? "; Secure" : "";
         document.cookie = `sevalor_access_token=${response.access_token}; path=/; max-age=86400; SameSite=Lax${secureFlag}`;
 
-        // Sentinel offline handling
-        const saltHex = localStorage.getItem(SENTINEL_SALT_KEY);
-        if (saltHex) {
-          const cipher = localStorage.getItem(SENTINEL_CIPHER_KEY);
-          const iv = localStorage.getItem(SENTINEL_IV_KEY);
-          if (cipher && iv) {
-            try {
-              const saltBytes = new Uint8Array(saltHex.split(",").map(Number));
-              const valid = await verifySentinelBlock(codiPin, saltBytes, cipher, iv);
-              if (!valid) {
+        // Sentinel offline handling + re-xifrat obligatori post-recuperació de PIN
+        if (response.requereix_rexifrat_idb) {
+          localStorage.removeItem(SENTINEL_CIPHER_KEY);
+          localStorage.removeItem(SENTINEL_IV_KEY);
+          localStorage.removeItem(SENTINEL_SALT_KEY);
+        } else {
+          const saltHex = localStorage.getItem(SENTINEL_SALT_KEY);
+          if (saltHex) {
+            const cipher = localStorage.getItem(SENTINEL_CIPHER_KEY);
+            const iv = localStorage.getItem(SENTINEL_IV_KEY);
+            if (cipher && iv) {
+              try {
+                const saltBytes = new Uint8Array(saltHex.split(",").map(Number));
+                const valid = await verifySentinelBlock(codiPin, saltBytes, cipher, iv);
+                if (!valid) {
+                  localStorage.removeItem(SENTINEL_CIPHER_KEY);
+                  localStorage.removeItem(SENTINEL_IV_KEY);
+                  localStorage.removeItem(SENTINEL_SALT_KEY);
+                }
+              } catch {
                 localStorage.removeItem(SENTINEL_CIPHER_KEY);
                 localStorage.removeItem(SENTINEL_IV_KEY);
                 localStorage.removeItem(SENTINEL_SALT_KEY);
               }
-            } catch {
-              localStorage.removeItem(SENTINEL_CIPHER_KEY);
-              localStorage.removeItem(SENTINEL_IV_KEY);
-              localStorage.removeItem(SENTINEL_SALT_KEY);
             }
           }
         }
@@ -181,35 +215,145 @@ export default function OperariLoginPage() {
         sessionStorage.setItem("sevalor_session_pin", codiPin);
         window.location.href = "/operari/feines";
       } else {
-        setError("PIN incorrecte. Torna a intentar-ho.");
-        setPin("");
+        await registerFailedAttempt(operariNif, "PIN incorrecte. Torna a intentar-ho.");
       }
     } catch (err: any) {
       // Intentar validació offline via sentinel si falla la xarxa
-      const saltHex = localStorage.getItem(SENTINEL_SALT_KEY);
-      if (saltHex) {
-        const cipher = localStorage.getItem(SENTINEL_CIPHER_KEY);
-        const iv = localStorage.getItem(SENTINEL_IV_KEY);
-        if (cipher && iv) {
-          try {
-            const saltBytes = new Uint8Array(saltHex.split(",").map(Number));
-            const valid = await verifySentinelBlock(codiPin, saltBytes, cipher, iv);
-            if (valid) {
-              sessionStorage.setItem("sevalor_session_pin", codiPin);
-              window.location.href = "/operari/feines";
-              setLoading(false);
-              return;
+      if (isOffline) {
+        const saltHex = localStorage.getItem(SENTINEL_SALT_KEY);
+        if (saltHex) {
+          const cipher = localStorage.getItem(SENTINEL_CIPHER_KEY);
+          const iv = localStorage.getItem(SENTINEL_IV_KEY);
+          if (cipher && iv) {
+            try {
+              const saltBytes = new Uint8Array(saltHex.split(",").map(Number));
+              const valid = await verifySentinelBlock(codiPin, saltBytes, cipher, iv);
+              if (valid) {
+                setFailedAttempts(0);
+                sessionStorage.setItem("sevalor_session_pin", codiPin);
+                window.location.href = "/operari/feines";
+                setLoading(false);
+                return;
+              }
+            } catch {
+              // Ignorar
             }
-          } catch {
-            // Ignorar
           }
         }
       }
 
-      setError(err.message || "Error al connectar amb el servidor.");
-      setPin("");
+      await registerFailedAttempt(operariNif, err.message || "Error al connectar amb el servidor.");
     } finally {
       setLoading(false);
+    }
+  };
+
+  const registerFailedAttempt = useCallback(
+    async (operariNif: string, baseMessage: string) => {
+      const nextCount = failedAttempts + 1;
+      setFailedAttempts(nextCount);
+      setPin("");
+
+      if (nextCount >= 3) {
+        setLockSeconds(30);
+        setError("Massa intents fallits. Terminal bloquejat 30 segons per seguretat.");
+        try {
+          await apiFetch("/operari/alerta-forca-bruta", {
+            method: "POST",
+            body: JSON.stringify({
+              telefon_o_nif: operariNif,
+              intents_fallits: nextCount,
+              device_token:
+                localStorage.getItem(DEVICE_TOKEN_KEY) ||
+                localStorage.getItem(DISPOSITIU_REF_KEY) ||
+                navigator.userAgent.slice(0, 60),
+            }),
+          });
+        } catch {
+          // Si falla xarxa no impedim el bloqueig local de 30s
+        }
+        return;
+      }
+
+      setError(baseMessage);
+    },
+    [failedAttempts]
+  );
+
+  const handleRequestOtp = async () => {
+    const operariNif = nif.trim().toUpperCase();
+    if (!operariNif) {
+      setError("Escriu el teu DNI/NIF abans de sol·licitar l'OTP per Telegram.");
+      return;
+    }
+    setEnrollLoading(true);
+    setError(null);
+    setInfoMessage(null);
+    try {
+      await apiFetch<{ status: string }>("/operari/enrolar/solicitar-otp", {
+        method: "POST",
+        body: JSON.stringify({ telefon_o_nif: operariNif }),
+      });
+      setOtpRequested(true);
+      setInfoMessage("Codi OTP enviat al teu Telegram.");
+    } catch (err: any) {
+      setError(err.message || "No s'ha pogut enviar el codi OTP per Telegram.");
+    } finally {
+      setEnrollLoading(false);
+    }
+  };
+
+  const handleVerifyOtp = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const operariNif = nif.trim().toUpperCase();
+    if (!operariNif || !otpCode.trim()) return;
+    setEnrollLoading(true);
+    setError(null);
+    try {
+      const res = await apiFetch<{ device_token: string; status: string }>(
+        "/operari/enrolar/verificar-otp",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            telefon_o_nif: operariNif,
+            otp_code: otpCode.trim(),
+            device_fingerprint: navigator.userAgent.slice(0, 80),
+          }),
+        }
+      );
+      localStorage.setItem(DEVICE_TOKEN_KEY, res.device_token);
+      localStorage.setItem(DISPOSITIU_REF_KEY, `${res.device_token}:${navigator.userAgent.slice(0, 32)}`);
+      setDeviceEnrolled(true);
+      setShowEnrollPanel(false);
+      setOtpRequested(false);
+      setOtpCode("");
+      setInfoMessage("Terminal enrolat correctament amb Telegram. Ara introdueix el teu PIN.");
+    } catch (err: any) {
+      setError(err.message || "Codi OTP invàlid o caducat.");
+    } finally {
+      setEnrollLoading(false);
+    }
+  };
+
+  const handleRecoverPin = async () => {
+    const operariNif = nif.trim().toUpperCase();
+    if (!operariNif) {
+      setError("Introdueix el teu DNI/NIF per recuperar el PIN via Telegram.");
+      return;
+    }
+    setEnrollLoading(true);
+    setError(null);
+    setInfoMessage(null);
+    try {
+      await apiFetch<{ status: string }>("/operari/recuperar-pin", {
+        method: "POST",
+        body: JSON.stringify({ telefon_o_nif: operariNif }),
+      });
+      setInfoMessage("Nou PIN temporal enviat al teu Telegram.");
+    } catch (err: any) {
+      setError(err.message || "Error sol·licitant recuperació de PIN.");
+    } finally {
+      setEnrollLoading(false);
     }
   };
 
@@ -223,7 +367,7 @@ export default function OperariLoginPage() {
   };
 
   return (
-    <div className="min-h-screen flex flex-col justify-between p-5 bg-gradient-to-b from-[#1E3A5F] to-[#0F172A] text-white select-none relative overflow-hidden">
+    <div className="min-h-screen flex flex-col justify-between p-5 bg-gradient-to-b from-primary to-slate-950 text-white select-none relative overflow-hidden">
       {/* Decorative Background Elements */}
       <div className="fixed -bottom-24 -left-24 w-64 h-64 bg-secondary-container/10 rounded-full blur-3xl pointer-events-none" />
       <div className="fixed -top-24 -right-24 w-64 h-64 bg-primary-container/20 rounded-full blur-3xl pointer-events-none" />
@@ -281,12 +425,74 @@ export default function OperariLoginPage() {
 
       {/* Main Content: NIF + PIN Indicators & Tactile Keypad */}
       <div className="w-full max-w-[320px] mx-auto flex flex-col items-center gap-4 my-auto py-3 relative z-10">
-        {/* Error Alert */}
+        {/* Error & Info Alerts */}
         {error && (
           <div className="w-full p-3 bg-rose-500/20 border border-rose-400/40 rounded-xl text-rose-200 text-xs font-medium flex items-center gap-2">
             <ShieldAlert className="w-4 h-4 shrink-0 text-rose-400" />
             <span>{error}</span>
           </div>
+        )}
+        {infoMessage && (
+          <div className="w-full p-3 bg-secondary-container/20 border border-secondary-container/40 rounded-xl text-white text-xs font-medium flex items-center gap-2">
+            <Send className="w-4 h-4 shrink-0 text-secondary-container" />
+            <span>{infoMessage}</span>
+          </div>
+        )}
+        {lockSeconds > 0 && (
+          <div className="w-full p-2.5 bg-amber-500/20 border border-amber-400/40 rounded-xl text-amber-200 text-xs font-bold text-center">
+            Bloqueig temporal de seguretat: {lockSeconds}s
+          </div>
+        )}
+
+        {/* Enrolament de Terminal via Telegram OTP */}
+        <div className="w-full flex items-center justify-between text-[11px] bg-white/5 border border-white/10 rounded-xl px-3 py-2">
+          <span className="text-slate-300 flex items-center gap-1.5 font-medium">
+            <Smartphone className="w-3.5 h-3.5 text-secondary-container" />
+            {deviceEnrolled ? "Terminal enrolat" : "Nou terminal sense token"}
+          </span>
+          <button
+            type="button"
+            onClick={() => setShowEnrollPanel(!showEnrollPanel)}
+            className="text-secondary-container font-bold hover:underline"
+          >
+            {showEnrollPanel ? "Tancar OTP" : "Enrolar per Telegram"}
+          </button>
+        </div>
+
+        {showEnrollPanel && (
+          <form onSubmit={handleVerifyOtp} className="w-full p-3 bg-slate-900/85 border border-white/15 rounded-xl space-y-2.5">
+            <p className="text-[11px] text-slate-300">
+              Pas 1: Sol·licita el codi OTP al teu bot de Telegram vinculat.
+            </p>
+            <button
+              type="button"
+              disabled={enrollLoading}
+              onClick={handleRequestOtp}
+              className="w-full py-2 rounded-lg bg-white/10 hover:bg-white/20 text-xs font-bold text-white transition-colors"
+            >
+              {enrollLoading ? "Enviant..." : "Sol·licitar OTP per Telegram"}
+            </button>
+            {otpRequested && (
+              <div className="flex gap-2 pt-1">
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  maxLength={6}
+                  value={otpCode}
+                  onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, ""))}
+                  placeholder="OTP 6 dígits"
+                  className="flex-1 px-3 py-2 rounded-lg bg-slate-800 border border-white/15 text-white text-xs font-mono tracking-widest"
+                />
+                <button
+                  type="submit"
+                  disabled={enrollLoading || otpCode.length < 6}
+                  className="px-3 py-2 rounded-lg bg-secondary-container text-white text-xs font-bold disabled:opacity-50"
+                >
+                  Verificar
+                </button>
+              </div>
+            )}
+          </form>
         )}
 
         {/* Camp NIF / DNI editable */}
@@ -339,9 +545,9 @@ export default function OperariLoginPage() {
             <button
               key={num}
               type="button"
-              disabled={loading}
+              disabled={loading || lockSeconds > 0}
               onClick={() => handleDigit(num)}
-              className="w-[68px] h-[68px] rounded-full bg-white/10 hover:bg-white/15 active:bg-secondary-container active:scale-95 transition-all flex items-center justify-center text-2xl font-bold text-white border border-white/10 shadow-lg touch-manipulation"
+              className="w-[68px] h-[68px] rounded-full bg-white/10 hover:bg-white/15 active:bg-secondary-container active:scale-95 disabled:opacity-40 transition-all flex items-center justify-center text-2xl font-bold text-white border border-white/10 shadow-lg touch-manipulation"
             >
               {num}
             </button>
@@ -349,8 +555,9 @@ export default function OperariLoginPage() {
 
           <button
             type="button"
+            disabled={lockSeconds > 0}
             onClick={handleClear}
-            className="w-[68px] h-[68px] rounded-full bg-white/5 hover:bg-white/10 active:bg-white/20 active:scale-95 transition-all flex items-center justify-center text-sm font-bold text-slate-300 border border-white/5 touch-manipulation"
+            className="w-[68px] h-[68px] rounded-full bg-white/5 hover:bg-white/10 active:bg-white/20 active:scale-95 disabled:opacity-40 transition-all flex items-center justify-center text-sm font-bold text-slate-300 border border-white/5 touch-manipulation"
             title="Netejar PIN"
           >
             C
@@ -358,18 +565,19 @@ export default function OperariLoginPage() {
 
           <button
             type="button"
-            disabled={loading}
+            disabled={loading || lockSeconds > 0}
             onClick={() => handleDigit("0")}
-            className="w-[68px] h-[68px] rounded-full bg-white/10 hover:bg-white/15 active:bg-secondary-container active:scale-95 transition-all flex items-center justify-center text-2xl font-bold text-white border border-white/10 shadow-lg touch-manipulation"
+            className="w-[68px] h-[68px] rounded-full bg-white/10 hover:bg-white/15 active:bg-secondary-container active:scale-95 disabled:opacity-40 transition-all flex items-center justify-center text-2xl font-bold text-white border border-white/10 shadow-lg touch-manipulation"
           >
             0
           </button>
 
           <button
             type="button"
+            disabled={lockSeconds > 0}
             onClick={handleDelete}
             aria-label="Esborrar"
-            className="w-[68px] h-[68px] rounded-full bg-transparent hover:bg-white/5 active:bg-white/15 active:scale-95 transition-all flex items-center justify-center text-slate-300 touch-manipulation"
+            className="w-[68px] h-[68px] rounded-full bg-transparent hover:bg-white/5 active:bg-white/15 active:scale-95 disabled:opacity-40 transition-all flex items-center justify-center text-slate-300 touch-manipulation"
           >
             <Delete className="w-6 h-6" />
           </button>
@@ -378,12 +586,22 @@ export default function OperariLoginPage() {
         {/* Primary Action Button (Stitch Green CTA) */}
         <button
           type="button"
-          disabled={loading || pin.length !== 4 || !nif.trim()}
+          disabled={loading || lockSeconds > 0 || pin.length !== 4 || !nif.trim()}
           onClick={() => submitLogin(pin)}
           className="w-full h-13 py-3.5 mt-1 rounded-xl bg-secondary-container hover:brightness-110 active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-xl shadow-black/20 flex items-center justify-center gap-2 text-white font-bold text-sm tracking-wide uppercase"
         >
           <span>{loading ? "Comprovant accés..." : "Entrar al Terminal"}</span>
           {!loading && <ArrowRight className="w-4 h-4" />}
+        </button>
+
+        <button
+          type="button"
+          disabled={enrollLoading}
+          onClick={handleRecoverPin}
+          className="text-xs font-semibold text-slate-300 hover:text-white flex items-center gap-1.5 py-1 transition-colors"
+        >
+          <KeyRound className="w-3.5 h-3.5 text-secondary-container" />
+          <span>Has oblidat el teu PIN? Recuperar per Telegram</span>
         </button>
       </div>
 

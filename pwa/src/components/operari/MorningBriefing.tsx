@@ -11,9 +11,11 @@ import {
   AlertCircle,
   Clock,
   ChevronRight,
+  Camera,
 } from "lucide-react";
 import { localDB } from "@/lib/db";
 import { getAuthToken } from "@/lib/api";
+import { CAMERA_LIVE_INPUT_PROPS, compressImageToWebP } from "@/lib/media";
 
 interface VehicleItem {
   id: string;
@@ -42,7 +44,7 @@ export default function MorningBriefing({
   const [jornadaId, setJornadaId] = useState<string>("");
   const [vehicles, setVehicles] = useState<VehicleItem[]>([]);
   const [selectedVehicleId, setSelectedVehicleId] = useState<string>("");
-  const [kmInicials, setKmInicials] = useState<string>("");
+  const [fotoOdometreInici, setFotoOdometreInici] = useState<Blob | null>(null);
   const [feinesDia, setFeinesDia] = useState<any[]>([]);
   const [materialsPicking, setMaterialsPicking] = useState<any[]>([]);
 
@@ -175,25 +177,47 @@ export default function MorningBriefing({
   };
 
   const handleStep2Vehicle = async () => {
+    if (selectedVehicleId.trim() && !fotoOdometreInici) {
+      setError("Captura en viu la fotografia de l'odòmetre abans de continuar.");
+      return;
+    }
+
     setLoading(true);
     setError(null);
     try {
       if (selectedVehicleId.trim()) {
-        const kmVal = kmInicials ? parseInt(kmInicials, 10) : 0;
-        if (navigator.onLine && jornadaId) {
+        let odometreFotoPath = "offline_odometre_inici.webp";
+        if (navigator.onLine && jornadaId && fotoOdometreInici) {
           const token = getAuthToken();
-          const headers: Record<string, string> = { "Content-Type": "application/json" };
-          if (token) headers["Authorization"] = `Bearer ${token}`;
+          const authHeaders: Record<string, string> = {};
+          if (token) authHeaders["Authorization"] = `Bearer ${token}`;
+
+          const formData = new FormData();
+          formData.append("foto_odometre", fotoOdometreInici, `odometre_inici_${Date.now()}.webp`);
+          formData.append("vehicle_id", selectedVehicleId.trim());
+          formData.append("moment", "INICI");
+
+          const fotoRes = await fetch(`/api/v1/operari/jornada/${jornadaId}/odometre-foto`, {
+            method: "POST",
+            headers: authHeaders,
+            credentials: "include",
+            body: formData,
+          });
+          if (!fotoRes.ok) {
+            const errFoto = await fotoRes.json().catch(() => ({}));
+            throw new Error(errFoto.detail || "Error pujant la foto de l'odòmetre.");
+          }
+          const fotoData = await fotoRes.json();
+          odometreFotoPath = fotoData.foto_odometre_path || odometreFotoPath;
 
           const res = await fetch(`/api/v1/operari/jornada/${jornadaId}/vehicle`, {
             method: "POST",
-            headers,
+            headers: { "Content-Type": "application/json", ...authHeaders },
             credentials: "include",
             body: JSON.stringify({
               vehicle_id: selectedVehicleId.trim(),
-              km_actuals: kmVal,
-              km_inicials: kmVal,
-              fotos_check_in: ["checkin_frontal.webp"],
+              odometre_foto_path: odometreFotoPath,
+              fotos_check_in: [odometreFotoPath],
             }),
           });
           if (!res.ok) {
@@ -208,7 +232,7 @@ export default function MorningBriefing({
           try {
             const parsed = JSON.parse(saved);
             parsed.vehicle_id = selectedVehicleId;
-            parsed.km_inicials = kmVal;
+            parsed.odometre_foto_inici = odometreFotoPath;
             localStorage.setItem("sevalor_jornada_activa", JSON.stringify(parsed));
             window.dispatchEvent(new Event("sevalor-jornada-updated"));
           } catch {
@@ -377,10 +401,7 @@ export default function MorningBriefing({
                   onChange={(e) => {
                     const vId = e.target.value;
                     setSelectedVehicleId(vId);
-                    const sel = vehicles.find((v) => v.id === vId);
-                    if (sel && sel.odometre_acumulat) {
-                      setKmInicials(String(sel.odometre_acumulat));
-                    }
+                    setFotoOdometreInici(null);
                   }}
                   className="w-full min-h-[46px] p-2.5 rounded-xl border border-outline-variant bg-surface-container-low text-on-surface text-sm font-medium"
                 >
@@ -396,16 +417,38 @@ export default function MorningBriefing({
               {selectedVehicleId && (
                 <div>
                   <label className="block text-xs font-bold uppercase text-on-surface mb-1.5">
-                    Quilòmetres Inicials (Odòmetre)
+                    Fotografia en Viu de l&apos;Odòmetre Inicial *
                   </label>
-                  <input
-                    type="number"
-                    data-testid="input-briefing-km"
-                    value={kmInicials}
-                    onChange={(e) => setKmInicials(e.target.value)}
-                    placeholder="Ex: 124500"
-                    className="w-full min-h-[46px] p-2.5 rounded-xl border border-outline-variant bg-surface-container-low text-on-surface text-sm font-mono font-bold"
-                  />
+                  <label
+                    data-testid="input-briefing-odometre-foto"
+                    className={`w-full min-h-[56px] p-3 rounded-xl border-2 border-dashed flex items-center justify-center gap-2 cursor-pointer transition-colors ${
+                      fotoOdometreInici
+                        ? "border-secondary-container bg-secondary-container/10 text-secondary"
+                        : "border-outline-variant bg-surface-container-low text-on-surface-variant"
+                    }`}
+                  >
+                    {fotoOdometreInici ? (
+                      <CheckCircle2 className="w-5 h-5" />
+                    ) : (
+                      <Camera className="w-5 h-5" />
+                    )}
+                    <span className="text-xs font-bold">
+                      {fotoOdometreInici
+                        ? "Odòmetre inicial capturat ✓"
+                        : "Capturar Foto de l'Odòmetre (Càmera en viu)"}
+                    </span>
+                    <input
+                      {...CAMERA_LIVE_INPUT_PROPS}
+                      className="hidden"
+                      onChange={async (e) => {
+                        const file = e.target.files?.[0];
+                        if (!file) return;
+                        const blob = await compressImageToWebP(file);
+                        setFotoOdometreInici(blob);
+                        setError(null);
+                      }}
+                    />
+                  </label>
                 </div>
               )}
 

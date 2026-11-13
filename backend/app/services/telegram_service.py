@@ -18,7 +18,7 @@ class TelegramService:
         self.bot_token = settings.TELEGRAM_BOT_TOKEN
         self.api_url = f"https://api.telegram.org/bot{self.bot_token}"
 
-    async def send_message(self, chat_id: int, text: str, reply_markup: dict = None) -> bool:  # type: ignore
+    async def send_message(self, chat_id: int, text: str, reply_markup: dict | None = None) -> bool:
         if not self.bot_token or self.bot_token == "DUMMY_TOKEN":
             logger.info(f"[TELEGRAM DISPATCH] Missatge a {chat_id}: {text} (markup={reply_markup})")
             return True
@@ -313,3 +313,17 @@ class TelegramService:
 
 
 telegram_service = TelegramService()
+
+
+async def send_telegram_direct_message(
+    empresa_id: uuid.UUID,
+    chat_id: int,
+    text: str,
+    reply_markup: dict | None = None,
+) -> bool:
+    """Envia un missatge directe via Telegram Bot a un operari o usuari vinculat."""
+    logger.info("Enviant missatge Telegram directe (empresa=%s, chat_id=%s)", empresa_id, chat_id)
+    return await telegram_service.send_message(chat_id=chat_id, text=text, reply_markup=reply_markup)
+
+
+send_telegram_Direct_message = send_telegram_direct_message

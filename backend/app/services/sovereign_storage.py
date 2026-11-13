@@ -908,3 +908,63 @@ class SovereignStorageGateway:
                 content_type="text/plain; charset=utf-8",
             )
         return rutes
+
+    @classmethod
+    async def reanomenar_fitxer_binari(
+        cls,
+        db: AsyncSession,
+        empresa_id: str | uuid.UUID,
+        old_path: Optional[str],
+        new_filename: str,
+        categoria: str = "tiquets_despesa",
+        content_type: str = "image/webp",
+    ) -> str:
+        """
+        Reanomena de forma segura un fitxer binari al disc sobirà del tenant sense sortir del seu root.
+        Suporta LOCAL_FS, cua transit:// i HTTP_VAULT.
+        """
+        nom_net = sanititzar_nom(new_filename)
+        if not old_path:
+            raise HTTPException(status_code=400, detail="Ruta d'origen del fitxer buida.")
+
+        transit_bin = cls._trobar_fitxer_transit(empresa_id, old_path)
+        if transit_bin and transit_bin.is_file():
+            raw_bytes = cls._decrypt_transit_payload(empresa_id, transit_bin.read_bytes())
+            nova_ruta = await cls.pujar_fitxer_binari(
+                db=db,
+                empresa_id=empresa_id,
+                categoria=categoria,
+                nom_fitxer=nom_net,
+                content=raw_bytes,
+                content_type=content_type,
+            )
+            if str(transit_bin.resolve()) != str(nova_ruta) and transit_bin.exists():
+                transit_bin.unlink(missing_ok=True)
+            return nova_ruta
+
+        real_old = await cls.resoldre_fitxer_real_path(db, empresa_id, old_path)
+        mode, base_target, _ = await cls.resoldre_desti_disc_empresa(db, empresa_id)
+
+        if real_old and real_old.is_file() and mode == "LOCAL_FS":
+            subcarpeta = MAPA_CARPETES_CLIENT.get(categoria, categoria)
+            base_resolved = Path(base_target).resolve()
+            dest_folder = (base_resolved / subcarpeta).resolve()
+            if not str(dest_folder).startswith(str(base_resolved)):
+                raise HTTPException(status_code=400, detail="Ruta de destí fora del disc del tenant.")
+            dest_folder.mkdir(parents=True, exist_ok=True)
+            dest_file = (dest_folder / nom_net).resolve()
+            if not str(dest_file).startswith(str(dest_folder)):
+                raise HTTPException(status_code=400, detail="Nom de fitxer invàlid.")
+            if real_old.resolve() != dest_file:
+                real_old.replace(dest_file)
+            return str(dest_file)
+
+        raw_bytes, _ = await cls.obtenir_bytes_fitxer(db, empresa_id, old_path)
+        return await cls.pujar_fitxer_binari(
+            db=db,
+            empresa_id=empresa_id,
+            categoria=categoria,
+            nom_fitxer=nom_net,
+            content=raw_bytes,
+            content_type=content_type,
+        )

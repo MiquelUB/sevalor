@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect } from "react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import {
   Briefcase,
   Package,
@@ -15,10 +15,12 @@ import {
   Bell,
   Volume2,
   QrCode,
+  Camera,
 } from "lucide-react";
 import CopilotWidget from "@/components/CopilotWidget";
 import NotificationCenter from "@/components/operari/NotificationCenter";
 import ControlHorariBar from "@/components/operari/ControlHorariBar";
+import { setAuthToken } from "@/lib/api";
 
 export default function OperariLayout({
   children,
@@ -26,6 +28,7 @@ export default function OperariLayout({
   children: React.ReactNode;
 }) {
   const pathname = usePathname();
+  const router = useRouter();
   const isLoginPage =
     !pathname ||
     pathname === "/operari/login" ||
@@ -48,6 +51,55 @@ export default function OperariLayout({
       document.documentElement.classList.remove("dark");
     }
   }, []);
+
+  // Spec 019: Autolock per inactivitat (30 min) o segon pla (>5 min)
+  useEffect(() => {
+    if (isLoginPage || typeof window === "undefined") return;
+
+    const INACTIVITY_MS = 30 * 60 * 1000;
+    const BACKGROUND_MS = 5 * 60 * 1000;
+    let hiddenTimestamp: number | null = null;
+
+    const triggerLock = () => {
+      try {
+        sessionStorage.removeItem("sevalor_session_pin");
+        setAuthToken("");
+        document.cookie = "sevalor_access_token=; path=/; max-age=0; SameSite=Lax";
+      } catch {
+        // Ignorar errors de neteja
+      }
+      router.replace("/operari/login?locked=1");
+    };
+
+    let inactivityTimer = window.setTimeout(triggerLock, INACTIVITY_MS);
+    const resetInactivity = () => {
+      window.clearTimeout(inactivityTimer);
+      inactivityTimer = window.setTimeout(triggerLock, INACTIVITY_MS);
+    };
+
+    const handleVisibility = () => {
+      if (document.visibilityState === "hidden") {
+        hiddenTimestamp = Date.now();
+      } else if (document.visibilityState === "visible") {
+        if (hiddenTimestamp && Date.now() - hiddenTimestamp >= BACKGROUND_MS) {
+          triggerLock();
+          return;
+        }
+        hiddenTimestamp = null;
+        resetInactivity();
+      }
+    };
+
+    const events = ["pointerdown", "keydown", "touchstart", "scroll"] as const;
+    events.forEach((ev) => window.addEventListener(ev, resetInactivity, { passive: true }));
+    document.addEventListener("visibilitychange", handleVisibility);
+
+    return () => {
+      window.clearTimeout(inactivityTimer);
+      events.forEach((ev) => window.removeEventListener(ev, resetInactivity));
+      document.removeEventListener("visibilitychange", handleVisibility);
+    };
+  }, [isLoginPage, router]);
 
   const toggleTheme = () => {
     if (isDark) {
@@ -83,6 +135,7 @@ export default function OperariLayout({
 
   const navItems = [
     { label: "Feines", href: "/operari/feines", icon: Briefcase, materialIcon: "assignment" },
+    { label: "Càmera", href: "/operari/camera", icon: Camera, materialIcon: "photo_camera" },
     { label: "Material", href: "/operari/material", icon: Package, materialIcon: "inventory_2" },
     { label: "Vehicles", href: "/operari/vehicles", icon: Truck, materialIcon: "local_shipping" },
     { label: "Plànols", href: "/operari/planols", icon: Layers, materialIcon: "map" },

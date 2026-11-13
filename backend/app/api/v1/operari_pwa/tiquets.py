@@ -1,8 +1,9 @@
 import secrets
 import uuid
-from datetime import datetime
+from datetime import date, datetime, timezone
 from typing import List, Optional
 
+import filetype
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select
@@ -10,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db_with_tenant_context
 from app.core.security import get_current_user_claims, require_roles
-from app.models.models import TiquetCarburant, Vehicle
+from app.models.models import OrdreTreball, TiquetCarburant, TiquetDespesa, Usuari, Vehicle
 
 router = APIRouter(
     prefix="/operari",
@@ -289,3 +290,259 @@ async def parse_tiquet_text(
         "categoria": categoria,
         "concepte": text.strip()[:100],
     }
+
+
+CATEGORIES_TIQUET_CAPTURA = {"CARBURANT", "FERRETERIA", "PEATGES", "DIETES", "ALTRES"}
+ALLOWED_IMAGE_MIMES = {"image/webp": "webp", "image/jpeg": "jpg", "image/png": "png"}
+MAX_TIQUET_IMAGE_BYTES = 10 * 1024 * 1024
+
+
+class CheckoutCustodiaRequest(BaseModel):
+    tiquet_ids: Optional[List[uuid.UUID]] = None
+
+
+@router.post("/tiquets/captura-rapida", status_code=status.HTTP_201_CREATED)
+async def captura_rapida_tiquet(
+    request: Request,
+    categoria: str = Form(...),
+    foto_tiquet: UploadFile = File(...),
+    foto_odometre: Optional[UploadFile] = File(None),
+    ordre_treball_id: Optional[str] = Form(None),
+    vehicle_id: Optional[str] = Form(None),
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+):
+    """(Spec 018 Zero-Tecleig) Captura binària pura de tiquets sense OCR local ni inputs manuals."""
+    empresa_id = request.state.empresa_id
+    if not empresa_id or empresa_id == "undefined":
+        raise HTTPException(status_code=401, detail="Tenant context missing")
+
+    emp_uuid = uuid.UUID(str(empresa_id))
+    claims = get_current_user_claims(request)
+    usuari_id_raw = claims.get("sub")
+    if not usuari_id_raw:
+        raise HTTPException(status_code=401, detail="Usuari no identificat")
+    usuari_uuid = uuid.UUID(str(usuari_id_raw))
+
+    cat_norm = categoria.strip().upper()
+    if cat_norm not in CATEGORIES_TIQUET_CAPTURA:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Categoria invàlida '{categoria}'. "
+                "Categories permeses: CARBURANT, FERRETERIA, PEATGES, DIETES, ALTRES."
+            ),
+        )
+
+    raw_tiquet = await foto_tiquet.read()
+    if not raw_tiquet:
+        raise HTTPException(status_code=422, detail="La fotografia del tiquet és obligatòria.")
+    if len(raw_tiquet) > MAX_TIQUET_IMAGE_BYTES:
+        raise HTTPException(status_code=413, detail="La foto del tiquet supera el límit de 10 MB.")
+
+    kind_tiquet = filetype.guess(raw_tiquet)
+    if kind_tiquet is None or kind_tiquet.mime not in ALLOWED_IMAGE_MIMES:
+        raise HTTPException(
+            status_code=422,
+            detail="Format d'imatge de tiquet no vàlid. Només s'admeten WebP, JPEG o PNG.",
+        )
+
+    raw_odometre: Optional[bytes] = None
+    ext_odometre = "webp"
+    mime_odometre = "image/webp"
+    if foto_odometre is not None:
+        raw_odometre = await foto_odometre.read()
+        if raw_odometre:
+            if len(raw_odometre) > MAX_TIQUET_IMAGE_BYTES:
+                raise HTTPException(
+                    status_code=413, detail="La foto de l'odòmetre supera el límit de 10 MB."
+                )
+            kind_odo = filetype.guess(raw_odometre)
+            if kind_odo is None or kind_odo.mime not in ALLOWED_IMAGE_MIMES:
+                raise HTTPException(
+                    status_code=422,
+                    detail="Format d'imatge d'odòmetre no vàlid. Només s'admeten WebP, JPEG o PNG.",
+                )
+            ext_odometre = ALLOWED_IMAGE_MIMES[kind_odo.mime]
+            mime_odometre = kind_odo.mime
+
+    if cat_norm == "CARBURANT" and not raw_odometre:
+        raise HTTPException(
+            status_code=422,
+            detail="Per a CARBURANT és obligatori aportar la segona foto de l'odòmetre.",
+        )
+
+    ot_uuid: Optional[uuid.UUID] = None
+    if ordre_treball_id and ordre_treball_id.strip():
+        try:
+            ot_uuid = uuid.UUID(ordre_treball_id.strip())
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail="ordre_treball_id invàlid") from exc
+        ot_res = await db.execute(
+            select(OrdreTreball.id).where(
+                OrdreTreball.id == ot_uuid,
+                OrdreTreball.empresa_id == emp_uuid,
+            )
+        )
+        if not ot_res.scalar_one_or_none():
+            raise HTTPException(status_code=404, detail="Ordre de treball no trobada al tenant")
+
+    veh_uuid: Optional[uuid.UUID] = None
+    if vehicle_id and vehicle_id.strip():
+        try:
+            veh_uuid = uuid.UUID(vehicle_id.strip())
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail="vehicle_id invàlid") from exc
+        v_res = await db.execute(
+            select(Vehicle.id).where(Vehicle.id == veh_uuid, Vehicle.empresa_id == emp_uuid)
+        )
+        if not v_res.scalar_one_or_none():
+            raise HTTPException(status_code=404, detail="Vehicle no trobat al tenant")
+    else:
+        u_res = await db.execute(
+            select(Usuari.vehicle_assignat_id).where(
+                Usuari.id == usuari_uuid,
+                Usuari.empresa_id == emp_uuid,
+            )
+        )
+        veh_uuid = u_res.scalar_one_or_none()
+
+    from app.services.sovereign_storage import SovereignStorageGateway
+    from app.workers.comptabilitat_tasks import processar_tiquet_ocr_a_gestio_task
+
+    ext_tiquet = ALLOWED_IMAGE_MIMES[kind_tiquet.mime]
+    ts = int(datetime.now(timezone.utc).timestamp())
+    nom_fitxer_visible = f"tiquet_tmp_{ts}.webp"
+    storage_name_tiquet = f"{uuid.uuid4().hex}.{ext_tiquet}"
+
+    path_tiquet = await SovereignStorageGateway.pujar_fitxer_binari(
+        db=db,
+        empresa_id=str(emp_uuid),
+        categoria="tiquets_despesa",
+        nom_fitxer=storage_name_tiquet,
+        content=raw_tiquet,
+        content_type=kind_tiquet.mime,
+    )
+
+    path_odometre: Optional[str] = None
+    if raw_odometre:
+        storage_name_odo = f"{uuid.uuid4().hex}.{ext_odometre}"
+        path_odometre = await SovereignStorageGateway.pujar_fitxer_binari(
+            db=db,
+            empresa_id=str(emp_uuid),
+            categoria="tiquets_despesa",
+            nom_fitxer=storage_name_odo,
+            content=raw_odometre,
+            content_type=mime_odometre,
+        )
+
+    nou_tiquet = TiquetDespesa(
+        id=uuid.uuid4(),
+        empresa_id=emp_uuid,
+        categoria=cat_norm,
+        usuari_id=usuari_uuid,
+        vehicle_id=veh_uuid,
+        ordre_treball_id=ot_uuid,
+        data_tiquet=date.today(),
+        base_imposable=None,
+        import_total=None,
+        estat_aprovacio="PENDENT_PROCESSAMENT",
+        estat_fiscal="PENDENT_OCR",
+        requereix_aprovacio_boss=False,
+        custodia_paper_confirmada=False,
+        nom_fitxer_visible=nom_fitxer_visible,
+        foto_tiquet_path=path_tiquet,
+        foto_odometre_path=path_odometre,
+    )
+    db.add(nou_tiquet)
+    await db.flush()
+    tiquet_id_str = str(nou_tiquet.id)
+    created_at_iso = nou_tiquet.created_at.isoformat() if nou_tiquet.created_at else None
+    await db.commit()
+
+    processar_tiquet_ocr_a_gestio_task.apply_async(
+        args=[str(emp_uuid), tiquet_id_str],
+        queue="queue_documents",
+    )
+
+    return {
+        "id": tiquet_id_str,
+        "categoria": cat_norm,
+        "estat_aprovacio": "PENDENT_PROCESSAMENT",
+        "nom_fitxer_visible": nom_fitxer_visible,
+        "custodia_paper_confirmada": False,
+        "te_foto_odometre": bool(path_odometre),
+        "ordre_treball_id": str(ot_uuid) if ot_uuid else None,
+        "vehicle_id": str(veh_uuid) if veh_uuid else None,
+        "created_at": created_at_iso,
+    }
+
+
+@router.get("/tiquets/avui")
+async def llistar_tiquets_avui_operari(
+    request: Request,
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+):
+    """Retorna exclusivament la llista Zero-Thumbnail de tiquets capturats avui per l'operari."""
+    empresa_id = request.state.empresa_id
+    if not empresa_id or empresa_id == "undefined":
+        raise HTTPException(status_code=401, detail="Tenant context missing")
+
+    emp_uuid = uuid.UUID(str(empresa_id))
+    claims = get_current_user_claims(request)
+    usuari_uuid = uuid.UUID(str(claims.get("sub")))
+
+    res = await db.execute(
+        select(TiquetDespesa)
+        .where(
+            TiquetDespesa.empresa_id == emp_uuid,
+            TiquetDespesa.usuari_id == usuari_uuid,
+            TiquetDespesa.data_tiquet == date.today(),
+            TiquetDespesa.custodia_paper_confirmada.is_(False),
+        )
+        .order_by(TiquetDespesa.created_at.desc())
+    )
+    files = res.scalars().all()
+    return [
+        {
+            "id": str(f.id),
+            "categoria": f.categoria,
+            "nom_fitxer_visible": f.nom_fitxer_visible or "tiquet_tmp.webp",
+            "estat_aprovacio": f.estat_aprovacio,
+            "custodia_paper_confirmada": bool(f.custodia_paper_confirmada),
+            "te_foto_odometre": bool(f.foto_odometre_path),
+            "ordre_treball_id": str(f.ordre_treball_id) if f.ordre_treball_id else None,
+            "created_at": f.created_at.isoformat() if f.created_at else None,
+        }
+        for f in files
+    ]
+
+
+@router.post("/tiquets/checkout-custodia")
+async def confirmar_custodia_tiquets_avui(
+    request: Request,
+    payload: Optional[CheckoutCustodiaRequest] = None,
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+):
+    """Confirma la custòdia física dels tiquets de la safata diària en fer el Checkout de jornada."""
+    empresa_id = request.state.empresa_id
+    if not empresa_id or empresa_id == "undefined":
+        raise HTTPException(status_code=401, detail="Tenant context missing")
+
+    emp_uuid = uuid.UUID(str(empresa_id))
+    claims = get_current_user_claims(request)
+    usuari_uuid = uuid.UUID(str(claims.get("sub")))
+
+    stmt = select(TiquetDespesa).where(
+        TiquetDespesa.empresa_id == emp_uuid,
+        TiquetDespesa.usuari_id == usuari_uuid,
+        TiquetDespesa.custodia_paper_confirmada.is_(False),
+    )
+    if payload and payload.tiquet_ids:
+        stmt = stmt.where(TiquetDespesa.id.in_(payload.tiquet_ids))
+
+    res = await db.execute(stmt)
+    tiquets = res.scalars().all()
+    for t in tiquets:
+        t.custodia_paper_confirmada = True
+    await db.commit()
+    return {"status": "OK", "confirmats": len(tiquets)}

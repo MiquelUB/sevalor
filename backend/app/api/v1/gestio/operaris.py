@@ -34,6 +34,7 @@ from app.services.ocr_service import (
     processar_ocr_document_operari,
 )
 from app.services.sovereign_storage import SovereignStorageGateway
+from app.services.telegram_service import send_telegram_direct_message
 
 router = APIRouter(
     prefix="/gestio/operaris",
@@ -110,6 +111,7 @@ class OperariCreate(BaseModel):
     certificats_prl: List[str] = Field(default_factory=list)
     documents_processats: Optional[List[Dict[str, Any]]] = None
     vehicle_assignat_id: Optional[uuid.UUID] = None
+    telegram_chat_id: Optional[int] = None
 
 
 class OperariUpdate(BaseModel):
@@ -130,6 +132,7 @@ class OperariUpdate(BaseModel):
     certificats_prl: Optional[List[str]] = None
     cap_de_grup_id: Optional[uuid.UUID] = None
     vehicle_assignat_id: Optional[uuid.UUID] = None
+    telegram_chat_id: Optional[int] = None
 
 
 class OperariResponse(BaseModel):
@@ -161,6 +164,9 @@ class OperariResponse(BaseModel):
     longitud: Optional[float] = None
     pin_generat: Optional[str] = None
     login_url: Optional[str] = None
+    telegram_chat_id: Optional[int] = None
+    dispositiu_referencia: Optional[str] = None
+    requereix_rexifrat_idb: bool = False
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -603,6 +609,7 @@ async def alta_operari(
         rol=rol_norm,
         estat="ACTIU",
         pin_hash=hashed_pin,
+        telegram_chat_id=operari.telegram_chat_id,
     )
     nou_usuari.te_cap = bool(operari.te_cap_vigent)
     setattr(nou_usuari, "_certificats_prl", list(operari.certificats_prl or []))
@@ -624,7 +631,16 @@ async def alta_operari(
     resp_obj.login_url = "/operari/login"
     await db.commit()
 
-    print(f"[SMS DISPATCH] -> Per a {operari.telefon}: El teu nou PIN de CampoPro és {nou_pin}")
+    if nou_usuari.telegram_chat_id:
+        await send_telegram_direct_message(
+            emp_uuid,
+            nou_usuari.telegram_chat_id,
+            (
+                f"👋 Hola {nou_usuari.nom}, ja tens compte actiu a Sevalor Suite.\n"
+                f"El teu PIN temporal d'accés és: <code>{nou_pin}</code>\n"
+                f"Enrola el terminal a /operari/login amb aquest compte de Telegram."
+            ),
+        )
     return resp_obj
 
 
@@ -721,6 +737,8 @@ async def actualitzar_operari(
         setattr(usuari, "_certificats_prl", list(payload.certificats_prl))
     if "cap_de_grup_id" in payload.model_fields_set:
         usuari.cap_de_grup_id = payload.cap_de_grup_id
+    if "telegram_chat_id" in payload.model_fields_set:
+        usuari.telegram_chat_id = payload.telegram_chat_id
 
     # Sincronització atòmica 1:1 i validació de carnet de conduir si es modifica el vehicle o permís
     if "vehicle_assignat_id" in payload.model_fields_set:
@@ -795,16 +813,50 @@ async def reset_pin_operari(
     usuari.pin_hash = hash_pin(nou_pin)
     usuari.pin_bloquejat = False
     usuari.intents_pin_fallits = 0
+    usuari.requereix_rexifrat_idb = True
+    usuari.updated_at = datetime.now(timezone.utc)
+
     nom_complet = f"{usuari.nom or ''} {usuari.cognoms or ''}".strip()
     nif_str = usuari.nif
     telefon_str = usuari.telefon
     rol_str = usuari.rol
+    chat_id = usuari.telegram_chat_id
 
+    incidencia_seg = Incidencia(
+        id=uuid.uuid4(),
+        empresa_id=uuid.UUID(empresa_id),
+        operari_id=usuari.id,
+        ambit="SEGURETAT",
+        tipus="SEGURETAT_RESTABLIMENT_PIN",
+        gravetat="ALTA",
+        estat="OBERTA",
+        text_observacions=(
+            f"Restabliment administratiu de PIN per a {nom_complet} ({telefon_str or nif_str}). "
+            "S'ha activat requereix_rexifrat_idb=True."
+        ),
+    )
+    db.add(incidencia_seg)
     await db.commit()
-    print(f"[SMS DISPATCH] -> Per a {telefon_str}: El teu nou PIN de CampoPro és {nou_pin}")
+
+    enviat_telegram = False
+    if chat_id:
+        enviat_telegram = await send_telegram_direct_message(
+            uuid.UUID(empresa_id),
+            chat_id,
+            (
+                f"🔐 <b>Sevalor Suite — Restabliment de PIN</b>\n"
+                f"PIN temporal generat per Gestió: <code>{nou_pin}</code>\n"
+                f"Es re-xifrarà la memòria segura offline al proper accés."
+            ),
+        )
 
     return {
-        "missatge": "Nou PIN generat i tramès per SMS",
+        "missatge": (
+            "Nou PIN generat i enviat per Telegram"
+            if enviat_telegram
+            else "Nou PIN generat (Telegram no vinculat a l'operari)"
+        ),
+        "canal": "TELEGRAM" if enviat_telegram else "PENDENT_TELEGRAM",
         "id": str(operari_id),
         "nom_complet": nom_complet,
         "nif": nif_str,
@@ -814,6 +866,8 @@ async def reset_pin_operari(
         "login_url": "/operari/login",
         "pin_bloquejat": False,
         "intents_pin_fallits": 0,
+        "requereix_rexifrat_idb": True,
+        "incidencia_seguretat_id": str(incidencia_seg.id),
     }
 
 

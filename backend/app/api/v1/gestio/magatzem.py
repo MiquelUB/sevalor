@@ -1,6 +1,7 @@
 import os
 import uuid
 from datetime import date, datetime
+from decimal import Decimal
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
@@ -18,7 +19,7 @@ from sqlalchemy import case, func, or_, select  # noqa: E402
 from sqlalchemy.ext.asyncio import AsyncSession  # noqa: E402
 
 from app.core.db import get_db_with_tenant_context  # noqa: E402
-from app.core.security import require_roles  # noqa: E402
+from app.core.security import get_current_user_claims, require_roles  # noqa: E402
 from app.models.models import (  # noqa: E402
     AlbaraProveidor,
     Article,
@@ -28,11 +29,16 @@ from app.models.models import (  # noqa: E402
     FullaPicking,
     LiniaPicking,
     Magatzem,
+    MermaInventari,
     MovimentEstoc,
     OrdreTreball,
     Proveidor,
     Usuari,
     Vehicle,
+)
+from app.services.magatzem_comptabilitat_service import (  # noqa: E402
+    processar_entrada_albara_i_recalcular_pmp,
+    registrar_merma_i_imputar_a_comptabilitat,
 )
 
 router = APIRouter(
@@ -91,6 +97,31 @@ class ArticleResponse(ArticleCreate):
     actiu: bool
     estoc_real: float = 0.0
     proveidor_nom: Optional[str] = None
+    pmp_actual: float = 0.0
+    estoc_slot_residus: float = 0.0
+    estoc_total_actual: float = 0.0
+    es_diposit_proveidor: bool = False
+    es_custodia_rma_client: bool = False
+
+
+class EntradaPMPRequest(BaseModel):
+    article_id: uuid.UUID
+    magatzem_id: uuid.UUID
+    quantitat_rebuda: Decimal = Field(..., gt=0)
+    preu_compra_unitari: Decimal = Field(..., ge=0)
+    preu_ferm_comanda: Optional[Decimal] = Field(None, ge=0)
+    es_granel_continu: bool = False
+    quantitat_demanada_comanda: Optional[Decimal] = Field(None, gt=0)
+    referencia_document: Optional[str] = Field(None, max_length=100)
+
+
+class MermaInventariRequest(BaseModel):
+    article_id: uuid.UUID
+    magatzem_id: uuid.UUID
+    quantitat_mermada: Decimal = Field(..., gt=0)
+    motiu: str = Field(..., max_length=50)
+    ordre_treball_id: Optional[uuid.UUID] = None
+    notes: Optional[str] = Field(None, max_length=500)
 
 
 # ---------------------------------------------------------------------------
@@ -199,6 +230,16 @@ async def llistar_articles(
             setattr(art, "referencia_inventari", "N/A")
         if getattr(art, "nom") is None:
             setattr(art, "nom", "N/A")
+        if getattr(art, "pmp_actual", None) is None:
+            setattr(art, "pmp_actual", float(getattr(art, "preu_cost", 0.0) or 0.0))
+        if getattr(art, "estoc_slot_residus", None) is None:
+            setattr(art, "estoc_slot_residus", 0.0)
+        if getattr(art, "estoc_total_actual", None) is None:
+            setattr(art, "estoc_total_actual", estocs_map.get(art.id, 0.0))
+        if getattr(art, "es_diposit_proveidor", None) is None:
+            setattr(art, "es_diposit_proveidor", False)
+        if getattr(art, "es_custodia_rma_client", None) is None:
+            setattr(art, "es_custodia_rma_client", False)
 
     return articles
 
@@ -1392,3 +1433,90 @@ async def traspas_estoc(
 
     await db.commit()
     return {"estat": "OK", "missatge": "Traspàs completat amb èxit."}
+
+
+@router.post("/entrades-pmp", status_code=status.HTTP_200_OK)
+async def registrar_entrada_pmp(
+    request: Request,
+    payload: EntradaPMPRequest,
+    claims: dict = Depends(get_current_user_claims),
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+):
+    """Entrada d'albarà amb control de Preu Ferm, tolerància +-2% granel i recàlcul atòmic de PMP."""
+    empresa_uuid = valida_uuid(str(request.state.empresa_id))
+    usuari_uuid = uuid.UUID(str(claims["sub"])) if claims.get("sub") else None
+    return await processar_entrada_albara_i_recalcular_pmp(
+        db=db,
+        empresa_id=empresa_uuid,
+        article_id=payload.article_id,
+        magatzem_id=payload.magatzem_id,
+        quantitat_rebuda=payload.quantitat_rebuda,
+        preu_compra_unitari=payload.preu_compra_unitari,
+        preu_ferm_comanda=payload.preu_ferm_comanda,
+        es_granel_continu=payload.es_granel_continu,
+        quantitat_demanada_comanda=payload.quantitat_demanada_comanda,
+        referencia_document=payload.referencia_document,
+        usuari_id=usuari_uuid,
+    )
+
+
+@router.post("/mermes", status_code=status.HTTP_201_CREATED)
+async def registrar_merma_inventari(
+    request: Request,
+    payload: MermaInventariRequest,
+    claims: dict = Depends(get_current_user_claims),
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+):
+    """Registra una merma, mou unitats al Slot de Residus i l'imputa a Comptabilitat (600/659)."""
+    empresa_uuid = valida_uuid(str(request.state.empresa_id))
+    usuari_uuid = uuid.UUID(str(claims["sub"])) if claims.get("sub") else None
+    return await registrar_merma_i_imputar_a_comptabilitat(
+        db=db,
+        empresa_id=empresa_uuid,
+        article_id=payload.article_id,
+        magatzem_id=payload.magatzem_id,
+        quantitat_mermada=payload.quantitat_mermada,
+        motiu=payload.motiu,
+        ordre_treball_id=payload.ordre_treball_id,
+        usuari_id=usuari_uuid,
+        notes=payload.notes,
+    )
+
+
+@router.get("/mermes")
+async def llistar_mermes_inventari(
+    request: Request,
+    limit: int = 50,
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+):
+    """Llista les mermes d'inventari del tenant ordenades de més recent a més antiga."""
+    empresa_uuid = valida_uuid(str(request.state.empresa_id))
+    stmt = (
+        select(MermaInventari, Article.nom, Article.referencia_inventari, OrdreTreball.codi)
+        .join(Article, MermaInventari.article_id == Article.id)
+        .outerjoin(OrdreTreball, MermaInventari.ordre_treball_id == OrdreTreball.id)
+        .where(MermaInventari.empresa_id == empresa_uuid)
+        .order_by(MermaInventari.created_at.desc())
+        .limit(limit)
+    )
+    rows = (await db.execute(stmt)).all()
+    return [
+        {
+            "id": str(m.id),
+            "article_id": str(m.article_id),
+            "article_nom": art_nom,
+            "article_ref": art_ref,
+            "magatzem_id": str(m.magatzem_id),
+            "ordre_treball_id": str(m.ordre_treball_id) if m.ordre_treball_id else None,
+            "ordre_treball_codi": ot_codi,
+            "quantitat": float(m.quantitat),
+            "pmp_aplicat": float(m.pmp_aplicat),
+            "cost_total": float(m.cost_total),
+            "motiu": m.motiu,
+            "subcompte_comptable": m.subcompte_comptable,
+            "transferit_slot_residus": bool(m.transferit_slot_residus),
+            "notes": m.notes,
+            "created_at": m.created_at.isoformat() if m.created_at else None,
+        }
+        for m, art_nom, art_ref, ot_codi in rows
+    ]

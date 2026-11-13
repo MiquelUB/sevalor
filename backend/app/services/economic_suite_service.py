@@ -13,6 +13,7 @@ from app.models.models import (
     Article,
     Client,
     ContracteMantenimentMRR,
+    DespesaComptable,
     DespesaFixaRecurrent,
     FacturaCapcalera,
     FacturaLinia,
@@ -829,15 +830,18 @@ class EconomicSuiteService:
                 ordre_treball_id=t.ordre_treball_id,
                 data_tiquet=t.data_tiquet,
                 nif_emissor=t.nif_emissor,
+                nif_comprador=t.nif_comprador,
                 rao_social=t.rao_social,
-                base_imposable=q2(Decimal(str(t.base_imposable))),
-                iva_pct=q2(Decimal(str(t.iva_pct))),
-                quota_iva=q2(Decimal(str(t.quota_iva))),
-                import_total=q2(Decimal(str(t.import_total))),
+                base_imposable=q2(Decimal(str(t.base_imposable or 0))),
+                iva_pct=q2(Decimal(str(t.iva_pct or 0))),
+                quota_iva=q2(Decimal(str(t.quota_iva or 0))),
+                import_total=q2(Decimal(str(t.import_total or 0))),
+                subcompte_pgc=t.subcompte_pgc or "629000",
                 estat_aprovacio=t.estat_aprovacio,
                 estat_fiscal=t.estat_fiscal,
                 requereix_aprovacio_boss=t.requereix_aprovacio_boss,
                 custodia_paper_confirmada=t.custodia_paper_confirmada,
+                nom_fitxer_visible=t.nom_fitxer_visible,
             )
             for t in rows
         ]
@@ -862,7 +866,10 @@ class EconomicSuiteService:
         if not tiquet:
             raise HTTPException(status_code=404, detail="Tiquet de despesa no trobat.")
 
-        if tiquet.requereix_aprovacio_boss and rol_peticio != "BOSS":
+        if (
+            tiquet.requereix_aprovacio_boss
+            or tiquet.estat_aprovacio == "BLOQUEJAT_EXCEDENCIA_100EUR"
+        ) and rol_peticio != "BOSS":
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Els tiquets >100 EUR requereixen aprovació exclusiva del BOSS.",
@@ -871,10 +878,33 @@ class EconomicSuiteService:
         if payload.accio not in ("APROVAT", "REBUTJAT"):
             raise HTTPException(status_code=400, detail="Acció invàlida (APROVAT o REBUTJAT).")
 
-        # RF-20: Si manca NIF, quota_iva = 0 i PENDENT_BESCANVI
-        if not tiquet.nif_emissor:
+        if payload.nif_emissor is not None:
+            tiquet.nif_emissor = payload.nif_emissor.strip().upper() or None
+        if payload.nif_comprador is not None:
+            tiquet.nif_comprador = payload.nif_comprador.strip().upper() or None
+        if payload.import_total is not None and payload.import_total > 0:
+            tiquet.import_total = float(q2(payload.import_total))
+
+        if payload.desglose_carburant_eur is not None or payload.desglose_adblue_eur is not None:
+            carb = q2(payload.desglose_carburant_eur or Decimal("0.00"))
+            adbl = q2(payload.desglose_adblue_eur or Decimal("0.00"))
+            total_desglose = q2(carb + adbl)
+            if total_desglose > 0:
+                tiquet.import_total = float(total_desglose)
+
+        # RF-20 / EDGE-08: Si manca NIF, quota_iva = 0 i PENDENT_BESCANVI
+        if not tiquet.nif_emissor and not tiquet.nif_comprador:
             tiquet.quota_iva = 0.00
+            tiquet.iva_pct = 0.00
+            tiquet.base_imposable = float(tiquet.import_total or 0.0)
             tiquet.estat_fiscal = "PENDENT_BESCANVI"
+        elif tiquet.nif_comprador and tiquet.import_total:
+            total_dec = q2(Decimal(str(tiquet.import_total)))
+            base_dec = q2(total_dec / Decimal("1.21"))
+            tiquet.base_imposable = float(base_dec)
+            tiquet.quota_iva = float(q2(total_dec - base_dec))
+            tiquet.iva_pct = 21.00
+            tiquet.estat_fiscal = "DEDUIBLE"
 
         tiquet.estat_aprovacio = payload.accio
         if payload.custodia_paper_confirmada is not None:
@@ -882,11 +912,56 @@ class EconomicSuiteService:
         if payload.ordre_treball_id is not None:
             tiquet.ordre_treball_id = payload.ordre_treball_id
 
+        # Desblocatge de targeta de carburant del vehicle quan el BOSS aprova l'excedència
+        if payload.accio == "APROVAT" and payload.desblocatge_targeta_vehicle and tiquet.vehicle_id:
+            veh = (
+                await db.execute(
+                    select(Vehicle).where(
+                        Vehicle.id == tiquet.vehicle_id,
+                        Vehicle.empresa_id == empresa_id,
+                    )
+                )
+            ).scalar_one_or_none()
+            if veh and getattr(veh, "targeta_combustible_bloquejada", False):
+                veh.targeta_combustible_bloquejada = False
+
+        # Actualitzar o crear apunt a DespesaComptable
+        despesa = (
+            await db.execute(
+                select(DespesaComptable).where(
+                    DespesaComptable.empresa_id == empresa_id,
+                    DespesaComptable.tiquet_id == tiquet.id,
+                )
+            )
+        ).scalar_one_or_none()
+        estat_desp = "CONSOLIDADA" if payload.accio == "APROVAT" else "REBUTJADA"
+        if despesa:
+            despesa.estat = estat_desp
+            despesa.ordre_treball_id = tiquet.ordre_treball_id
+            despesa.base_imposable = float(tiquet.base_imposable or 0.0)
+            despesa.quota_iva = float(tiquet.quota_iva or 0.0)
+            despesa.import_total = float(tiquet.import_total or 0.0)
+        elif payload.accio == "APROVAT":
+            db.add(
+                DespesaComptable(
+                    id=uuid.uuid4(),
+                    empresa_id=empresa_id,
+                    ordre_treball_id=tiquet.ordre_treball_id,
+                    tiquet_id=tiquet.id,
+                    concepte=f"Tiquet {tiquet.categoria} - {tiquet.rao_social or 'Validat /gestio'}",
+                    subcompte=tiquet.subcompte_pgc or "629.DESPESA_CAMP",
+                    base_imposable=float(tiquet.base_imposable or 0.0),
+                    quota_iva=float(tiquet.quota_iva or 0.0),
+                    import_total=float(tiquet.import_total or 0.0),
+                    estat=estat_desp,
+                    origen="OCR_TIQUET_CAMP",
+                )
+            )
+
         await cls.registrar_esdeveniment_sif(
             db, empresa_id, usuari_id, "EV-03", f"Auditoria tiquet {tiquet.id}: {payload.accio}"
         )
         await db.commit()
-        await db.refresh(tiquet)
         return tiquet
 
     # --- CONCILIACIÓ NORMA 43 IDEMPOTENT (RF-22, RF-23) ---

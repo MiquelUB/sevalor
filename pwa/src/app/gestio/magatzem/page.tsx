@@ -37,6 +37,26 @@ interface Article {
   actiu?: boolean;
   es_lot_caducable?: boolean;
   estoc_real?: number;
+  pmp_actual?: number;
+  estoc_slot_residus?: number;
+}
+
+interface MermaItem {
+  id: string;
+  article_id: string;
+  article_nom: string;
+  article_ref: string;
+  magatzem_id: string;
+  ordre_treball_id?: string | null;
+  ordre_treball_codi?: string | null;
+  quantitat: number;
+  pmp_aplicat: number;
+  cost_total: number;
+  motiu: string;
+  subcompte_comptable: string;
+  transferit_slot_residus: boolean;
+  notes?: string | null;
+  created_at?: string | null;
 }
 
 interface MagatzemItem {
@@ -65,7 +85,16 @@ export default function GestioMagatzemPage() {
   const [traspasant, setTraspasant] = useState(false);
   const [checkoutTargetTipus, setCheckoutTargetTipus] = useState<"OPERARI" | "VEHICLE">("OPERARI");
   const [selectedVehicleMagatzemId, setSelectedVehicleMagatzemId] = useState("");
-  const [activeTab, setActiveTab] = useState<"MATERIALS" | "EINES">("MATERIALS");
+  const [activeTab, setActiveTab] = useState<"MATERIALS" | "EINES" | "MERMES">("MATERIALS");
+  const [mermes, setMermes] = useState<MermaItem[]>([]);
+  const [ordresTreball, setOrdresTreball] = useState<Array<{ id: string; codi: string; titol: string }>>([]);
+  const [mermaArticleId, setMermaArticleId] = useState<string>("");
+  const [mermaMagatzemId, setMermaMagatzemId] = useState<string>("");
+  const [mermaQuantitat, setMermaQuantitat] = useState<string>("1");
+  const [mermaMotiu, setMermaMotiu] = useState<string>("OBRA_TALL_INUTIL");
+  const [mermaOtId, setMermaOtId] = useState<string>("");
+  const [mermaNotes, setMermaNotes] = useState<string>("");
+  const [registrantMerma, setRegistrantMerma] = useState<boolean>(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [filtreCerca, setFiltreCerca] = useState("");
@@ -132,18 +161,22 @@ export default function GestioMagatzemPage() {
       : "/gestio/magatzem/eines";
 
     try {
-      const [articlesData, einesData, operarisData, configData, proveidorsData, magatzemsData] = await Promise.all([
+      const [articlesData, einesData, operarisData, configData, proveidorsData, magatzemsData, mermesData, otsData] = await Promise.all([
         apiFetch<Article[]>(articlesQuery).catch(() => []),
         apiFetch<any[]>(einesQuery).catch(() => []),
         apiFetch<any[]>("/gestio/operaris").catch(() => []),
         apiFetch<any>("/gestio/configuracio/empresa").catch(() => null),
         apiFetch<any[]>("/gestio/proveidors").catch(() => []),
-        apiFetch<MagatzemItem[]>("/gestio/magatzem/magatzems").catch(() => [])
+        apiFetch<MagatzemItem[]>("/gestio/magatzem/magatzems").catch(() => []),
+        apiFetch<MermaItem[]>("/gestio/magatzem/mermes").catch(() => []),
+        apiFetch<Array<{ id: string; codi: string; titol: string }>>("/gestio/feines").catch(() => [])
       ]);
       setArticles(articlesData || []);
       setEines(einesData || []);
       setOperaris(operarisData || []);
       setProveidors(proveidorsData || []);
+      setMermes(mermesData || []);
+      setOrdresTreball(otsData || []);
       if (Array.isArray(magatzemsData) && magatzemsData.length > 0) {
         setMagatzems(magatzemsData);
       }
@@ -170,6 +203,36 @@ export default function GestioMagatzemPage() {
   const handleCanviMagatzem = (nouMagId: string) => {
     setSelectedMagatzemId(nouMagId);
     carregarArticles(nouMagId);
+  };
+
+  const handleRegistrarMerma = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!mermaArticleId || !mermaMagatzemId) {
+      setError("Cal seleccionar article i magatzem per registrar la merma");
+      return;
+    }
+    setRegistrantMerma(true);
+    setError(null);
+    try {
+      await apiFetch("/gestio/magatzem/mermes", {
+        method: "POST",
+        body: JSON.stringify({
+          article_id: mermaArticleId,
+          magatzem_id: mermaMagatzemId,
+          quantitat_mermada: Number(mermaQuantitat || 0),
+          motiu: mermaMotiu,
+          ordre_treball_id: mermaOtId || null,
+          notes: mermaNotes || null,
+        }),
+      });
+      setMermaQuantitat("1");
+      setMermaNotes("");
+      await carregarArticles();
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Error registrant merma d'inventari");
+    } finally {
+      setRegistrantMerma(false);
+    }
   };
 
   const handleExecutarTraspas = async (e: React.FormEvent) => {
@@ -675,11 +738,21 @@ export default function GestioMagatzemPage() {
                 onClick={() => setActiveTab("EINES")}
                 className={`px-4 py-2 rounded-lg text-xs font-bold transition-colors flex items-center gap-2 ${
                   activeTab === "EINES"
-                    ? "bg-blue-600 text-white"
+                    ? "bg-primary text-white"
                     : "bg-slate-100 text-slate-600 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-400"
                 }`}
               >
-                <Wrench className="w-3.5 h-3.5" /> Inventari d'Eines
+                <Wrench className="w-3.5 h-3.5" /> Inventari d&apos;Eines
+              </button>
+              <button
+                onClick={() => setActiveTab("MERMES")}
+                className={`px-4 py-2 rounded-lg text-xs font-bold transition-colors flex items-center gap-2 ${
+                  activeTab === "MERMES"
+                    ? "bg-primary text-white"
+                    : "bg-slate-100 text-slate-600 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-400"
+                }`}
+              >
+                <Trash2 className="w-3.5 h-3.5" /> Mermes &amp; Residus ({mermes.length})
               </button>
             </div>
 
@@ -734,9 +807,10 @@ export default function GestioMagatzemPage() {
                       <th className="p-3">Família</th>
                       <th className="p-3">Unitat</th>
                       <th className="p-3 text-right">Estoc Real</th>
+                      <th className="p-3 text-right">Slot Residus</th>
                       <th className="p-3 text-right">Estoc Mínim</th>
                       <th className="p-3 text-right">Estoc Òptim</th>
-                      <th className="p-3 text-right">Preu Cost</th>
+                      <th className="p-3 text-right">PMP / Cost</th>
                       <th className="p-3 text-right">Preu Venda</th>
                     </tr>
                   </thead>
@@ -773,14 +847,17 @@ export default function GestioMagatzemPage() {
                             {art.estoc_real ?? 0}
                           </span>
                         </td>
+                        <td className="p-3 text-right font-mono text-amber-600 dark:text-amber-400">
+                          {(art.estoc_slot_residus ?? 0).toFixed(2)}
+                        </td>
                         <td className="p-3 text-right font-mono text-slate-400">
                           {art.estoc_minim}
                         </td>
                         <td className="p-3 text-right font-mono text-slate-400">
                           {art.estoc_optim}
                         </td>
-                        <td className="p-3 text-right font-mono text-slate-500">
-                          {art.preu_cost?.toFixed(2)} €
+                        <td className="p-3 text-right font-mono text-slate-600 dark:text-slate-300">
+                          {(art.pmp_actual && art.pmp_actual > 0 ? art.pmp_actual : art.preu_cost)?.toFixed(2)} €
                         </td>
                         <td className="p-3 text-right font-mono font-bold text-emerald-600 dark:text-emerald-400">
                           {art.preu_venda?.toFixed(2)} €
@@ -789,7 +866,7 @@ export default function GestioMagatzemPage() {
                     ))}
                   </tbody>
                 </table>
-              ) : (
+              ) : activeTab === "EINES" ? (
                 <table className="w-full text-left text-xs border-collapse">
                   <thead>
                     <tr className="bg-blue-50 dark:bg-blue-900/20 border-b border-blue-100 dark:border-blue-900/40 font-bold text-blue-700 dark:text-blue-400">
@@ -855,6 +932,123 @@ export default function GestioMagatzemPage() {
                     ))}
                   </tbody>
                 </table>
+              ) : (
+                <div className="p-5 space-y-6">
+                  <form onSubmit={handleRegistrarMerma} className="grid grid-cols-1 md:grid-cols-6 gap-3 rounded-xl border border-slate-200 dark:border-slate-800 p-4 bg-slate-50/70 dark:bg-slate-800/30">
+                    <div className="md:col-span-2">
+                      <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-300 mb-1">Article</label>
+                      <select
+                        value={mermaArticleId}
+                        onChange={(e) => setMermaArticleId(e.target.value)}
+                        className="w-full rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2 text-xs"
+                      >
+                        <option value="">Selecciona article...</option>
+                        {articles.map((a) => (
+                          <option key={a.id} value={a.id}>
+                            {a.referencia_inventari} · {a.nom}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-300 mb-1">Magatzem</label>
+                      <select
+                        value={mermaMagatzemId}
+                        onChange={(e) => setMermaMagatzemId(e.target.value)}
+                        className="w-full rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2 text-xs"
+                      >
+                        <option value="">Selecciona nau...</option>
+                        {magatzems.map((m) => (
+                          <option key={m.id} value={m.id}>{m.nom}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-300 mb-1">Motiu comptable</label>
+                      <select
+                        value={mermaMotiu}
+                        onChange={(e) => setMermaMotiu(e.target.value)}
+                        className="w-full rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2 text-xs"
+                      >
+                        <option value="OBRA_TALL_INUTIL">Tall inútil / Obra (600)</option>
+                        <option value="ENVAS_DESPRECINTAT_CAMP">Envàs desprecintat camp (600)</option>
+                        <option value="FIANCA_PALET_TRENCAT">Fiança palet trencat (600)</option>
+                        <option value="CADUCITAT_FEFO">Caducitat FEFO nau (659)</option>
+                        <option value="TRENCAMENT_NAU">Trencament a nau (659)</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-300 mb-1">Quantitat &amp; OT</label>
+                      <div className="flex gap-2">
+                        <input
+                          type="number"
+                          step="0.01"
+                          min="0.01"
+                          value={mermaQuantitat}
+                          onChange={(e) => setMermaQuantitat(e.target.value)}
+                          className="w-20 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-2 text-xs tabular-nums"
+                        />
+                        <select
+                          value={mermaOtId}
+                          onChange={(e) => setMermaOtId(e.target.value)}
+                          className="flex-1 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-2 text-xs"
+                        >
+                          <option value="">Sense OT (Nau)</option>
+                          {ordresTreball.map((ot) => (
+                            <option key={ot.id} value={ot.id}>{ot.codi}</option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+                    <div className="flex items-end">
+                      <button
+                        type="submit"
+                        disabled={registrantMerma}
+                        className="w-full rounded-lg bg-primary px-4 py-2 text-xs font-bold text-white disabled:opacity-50"
+                      >
+                        {registrantMerma ? "Registrant..." : "Registrar merma"}
+                      </button>
+                    </div>
+                  </form>
+
+                  {mermes.length === 0 ? (
+                    <div className="rounded-xl border border-dashed border-slate-200 dark:border-slate-800 py-10 text-center text-xs text-slate-500">
+                      Cap merma d&apos;inventari registrada. Qualsevol baixa s&apos;imputarà automàticament al PMP vigent i a Comptabilitat.
+                    </div>
+                  ) : (
+                    <table className="w-full text-left text-xs border-collapse">
+                      <thead>
+                        <tr className="border-b border-slate-200 dark:border-slate-800 text-slate-500 font-bold">
+                          <th className="p-3">Article</th>
+                          <th className="p-3">Motiu</th>
+                          <th className="p-3">Subcompte</th>
+                          <th className="p-3">OT Imputada</th>
+                          <th className="p-3 text-right">Quantitat</th>
+                          <th className="p-3 text-right">PMP Aplicat</th>
+                          <th className="p-3 text-right">Cost Imputat</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                        {mermes.map((m) => (
+                          <tr key={m.id}>
+                            <td className="p-3 font-medium">
+                              <span className="font-mono text-primary mr-1.5">{m.article_ref}</span>
+                              {m.article_nom}
+                            </td>
+                            <td className="p-3 text-slate-600 dark:text-slate-300">{m.motiu}</td>
+                            <td className="p-3 font-mono font-semibold text-primary">{m.subcompte_comptable}</td>
+                            <td className="p-3 font-mono text-slate-500">{m.ordre_treball_codi || "Nau (General)"}</td>
+                            <td className="p-3 text-right font-mono tabular-nums">{Number(m.quantitat).toFixed(2)}</td>
+                            <td className="p-3 text-right font-mono tabular-nums">{Number(m.pmp_aplicat).toFixed(2)} €</td>
+                            <td className="p-3 text-right font-mono font-bold tabular-nums text-rose-600">
+                              {Number(m.cost_total).toFixed(2)} €
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
               )}
             </div>
           </div>

@@ -2,7 +2,8 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+import filetype
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -171,12 +172,13 @@ async def finalitzar_jornada(
 
 class AssignarVehicleRequest(BaseModel):
     vehicle_id: uuid.UUID
-    km_actuals: int = 0
+    km_actuals: Optional[int] = None
     km_inicials: Optional[int] = None
     fotos_check_in: Optional[list[str]] = None
+    odometre_foto_path: Optional[str] = None
 
     def model_post_init(self, __context: Any) -> None:
-        if self.km_actuals == 0 and self.km_inicials is not None:
+        if self.km_actuals is None and self.km_inicials is not None:
             self.km_actuals = self.km_inicials
 
 
@@ -188,7 +190,7 @@ async def assignar_vehicle_a_jornada(
     request: Request,
     db: AsyncSession = Depends(get_db_with_tenant_context),
 ):
-    """Assigna un vehicle a l'operari per a la jornada actual i comprova odòmetre."""
+    """Assigna un vehicle a l'operari per a la jornada actual i comprova odòmetre o foto."""
     empresa_id = request.state.empresa_id
     if not empresa_id or empresa_id == "undefined":
         raise HTTPException(status_code=401)
@@ -217,13 +219,19 @@ async def assignar_vehicle_a_jornada(
 
     validar_permis_conduir(vehicle, usuari)
 
-    if vehicle.odometre_acumulat and payload.km_actuals < vehicle.odometre_acumulat:
+    km_reportat = payload.km_actuals
+    if km_reportat is not None:
+        if vehicle.odometre_acumulat and km_reportat < vehicle.odometre_acumulat:
+            raise HTTPException(
+                status_code=422, detail="Els km reportats són inferiors als últims registrats"
+            )
+        vehicle.odometre_acumulat = km_reportat
+    elif not payload.odometre_foto_path and not payload.fotos_check_in:
         raise HTTPException(
-            status_code=422, detail="Els km reportats són inferiors als últims registrats"
+            status_code=422,
+            detail="Cal capturar la fotografia de l'odòmetre o indicar el quilometratge.",
         )
 
-    # Actualitzar Vehicle i Usuari
-    vehicle.odometre_acumulat = payload.km_actuals
     usuari.vehicle_assignat_id = vehicle.id
     if not vehicle.conductor_habitual_id:
         vehicle.conductor_habitual_id = usuari.id
@@ -243,6 +251,7 @@ async def assignar_vehicle_a_jornada(
             "marca": vehicle.marca,
             "model": vehicle.model,
             "odometre_acumulat": vehicle.odometre_acumulat,
+            "odometre_foto_path": payload.odometre_foto_path,
             "conductor_habitual_id": (
                 str(vehicle.conductor_habitual_id) if vehicle.conductor_habitual_id else None
             ),
@@ -255,5 +264,72 @@ async def assignar_vehicle_a_jornada(
     return {
         "status": "OK",
         "vehicle_assignat_id": str(vehicle.id),
-        "km_actuals": payload.km_actuals,
+        "km_actuals": vehicle.odometre_acumulat,
+        "odometre_foto_path": payload.odometre_foto_path,
+    }
+
+
+@router.post("/{jornada_id}/odometre-foto", status_code=status.HTTP_201_CREATED)
+@router.post("/jornada/{jornada_id}/odometre-foto", status_code=status.HTTP_201_CREATED)
+async def pujar_foto_odometre_jornada(
+    jornada_id: uuid.UUID,
+    request: Request,
+    foto_odometre: UploadFile = File(...),
+    vehicle_id: Optional[str] = Form(None),
+    moment: str = Form("INICI"),
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+):
+    """(Spec 015/020) Captura fotogràfica obligatòria d'odòmetre en inici o tancament de jornada."""
+    empresa_id = request.state.empresa_id
+    if not empresa_id or empresa_id == "undefined":
+        raise HTTPException(status_code=401, detail="Tenant context missing")
+
+    emp_uuid = uuid.UUID(str(empresa_id))
+    usuari_id = get_current_user_id(request)
+    raw = await foto_odometre.read()
+    if not raw:
+        raise HTTPException(status_code=422, detail="La foto de l'odòmetre és obligatòria.")
+    if len(raw) > 10 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="La foto supera el límit de 10 MB.")
+
+    kind = filetype.guess(raw)
+    mimes_map = {"image/webp": "webp", "image/jpeg": "jpg", "image/png": "png"}
+    if kind is None or kind.mime not in mimes_map:
+        raise HTTPException(
+            status_code=422, detail="Format d'imatge no vàlid. Admesos: WebP, JPEG, PNG."
+        )
+
+    from app.services.sovereign_storage import SovereignStorageGateway
+
+    ext = mimes_map[kind.mime]
+    path = await SovereignStorageGateway.pujar_fitxer_binari(
+        db=db,
+        empresa_id=str(emp_uuid),
+        categoria="odometres",
+        nom_fitxer=f"{uuid.uuid4().hex}.{ext}",
+        content=raw,
+        content_type=kind.mime,
+    )
+
+    moment_norm = moment.strip().upper() or "INICI"
+    await SovereignStorageGateway.desar_entitat_json(
+        db=db,
+        empresa_id=str(emp_uuid),
+        categoria="odometres",
+        item_id=f"odo_{jornada_id}_{moment_norm.lower()}_{uuid.uuid4().hex[:8]}",
+        dades={
+            "jornada_id": str(jornada_id),
+            "operari_id": str(usuari_id),
+            "vehicle_id": vehicle_id,
+            "moment": moment_norm,
+            "foto_path": path,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        },
+    )
+    await db.commit()
+    return {
+        "status": "OK",
+        "jornada_id": str(jornada_id),
+        "moment": moment_norm,
+        "foto_odometre_path": path,
     }

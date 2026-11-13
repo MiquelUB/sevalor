@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import io
 import json
 import logging
@@ -31,6 +32,7 @@ from app.models.models import (
     Empresa,
     FacturaCapcalera,
     OrdreTreball,
+    RegistreBaixaCertificat,
     SaasFacturaB2B,
     SaasHistorialLlicencia,
     SaasTiquetSuport,
@@ -2173,6 +2175,18 @@ async def destroy_tenant(
             shutil.copyfile(pdf_path, persistent_path)
         except OSError:
             pass
+
+    nif_hash = hashlib.sha256((emp.nif or str(tenant_uuid)).encode("utf-8")).hexdigest()
+    db.add(
+        RegistreBaixaCertificat(
+            tenant_id=tenant_uuid,
+            nif_hash=nif_hash,
+            certificat_path=persistent_path,
+            estat="ELIMINAT",
+            custodia_anys=5,
+            periode_gracia_dies=30,
+        )
+    )
 
     from app.workers.tasks import purgar_dades_tenant_destruit
 

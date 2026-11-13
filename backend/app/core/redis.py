@@ -73,3 +73,16 @@ async def is_tenant_blacklisted(empresa_id: str) -> Optional[str]:
     except Exception:
         pass
     return None
+
+
+async def get_redis() -> aioredis.Redis:
+    """Dependència FastAPI que retorna el client Redis asíncron actiu."""
+    client = await get_redis_client()
+    if client is None:
+        from fastapi import HTTPException, status
+
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Servei de memòria temporal Redis no disponible.",
+        )
+    return client

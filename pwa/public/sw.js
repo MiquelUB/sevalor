@@ -1,17 +1,23 @@
 /**
- * Service Worker per a SEVALOR PWA — Offline-First (Spec 013, Spec 019)
+ * Service Worker per a SEVALOR PWA — Offline-First (Spec 013, Spec 019, Spec 022/024)
  *
  * Estratègia:
  * - CacheFirst per a assets estàtics (shell de l'app)
  * - NetworkFirst per a peticions GET de dades (API)
  * - BackgroundSyncPlugin (Workbox) per a mètodes mutables (POST, PUT, DELETE, PATCH)
  *   amb cua "sync_queue" per a operacions offline diferides
+ * - Cache Busting automàtic per a Service Workers i caches obsolets
  */
 
 // Workbox CDN — Spec 013 RF-02
 importScripts("https://storage.googleapis.com/workbox-cdn/releases/7.0.0/workbox-sw.js");
 
-const CACHE_NAME = "sevalor-pwa-v4";
+const CACHE_VERSION = "v5";
+const CACHE_NAME = `sevalor-pwa-${CACHE_VERSION}`;
+const API_CACHE_NAME = `sevalor-api-cache-${CACHE_VERSION}`;
+const STATIC_CACHE_NAME = `sevalor-static-cache-${CACHE_VERSION}`;
+const ACTIVE_CACHES = new Set([CACHE_NAME, API_CACHE_NAME, STATIC_CACHE_NAME]);
+
 const STATIC_ASSETS = [
   "/",
   "/operari/feines/",
@@ -20,6 +26,13 @@ const STATIC_ASSETS = [
   "/icons/icon-192x192.png",
   "/icons/icon-512x512.png",
 ];
+
+async function purgeObsoleteCaches(forceAll = false) {
+  const keys = await caches.keys();
+  const toDelete = forceAll ? keys : keys.filter((key) => !ACTIVE_CACHES.has(key));
+  await Promise.all(toDelete.map((key) => caches.delete(key)));
+  return toDelete.length;
+}
 
 // ─── Pre-cache d'assets estàtics ───────────────────────────────────────
 self.addEventListener("install", (event) => {
@@ -31,16 +44,46 @@ self.addEventListener("install", (event) => {
   self.skipWaiting();
 });
 
-// ─── Activació: neteja de caches antics ────────────────────────────────
+// ─── Activació: neteja de caches obsolets (Cache Busting) ──────────────
 self.addEventListener("activate", (event) => {
   event.waitUntil(
-    caches.keys().then((keys) => {
-      return Promise.all(
-        keys.filter((key) => key !== CACHE_NAME).map((key) => caches.delete(key))
-      );
+    purgeObsoleteCaches(false).then(async (deletedCount) => {
+      await self.clients.claim();
+      if (deletedCount > 0) {
+        const allClients = await self.clients.matchAll({ includeUncontrolled: true });
+        for (const client of allClients) {
+          client.postMessage({
+            type: "SW_CACHE_BUSTED",
+            version: CACHE_VERSION,
+            deletedCaches: deletedCount,
+          });
+        }
+      }
     })
   );
-  self.clients.claim();
+});
+
+// ─── Control de Cache Busting sota demanda des de la PWA ───────────────
+self.addEventListener("message", (event) => {
+  const payload = event.data || {};
+  if (payload.type === "SKIP_WAITING") {
+    self.skipWaiting();
+    return;
+  }
+  if (payload.type === "CACHE_BUST" || payload.type === "FORCE_PURGE") {
+    const forceAll = payload.type === "FORCE_PURGE";
+    event.waitUntil(
+      purgeObsoleteCaches(forceAll).then((deletedCount) => {
+        if (event.ports && event.ports[0]) {
+          event.ports[0].postMessage({
+            type: "CACHE_BUST_DONE",
+            version: CACHE_VERSION,
+            deletedCaches: deletedCount,
+          });
+        }
+      })
+    );
+  }
 });
 
 // ─── Workbox: Background Sync per a mètodes mutables ───────────────────
@@ -102,11 +145,11 @@ if (workbox) {
     "PATCH"
   );
 
-  // GET a /api/v1/ → NetworkFirst amb fallback a cache
+  // GET a /api/v1/ → NetworkFirst amb fallback a cache versionada
   workbox.routing.registerRoute(
     ({ url }) => url.pathname.startsWith("/api/v1/"),
     new workbox.strategies.NetworkFirst({
-      cacheName: "sevalor-api-cache",
+      cacheName: API_CACHE_NAME,
       plugins: [
         new workbox.expiration.ExpirationPlugin({
           maxEntries: 100,
@@ -116,7 +159,7 @@ if (workbox) {
     })
   );
 
-  // Assets estàtics → CacheFirst
+  // Assets estàtics → CacheFirst versionada
   workbox.routing.registerRoute(
     ({ request }) =>
       request.destination === "style" ||
@@ -124,7 +167,7 @@ if (workbox) {
       request.destination === "image" ||
       request.destination === "font",
     new workbox.strategies.CacheFirst({
-      cacheName: "sevalor-static-cache",
+      cacheName: STATIC_CACHE_NAME,
       plugins: [
         new workbox.expiration.ExpirationPlugin({
           maxEntries: 60,
@@ -141,8 +184,13 @@ self.addEventListener("fetch", (event) => {
   // només actua com a fallback per a peticions GET no capturades per Workbox
   if (event.request.method !== "GET") return;
 
-  // Ignorem les rutes ja gestionades per Workbox
-  if (event.request.url.includes("/api/v1/")) return;
+  // Ignorem les rutes ja gestionades per Workbox i el propi sw.js
+  if (
+    event.request.url.includes("/api/v1/") ||
+    event.request.url.endsWith("/sw.js")
+  ) {
+    return;
+  }
 
   event.respondWith(
     fetch(event.request)

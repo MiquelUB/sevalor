@@ -10,17 +10,19 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db_with_tenant_context
 from app.core.security import get_current_user_claims, require_financial_access, require_roles
-from app.models.models import Client, Empresa, FacturaCapcalera
+from app.models.models import Client, DespesaComptable, Empresa, FacturaCapcalera, OrdreTreball
 from app.schemas.comptabilitat import (
     Art80ItemDTO,
     Art80ReclamacioRequestDTO,
     ClientRiscSanititzatDTO,
     ContracteMRRAuditoriaDTO,
     DashboardEconomicResponseDTO,
+    DespesaComptableDTO,
     FacturaEmissioCreateDTO,
     Norma43ConciliarRequestDTO,
     Norma43MovimentDTO,
     OperariCostEfectiuDTO,
+    OTCostMargeDTO,
     OverrideRiscRequestDTO,
     RetencioGarantiaDTO,
     TiquetAuditoriaRequestDTO,
@@ -28,6 +30,7 @@ from app.schemas.comptabilitat import (
     WIPControlResponseDTO,
 )
 from app.services.economic_suite_service import EconomicSuiteService
+from app.services.magatzem_comptabilitat_service import calcular_cost_i_marge_analitic_ot
 from app.services.outbox_aeat import registrar_enviament_outbox
 from app.services.sovereign_storage import SovereignStorageGateway
 from app.services.verifactu import generar_factura_pdf
@@ -525,3 +528,65 @@ async def conciliar_norma43(
         contingut_c43=payload.contingut_c43,
         confirmar_hitl=payload.confirmar_conciliacio_hitl,
     )
+
+
+@router.get("/ordres-treball/{ordre_treball_id}/cost-marge", response_model=OTCostMargeDTO)
+async def obtenir_cost_marge_analitic_ot(
+    ordre_treball_id: uuid.UUID,
+    request: Request,
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+):
+    """Calcula en temps real el cost real (PickIn/Out PMP + Mermes + Tiquets + Mà d'obra + Flota) i marge brut d'una OT."""
+    empresa_id, _, _ = _get_tenant_and_user(request)
+    return await calcular_cost_i_marge_analitic_ot(
+        db=db,
+        empresa_id=empresa_id,
+        ordre_treball_id=ordre_treball_id,
+    )
+
+
+@router.get("/ordres-treball-marges", response_model=List[OTCostMargeDTO])
+async def llistar_marges_analitics_ots(
+    request: Request,
+    limit: int = 30,
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+):
+    """Llista el càlcul determinista de costos i marges bruts per a les OTs del tenant."""
+    empresa_id, _, _ = _get_tenant_and_user(request)
+    ot_ids = (
+        await db.execute(
+            select(OrdreTreball.id)
+            .where(OrdreTreball.empresa_id == empresa_id)
+            .order_by(OrdreTreball.created_at.desc())
+            .limit(limit)
+        )
+    ).scalars().all()
+    resultats = []
+    for ot_id in ot_ids:
+        resultats.append(
+            await calcular_cost_i_marge_analitic_ot(
+                db=db,
+                empresa_id=empresa_id,
+                ordre_treball_id=ot_id,
+            )
+        )
+    return resultats
+
+
+@router.get("/despeses-analitiques", response_model=List[DespesaComptableDTO])
+async def llistar_despeses_analitiques(
+    request: Request,
+    limit: int = 50,
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+):
+    """Llista els assentaments analítics procedents de Mermes de Magatzem i Tiquets OCR de camp."""
+    empresa_id, _, _ = _get_tenant_and_user(request)
+    rows = (
+        await db.execute(
+            select(DespesaComptable)
+            .where(DespesaComptable.empresa_id == empresa_id)
+            .order_by(DespesaComptable.created_at.desc())
+            .limit(limit)
+        )
+    ).scalars().all()
+    return rows

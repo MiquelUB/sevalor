@@ -16,7 +16,6 @@ from app.api.v1.gestio.cerca import router as cerca_router
 from app.api.v1.gestio.cerca import spotlight_router
 from app.api.v1.gestio.clients import router as clients_router
 from app.api.v1.gestio.comptabilitat import router as comptabilitat_router
-from app.api.v1.gestio.operativa_financera import router as operativa_financera_router
 from app.api.v1.gestio.configuracio import obtenir_dades_empresa, obtenir_marca_camaleonica
 from app.api.v1.gestio.configuracio import router as configuracio_router
 from app.api.v1.gestio.contractes import router as contractes_router
@@ -30,11 +29,13 @@ from app.api.v1.gestio.ia import router as ia_router
 from app.api.v1.gestio.magatzem import router as magatzem_router
 from app.api.v1.gestio.notificacions import router as notificacions_router
 from app.api.v1.gestio.operaris import router as operaris_router
+from app.api.v1.gestio.operativa_financera import router as operativa_financera_router
 from app.api.v1.gestio.planols import router as planols_router
 from app.api.v1.gestio.pressupostos import router as pressupostos_router
 from app.api.v1.gestio.proveidors import router as proveidors_router
 from app.api.v1.gestio.ws import router as ws_router
 from app.api.v1.health import router as health_router
+from app.api.v1.operari_auth import enrolament_router as operari_enrolament_router
 from app.api.v1.operari_auth import router as operari_auth_router
 from app.api.v1.operari_pwa.copilot import router as operari_copilot_router
 from app.api.v1.operari_pwa.feines import llistar_les_meves_feines
@@ -182,6 +183,7 @@ app.include_router(economia_router, prefix=settings.API_V1_STR)
 app.include_router(contractes_router, prefix=settings.API_V1_STR)
 app.include_router(notificacions_router, prefix=settings.API_V1_STR)
 app.include_router(operari_auth_router, prefix=settings.API_V1_STR)
+app.include_router(operari_enrolament_router, prefix=settings.API_V1_STR)
 app.include_router(auth_router, prefix=settings.API_V1_STR + "/auth", tags=["Autenticació Oficina"])
 app.include_router(jornada_router, prefix=settings.API_V1_STR)
 app.include_router(feines_pwa_router, prefix=settings.API_V1_STR)

@@ -12,6 +12,7 @@ import logging
 import re
 import xml.etree.ElementTree as ET
 import zipfile
+from dataclasses import dataclass
 from datetime import date
 from typing import Any, Dict, List, Optional
 
@@ -124,18 +125,23 @@ def _extreure_text_de_fitxer(file_bytes: bytes, filename: Optional[str] = None) 
     except Exception:
         pass
 
-    # 5. Si és una imatge (.jpg, .png) amb comentaris/tEXt incrustats (p.ex. escenaris de test o EXIF)
-    if file_bytes.startswith((b"\xff\xd8\xff", b"\x89PNG")):
+    # 5. Si és una imatge (.jpg, .png, .webp) amb comentaris/tEXt/EXIF/XMP incrustats
+    is_webp = file_bytes.startswith(b"RIFF") and file_bytes[8:12] == b"WEBP"
+    if file_bytes.startswith((b"\xff\xd8\xff", b"\x89PNG")) or is_webp:
         try:
             latin_text = file_bytes.decode("latin-1", errors="ignore")
-            m_txt = re.findall(r"[A-Za-zÀ-ÿ0-9_:\-\./\s,@\+]{12,}", latin_text)
+            m_txt = re.findall(r"[A-Za-zÀ-ÿ0-9_:\-\./\s,@\+€%]{10,}", latin_text)
+            receipt_keywords = (
+                "nif", "cif", "dni", "nom", "cognoms", "carnet", "prl", "caducitat",
+                "permis", "permiso", "titular", "total", "import", "importe", "base",
+                "iva", "eur", "proveidor", "vendor", "repsol", "cepsa", "galp",
+                "ferreteria", "adblue", "diesel", "dièsel", "gasoil", "gasoleo",
+                "comprador", "client", "confidence", "data", "fecha",
+            )
             filtered = [
                 seg.strip()
                 for seg in m_txt
-                if any(
-                    k in seg.lower()
-                    for k in ("nif", "dni", "nom", "cognoms", "carnet", "prl", "caducitat", "permis", "permiso", "titular")
-                )
+                if any(k in seg.lower() for k in receipt_keywords)
             ]
             if filtered:
                 return "\n".join(filtered)
@@ -1912,3 +1918,202 @@ async def processar_tiquet_ocr(
     resultat["status"] = ESTAT_EXTRET_AUTOMATIC if trobat else ESTAT_REVISIO_MANUAL
     resultat["confidence"] = 0.95 if trobat else 0.0
     return resultat
+
+
+@dataclass
+class ReceiptOCRData:
+    """Resultat normalitzat de l'extracció OCR de tiquets a /gestio."""
+
+    confidence: float
+    total_eur: float
+    tax_base_eur: Optional[float]
+    quota_iva_eur: Optional[float]
+    iva_pct: float
+    vendor_name: str
+    vendor_nif: Optional[str]
+    buyer_nif: Optional[str]
+    date_str: str
+    has_mixed_fuel_and_adblue: bool
+    raw_text: str = ""
+
+
+async def extract_receipt_ocr_data(
+    file_bytes: bytes,
+    *,
+    filename: Optional[str] = None,
+    node_ia_url: Optional[str] = None,
+    vault_token: Optional[str] = None,
+    empresa_nif: Optional[str] = None,
+) -> ReceiptOCRData:
+    """
+    Motor OCR de /gestio per a tiquets de camp (Spec 018 RF-08, RF-08.1, RF-13, RF-17, EDGE-08).
+    Extreu text incrustat/PDF i, si escau, invoca el node IA Vision sobirà.
+    """
+    text = _extreure_text_de_fitxer(file_bytes, filename=filename)
+
+    confidence: Optional[float] = None
+    total_eur: Optional[float] = None
+    tax_base_eur: Optional[float] = None
+    quota_iva_eur: Optional[float] = None
+    iva_pct = 21.0
+    vendor_name: Optional[str] = None
+    vendor_nif: Optional[str] = None
+    buyer_nif: Optional[str] = None
+    date_str: Optional[str] = None
+    has_mixed_fuel_and_adblue = False
+
+    if text:
+        low = text.lower()
+        conf_m = re.search(r"(?:confidence|confiança|confianza)[\s:]*([01](?:[.,]\d+)?)", low)
+        if conf_m:
+            try:
+                confidence = float(conf_m.group(1).replace(",", "."))
+                if confidence > 1.0:
+                    confidence = confidence / 100.0
+            except ValueError:
+                pass
+
+        vend_m = re.search(
+            r"(?:prove[iï]dor|proveedor|vendor|ra[oó]\s*social|establiment)[\s:]+([^\n;|]+)",
+            text,
+            re.IGNORECASE,
+        )
+        if vend_m:
+            vendor_name = vend_m.group(1).strip()[:120]
+
+        buyer_m = re.search(
+            r"(?:nif\s*comprador|cif\s*comprador|nif\s*client[e]?|comprador|client[e]?)[\s:]+([A-HJ-NP-SU-W0-9]{8,10})",
+            text,
+            re.IGNORECASE,
+        )
+        if buyer_m:
+            buyer_nif = buyer_m.group(1).upper()
+
+        emissor_m = re.search(
+            r"(?:nif\s*(?:emissor|prove[iï]dor|proveedor|vendor)|cif\s*(?:emissor|prove[iï]dor))[\s:]+([A-HJ-NP-SU-W0-9]{8,10})",
+            text,
+            re.IGNORECASE,
+        )
+        if emissor_m:
+            vendor_nif = emissor_m.group(1).upper()
+
+        # Fallback: tots els NIFs presents al text
+        all_nifs = re.findall(
+            r"\b([A-HJ-NP-SU-W][0-9]{7}[0-9A-J]|[0-9]{8}[A-Z])\b",
+            text.upper(),
+        )
+        emp_nif_norm = empresa_nif.strip().upper() if empresa_nif else None
+        for n in all_nifs:
+            if emp_nif_norm and n == emp_nif_norm:
+                buyer_nif = buyer_nif or n
+            elif not vendor_nif and n != buyer_nif:
+                vendor_nif = n
+
+        tot_m = re.search(
+            r"(?:total|import\s*total|importe\s*total|import|importe)[\s:=]*(\d+(?:[.,]\d{1,2})?)\s*(?:€|eur)?",
+            text,
+            re.IGNORECASE,
+        )
+        if tot_m:
+            total_eur = float(tot_m.group(1).replace(",", "."))
+
+        base_m = re.search(
+            r"(?:base\s*imposable|base\s*imponible|base)[\s:=]*(\d+(?:[.,]\d{1,2})?)",
+            text,
+            re.IGNORECASE,
+        )
+        if base_m:
+            tax_base_eur = float(base_m.group(1).replace(",", "."))
+
+        iva_m = re.search(
+            r"(?:quota\s*iva|cuota\s*iva|iva\s*\d+%?)[\s:=]*(\d+(?:[.,]\d{1,2})?)",
+            text,
+            re.IGNORECASE,
+        )
+        if iva_m:
+            quota_iva_eur = float(iva_m.group(1).replace(",", "."))
+
+        d_m = re.search(r"\b(\d{4}[-/]\d{2}[-/]\d{2}|\d{2}[/.-]\d{2}[/.-]\d{4})\b", text)
+        if d_m:
+            date_str = _normalitzar_data_iso_general(d_m.group(1))
+
+        has_adblue = bool(re.search(r"\b(adblue|ad-blue|urea)\b", low))
+        has_fuel = bool(
+            re.search(r"\b(diesel|dièsel|gasoil|gasoleo|gasóleo|carburant|gasolina|b7)\b", low)
+        )
+        has_mixed_fuel_and_adblue = has_adblue and has_fuel
+
+        if not vendor_name:
+            first_line = next(
+                (ln.strip() for ln in text.splitlines() if len(ln.strip()) >= 3),
+                "",
+            )
+            if first_line and not any(
+                k in first_line.lower() for k in ("total:", "nif", "cif", "confidence", "base", "iva")
+            ):
+                vendor_name = first_line[:80]
+
+    # IA Vision fallback si no s'ha extret import o confiança i hi ha node_ia_url configurat
+    if (total_eur is None or confidence is None) and node_ia_url:
+        prompt = (
+            "Ets un extractor OCR comptable de tiquets de camp. Retorna únicament JSON amb: "
+            "confidence (0..1), total_eur (float), tax_base_eur (float o null), quota_iva_eur (float o null), "
+            "vendor_name (str), vendor_nif (str o null), buyer_nif (str o null), date_str (YYYY-MM-DD), "
+            "has_mixed_fuel_and_adblue (bool)."
+        )
+        b64 = base64.b64encode(file_bytes).decode("utf-8") if file_bytes else None
+        ai_res = await _cridar_ia_vision(
+            prompt, text, b64, node_ia_url=node_ia_url, vault_token=vault_token
+        )
+        if ai_res:
+            try:
+                if ai_res.get("confidence") is not None:
+                    confidence = float(ai_res["confidence"])
+                if ai_res.get("total_eur") is not None:
+                    total_eur = float(ai_res["total_eur"])
+                if ai_res.get("tax_base_eur") is not None:
+                    tax_base_eur = float(ai_res["tax_base_eur"])
+                if ai_res.get("quota_iva_eur") is not None:
+                    quota_iva_eur = float(ai_res["quota_iva_eur"])
+                if ai_res.get("vendor_name"):
+                    vendor_name = str(ai_res["vendor_name"])
+                if ai_res.get("vendor_nif"):
+                    vendor_nif = str(ai_res["vendor_nif"]).upper()
+                if ai_res.get("buyer_nif"):
+                    buyer_nif = str(ai_res["buyer_nif"]).upper()
+                if ai_res.get("date_str"):
+                    date_str = _normalitzar_data_iso_general(str(ai_res["date_str"])) or date_str
+                if ai_res.get("has_mixed_fuel_and_adblue") is not None:
+                    has_mixed_fuel_and_adblue = bool(ai_res["has_mixed_fuel_and_adblue"])
+            except Exception:
+                pass
+
+    if confidence is None:
+        if total_eur is not None and total_eur > 0 and (vendor_name or vendor_nif):
+            confidence = 0.95
+        elif total_eur is not None and total_eur > 0:
+            confidence = 0.80
+        elif text.strip():
+            confidence = 0.40
+        else:
+            confidence = 0.0
+
+    total_final = round(float(total_eur or 0.0), 2)
+    if tax_base_eur is None and total_final > 0:
+        tax_base_eur = round(total_final / (1.0 + iva_pct / 100.0), 2)
+    if quota_iva_eur is None and tax_base_eur is not None and total_final > 0:
+        quota_iva_eur = round(total_final - tax_base_eur, 2)
+
+    return ReceiptOCRData(
+        confidence=max(0.0, min(1.0, float(confidence))),
+        total_eur=total_final,
+        tax_base_eur=tax_base_eur,
+        quota_iva_eur=quota_iva_eur,
+        iva_pct=iva_pct,
+        vendor_name=vendor_name or "PROVEIDOR",
+        vendor_nif=vendor_nif,
+        buyer_nif=buyer_nif,
+        date_str=date_str or date.today().isoformat(),
+        has_mixed_fuel_and_adblue=has_mixed_fuel_and_adblue,
+        raw_text=text,
+    )

@@ -15,6 +15,7 @@ import {
   QrCode,
   Receipt,
   RefreshCw,
+  Scale,
   ShieldAlert,
   ShieldCheck,
   TrendingUp,
@@ -158,14 +159,50 @@ interface TiquetDespesa {
   categoria: string;
   data_tiquet: string;
   nif_emissor?: string;
+  nif_comprador?: string;
   rao_social?: string;
   base_imposable: number;
   quota_iva: number;
   import_total: number;
+  subcompte_pgc?: string;
   estat_aprovacio: string;
   estat_fiscal: string;
   requereix_aprovacio_boss: boolean;
   custodia_paper_confirmada: boolean;
+  nom_fitxer_visible?: string;
+}
+
+interface OTCostMarge {
+  ordre_treball_id: string;
+  codi?: string;
+  titol?: string;
+  ingressos_nets_eur: number;
+  desglossament_costos: {
+    materials_picking_pmp_eur: number;
+    mermes_imputades_eur: number;
+    tiquets_camp_ocr_eur: number;
+    ma_obra_real_eur: number;
+    flota_real_eur: number;
+  };
+  cost_total_real_eur: number;
+  marge_brut_eur: number;
+  marge_brut_pct: number;
+  alerta_desviacio_marge: boolean;
+}
+
+interface DespesaComptableItem {
+  id: string;
+  ordre_treball_id?: string | null;
+  tiquet_id?: string | null;
+  merma_id?: string | null;
+  concepte: string;
+  subcompte: string;
+  base_imposable: number;
+  quota_iva: number;
+  import_total: number;
+  estat: string;
+  origen: string;
+  created_at: string;
 }
 
 interface Norma43Moviment {
@@ -182,6 +219,7 @@ type TabKey =
   | "DASHBOARD"
   | "VERIFACTU"
   | "WIP_CONTROL"
+  | "MARGES_OT"
   | "OPERARIS_MRR"
   | "TIQUETS"
   | "NORMA43";
@@ -202,6 +240,9 @@ export default function GestioComptabilitatPage() {
   const [operarisCost, setOperarisCost] = useState<OperariCost[]>([]);
   const [contractesMrr, setContractesMrr] = useState<ContracteMRR[]>([]);
   const [tiquets, setTiquets] = useState<TiquetDespesa[]>([]);
+  const [margesOt, setMargesOt] = useState<OTCostMarge[]>([]);
+  const [despesesAnalitiques, setDespesesAnalitiques] = useState<DespesaComptableItem[]>([]);
+  const [desgloseMap, setDesgloseMap] = useState<Record<string, { carb: string; adbl: string }>>({});
 
   // Estat Norma 43
   const [textC43, setTextC43] = useState("");
@@ -219,19 +260,33 @@ export default function GestioComptabilitatPage() {
     setLoading(true);
     setError(null);
     try {
-      const [dashRes, factRes, wipRes, retRes, art80Res, opRes, mrrRes, tiqRes] =
-        await Promise.all([
-          apiFetch<DashboardEconomic>(
-            `/gestio/comptabilitat/dashboard-economic?criteri_caixa=${criteriCaixa}`
-          ),
-          apiFetch<Factura[]>("/gestio/comptabilitat/factures"),
-          apiFetch<WIPControl>("/gestio/comptabilitat/wip-control"),
-          apiFetch<RetencioGarantia[]>("/gestio/comptabilitat/retencions-garantia"),
-          apiFetch<Art80Item[]>("/gestio/comptabilitat/art80-incobrables"),
-          apiFetch<OperariCost[]>("/gestio/comptabilitat/operaris-cost-efectiu"),
-          apiFetch<ContracteMRR[]>("/gestio/comptabilitat/contractes-mrr-auditoria"),
-          apiFetch<TiquetDespesa[]>("/gestio/comptabilitat/tiquets"),
-        ]);
+      const [
+        dashRes,
+        factRes,
+        wipRes,
+        retRes,
+        art80Res,
+        opRes,
+        mrrRes,
+        tiqRes,
+        margesRes,
+        despRes,
+      ] = await Promise.all([
+        apiFetch<DashboardEconomic>(
+          `/gestio/comptabilitat/dashboard-economic?criteri_caixa=${criteriCaixa}`
+        ),
+        apiFetch<Factura[]>("/gestio/comptabilitat/factures"),
+        apiFetch<WIPControl>("/gestio/comptabilitat/wip-control"),
+        apiFetch<RetencioGarantia[]>("/gestio/comptabilitat/retencions-garantia"),
+        apiFetch<Art80Item[]>("/gestio/comptabilitat/art80-incobrables"),
+        apiFetch<OperariCost[]>("/gestio/comptabilitat/operaris-cost-efectiu"),
+        apiFetch<ContracteMRR[]>("/gestio/comptabilitat/contractes-mrr-auditoria"),
+        apiFetch<TiquetDespesa[]>("/gestio/comptabilitat/tiquets"),
+        apiFetch<OTCostMarge[]>("/gestio/comptabilitat/ordres-treball-marges").catch(() => []),
+        apiFetch<DespesaComptableItem[]>("/gestio/comptabilitat/despeses-analitiques").catch(
+          () => []
+        ),
+      ]);
 
       setDashboard(dashRes);
       setFactures(factRes || []);
@@ -241,6 +296,8 @@ export default function GestioComptabilitatPage() {
       setOperarisCost(opRes || []);
       setContractesMrr(mrrRes || []);
       setTiquets(tiqRes || []);
+      setMargesOt(margesRes || []);
+      setDespesesAnalitiques(despRes || []);
     } catch (err: unknown) {
       const message =
         err instanceof Error ? err.message : "Error carregant la suite econòmica";
@@ -309,9 +366,19 @@ export default function GestioComptabilitatPage() {
 
   const handleAuditarTiquet = async (id: string, accio: "APROVAT" | "REBUTJAT") => {
     try {
+      const split = desgloseMap[id];
+      const payload: Record<string, unknown> = {
+        accio,
+        custodia_paper_confirmada: true,
+        desblocatge_targeta_vehicle: true,
+      };
+      if (split) {
+        if (split.carb) payload.desglose_carburant_eur = Number(split.carb);
+        if (split.adbl) payload.desglose_adblue_eur = Number(split.adbl);
+      }
       await apiFetch(`/gestio/comptabilitat/tiquets/${id}/auditar`, {
         method: "POST",
-        body: JSON.stringify({ accio, custodia_paper_confirmada: true }),
+        body: JSON.stringify(payload),
       });
       await carregarDades();
     } catch (err: unknown) {
@@ -354,8 +421,9 @@ export default function GestioComptabilitatPage() {
     { key: "DASHBOARD", label: "Suite Econòmica & KPIs", icon: <TrendingUp className="h-4 w-4" /> },
     { key: "VERIFACTU", label: "Veri*factu, Art.80 & 4308", icon: <QrCode className="h-4 w-4" /> },
     { key: "WIP_CONTROL", label: "WIP Obra en Curs", icon: <Activity className="h-4 w-4" /> },
+    { key: "MARGES_OT", label: "Costos & Marges OT", icon: <Scale className="h-4 w-4" /> },
     { key: "OPERARIS_MRR", label: "Operaris & MRR", icon: <Users className="h-4 w-4" /> },
-    { key: "TIQUETS", label: "Tiquets de Camp", icon: <Receipt className="h-4 w-4" /> },
+    { key: "TIQUETS", label: "Tiquets OCR Camp", icon: <Receipt className="h-4 w-4" /> },
     { key: "NORMA43", label: "Banc Norma 43", icon: <Banknote className="h-4 w-4" /> },
   ];
 
@@ -819,56 +887,244 @@ export default function GestioComptabilitatPage() {
         </div>
       )}
 
+      {/* TAB: COSTOS REALS & MARGES OT (PONT MAGATZEM -> COMPTABILITAT) */}
+      {tabActiva === "MARGES_OT" && (
+        <div className="space-y-6">
+          <div className="rounded-xl border border-slate-200 bg-white p-5">
+            <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <h2 className="text-sm font-semibold text-slate-900">
+                  Rendibilitat Real per Ordre de Treball (PMP + Mermes + Tiquets OCR + Mà d&apos;Obra + Flota)
+                </h2>
+                <p className="text-xs text-slate-500">
+                  Consolidació determinista del consum net de magatzem valorat a Preu Mitjà Ponderat i costos de camp
+                </p>
+              </div>
+              <span className="rounded-lg bg-primary/10 px-2.5 py-1 text-xs font-semibold text-primary">
+                Llindar alerta: &lt; 15% Marge Brut
+              </span>
+            </div>
+
+            {margesOt.length === 0 ? (
+              <div className="rounded-xl border border-dashed border-slate-200 py-10 text-center text-sm text-slate-500">
+                Encara no hi ha ordres de treball registrades per analitzar costos i marges.
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs">
+                  <thead>
+                    <tr className="border-b border-slate-200 text-slate-500">
+                      <th className="px-3 py-2">Ordre de Treball</th>
+                      <th className="px-3 py-2 text-right">Ingressos Nets</th>
+                      <th className="px-3 py-2 text-right">Picking PMP</th>
+                      <th className="px-3 py-2 text-right">Mermes (600)</th>
+                      <th className="px-3 py-2 text-right">Tiquets OCR</th>
+                      <th className="px-3 py-2 text-right">Mà d&apos;Obra &amp; Flota</th>
+                      <th className="px-3 py-2 text-right">Cost Real</th>
+                      <th className="px-3 py-2 text-right">Marge Brut</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {margesOt.map((m) => (
+                      <tr key={m.ordre_treball_id} className="border-b border-slate-100">
+                        <td className="px-3 py-2.5">
+                          <span className="font-mono font-semibold text-primary">{m.codi || m.ordre_treball_id.slice(0, 8)}</span>
+                          {m.titol && <span className="ml-2 text-slate-700">{m.titol}</span>}
+                        </td>
+                        <td className="px-3 py-2.5 text-right tabular-nums font-medium">
+                          {Number(m.ingressos_nets_eur).toFixed(2)} €
+                        </td>
+                        <td className="px-3 py-2.5 text-right tabular-nums">
+                          {Number(m.desglossament_costos.materials_picking_pmp_eur).toFixed(2)} €
+                        </td>
+                        <td className="px-3 py-2.5 text-right tabular-nums">
+                          {Number(m.desglossament_costos.mermes_imputades_eur).toFixed(2)} €
+                        </td>
+                        <td className="px-3 py-2.5 text-right tabular-nums">
+                          {Number(m.desglossament_costos.tiquets_camp_ocr_eur).toFixed(2)} €
+                        </td>
+                        <td className="px-3 py-2.5 text-right tabular-nums">
+                          {(
+                            Number(m.desglossament_costos.ma_obra_real_eur) +
+                            Number(m.desglossament_costos.flota_real_eur)
+                          ).toFixed(2)} €
+                        </td>
+                        <td className="px-3 py-2.5 text-right tabular-nums font-semibold">
+                          {Number(m.cost_total_real_eur).toFixed(2)} €
+                        </td>
+                        <td className="px-3 py-2.5 text-right tabular-nums">
+                          <span
+                            className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 font-semibold ${
+                              m.alerta_desviacio_marge
+                                ? "bg-rose-100 text-rose-800"
+                                : "bg-emerald-100 text-emerald-800"
+                            }`}
+                          >
+                            {Number(m.marge_brut_eur).toFixed(2)} € ({Number(m.marge_brut_pct).toFixed(1)}%)
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+
+          <div className="rounded-xl border border-slate-200 bg-white p-5">
+            <h3 className="mb-3 text-sm font-semibold text-slate-900">
+              Assentaments Analítics Consolidats (Mermes 600/659 i Tiquets OCR 602/629/62X)
+            </h3>
+            {despesesAnalitiques.length === 0 ? (
+              <div className="rounded-xl border border-dashed border-slate-200 py-8 text-center text-xs text-slate-500">
+                Cap assentament analític generat des de Magatzem o OCR de Tiquets encara.
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs">
+                  <thead>
+                    <tr className="border-b border-slate-200 text-slate-500">
+                      <th className="px-3 py-2">Subcompte</th>
+                      <th className="px-3 py-2">Concepte</th>
+                      <th className="px-3 py-2">Origen</th>
+                      <th className="px-3 py-2 text-right">Base</th>
+                      <th className="px-3 py-2 text-right">IVA</th>
+                      <th className="px-3 py-2 text-right">Total</th>
+                      <th className="px-3 py-2">Estat</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {despesesAnalitiques.map((d) => (
+                      <tr key={d.id} className="border-b border-slate-100">
+                        <td className="px-3 py-2 font-mono font-semibold text-primary">{d.subcompte}</td>
+                        <td className="px-3 py-2 text-slate-800">{d.concepte}</td>
+                        <td className="px-3 py-2 font-mono text-slate-500">{d.origen}</td>
+                        <td className="px-3 py-2 text-right tabular-nums">{Number(d.base_imposable).toFixed(2)} €</td>
+                        <td className="px-3 py-2 text-right tabular-nums">{Number(d.quota_iva).toFixed(2)} €</td>
+                        <td className="px-3 py-2 text-right tabular-nums font-semibold">
+                          {Number(d.import_total).toFixed(2)} €
+                        </td>
+                        <td className="px-3 py-2">
+                          <span className="rounded bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-700">
+                            {d.estat}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* TAB 5: TIQUETS DE DESPESA DE CAMP */}
       {tabActiva === "TIQUETS" && (
         <div className="rounded-xl border border-slate-200 bg-white p-5">
           <h2 className="text-sm font-semibold text-slate-900 mb-4">
-            Bústia d&apos;Auditoria de Tiquets (Control &gt;100 € i NIF Art. 97 LIVA)
+            Bústia d&apos;Auditoria OCR de Tiquets (Control &gt;100 €, AdBlue mixt i NIF Art. 97 LIVA)
           </h2>
           {tiquets.length === 0 ? (
             <p className="text-sm text-slate-500 text-center py-6">
               Cap tiquet de despesa pendent ni registrat al sistema.
             </p>
           ) : (
-            <div className="space-y-2 text-xs">
-              {tiquets.map((t) => (
-                <div
-                  key={t.id}
-                  className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-100 p-3"
-                >
-                  <div>
-                    <p className="font-semibold text-slate-900">
-                      {t.categoria} · {Number(t.import_total).toFixed(2)} € (IVA: {Number(t.quota_iva).toFixed(2)} €)
-                    </p>
-                    <p className="text-slate-500">
-                      {t.data_tiquet} · NIF: {t.nif_emissor || "SENSE NIF (No deduïble)"} · {t.estat_aprovacio}
-                    </p>
+            <div className="space-y-3 text-xs">
+              {tiquets.map((t) => {
+                const editableStates = [
+                  "PENDENT_AUDITORIA",
+                  "INCIDENCIA_COMPROVACIO_MANUAL",
+                  "PENDENT_DESGLOSE_MANUAL",
+                  "BLOQUEJAT_EXCEDENCIA_100EUR",
+                  "PENDENT_DE_CANJE",
+                  "ARXIVAT_GESTIO",
+                ];
+                const canAudit = editableStates.includes(t.estat_aprovacio);
+                const splitState = desgloseMap[t.id] || { carb: "", adbl: "" };
+                return (
+                  <div
+                    key={t.id}
+                    className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-100 p-3"
+                  >
+                    <div className="space-y-0.5">
+                      <p className="font-semibold text-slate-900">
+                        {t.categoria} · {t.rao_social || "Proveïdor per validar"} ·{" "}
+                        <span className="tabular-nums">{Number(t.import_total).toFixed(2)} €</span>{" "}
+                        <span className="text-slate-500 font-normal">
+                          (IVA: {Number(t.quota_iva).toFixed(2)} € · PGC {t.subcompte_pgc || "629000"})
+                        </span>
+                      </p>
+                      <p className="text-slate-500">
+                        {t.data_tiquet} · Emissor: {t.nif_emissor || "N/D"} · Comprador:{" "}
+                        {t.nif_comprador || "SENSE NIF (62X / Canje)"} ·{" "}
+                        <span className="font-semibold text-slate-700">{t.estat_aprovacio}</span>
+                        {t.nom_fitxer_visible && (
+                          <span className="ml-2 font-mono text-[11px] text-primary">
+                            {t.nom_fitxer_visible}
+                          </span>
+                        )}
+                      </p>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      {(t.requereix_aprovacio_boss ||
+                        t.estat_aprovacio === "BLOQUEJAT_EXCEDENCIA_100EUR") && (
+                        <span className="rounded bg-rose-100 px-2 py-0.5 font-semibold text-rose-900">
+                          &gt;100€ Targeta bloquejada · Només BOSS
+                        </span>
+                      )}
+                      {t.estat_aprovacio === "PENDENT_DESGLOSE_MANUAL" && (
+                        <div className="flex items-center gap-1.5">
+                          <input
+                            type="number"
+                            step="0.01"
+                            placeholder="Dièsel €"
+                            value={splitState.carb}
+                            onChange={(e) =>
+                              setDesgloseMap((prev) => ({
+                                ...prev,
+                                [t.id]: { ...splitState, carb: e.target.value },
+                              }))
+                            }
+                            className="w-20 rounded border border-slate-300 px-2 py-1 text-xs tabular-nums"
+                          />
+                          <input
+                            type="number"
+                            step="0.01"
+                            placeholder="AdBlue €"
+                            value={splitState.adbl}
+                            onChange={(e) =>
+                              setDesgloseMap((prev) => ({
+                                ...prev,
+                                [t.id]: { ...splitState, adbl: e.target.value },
+                              }))
+                            }
+                            className="w-20 rounded border border-slate-300 px-2 py-1 text-xs tabular-nums"
+                          />
+                        </div>
+                      )}
+                      {canAudit && (
+                        <>
+                          <button
+                            onClick={() => handleAuditarTiquet(t.id, "APROVAT")}
+                            className="rounded-lg bg-primary px-2.5 py-1 text-white font-semibold"
+                          >
+                            {t.estat_aprovacio === "BLOQUEJAT_EXCEDENCIA_100EUR"
+                              ? "Aprovar i desbloquejar targeta"
+                              : "Aprovar"}
+                          </button>
+                          <button
+                            onClick={() => handleAuditarTiquet(t.id, "REBUTJAT")}
+                            className="rounded-lg bg-rose-600 px-2.5 py-1 text-white font-semibold"
+                          >
+                            Rebutjar
+                          </button>
+                        </>
+                      )}
+                    </div>
                   </div>
-                  <div className="flex items-center gap-2">
-                    {t.requereix_aprovacio_boss && (
-                      <span className="rounded bg-amber-100 px-2 py-0.5 font-semibold text-amber-900">
-                        &gt;100€ Només BOSS
-                      </span>
-                    )}
-                    {t.estat_aprovacio === "PENDENT_AUDITORIA" && (
-                      <>
-                        <button
-                          onClick={() => handleAuditarTiquet(t.id, "APROVAT")}
-                          className="rounded-lg bg-emerald-600 px-2.5 py-1 text-white font-semibold"
-                        >
-                          Aprovar
-                        </button>
-                        <button
-                          onClick={() => handleAuditarTiquet(t.id, "REBUTJAT")}
-                          className="rounded-lg bg-rose-600 px-2.5 py-1 text-white font-semibold"
-                        >
-                          Rebutjar
-                        </button>
-                      </>
-                    )}
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>

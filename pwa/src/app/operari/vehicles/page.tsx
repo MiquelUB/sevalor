@@ -93,9 +93,7 @@ export default function OperariVehiclesPage() {
     number | null
   >(null);
 
-  // Repostatge form (Spec 015 RF-06, RF-07, RF-08)
-  const [litresRepostats, setLitresRepostats] = useState<string>("");
-  const [importEuros, setImportEuros] = useState<string>("");
+  // Repostatge form (Spec 015 RF-06, RF-07, RF-08 Zero-Tecleig)
   const [tipusCarburant, setTipusCarburant] = useState<
     "DIESEL" | "GASOLINA" | "ADBLUE"
   >("DIESEL");
@@ -236,17 +234,9 @@ export default function OperariVehiclesPage() {
     setErrorValidacio(null);
   };
 
-  // Repostatge Submit (Spec 015 RF-07, RF-08)
+  // Repostatge Submit Zero-Tecleig (Spec 015 RF-07, Spec 018)
   const handleRepostarSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!importEuros || parseFloat(importEuros) <= 0) {
-      setErrorValidacio("Introdueix l'import en euros (€).");
-      return;
-    }
-    if (!litresRepostats || parseFloat(litresRepostats) <= 0) {
-      setErrorValidacio("Introdueix els litres de carburant.");
-      return;
-    }
     if (!fotoTiquetCarburant) {
       setErrorValidacio(
         "Foto 1: El tiquet de la benzinera és obligatori (Spec 015 RF-07)."
@@ -263,18 +253,32 @@ export default function OperariVehiclesPage() {
     setErrorValidacio(null);
 
     try {
-      await apiFetch(`/operari/vehicles/${vehicle?.id}/repostatge`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          litres: parseFloat(litresRepostats),
-          euros: parseFloat(importEuros),
-          odometre: 0,
-        }),
-      });
-    } catch {}
+      const formData = new FormData();
+      formData.append("categoria", "CARBURANT");
+      formData.append("foto_tiquet", fotoTiquetCarburant, `tiquet_tmp_${Date.now()}.webp`);
+      formData.append("foto_odometre", fotoOdometreCarburant, `odometre_${Date.now()}.webp`);
+      if (vehicle?.id) {
+        formData.append("vehicle_id", vehicle.id);
+      }
 
-    setRepostatgeGuardat(true);
+      const token = typeof window !== "undefined" ? localStorage.getItem("sevalor_token") : null;
+      const headers: Record<string, string> = {};
+      if (token) headers["Authorization"] = `Bearer ${token}`;
+
+      const res = await fetch("/api/v1/operari/tiquets/captura-rapida", {
+        method: "POST",
+        headers,
+        credentials: "include",
+        body: formData,
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || "No s'ha pogut registrar el repostatge.");
+      }
+      setRepostatgeGuardat(true);
+    } catch (err: any) {
+      setErrorValidacio(err.message || "Error transmetent el repostatge.");
+    }
   };
 
   const estocFiltrat = estocFurgoneta.filter(
@@ -848,13 +852,11 @@ export default function OperariVehiclesPage() {
                   Repostatge Enregistrat amb Èxit
                 </h4>
                 <p className="text-xs text-on-surface-variant dark:text-slate-400">
-                  Despesa de {importEuros} € ({litresRepostats} L) assignada a la matrícula {vehicle.matricula} i derivada a Comptabilitat Hetzner.
+                  Captura de carburant i odòmetre assignada a la matrícula {vehicle.matricula} i derivada a Comptabilitat Hetzner per OCR.
                 </p>
                 <button
                   onClick={() => {
                     setRepostatgeGuardat(false);
-                    setImportEuros("");
-                    setLitresRepostats("");
                     setFotoTiquetCarburant(null);
                     setFotoOdometreCarburant(null);
                   }}
@@ -896,42 +898,13 @@ export default function OperariVehiclesPage() {
                   </div>
                 </div>
 
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-[10px] font-bold uppercase text-on-surface-variant mb-1">
-                      Import Total (€) *
-                    </label>
-                    <input
-                      type="number"
-                      step="0.01"
-                      value={importEuros}
-                      onChange={(e) => setImportEuros(e.target.value)}
-                      placeholder="0.00"
-                      className="w-full p-2.5 rounded-xl border border-outline-variant/40 dark:border-slate-700 bg-surface-container-low dark:bg-slate-800 text-xs font-mono font-bold"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-[10px] font-bold uppercase text-on-surface-variant mb-1">
-                      Litres Càrrega (L) *
-                    </label>
-                    <input
-                      type="number"
-                      step="0.01"
-                      value={litresRepostats}
-                      onChange={(e) => setLitresRepostats(e.target.value)}
-                      placeholder="0.00"
-                      className="w-full p-2.5 rounded-xl border border-outline-variant/40 dark:border-slate-700 bg-surface-container-low dark:bg-slate-800 text-xs font-mono font-bold"
-                    />
-                  </div>
-                </div>
-
                 <div className="space-y-3 pt-2">
                   <p className="text-xs font-bold uppercase text-on-surface-variant">
-                    Doble Fotografia Obligatòria per a Carburant
+                    Doble Fotografia Obligatòria per a Carburant (Zero-Tecleig)
                   </p>
                   <CameraInput
                     captured={!!fotoTiquetCarburant}
-                    label="Capturar"
+                    label="Foto 1: Tiquet de Benzinera"
                     onCapture={(blob) => {
                       setFotoTiquetCarburant(blob);
                       setErrorValidacio(null);
@@ -939,7 +912,7 @@ export default function OperariVehiclesPage() {
                   />
                   <CameraInput
                     captured={!!fotoOdometreCarburant}
-                    label="Capturar"
+                    label="Foto 2: Odòmetre del Vehicle"
                     onCapture={(blob) => {
                       setFotoOdometreCarburant(blob);
                       setErrorValidacio(null);

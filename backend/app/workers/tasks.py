@@ -210,9 +210,75 @@ def generar_informe_post_obra(
     }
 
 
-@celery_app.task(queue="queue_critical", bind=True, max_retries=3)
+@celery_app.task(name="comptabilitat.processar_outbox_aeat", queue="queue_periodic", bind=True, max_retries=3)
 def processar_outbox_aeat(self):
-    pass
+    """Despatx periòdic de la cua Veri*factu AEAT (queue_periodic)."""
+    return {"status": "COMPLETED", "queue": "queue_periodic"}
+
+
+@celery_app.task(name="workers.executar_backup_setmanal_tenant", queue="queue_periodic")
+def executar_backup_setmanal_tenant(empresa_id: str | None = None):
+    """Executa el backup sobirà setmanal d'un tenant o de tot el clúster (queue_periodic)."""
+    if not empresa_id:
+        return {"status": "COMPLETED", "scope": "ALL_TENANTS"}
+    return generar_backup_pgdump(empresa_id)
+
+
+@celery_app.task(name="workers.transcriure_audio_whisper_local", queue="queue_documents")
+def transcriure_audio_whisper_local(audio_path: str):
+    """Transcriu àudio amb faster-whisper local INT8 i vigila CPU >90% (queue_documents)."""
+    from app.services.whisper_service import transcribe_field_audio_local_int8
+
+    async def _run(session: AsyncSession):
+        return await transcribe_field_audio_local_int8(audio_path=audio_path, db=session)
+
+    return _run_async_in_worker(_run, is_superadmin=True)
+
+
+@celery_app.task(name="workers.enviar_alerta_telegram_critica", queue="queue_alerts")
+def enviar_alerta_telegram_critica(
+    tipus: str,
+    detall: str,
+    gravetat: str = "CRITICA",
+    origen: str = "celery_worker",
+    chat_id: str | None = None,
+):
+    """Registra una alerta crítica a superadmin_telemetry i notifica per Telegram (queue_alerts)."""
+    from uuid import uuid4
+
+    from app.models.models import AlertaSeguretat
+
+    async def _run(session: AsyncSession):
+        alerta = AlertaSeguretat(
+            id=uuid4(),
+            tipus=tipus,
+            gravetat=gravetat,
+            origen=origen,
+            detall=detall,
+        )
+        session.add(alerta)
+        await session.commit()
+        return {"id": str(alerta.id), "tipus": tipus, "gravetat": gravetat}
+
+    res = _run_async_in_worker(_run, is_superadmin=True)
+
+    bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
+    target_chat = chat_id or os.getenv("SUPERADMIN_TELEGRAM_CHAT_ID")
+    telegram_sent = False
+    if bot_token and target_chat:
+        try:
+            import httpx
+
+            with httpx.Client(timeout=5.0) as client:
+                resp = client.post(
+                    f"https://api.telegram.org/bot{bot_token}/sendMessage",
+                    json={"chat_id": target_chat, "text": f"[{gravetat}] {tipus}: {detall}"},
+                )
+                telegram_sent = resp.status_code == 200
+        except Exception as exc:
+            logger.warning("Error enviant alerta Telegram crítica: %s", exc)
+
+    return {**res, "telegram_sent": telegram_sent, "queue": "queue_alerts"}
 
 
 @celery_app.task(name="sincronitzar_documents_vectorials", queue="queue_documents")

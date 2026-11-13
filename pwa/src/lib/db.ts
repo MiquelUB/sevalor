@@ -14,13 +14,28 @@ import { OrdreTreballLocal } from "./types/operari";
 export interface LocalTiquetDespesa {
   id: string;
   empresa_id: string;
-  categoria: "CARBURANT" | "DIETES" | "MATERIAL" | "ALTRES";
-  import_total: number;
+  categoria: "CARBURANT" | "FERRETERIA" | "PEATGES" | "DIETES" | "MATERIAL" | "ALTRES";
+  import_total?: number | null;
+  nom_fitxer?: string;
+  ordre_treball_id?: string | null;
+  vehicle_id?: string | null;
   tiquet_foto_blob?: Blob | string;
   odometre_foto_blob?: Blob | string; // Obligatori per a CARBURANT
   odometre_valor?: number;
   data_despesa: string;
+  custodia_confirmada?: boolean;
   estat_sync: "PENDENT" | "SINCRONITZAT" | "ERROR";
+}
+
+export interface LocalCameraCapture {
+  id: string;
+  empresa_id: string;
+  blob: Blob;
+  nom_fitxer: string;
+  ordre_treball_id?: string | null;
+  fase_foto?: "INICIAL" | "INTERMEDIA" | "FINAL" | null;
+  assignada: boolean;
+  created_at: string;
 }
 
 export interface LocalIncidencia {
@@ -87,6 +102,7 @@ export class SevalorLocalDatabase extends Dexie {
   fichajes!: Table<LocalFitxatgeJornada, string>;
   picking!: Table<LocalLiniaPicking, string>;
   sync_queue!: Table<SyncQueueItem, string>;
+  camera_captures!: Table<LocalCameraCapture, string>;
 
   constructor() {
     super("SevalorFieldDB");
@@ -103,6 +119,15 @@ export class SevalorLocalDatabase extends Dexie {
       fichajes: "id, empresa_id, usuari_id, estat, estat_sync",
       picking: "id, empresa_id, article_id, estat_sync",
       sync_queue: "id, bloc_uuid, timestamp, intents",
+    });
+    this.version(4).stores({
+      ordres: "id, empresa_id, estat_local, data_programada",
+      tiquets: "id, empresa_id, categoria, estat_sync",
+      incidencies: "id, empresa_id, tipus, estat_sync",
+      fichajes: "id, empresa_id, usuari_id, estat, estat_sync",
+      picking: "id, empresa_id, article_id, estat_sync",
+      sync_queue: "id, bloc_uuid, timestamp, intents",
+      camera_captures: "id, empresa_id, assignada, ordre_treball_id, created_at",
     });
   }
 }

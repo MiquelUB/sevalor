@@ -245,6 +245,11 @@ class Usuari(Base):
     pin_bloquejat: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default=text("false")
     )
+    telegram_chat_id: Mapped[Optional[int]] = mapped_column(BIGINT, nullable=True)
+    dispositiu_referencia: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    requereix_rexifrat_idb: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=text("false")
+    )
     data_ultim_acces: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -452,6 +457,21 @@ class Article(Base):
     )
     es_diposit_proveidor: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default=text("false")
+    )
+    es_custodia_rma_client: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=text("false")
+    )
+    pmp_actual: Mapped[float] = mapped_column(
+        Numeric(12, 4), default=0.0, server_default=text("0.0000")
+    )
+    ultim_preu_compra: Mapped[float] = mapped_column(
+        Numeric(12, 4), default=0.0, server_default=text("0.0000")
+    )
+    estoc_total_actual: Mapped[float] = mapped_column(
+        Numeric(12, 3), default=0.0, server_default=text("0.000")
+    )
+    estoc_slot_residus: Mapped[float] = mapped_column(
+        Numeric(12, 3), default=0.0, server_default=text("0.000")
     )
     darrer_moviment_sortida: Mapped[Optional[date]] = mapped_column(Date)
     actiu: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("true"))
@@ -679,6 +699,9 @@ class Vehicle(Base):
     consum_mitjana_historica: Mapped[Optional[float]] = mapped_column(Numeric(5, 2))
     consum_adblue_litres: Mapped[float] = mapped_column(
         Numeric(10, 2), default=0.0, server_default=text("0")
+    )
+    targeta_combustible_bloquejada: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=text("false")
     )
 
     @hybrid_property
@@ -1111,6 +1134,18 @@ class OrdreTreball(Base):
     pvp_materials_aplicat: Mapped[float] = mapped_column(
         Numeric(12, 2), default=0.00, server_default=text("0")
     )
+    cost_materials_picking_pmp: Mapped[float] = mapped_column(
+        Numeric(12, 2), default=0.00, server_default=text("0.00")
+    )
+    cost_ma_obra_real: Mapped[float] = mapped_column(
+        Numeric(12, 2), default=0.00, server_default=text("0.00")
+    )
+    cost_flota_real: Mapped[float] = mapped_column(
+        Numeric(12, 2), default=0.00, server_default=text("0.00")
+    )
+    import_pressupostat_net: Mapped[float] = mapped_column(
+        Numeric(12, 2), default=0.00, server_default=text("0.00")
+    )
     km_imputats: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -1256,6 +1291,8 @@ class Incidencia(Base):
         UUID(as_uuid=True), ForeignKey("usuaris.id", ondelete="SET NULL")
     )
     ambit: Mapped[str] = mapped_column(String(30), default="TASCA", server_default="TASCA")
+    tipus: Mapped[Optional[str]] = mapped_column(String(60), nullable=True)
+    gravetat: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
     estat: Mapped[str] = mapped_column(String(20), default="VERMELL", server_default="VERMELL")
     audio_path: Mapped[Optional[str]] = mapped_column(String(500))
     foto_path: Mapped[Optional[str]] = mapped_column(String(500))
@@ -2903,16 +2940,19 @@ class TiquetDespesa(Base):
     ordre_treball_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True), ForeignKey("ordres_treball.id", ondelete="SET NULL")
     )
-    data_tiquet: Mapped[date] = mapped_column(Date, nullable=False)
+    data_tiquet: Mapped[date] = mapped_column(
+        Date, default=date.today, server_default=text("CURRENT_DATE"), nullable=False
+    )
     nif_emissor: Mapped[Optional[str]] = mapped_column(String(20))
+    nif_comprador: Mapped[Optional[str]] = mapped_column(String(20))
     rao_social: Mapped[Optional[str]] = mapped_column(String(255))
-    base_imposable: Mapped[float] = mapped_column(Numeric(10, 2), nullable=False)
+    base_imposable: Mapped[Optional[float]] = mapped_column(Numeric(10, 2), nullable=True)
     iva_pct: Mapped[float] = mapped_column(Numeric(5, 2), default=21.00, server_default=text("21.00"))
     quota_iva: Mapped[float] = mapped_column(Numeric(10, 2), default=0.00, server_default=text("0.00"))
-    import_total: Mapped[float] = mapped_column(Numeric(10, 2), nullable=False)
-    subcompte_pgc: Mapped[str] = mapped_column(String(10), default="629000", server_default="629000")
+    import_total: Mapped[Optional[float]] = mapped_column(Numeric(10, 2), nullable=True)
+    subcompte_pgc: Mapped[str] = mapped_column(String(40), default="629000", server_default="629000")
     estat_aprovacio: Mapped[str] = mapped_column(
-        String(30), default="PENDENT_AUDITORIA", server_default="PENDENT_AUDITORIA"
+        String(50), default="PENDENT_AUDITORIA", server_default="PENDENT_AUDITORIA"
     )
     estat_fiscal: Mapped[str] = mapped_column(
         String(30), default="DEDUIBLE", server_default="DEDUIBLE"
@@ -2923,7 +2963,9 @@ class TiquetDespesa(Base):
     custodia_paper_confirmada: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default=text("false")
     )
+    nom_fitxer_visible: Mapped[Optional[str]] = mapped_column(String(255))
     foto_tiquet_path: Mapped[Optional[str]] = mapped_column(String(500))
+    foto_odometre_path: Mapped[Optional[str]] = mapped_column(String(500))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
@@ -2989,6 +3031,193 @@ class ApuntBancariNorma43(Base):
         UUID(as_uuid=True), ForeignKey("factures_capcalera.id", ondelete="SET NULL")
     )
     created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        server_default=text("now()"),
+    )
+
+
+class MermaInventari(Base):
+    """Registre transaccional de mermes d'inventari i transferència a residus/obra."""
+
+    __tablename__ = "mermes_inventari"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+        server_default=text("gen_random_uuid()"),
+    )
+    empresa_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("empreses.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    article_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("articles.id", ondelete="CASCADE"), nullable=False
+    )
+    magatzem_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("magatzems.id", ondelete="CASCADE"), nullable=False
+    )
+    ordre_treball_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("ordres_treball.id", ondelete="SET NULL")
+    )
+    usuari_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("usuaris.id", ondelete="SET NULL")
+    )
+    quantitat: Mapped[float] = mapped_column(Numeric(12, 3), nullable=False)
+    pmp_aplicat: Mapped[float] = mapped_column(Numeric(12, 4), nullable=False)
+    cost_total: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False)
+    motiu: Mapped[str] = mapped_column(String(50), nullable=False)
+    subcompte_comptable: Mapped[str] = mapped_column(String(40), nullable=False)
+    transferit_slot_residus: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default=text("true")
+    )
+    notes: Mapped[Optional[str]] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        server_default=text("now()"),
+    )
+
+
+class DespesaComptable(Base):
+    """Assentament analític de despeses imputades des de Magatzem o OCR Tiquets."""
+
+    __tablename__ = "despeses_comptables"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+        server_default=text("gen_random_uuid()"),
+    )
+    empresa_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("empreses.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    ordre_treball_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("ordres_treball.id", ondelete="SET NULL")
+    )
+    tiquet_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("tiquets_despesa.id", ondelete="SET NULL")
+    )
+    merma_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("mermes_inventari.id", ondelete="SET NULL")
+    )
+    concepte: Mapped[str] = mapped_column(String(500), nullable=False)
+    subcompte: Mapped[str] = mapped_column(String(40), nullable=False)
+    base_imposable: Mapped[float] = mapped_column(
+        Numeric(12, 2), default=0.00, server_default=text("0.00")
+    )
+    quota_iva: Mapped[float] = mapped_column(
+        Numeric(12, 2), default=0.00, server_default=text("0.00")
+    )
+    import_total: Mapped[float] = mapped_column(
+        Numeric(12, 2), default=0.00, server_default=text("0.00")
+    )
+    estat: Mapped[str] = mapped_column(
+        String(40), default="PENDENT_VALIDACIO", server_default="PENDENT_VALIDACIO"
+    )
+    origen: Mapped[str] = mapped_column(String(40), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        server_default=text("now()"),
+    )
+
+
+class TelemetriaSistema(Base):
+    """Mètriques del sistema emmagatzemades a l'esquema aïllat superadmin_telemetry (Spec 022 RF-03)."""
+
+    __tablename__ = "telemetria_sistema"
+    __table_args__ = {"schema": "superadmin_telemetry"}
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+        server_default=text("gen_random_uuid()"),
+    )
+    cluster: Mapped[str] = mapped_column(
+        String(100), nullable=False, default="hetzner-cpx21", server_default="hetzner-cpx21"
+    )
+    node: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    cpu_utilization_percent: Mapped[float] = mapped_column(
+        Numeric(6, 2), nullable=False, default=0.00, server_default=text("0.00")
+    )
+    ram_utilization_mb: Mapped[float] = mapped_column(
+        Numeric(12, 2), nullable=False, default=0.00, server_default=text("0.00")
+    )
+    ram_total_mb: Mapped[float] = mapped_column(
+        Numeric(12, 2), nullable=False, default=0.00, server_default=text("0.00")
+    )
+    db_pool_occupancy_percent: Mapped[Optional[float]] = mapped_column(Numeric(6, 2), nullable=True)
+    p95_latency_ms: Mapped[Optional[float]] = mapped_column(Numeric(10, 2), nullable=True)
+    queue_depths: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb")
+    )
+    captured_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        server_default=text("now()"),
+    )
+
+
+class AlertaSeguretat(Base):
+    """Alertes tècniques i de saturació CPU a l'esquema aïllat superadmin_telemetry (Spec 022 RF-03/RF-10)."""
+
+    __tablename__ = "alertes_seguretat"
+    __table_args__ = {"schema": "superadmin_telemetry"}
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+        server_default=text("gen_random_uuid()"),
+    )
+    tipus: Mapped[str] = mapped_column(String(100), nullable=False)
+    gravetat: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="GROGA", server_default="GROGA"
+    )
+    origen: Mapped[str] = mapped_column(
+        String(80), nullable=False, default="whisper_service", server_default="whisper_service"
+    )
+    detall: Mapped[str] = mapped_column(Text, nullable=False)
+    resolta: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
+    empresa_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True)
+    creat_a: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        server_default=text("now()"),
+    )
+    resolta_a: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class RegistreBaixaCertificat(Base):
+    """Registre RGPD Art. 17 de certificats de destrucció a superadmin_telemetry (Spec 022 RF-06)."""
+
+    __tablename__ = "registre_baixes_certificats"
+    __table_args__ = {"schema": "superadmin_telemetry"}
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+        server_default=text("gen_random_uuid()"),
+    )
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    nif_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    certificat_path: Mapped[str] = mapped_column(String(500), nullable=False)
+    estat: Mapped[str] = mapped_column(
+        String(40), nullable=False, default="ELIMINAT", server_default="ELIMINAT"
+    )
+    custodia_anys: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=5, server_default=text("5")
+    )
+    periode_gracia_dies: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=30, server_default=text("30")
+    )
+    creat_a: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
         server_default=text("now()"),

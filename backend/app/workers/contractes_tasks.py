@@ -3,16 +3,16 @@ import logging
 
 from sqlalchemy import select
 
-from app.core.celery_app import celery_app
-from app.core.database import get_worker_session
 from app.models.contractes import ContracteManteniment
 from app.models.models import Empresa
 from app.services.contractes_service import generar_ordres_preventives_per_contracte
+from app.workers.celery_app import celery_app
+from app.workers.tasks import get_worker_session
 
 logger = logging.getLogger(__name__)
 
 
-@celery_app.task(name="app.workers.tasks.revisar_contractes_manteniment", queue="queue_periodic")
+@celery_app.task(name="app.workers.contractes_tasks.revisar_contractes_manteniment", queue="queue_periodic")
 def revisar_contractes_manteniment():
     """T006: Revisa els contractes de manteniment i genera les ordres de treball preventives."""
 

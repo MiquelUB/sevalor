@@ -28,10 +28,13 @@ from app.core.config import settings
 from app.core.db import engine, get_db_with_tenant_context
 from app.core.security import require_roles
 from app.models.models import (
+    AlertaSeguretat,
     Empresa,
+    RegistreBaixaCertificat,
     RegistreJornadaLaboral,
     SaasHistorialLlicencia,
     SaasTiquetSuport,
+    TelemetriaSistema,
     Usuari,
 )
 
@@ -543,6 +546,159 @@ async def update_tenant_quota(
         "estat_pagament": emp.estat_pagament,
         "message": f"Pla actualitzat a {pla_norm} ({nova_quota} operaris) satisfactòriament.",
     }
+
+
+@router.post("/snapshots", status_code=status.HTTP_201_CREATED, response_model=Dict[str, Any])
+async def capture_telemetry_snapshot(
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+) -> Dict[str, Any]:
+    """Desa una instantània de telemetria del node a superadmin_telemetry.telemetria_sistema."""
+    import psutil
+
+    cpu_count = psutil.cpu_count(logical=True) or 1
+    cpu_pct = round(float(psutil.cpu_percent(interval=0.0)), 2)
+    ram = psutil.virtual_memory()
+    disk = psutil.disk_usage("/")
+    redis_info = await _sonda_redis()
+    pool = _estat_pool()
+    latencies = metrics.latency_percentiles()
+    p95 = round(float(latencies["p95"]), 2) if latencies and latencies.get("p95") is not None else None
+
+    snap = TelemetriaSistema(
+        cluster=socket.gethostname(),
+        node=f"{cpu_count} vCPU / {round(ram.total / (1024**3), 1)}GB RAM / {round(disk.total / (1024**3), 1)}GB disc",
+        cpu_utilization_percent=cpu_pct,
+        ram_utilization_mb=round(ram.used / (1024**2), 2),
+        ram_total_mb=round(ram.total / (1024**2), 2),
+        db_pool_occupancy_percent=pool["occupancy_percent"],
+        p95_latency_ms=p95,
+        queue_depths=redis_info.get("queues", {}),
+    )
+    db.add(snap)
+    await db.commit()
+
+    return {
+        "id": str(snap.id),
+        "cluster": snap.cluster,
+        "cpu_utilization_percent": float(snap.cpu_utilization_percent),
+        "ram_utilization_mb": float(snap.ram_utilization_mb),
+        "ram_total_mb": float(snap.ram_total_mb),
+        "db_pool_occupancy_percent": (
+            float(snap.db_pool_occupancy_percent)
+            if snap.db_pool_occupancy_percent is not None
+            else None
+        ),
+        "p95_latency_ms": float(snap.p95_latency_ms) if snap.p95_latency_ms is not None else None,
+        "queue_depths": snap.queue_depths,
+        "captured_at": snap.captured_at.isoformat() if snap.captured_at else None,
+    }
+
+
+@router.get("/snapshots", response_model=List[Dict[str, Any]])
+async def list_telemetry_snapshots(
+    limit: int = Query(20, ge=1, le=100),
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+) -> List[Dict[str, Any]]:
+    """Llista les darreres instantànies tècniques de superadmin_telemetry.telemetria_sistema."""
+    res = await db.execute(
+        select(TelemetriaSistema).order_by(TelemetriaSistema.captured_at.desc()).limit(limit)
+    )
+    rows = res.scalars().all()
+    return [
+        {
+            "id": str(r.id),
+            "cluster": r.cluster,
+            "node": r.node,
+            "cpu_utilization_percent": float(r.cpu_utilization_percent),
+            "ram_utilization_mb": float(r.ram_utilization_mb),
+            "ram_total_mb": float(r.ram_total_mb),
+            "db_pool_occupancy_percent": (
+                float(r.db_pool_occupancy_percent)
+                if r.db_pool_occupancy_percent is not None
+                else None
+            ),
+            "p95_latency_ms": float(r.p95_latency_ms) if r.p95_latency_ms is not None else None,
+            "queue_depths": r.queue_depths,
+            "captured_at": r.captured_at.isoformat() if r.captured_at else None,
+        }
+        for r in rows
+    ]
+
+
+@router.get("/alertes", response_model=List[Dict[str, Any]])
+async def list_security_alerts(
+    resolta: Optional[bool] = Query(None),
+    limit: int = Query(50, ge=1, le=200),
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+) -> List[Dict[str, Any]]:
+    """Llista les alertes tècniques i de seguretat des de superadmin_telemetry.alertes_seguretat."""
+    stmt = select(AlertaSeguretat).order_by(AlertaSeguretat.creat_a.desc()).limit(limit)
+    if resolta is not None:
+        stmt = stmt.where(AlertaSeguretat.resolta == resolta)
+    res = await db.execute(stmt)
+    alertes = res.scalars().all()
+    return [
+        {
+            "id": str(a.id),
+            "tipus": a.tipus,
+            "gravetat": a.gravetat,
+            "origen": a.origen,
+            "detall": a.detall,
+            "resolta": a.resolta,
+            "creat_a": a.creat_a.isoformat() if a.creat_a else None,
+            "resolta_a": a.resolta_a.isoformat() if a.resolta_a else None,
+        }
+        for a in alertes
+    ]
+
+
+@router.patch("/alertes/{alerta_id}/resoldre", response_model=Dict[str, Any])
+async def resolve_security_alert(
+    alerta_id: str,
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+) -> Dict[str, Any]:
+    """Marca com a resolta una alerta dins superadmin_telemetry.alertes_seguretat."""
+    try:
+        a_uuid = UUID(alerta_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="ID d'alerta invàlid")
+
+    res = await db.execute(select(AlertaSeguretat).where(AlertaSeguretat.id == a_uuid))
+    alerta = res.scalar_one_or_none()
+    if not alerta:
+        raise HTTPException(status_code=404, detail="Alerta no trobada")
+
+    alerta.resolta = True
+    alerta.resolta_a = datetime.now(timezone.utc)
+    await db.commit()
+    return {"id": str(alerta.id), "resolta": True, "resolta_a": alerta.resolta_a.isoformat()}
+
+
+@router.get("/baixes-certificats", response_model=List[Dict[str, Any]])
+async def list_baixes_certificats_telemetry(
+    limit: int = Query(50, ge=1, le=200),
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+) -> List[Dict[str, Any]]:
+    """Llista el registre anonimitzat de baixes certificades a superadmin_telemetry."""
+    res = await db.execute(
+        select(RegistreBaixaCertificat)
+        .order_by(RegistreBaixaCertificat.creat_a.desc())
+        .limit(limit)
+    )
+    rows = res.scalars().all()
+    return [
+        {
+            "id": str(r.id),
+            "tenant_id": str(r.tenant_id),
+            "nif_hash": r.nif_hash,
+            "certificat_path": r.certificat_path,
+            "estat": r.estat,
+            "custodia_anys": r.custodia_anys,
+            "periode_gracia_dies": r.periode_gracia_dies,
+            "creat_a": r.creat_a.isoformat() if r.creat_a else None,
+        }
+        for r in rows
+    ]
 
 
 @router.post("/traces-error")
