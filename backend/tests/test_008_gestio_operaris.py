@@ -91,7 +91,8 @@ async def test_reset_pin_operari(admin_session, headers, boss_token):
         res = await ac.post(f"/api/v1/gestio/operaris/{operari_id}/reset-pin", headers=headers)
         assert res.status_code == 200, res.text
         data = res.json()
-        assert data["missatge"] == "Nou PIN generat i tramès per SMS"
+        assert data["missatge"] == "Nou PIN generat (Telegram no vinculat a l'operari)"
+        assert data["requereix_rexifrat_idb"] is True
         assert data["pin_bloquejat"] is False
         assert data["intents_pin_fallits"] == 0
 

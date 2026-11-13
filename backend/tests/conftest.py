@@ -58,6 +58,7 @@ async def setup_test_database():
     from app.core.db import Base
 
     async with engine.begin() as conn:
+        await conn.execute(text("CREATE SCHEMA IF NOT EXISTS superadmin_telemetry;"))
         await conn.run_sync(Base.metadata.create_all)
         import os
 

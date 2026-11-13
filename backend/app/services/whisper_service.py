@@ -5,6 +5,7 @@ i persistència d'alertes a superadmin_telemetry.alertes_seguretat (Spec 022 / 0
 """
 
 import logging
+import math
 import os
 import time
 from typing import Any, Optional
@@ -14,12 +15,15 @@ import httpx
 import psutil
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.config import settings
 from app.models.models import AlertaSeguretat
 
 logger = logging.getLogger("whisper_service")
 
 _WHISPER_MODEL: Any = None
+
+
+class WhisperTranscriptionError(Exception):
+    pass
 
 
 def get_local_int8_whisper_model() -> Any:
@@ -83,60 +87,62 @@ async def transcriure_audio(
     device: str = "cpu",
     compute_type: str = "int8",
 ) -> dict[str, Any]:
-    """Transcriu un arxiu d'àudio delegant-lo al servidor Whisper local si existeix."""
-    if not os.path.exists(audio_path):
-        raise FileNotFoundError(f"L'arxiu d'àudio no existeix a {audio_path}")
+    if not audio_path or not isinstance(audio_path, str):
+        return {"status": "ERROR", "error": "audio_path no vàlid"}
 
-    whisper_url = f"{settings.WHISPER_URL.rstrip('/')}/transcribe"
-    start_ts = time.time()
+    if not os.path.isfile(audio_path):
+        return {"status": "ERROR", "error": "L'arxiu no existeix físicament a disc"}
 
     try:
-        async with httpx.AsyncClient(timeout=120.0) as client:
+        async with httpx.AsyncClient(timeout=15.0) as client:
             with open(audio_path, "rb") as f:
                 files = {"file": (os.path.basename(audio_path), f, "audio/webm")}
-                data = {"language": language or "auto", "model": model_size}
-                response = await client.post(whisper_url, files=files, data=data)
+                data = {"model": "whisper-1", "response_format": "verbose_json"}
+                if language:
+                    data["language"] = language
 
-            if response.status_code == 200:
-                res_json = response.json()
-                text_clean = res_json.get("text", "").strip()
-                idioma = res_json.get("language", language or "ca")
-                confianca = float(res_json.get("confianca", 0.90))
-                durada = float(res_json.get("duration", 0.0))
-
-                logger.info(
-                    f"Àudio transcrit via API Whisper local ({idioma}) en {time.time() - start_ts:.2f}s"
+                response = await client.post(
+                    "http://127.0.0.1:8000/v1/audio/transcriptions", files=files, data=data
                 )
+
+                response.raise_for_status()
+                result = response.json()
+                segments = result.get("segments", [])
+
                 return {
-                    "text": text_clean,
-                    "idioma_detectat": idioma,
-                    "confianca_estimada": round(confianca, 2),
-                    "durada_segons": round(durada, 1),
-                    "temps_proces_segons": round(time.time() - start_ts, 2),
-                    "estat": "TRANSCRIT",
+                    "status": "SUCCESS",
+                    "text": result.get("text", ""),
+                    "language": language or "ca",
+                    "confianca_acustica": _confianca_des_de_segments(segments),
+                    "segments": segments,
                 }
-            else:
-                logger.warning(f"API Whisper retornà HTTP {response.status_code}")
-
+    except (httpx.RequestError, httpx.HTTPStatusError) as e:
+        logger.warning(f"Error connectant al node d'IA Whisper, s'activa fallback: {e}")
+        return {
+            "status": "REVISIO_MANUAL",
+            "text": "Copilot provisionalment no disponible",
+            "language": language or "ca",
+            "confianca_acustica": 0.0,
+            "segments": [],
+        }
     except Exception as e:
-        logger.warning(f"Node Whisper local ({whisper_url}) inaccesible ({e}). Retornant buit.")
-
-    # Si no hi ha node Whisper actiu, retornem estat sense transcripció (Zero Mock)
-    return {
-        "text": "",
-        "idioma_detectat": language or "ca",
-        "confianca_estimada": 0.0,
-        "durada_segons": 0.0,
-        "temps_proces_segons": round(time.time() - start_ts, 2),
-        "estat": "SENSE_NODE_WHISPER",
-    }
+        logger.error(f"Error a whisper: {e}")
+        return {
+            "status": "REVISIO_MANUAL",
+            "text": "Copilot provisionalment no disponible",
+            "language": language or "ca",
+            "confianca_acustica": 0.0,
+            "segments": [],
+        }
 
 
 def _confianca_des_de_segments(segments: list[Any]) -> float:
-    """Calcula una confiança aproximada a partir d'avg_logprob."""
-    if not segments:
+    """Confiança acústica real: mitjana de exp(avg_logprob) dels segments (0.0 si no n'hi ha)."""
+    valors = [
+        math.exp(s["avg_logprob"])
+        for s in segments
+        if isinstance(s, dict) and isinstance(s.get("avg_logprob"), (int, float))
+    ]
+    if not valors:
         return 0.0
-    avg_logprobs = [getattr(s, "avg_logprob", -0.5) for s in segments]
-    mean_lp = sum(avg_logprobs) / len(avg_logprobs)
-    confianca = max(0.0, min(1.0, 1.0 + (mean_lp / 2.0)))
-    return float(confianca)
+    return round(min(1.0, max(0.0, sum(valors) / len(valors))), 4)

@@ -80,6 +80,20 @@ def upgrade() -> None:
     )
 
     op.execute(
+        """
+        CREATE TABLE IF NOT EXISTS superadmin_telemetry.traces_error (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            endpoint VARCHAR(255) NOT NULL,
+            metode VARCHAR(20) NOT NULL DEFAULT 'GET',
+            status_code INTEGER NOT NULL DEFAULT 500,
+            stack_trace TEXT NOT NULL,
+            detall TEXT,
+            creat_a TIMESTAMPTZ NOT NULL DEFAULT now()
+        );
+        """
+    )
+
+    op.execute(
         "CREATE INDEX IF NOT EXISTS ix_superadmin_telemetria_captured_at ON superadmin_telemetry.telemetria_sistema (captured_at DESC);"
     )
     op.execute(

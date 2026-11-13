@@ -3222,3 +3222,31 @@ class RegistreBaixaCertificat(Base):
         default=lambda: datetime.now(timezone.utc),
         server_default=text("now()"),
     )
+
+
+class TraceError(Base):
+    """Traces tècniques d'error SRE segregades a superadmin_telemetry (Spec 022 RF-03)."""
+
+    __tablename__ = "traces_error"
+    __table_args__ = {"schema": "superadmin_telemetry"}
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+        server_default=text("gen_random_uuid()"),
+    )
+    endpoint: Mapped[str] = mapped_column(String(255), nullable=False)
+    metode: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="GET", server_default="GET"
+    )
+    status_code: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=500, server_default=text("500")
+    )
+    stack_trace: Mapped[str] = mapped_column(Text, nullable=False)
+    detall: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    creat_a: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        server_default=text("now()"),
+    )
