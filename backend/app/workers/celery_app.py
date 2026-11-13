@@ -19,7 +19,7 @@ celery_app = Celery(
     "sevalor_workers",
     broker=REDIS_URL,
     backend=REDIS_URL,
-    include=["app.workers.tasks"],
+    include=["app.workers.tasks", "app.workers.comptabilitat_tasks"],
 )
 
 celery_app.conf.update(
@@ -54,6 +54,12 @@ celery_app.conf.update(
         "app.workers.tasks.purgar_tokens_expirats": {"queue": "queue_periodic"},
         "app.workers.tasks.revisar_contractes_manteniment": {"queue": "queue_periodic"},
         "app.workers.tasks.buidar_buffer_diari_cap_a_disc_client": {"queue": "queue_periodic"},
+        "app.workers.comptabilitat_tasks.executar_auditoria_diaria_financera_tenant": {
+            "queue": "queue_periodic"
+        },
+        "app.workers.comptabilitat_tasks.executar_auditoria_diaria_financera_tots_tenants": {
+            "queue": "queue_periodic"
+        },
     },
     # ── T047-T050 + T041 + Contractes: Celery Beat Schedules ───────────────────────────────
     beat_schedule={
@@ -71,6 +77,11 @@ celery_app.conf.update(
         "revisar-contractes-manteniment-diaria": {
             "task": "app.workers.tasks.revisar_contractes_manteniment",
             "schedule": crontab(hour=4, minute=0),
+        },
+        # Spec 007: Auditoria financera diària (risc, retencions 4308, Art. 80 LIVA) - 05:00 UTC
+        "auditoria-diaria-financera-tenants": {
+            "task": "app.workers.comptabilitat_tasks.executar_auditoria_diaria_financera_tots_tenants",
+            "schedule": crontab(hour=5, minute=0),
         },
         # T047: Alerta Matinal de Flota — cada dia a les 06:00 UTC
         "alerta-matinal-flota-diaria": {

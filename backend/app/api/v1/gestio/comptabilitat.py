@@ -9,8 +9,25 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db_with_tenant_context
-from app.core.security import require_financial_access
+from app.core.security import get_current_user_claims, require_financial_access, require_roles
 from app.models.models import Client, Empresa, FacturaCapcalera
+from app.schemas.comptabilitat import (
+    Art80ItemDTO,
+    Art80ReclamacioRequestDTO,
+    ClientRiscSanititzatDTO,
+    ContracteMRRAuditoriaDTO,
+    DashboardEconomicResponseDTO,
+    FacturaEmissioCreateDTO,
+    Norma43ConciliarRequestDTO,
+    Norma43MovimentDTO,
+    OperariCostEfectiuDTO,
+    OverrideRiscRequestDTO,
+    RetencioGarantiaDTO,
+    TiquetAuditoriaRequestDTO,
+    TiquetDespesaResponseDTO,
+    WIPControlResponseDTO,
+)
+from app.services.economic_suite_service import EconomicSuiteService
 from app.services.outbox_aeat import registrar_enviament_outbox
 from app.services.sovereign_storage import SovereignStorageGateway
 from app.services.verifactu import generar_factura_pdf
@@ -308,3 +325,203 @@ async def exportar_factura_xml(
     xml_str = ET.tostring(root, encoding="utf-8", xml_declaration=True).decode("utf-8")
 
     return Response(content=xml_str, media_type="application/xml")
+
+
+# ==============================================================================
+# SPEC 007 (v5.0): SUITE ECONÒMICA, 6 MILLORES, TIQUETS I NORMA 43
+# ==============================================================================
+
+
+def _get_tenant_and_user(request: Request, claims: Optional[dict] = None) -> tuple[uuid.UUID, uuid.UUID, str]:
+    emp = getattr(request.state, "empresa_id", None)
+    uid = (claims or {}).get("sub") or getattr(request.state, "user_id", None)
+    rol = (claims or {}).get("rol") or getattr(request.state, "rol", "SECRETARIA")
+    if not emp or emp == "undefined":
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Tenant no autenticat")
+    return uuid.UUID(str(emp)), uuid.UUID(str(uid)) if uid else uuid.uuid4(), str(rol).upper()
+
+
+@router.get("/dashboard-economic", response_model=DashboardEconomicResponseDTO)
+async def obtenir_dashboard_economic(
+    request: Request,
+    criteri_caixa: bool = False,
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+):
+    empresa_id, _, _ = _get_tenant_and_user(request)
+    return await EconomicSuiteService.obtenir_dashboard_economic(
+        db=db, empresa_id=empresa_id, criteri_caixa=criteri_caixa
+    )
+
+
+@router.get("/wip-control", response_model=WIPControlResponseDTO)
+async def obtenir_wip_control(
+    request: Request,
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+):
+    empresa_id, _, _ = _get_tenant_and_user(request)
+    return await EconomicSuiteService.obtenir_control_wip(db=db, empresa_id=empresa_id)
+
+
+@router.post("/factures/emetre", status_code=status.HTTP_201_CREATED)
+async def emetre_factura_suite(
+    payload: FacturaEmissioCreateDTO,
+    request: Request,
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+):
+    empresa_id, usuari_id, _ = _get_tenant_and_user(request)
+    factura = await EconomicSuiteService.emetre_factura_verifactu(
+        db=db, empresa_id=empresa_id, usuari_id=usuari_id, payload=payload
+    )
+    return {
+        "id": factura.id,
+        "numero_factura": factura.numero_factura,
+        "serie": factura.serie,
+        "liquid_exigible": factura.liquid_exigible,
+        "hash_sha256": factura.hash_sha256,
+        "qr_verifactu_payload": factura.qr_verifactu_payload,
+    }
+
+
+@router.get("/retencions-garantia", response_model=List[RetencioGarantiaDTO])
+async def llistar_retencions_garantia(
+    request: Request,
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+):
+    empresa_id, _, _ = _get_tenant_and_user(request)
+    return await EconomicSuiteService.llistar_retencions_garantia(db=db, empresa_id=empresa_id)
+
+
+@router.post("/retencions-garantia/{retencio_id}/reclamar")
+async def reclamar_retencio_garantia(
+    retencio_id: uuid.UUID,
+    request: Request,
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+):
+    empresa_id, usuari_id, _ = _get_tenant_and_user(request)
+    ret = await EconomicSuiteService.reclamar_retencio_garantia(
+        db=db, empresa_id=empresa_id, usuari_id=usuari_id, retencio_id=retencio_id
+    )
+    return {"id": ret.id, "estat": ret.estat}
+
+
+@router.post("/clients/{client_id}/evaluar-risc", response_model=ClientRiscSanititzatDTO)
+async def evaluar_risc_client(
+    client_id: uuid.UUID,
+    request: Request,
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+):
+    empresa_id, _, _ = _get_tenant_and_user(request)
+    return await EconomicSuiteService.validar_operacio_camp_client(
+        db=db, empresa_id=empresa_id, client_id=client_id, enforce_lock=False, evaluate_risk=True
+    )
+
+
+@router.post(
+    "/clients/{client_id}/override-risc",
+    dependencies=[Depends(require_roles(["BOSS"]))],
+)
+async def override_risc_client(
+    client_id: uuid.UUID,
+    payload: OverrideRiscRequestDTO,
+    request: Request,
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+):
+    empresa_id, boss_id, _ = _get_tenant_and_user(request)
+    client = await EconomicSuiteService.override_risc_pel_boss(
+        db=db, empresa_id=empresa_id, boss_id=boss_id, client_id=client_id, motiu=payload.motiu
+    )
+    return {"client_id": client.id, "estat_risc_operatiu": client.estat_risc_operatiu}
+
+
+@router.get("/art80-incobrables", response_model=List[Art80ItemDTO])
+async def llistar_art80_incobrables(
+    request: Request,
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+):
+    empresa_id, _, _ = _get_tenant_and_user(request)
+    return await EconomicSuiteService.processar_finestres_art80_liva(db=db, empresa_id=empresa_id)
+
+
+@router.post("/art80-incobrables/{factura_id}/generar-rectificativa", status_code=status.HTTP_201_CREATED)
+@router.post("/art80-incobrables/{factura_id}/rectificar", status_code=status.HTTP_201_CREATED)
+async def generar_rectificativa_art80(
+    factura_id: uuid.UUID,
+    payload: Art80ReclamacioRequestDTO,
+    request: Request,
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+):
+    empresa_id, usuari_id, _ = _get_tenant_and_user(request)
+    rect = await EconomicSuiteService.generar_rectificativa_art80(
+        db=db,
+        empresa_id=empresa_id,
+        usuari_id=usuari_id,
+        factura_id=factura_id,
+        justificant_notarial_path=payload.justificant_notarial_path,
+    )
+    return {"id": rect.id, "serie": rect.serie, "numero_factura": rect.numero_factura}
+
+
+@router.get("/operaris-cost-efectiu", response_model=List[OperariCostEfectiuDTO])
+async def obtenir_operaris_cost_efectiu(
+    request: Request,
+    claims: dict = Depends(get_current_user_claims),
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+):
+    empresa_id, _, rol = _get_tenant_and_user(request, claims)
+    return await EconomicSuiteService.calcular_cost_efectiu_operaris(
+        db=db, empresa_id=empresa_id, rol_peticio=rol
+    )
+
+
+@router.get("/contractes-mrr-auditoria", response_model=List[ContracteMRRAuditoriaDTO])
+async def obtenir_contractes_mrr_auditoria(
+    request: Request,
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+):
+    empresa_id, _, _ = _get_tenant_and_user(request)
+    return await EconomicSuiteService.auditar_contractes_mrr(db=db, empresa_id=empresa_id)
+
+
+@router.get("/tiquets", response_model=List[TiquetDespesaResponseDTO])
+async def llistar_tiquets_comptabilitat(
+    request: Request,
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+):
+    empresa_id, _, _ = _get_tenant_and_user(request)
+    return await EconomicSuiteService.llistar_tiquets_despesa(db=db, empresa_id=empresa_id)
+
+
+@router.post("/tiquets/{tiquet_id}/auditar")
+async def auditar_tiquet_comptabilitat(
+    tiquet_id: uuid.UUID,
+    payload: TiquetAuditoriaRequestDTO,
+    request: Request,
+    claims: dict = Depends(get_current_user_claims),
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+):
+    empresa_id, usuari_id, rol = _get_tenant_and_user(request, claims)
+    tiquet = await EconomicSuiteService.auditar_tiquet_despesa(
+        db=db,
+        empresa_id=empresa_id,
+        usuari_id=usuari_id,
+        rol_peticio=rol,
+        tiquet_id=tiquet_id,
+        payload=payload,
+    )
+    return {"id": tiquet.id, "estat_aprovacio": tiquet.estat_aprovacio, "estat_fiscal": tiquet.estat_fiscal}
+
+
+@router.post("/norma43/conciliar", response_model=List[Norma43MovimentDTO])
+async def conciliar_norma43(
+    payload: Norma43ConciliarRequestDTO,
+    request: Request,
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+):
+    empresa_id, usuari_id, _ = _get_tenant_and_user(request)
+    return await EconomicSuiteService.conciliar_norma43(
+        db=db,
+        empresa_id=empresa_id,
+        usuari_id=usuari_id,
+        contingut_c43=payload.contingut_c43,
+        confirmar_hitl=payload.confirmar_conciliacio_hitl,
+    )

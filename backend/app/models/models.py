@@ -6,6 +6,7 @@ from typing import Any, List, Optional
 
 from sqlalchemy import (
     BIGINT,
+    DDL,
     Boolean,
     Date,
     DateTime,
@@ -16,6 +17,7 @@ from sqlalchemy import (
     Text,
     Time,
     UniqueConstraint,
+    event,
     text,
 )
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
@@ -215,6 +217,18 @@ class Usuari(Base):
     cost_hora_eur: Mapped[float] = mapped_column(
         Numeric(8, 2), default=22.50, server_default=text("22.50")
     )
+    es_alta_direccio: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=text("false")
+    )
+    cost_hora_referencia: Mapped[float] = mapped_column(
+        Numeric(8, 2), default=22.50, server_default=text("22.50")
+    )
+    salari_mensual_brut: Mapped[float] = mapped_column(
+        Numeric(10, 2), default=0.00, server_default=text("0.00")
+    )
+    cost_ss_mensual: Mapped[float] = mapped_column(
+        Numeric(10, 2), default=0.00, server_default=text("0.00")
+    )
     carnet_conduir: Mapped[str] = mapped_column(String(20), default="B", server_default="B")
     carnet_caducitat: Mapped[Optional[date]] = mapped_column(Date)
     prl_certificat_vigencia: Mapped[Optional[date]] = mapped_column(Date)
@@ -280,6 +294,9 @@ class RegistreJornadaLaboral(Base):
     )
     hores_extraordinaries: Mapped[float] = mapped_column(
         Numeric(5, 2), default=0.00, server_default=text("0")
+    )
+    hores_imputades_ot: Mapped[float] = mapped_column(
+        Numeric(6, 2), default=0.00, server_default=text("0")
     )
     auditat_per_usuari_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True), ForeignKey("usuaris.id", ondelete="SET NULL")
@@ -354,6 +371,15 @@ class Client(Base):
     telegram_chat_id: Mapped[Optional[int]] = mapped_column(BIGINT)
     iban_xifrat_simetric: Mapped[Optional[str]] = mapped_column(Text)
     mandat_sepa_path: Mapped[Optional[str]] = mapped_column(String(500))
+    limit_risc_credit: Mapped[float] = mapped_column(
+        Numeric(12, 2), default=15000.00, server_default=text("15000.00")
+    )
+    estat_risc_operatiu: Mapped[str] = mapped_column(
+        String(30), default="APTE", server_default="APTE"
+    )
+    motiu_override_risc: Mapped[Optional[str]] = mapped_column(Text)
+    override_boss_usuari_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True))
+    data_override_risc: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     actiu: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("true"))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -408,6 +434,12 @@ class Article(Base):
         UUID(as_uuid=True), ForeignKey("proveidors.id", ondelete="SET NULL")
     )
     preu_cost: Mapped[float] = mapped_column(Numeric(10, 2), default=0.0, server_default=text("0"))
+    preu_cost_ultim: Mapped[float] = mapped_column(
+        Numeric(12, 4), default=0.0, server_default=text("0")
+    )
+    preu_cost_mitja: Mapped[float] = mapped_column(
+        Numeric(12, 4), default=0.0, server_default=text("0")
+    )
     descompte_proveidor: Mapped[float] = mapped_column(
         Numeric(10, 2), default=0.0, server_default=text("0")
     )
@@ -415,6 +447,13 @@ class Article(Base):
         Numeric(10, 2), default=0.0, server_default=text("0")
     )
     preu_venda: Mapped[float] = mapped_column(Numeric(10, 2), default=0.0, server_default=text("0"))
+    llindar_marge_minim_pct: Mapped[float] = mapped_column(
+        Numeric(5, 2), default=25.00, server_default=text("25.00")
+    )
+    es_diposit_proveidor: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=text("false")
+    )
+    darrer_moviment_sortida: Mapped[Optional[date]] = mapped_column(Date)
     actiu: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("true"))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -527,6 +566,10 @@ class Vehicle(Base):
         Numeric(10, 2), default=0.0, server_default=text("0")
     )
     odometre_acumulat: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+    km_inicials_mes: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+    despeses_taller_mes: Mapped[float] = mapped_column(
+        Numeric(10, 2), default=0.00, server_default=text("0.00")
+    )
     distintiu_ambiental: Mapped[Optional[str]] = mapped_column(String(10))
     estat: Mapped[str] = mapped_column(String(30), default="OPERATIU", server_default="OPERATIU")
     conductor_habitual_id: Mapped[Optional[uuid.UUID]] = mapped_column(
@@ -716,6 +759,30 @@ class RegistreEsdevenimentsSIF(Base):
         default=lambda: datetime.now(timezone.utc),
         server_default=text("now()"),
     )
+
+
+SIF_IMMUTABLE_FN_DDL = DDL(
+    """
+    CREATE OR REPLACE FUNCTION fn_prevent_sif_mutation()
+    RETURNS TRIGGER AS $$
+    BEGIN
+        RAISE EXCEPTION 'SIF_IMMUTABLE_VIOLATION: El Registre d Esdeveniments SIF és Append-Only i no permet UPDATE ni DELETE.';
+    END;
+    $$ LANGUAGE plpgsql
+    """
+)
+SIF_IMMUTABLE_DROP_DDL = DDL("DROP TRIGGER IF EXISTS trg_sif_immutable ON registre_esdeveniments_sif")
+SIF_IMMUTABLE_TRG_DDL = DDL(
+    """
+    CREATE TRIGGER trg_sif_immutable
+    BEFORE UPDATE OR DELETE ON registre_esdeveniments_sif
+    FOR EACH ROW EXECUTE FUNCTION fn_prevent_sif_mutation()
+    """
+)
+
+event.listen(RegistreEsdevenimentsSIF.__table__, "after_create", SIF_IMMUTABLE_FN_DDL)
+event.listen(RegistreEsdevenimentsSIF.__table__, "after_create", SIF_IMMUTABLE_DROP_DDL)
+event.listen(RegistreEsdevenimentsSIF.__table__, "after_create", SIF_IMMUTABLE_TRG_DDL)
 
 
 class Finca(Base):
@@ -955,6 +1022,21 @@ class FacturaProveidor(Base):
         Numeric(5, 2), default=0.00, server_default=text("0")
     )
     fitxer_pdf_path: Mapped[Optional[str]] = mapped_column(String(500))
+    data_venciment: Mapped[Optional[date]] = mapped_column(Date)
+    data_pagament_real: Mapped[Optional[date]] = mapped_column(Date)
+    import_retencio_garantia_4008: Mapped[float] = mapped_column(
+        Numeric(12, 2), default=0.00, server_default=text("0")
+    )
+    import_pagat: Mapped[float] = mapped_column(
+        Numeric(12, 2), default=0.00, server_default=text("0")
+    )
+    es_recc_passiu_4729: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=text("false")
+    )
+    pagada: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
+    estat_pagament: Mapped[str] = mapped_column(
+        String(40), default="PENDENT", server_default="PENDENT"
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
@@ -1008,6 +1090,28 @@ class OrdreTreball(Base):
     planol_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True), ForeignKey("planols_base.id", ondelete="SET NULL")
     )
+    contracte_mrr_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True))
+    vertical: Mapped[str] = mapped_column(
+        String(50), default="INSTAL_LACIONS", server_default="INSTAL_LACIONS"
+    )
+    data_finalitzacio_camp: Mapped[Optional[date]] = mapped_column(Date)
+    factura_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True))
+    import_pressupostat: Mapped[float] = mapped_column(
+        Numeric(12, 2), default=0.00, server_default=text("0")
+    )
+    hores_imputades_facturables: Mapped[float] = mapped_column(
+        Numeric(8, 2), default=0.00, server_default=text("0")
+    )
+    preu_venda_hora_aplicat: Mapped[float] = mapped_column(
+        Numeric(8, 2), default=45.00, server_default=text("45.00")
+    )
+    cost_materials_pmp: Mapped[float] = mapped_column(
+        Numeric(12, 2), default=0.00, server_default=text("0")
+    )
+    pvp_materials_aplicat: Mapped[float] = mapped_column(
+        Numeric(12, 2), default=0.00, server_default=text("0")
+    )
+    km_imputats: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
@@ -1251,6 +1355,33 @@ class FacturaCapcalera(Base):
     hash_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
     qr_code_path: Mapped[Optional[str]] = mapped_column(String(500))
     pdf_path: Mapped[Optional[str]] = mapped_column(String(500))
+    estat_document: Mapped[str] = mapped_column(
+        String(30), default="EMESA", server_default="EMESA"
+    )
+    data_venciment: Mapped[Optional[date]] = mapped_column(Date)
+    data_cobrament_real: Mapped[Optional[date]] = mapped_column(Date)
+    metode_pagament: Mapped[str] = mapped_column(
+        String(30), default="TRANSFERENCIA", server_default="TRANSFERENCIA"
+    )
+    es_inversio_subjecte_passiu: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=text("false")
+    )
+    justificant_suplerts_pdf_path: Mapped[Optional[str]] = mapped_column(String(500))
+    import_retencio_garantia_4308: Mapped[float] = mapped_column(
+        Numeric(12, 2), default=0.00, server_default=text("0")
+    )
+    import_cobrat: Mapped[float] = mapped_column(
+        Numeric(12, 2), default=0.00, server_default=text("0")
+    )
+    factura_rectificada_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("factures_capcalera.id", ondelete="RESTRICT")
+    )
+    motiu_rectificacio: Mapped[Optional[str]] = mapped_column(Text)
+    estat_art80: Mapped[str] = mapped_column(
+        String(40), default="NO_APLICA", server_default="NO_APLICA"
+    )
+    justificant_reclamacio_art80_path: Mapped[Optional[str]] = mapped_column(String(500))
+    qr_verifactu_payload: Mapped[Optional[str]] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
@@ -1294,6 +1425,16 @@ class FacturaLinia(Base):
         Numeric(4, 2), default=21.00, server_default=text("21")
     )
     subtotal: Mapped[float] = mapped_column(Numeric(12, 2), default=0.00, server_default=text("0"))
+    compte_pgc: Mapped[str] = mapped_column(String(10), default="700000", server_default="700000")
+    quantitat_merma: Mapped[float] = mapped_column(
+        Numeric(10, 2), default=0.00, server_default=text("0")
+    )
+    descompte_aplicat_pct: Mapped[float] = mapped_column(
+        Numeric(5, 2), default=0.00, server_default=text("0")
+    )
+    cost_unitari_historic: Mapped[float] = mapped_column(
+        Numeric(12, 4), default=0.0000, server_default=text("0")
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
@@ -2631,6 +2772,222 @@ class SaasExclusioRgpd(Base):
         String(50), default="OPTOUT_EXPLICIT", server_default="OPTOUT_EXPLICIT"
     )  # OPTOUT_EXPLICIT, REBOT_HARD, MANUAL_SUPERADMIN
     origen_message_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        server_default=text("now()"),
+    )
+
+
+# --- SPEC 007 (v5.0): SUITE ECONÒMICA, RETENCIONS, TIQUETS, MRR I NORMA 43 ---
+
+
+class ContracteMantenimentMRR(Base):
+    """Contractes de manteniment recurrent per a càlcul de MRR i sinistralitat."""
+
+    __tablename__ = "contractes_manteniment_mrr"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+        server_default=text("gen_random_uuid()"),
+    )
+    empresa_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("empreses.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    client_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("clients.id", ondelete="RESTRICT"), nullable=False
+    )
+    codi_contracte: Mapped[str] = mapped_column(String(50), nullable=False)
+    quota_mensual_mrr: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False)
+    data_inici: Mapped[date] = mapped_column(Date, nullable=False)
+    data_fi: Mapped[Optional[date]] = mapped_column(Date)
+    actiu: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("true"))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        server_default=text("now()"),
+    )
+
+
+class SerieFiscalVerifactu(Base):
+    """Control d'encadenament SHA-256 amb bloqueig SELECT FOR UPDATE per sèrie/exercici."""
+
+    __tablename__ = "series_fiscals_verifactu"
+    __table_args__ = (
+        UniqueConstraint("empresa_id", "codi_serie", "exercici", name="uq_serie_empresa_exercici"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+        server_default=text("gen_random_uuid()"),
+    )
+    empresa_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("empreses.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    codi_serie: Mapped[str] = mapped_column(String(20), nullable=False)
+    exercici: Mapped[int] = mapped_column(Integer, nullable=False)
+    ultim_numero: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+    ultim_hash_sha256: Mapped[str] = mapped_column(
+        String(64), default="0" * 64, server_default=text("repeat('0', 64)")
+    )
+
+
+class RetencioGarantia(Base):
+    """Control de retencions per garantia d'obra (comptes 4308 / 4008, 365 dies)."""
+
+    __tablename__ = "retencions_garantia"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+        server_default=text("gen_random_uuid()"),
+    )
+    empresa_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("empreses.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    tipus: Mapped[str] = mapped_column(String(30), nullable=False)  # CLIENT_4308 / PROVEIDOR_4008
+    factura_client_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("factures_capcalera.id", ondelete="SET NULL")
+    )
+    factura_proveidor_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("factures_proveidor.id", ondelete="SET NULL")
+    )
+    client_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("clients.id", ondelete="SET NULL")
+    )
+    obra_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("ordres_treball.id", ondelete="SET NULL")
+    )
+    import_retingut: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False)
+    percentatge_aplicat: Mapped[float] = mapped_column(
+        Numeric(5, 2), default=5.00, server_default=text("5.00")
+    )
+    data_retencio: Mapped[date] = mapped_column(Date, nullable=False)
+    data_venciment_garantia: Mapped[date] = mapped_column(Date, nullable=False)
+    estat: Mapped[str] = mapped_column(
+        String(30), default="RETINGUDA", server_default="RETINGUDA"
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        server_default=text("now()"),
+    )
+
+
+class TiquetDespesa(Base):
+    """Tiquets i despeses de camp amb control fiscal d'IVA i llindar >100 EUR."""
+
+    __tablename__ = "tiquets_despesa"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+        server_default=text("gen_random_uuid()"),
+    )
+    empresa_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("empreses.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    categoria: Mapped[str] = mapped_column(String(30), nullable=False)
+    usuari_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("usuaris.id", ondelete="RESTRICT"), nullable=False
+    )
+    vehicle_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("vehicles.id", ondelete="SET NULL")
+    )
+    ordre_treball_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("ordres_treball.id", ondelete="SET NULL")
+    )
+    data_tiquet: Mapped[date] = mapped_column(Date, nullable=False)
+    nif_emissor: Mapped[Optional[str]] = mapped_column(String(20))
+    rao_social: Mapped[Optional[str]] = mapped_column(String(255))
+    base_imposable: Mapped[float] = mapped_column(Numeric(10, 2), nullable=False)
+    iva_pct: Mapped[float] = mapped_column(Numeric(5, 2), default=21.00, server_default=text("21.00"))
+    quota_iva: Mapped[float] = mapped_column(Numeric(10, 2), default=0.00, server_default=text("0.00"))
+    import_total: Mapped[float] = mapped_column(Numeric(10, 2), nullable=False)
+    subcompte_pgc: Mapped[str] = mapped_column(String(10), default="629000", server_default="629000")
+    estat_aprovacio: Mapped[str] = mapped_column(
+        String(30), default="PENDENT_AUDITORIA", server_default="PENDENT_AUDITORIA"
+    )
+    estat_fiscal: Mapped[str] = mapped_column(
+        String(30), default="DEDUIBLE", server_default="DEDUIBLE"
+    )
+    requereix_aprovacio_boss: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=text("false")
+    )
+    custodia_paper_confirmada: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=text("false")
+    )
+    foto_tiquet_path: Mapped[Optional[str]] = mapped_column(String(500))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        server_default=text("now()"),
+    )
+
+
+class DespesaFixaRecurrent(Base):
+    """Despeses fixes d'estructura per a EBITDA, Break-Even i Burn Rate."""
+
+    __tablename__ = "despeses_fixes_recurrents"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+        server_default=text("gen_random_uuid()"),
+    )
+    empresa_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("empreses.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    concepte: Mapped[str] = mapped_column(String(255), nullable=False)
+    categoria: Mapped[str] = mapped_column(String(50), nullable=False)
+    import_base: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False)
+    quota_iva: Mapped[float] = mapped_column(Numeric(12, 2), default=0.00, server_default=text("0.00"))
+    periodicitat: Mapped[str] = mapped_column(
+        String(20), default="MENSUAL", server_default="MENSUAL"
+    )
+    dia_carrec: Mapped[int] = mapped_column(Integer, default=5, server_default=text("5"))
+    actiu: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("true"))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        server_default=text("now()"),
+    )
+
+
+class ApuntBancariNorma43(Base):
+    """Moviments bancaris CSB 43 amb empremta SHA-256 idempotent."""
+
+    __tablename__ = "apunts_bancaris_norma43"
+    __table_args__ = (
+        UniqueConstraint("empresa_id", "huella_sha256", name="uq_norma43_huella"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+        server_default=text("gen_random_uuid()"),
+    )
+    empresa_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("empreses.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    data_operacio: Mapped[date] = mapped_column(Date, nullable=False)
+    concepte: Mapped[str] = mapped_column(String(500), nullable=False)
+    import_moviment: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False)
+    divisa: Mapped[str] = mapped_column(String(3), default="EUR", server_default="EUR")
+    saldo_resultant: Mapped[float] = mapped_column(Numeric(14, 2), nullable=False)
+    huella_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    conciliat: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
+    factura_conciliada_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("factures_capcalera.id", ondelete="SET NULL")
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),

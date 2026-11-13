@@ -1,0 +1,9 @@
+# Tasques d'Implementació — Spec 007 v5.0
+
+- [x] **T07.1 — Especificació, Models i Trigger SIF**: Actualitzar `spec.md`, estendre `backend/app/models/models.py` amb les noves entitats econòmiques, camps sobre `Client`, `Usuari`, `Article`, `Vehicle`, `OrdreTreball`, `FacturaCapcalera`, i afegir `trg_sif_immutable` sobre `RegistreEsdevenimentsSIF`.
+- [x] **T07.2 — Migració Alembic `a017` i RLS**: Crear `backend/alembic/versions/a017_spec007_economic_suite.py` amb RLS obligatori (`ENABLE` + `FORCE`) en totes les taules multi-tenant i aplicar `alembic upgrade head`.
+- [x] **T07.3 — Esquemes Pydantic i Servei Econòmic**: Crear `backend/app/schemas/comptabilitat.py` i `backend/app/services/economic_suite_service.py` (Dashboard, WIP >7d, Retencions 4308, Risk Gate + Override BOSS, Art. 80 LIVA 180-270d, Cost Hora Efectiu + EDGE-03, MRR Sinistralitat, Erosió de Marge, Estoc >90d, Tiquets OCR, Conciliació Norma 43).
+- [x] **T07.4 — Endpoints FastAPI i Blindatge C-05**: Implementar endpoints a `backend/app/api/v1/gestio/comptabilitat.py` i `backend/app/api/v1/gestio/operativa_financera.py` (incloent àlies `/art80-incobrables/{id}/rectificar` i `/validar-operacio/{id}`).
+- [x] **T07.5 — Celery Worker Diari**: Implementar `backend/app/workers/comptabilitat_tasks.py` amb `executar_auditoria_diaria_financera_tenant` i registre de tasca periòdica.
+- [x] **T07.6 — Frontend PWA Chameleon UI**: Implementar `pwa/src/components/comptabilitat/EconomicCharts.tsx` (5 gràfics SVG interactius) i `pwa/src/app/gestio/comptabilitat/page.tsx` (6 pestanyes, Zero-Mock).
+- [x] **T07.7 — Bateria de Verificació Zero-Mock**: Completar `backend/tests/test_007_gestio_comptabilitat.py` amb tots els casos (Dia 0, Veto 403, C-05, WIP, EDGE-07 + 423 + Override BOSS, EDGE-11 Art. 80, EDGE-03 div/0 + `***`, MRR, Erosió Marge, Norma 43, EDGE-10 SIF Trigger, Worker) i passar `pytest`, `ruff`, `mypy`.
