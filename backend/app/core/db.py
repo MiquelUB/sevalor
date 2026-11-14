@@ -54,6 +54,10 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
             await set_tenant_context(session, empresa_id, is_superadmin, role=role)
             yield session
         finally:
+            try:
+                await session.execute(text("RESET ROLE;"))
+            except Exception:
+                pass
             await session.close()
 
 
@@ -76,7 +80,7 @@ async def set_tenant_context(
         await session.execute(text("SELECT set_config('app.current_user_role', 'SUPERADMIN', true);"))
     else:
         # Assignar el rol d'aplicació per fer complir RLS a PostgreSQL (els superusuaris ignorarien RLS)
-        await session.execute(text("SET ROLE sevalor_app;"))
+        await session.execute(text("SET LOCAL ROLE sevalor_app;"))
         await session.execute(text("SELECT set_config('app.is_superadmin', 'false', true);"))
         if role:
             await session.execute(

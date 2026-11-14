@@ -10,24 +10,26 @@ const nextConfig = {
     memoryBasedWorkersCount: true,
   },
   async rewrites() {
-    const rawApiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://backend:8000/api/v1';
-    const apiUrl = rawApiUrl.replace(/\/+$/, '');
-    const backendRoot = apiUrl.replace(/\/api\/v1\/?$/, '');
+    const rawApiUrl = (process.env.NEXT_PUBLIC_API_URL || 'http://backend:8000/api/v1').replace(/\/+$/, '');
+    const backendRoot = rawApiUrl.replace(/\/api\/v1$/, '');
+    const apiUrl = `${backendRoot}/api/v1`;
 
-    return [
-      {
-        source: '/api/v1/:path*',
-        destination: `${apiUrl}/:path*`
-      },
-      {
-        source: '/docs/:path*',
-        destination: `${backendRoot}/docs/:path*`
-      },
-      {
-        source: '/data/:path*',
-        destination: `${backendRoot}/data/:path*`
-      }
-    ];
+    return {
+      fallback: [
+        {
+          source: '/api/v1/:path*',
+          destination: `${apiUrl}/:path*`
+        },
+        {
+          source: '/docs/:path*',
+          destination: `${backendRoot}/docs/:path*`
+        },
+        {
+          source: '/data/:path*',
+          destination: `${backendRoot}/data/:path*`
+        }
+      ]
+    };
   },
   async redirects() {
     return [

@@ -73,21 +73,39 @@ limiter = Limiter(
     key_func=get_remote_address,
     default_limits=["100/minute"],
     storage_uri=redis_url if os.getenv("TESTING") != "1" else "memory://",
+    swallow_errors=True,
 )
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
-    if os.getenv("TESTING") != "1":
-        try:
-            from sqlalchemy import text
+async def _ensure_schema_columns() -> None:
+    """Comprova de forma no bloquejant si falten columnes crítiques abans d'executar cap DDL."""
+    try:
+        from sqlalchemy import text
 
-            from app.core.db import AsyncSessionLocal
+        from app.core.db import AsyncSessionLocal
 
-            async with AsyncSessionLocal() as session:
+        async with AsyncSessionLocal() as session:
+            await session.execute(text("SET LOCAL lock_timeout = '2s'"))
+            await session.execute(text("SET LOCAL statement_timeout = '5s'"))
+
+            res_emp = await session.execute(
+                text(
+                    "SELECT 1 FROM information_schema.columns "
+                    "WHERE table_schema = 'public' AND table_name = 'empreses' AND column_name = 'disc_dur_url'"
+                )
+            )
+            if not res_emp.scalar():
                 await session.execute(
                     text("ALTER TABLE empreses ADD COLUMN IF NOT EXISTS disc_dur_url VARCHAR(255);")
                 )
+
+            res_ot = await session.execute(
+                text(
+                    "SELECT 1 FROM information_schema.columns "
+                    "WHERE table_schema = 'public' AND table_name = 'ordres_treball' AND column_name = 'desviacio_geovalla'"
+                )
+            )
+            if not res_ot.scalar():
                 await session.execute(
                     text(
                         """
@@ -104,9 +122,17 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                         """
                     )
                 )
-                await session.commit()
-        except Exception:
-            pass
+            await session.commit()
+    except Exception:
+        pass
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
+    if os.getenv("TESTING") != "1":
+        import asyncio
+
+        asyncio.create_task(_ensure_schema_columns())
     yield
 
 

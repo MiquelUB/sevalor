@@ -117,6 +117,9 @@ export function ChameleonProvider({ children }: { children: React.ReactNode }) {
 
           if (typeof sessionStorage !== "undefined") {
             sessionStorage.setItem("sevalor_tenant_id", tenantId);
+            sessionStorage.setItem("sevalor_tenant_primari", brandData.primari_hsl);
+            sessionStorage.setItem("sevalor_tenant_secundari", brandData.secundari_hsl);
+            sessionStorage.setItem("sevalor_tenant_accent", brandData.accent_hsl);
             if (brandData.empresa_nom) {
               sessionStorage.setItem("sevalor_tenant_nom", brandData.empresa_nom);
             }
@@ -134,31 +137,58 @@ export function ChameleonProvider({ children }: { children: React.ReactNode }) {
         // Fallback per a entorns locals o sense resolució per host
       }
 
-      // 2. Si no ha resolt pel host, provar endpoint de gestió de marca
-      try {
-        const data = await apiFetch<ChameleonBrand>("/gestio/configuracio/marca");
-        if (data) {
-          setBrand(data);
-          applyChameleonCSS(data);
-        }
-      } catch (err: any) {
-        const isExpectedSegregation =
-          err?.status === 401 ||
-          err?.status === 403 ||
-          err?.status === 404 ||
-          err?.message?.includes("401") ||
-          err?.message?.includes("403") ||
-          err?.message?.includes("404") ||
-          err?.message?.includes("Zero-Trust") ||
-          err?.message?.includes("SUPERADMIN");
+      // 2. Si no ha resolt pel host i hi ha sessió autenticada, provar endpoint de gestió de marca
+      const hasToken = Boolean(getAuthToken());
+      if (hasToken) {
+        try {
+          const data = await apiFetch<ChameleonBrand>("/gestio/configuracio/marca");
+          if (data) {
+            setBrand(data);
+            applyChameleonCSS(data);
+            setLoading(false);
+            return;
+          }
+        } catch (err: any) {
+          const isExpectedSegregation =
+            err?.status === 401 ||
+            err?.status === 403 ||
+            err?.status === 404 ||
+            err?.code === "DB_UNAVAILABLE" ||
+            err?.code === "BACKEND_UNREACHABLE" ||
+            err?.message?.includes("401") ||
+            err?.message?.includes("403") ||
+            err?.message?.includes("404") ||
+            err?.message?.includes("Zero-Trust") ||
+            err?.message?.includes("SUPERADMIN");
 
-        if (!isExpectedSegregation) {
-          console.warn("[Chameleon] No s'ha pogut carregar la marca:", err?.message || err);
+          if (!isExpectedSegregation) {
+            console.warn("[Chameleon] No s'ha pogut carregar la marca:", err?.message || err);
+          }
         }
-        setError("Marca no disponible");
-      } finally {
-        setLoading(false);
       }
+
+      // 3. Fallback a memòria de sessió si s'havia resolt prèviament
+      if (typeof sessionStorage !== "undefined") {
+        const cachedTenantId = sessionStorage.getItem("sevalor_tenant_id");
+        const cachedNom = sessionStorage.getItem("sevalor_tenant_nom");
+        if (cachedTenantId || cachedNom) {
+          const fallbackBrand: ChameleonBrand = {
+            tenant_id: cachedTenantId || undefined,
+            primari_hsl: sessionStorage.getItem("sevalor_tenant_primari") || "152 60% 25%",
+            secundari_hsl: sessionStorage.getItem("sevalor_tenant_secundari") || "152 45% 15%",
+            accent_hsl: sessionStorage.getItem("sevalor_tenant_accent") || "38 92% 50%",
+            logotip_path: sessionStorage.getItem("sevalor_tenant_logo") || undefined,
+            empresa_nom: cachedNom || undefined,
+          };
+          setBrand(fallbackBrand);
+          applyChameleonCSS(fallbackBrand);
+          setLoading(false);
+          return;
+        }
+      }
+
+      setError("Marca no disponible");
+      setLoading(false);
     };
 
     loadBrand();

@@ -46,6 +46,8 @@ Thumbs.db
 # Backups i dades
 backups/
 data/
+!pwa/src/app/data/
+!pwa/src/app/data/**
 *.sql
 !db/migrations/*.sql
 *.dump

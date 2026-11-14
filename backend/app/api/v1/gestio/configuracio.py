@@ -305,6 +305,7 @@ def validar_permisos_gestio(
 
 
 @router.get("/empresa")
+@router.get("/empresa/")
 async def obtenir_dades_empresa(
     claims: Dict[str, Any] = Depends(get_current_user_claims),
     db: AsyncSession = Depends(get_db),
@@ -393,6 +394,7 @@ async def actualitzar_dades_empresa(
 
 
 @router.get("/marca")
+@router.get("/marca/")
 async def obtenir_marca_camaleonica(
     claims: Dict[str, Any] = Depends(get_current_user_claims),
     db: AsyncSession = Depends(get_db),

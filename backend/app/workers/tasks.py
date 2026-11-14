@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from sqlalchemy.pool import NullPool
 
 from app.core.config import settings
-from app.core.db import AsyncSessionLocal, set_tenant_context
+from app.core.db import set_tenant_context
 from app.workers.celery_app import celery_app
 
 
@@ -18,9 +18,20 @@ from app.workers.celery_app import celery_app
 async def get_worker_session(
     empresa_id: str | None = None, is_superadmin: bool = False, role: str | None = "BOSS"
 ):
-    async with AsyncSessionLocal() as session:
-        await set_tenant_context(session, empresa_id, is_superadmin, role=role)
-        yield session
+    worker_engine = create_async_engine(settings.get_database_url(), poolclass=NullPool)
+    session_maker = async_sessionmaker(
+        bind=worker_engine,
+        class_=AsyncSession,
+        autocommit=False,
+        autoflush=False,
+        expire_on_commit=False,
+    )
+    try:
+        async with session_maker() as session:
+            await set_tenant_context(session, empresa_id, is_superadmin, role=role)
+            yield session
+    finally:
+        await worker_engine.dispose()
 
 
 logger = logging.getLogger("workers.tasks")
