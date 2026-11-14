@@ -26,7 +26,17 @@ MIME_MAP = {
 def generar_svg_monograma(nom: Optional[str] = None, primari_hsl: Optional[str] = None) -> str:
     """Genera un SVG vectorial dinàmic amb les inicials i el color primari de l'empresa."""
     nom_text = (nom or "SEVALOR").strip()
-    inicials = "".join([w[0].upper() for w in nom_text.split()[:2]]) or "SV"
+    words = nom_text.split()
+    if len(words) >= 2:
+        inicials = (words[0][0] + words[1][0]).upper()
+    elif len(words) == 1 and len(words[0]) >= 2:
+        if words[0].upper().startswith("SEVALOR"):
+            inicials = "SV"
+        else:
+            inicials = words[0][:2].upper()
+    else:
+        inicials = "SV"
+
     primari = primari_hsl or "142 71% 25%"
 
     return f"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 160" width="160" height="160">

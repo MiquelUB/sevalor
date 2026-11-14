@@ -11,7 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.superadmin.tenants import _resolve_empresa
-from app.core.branding import resoldre_fitxer_logotip_local
+from app.core.branding import generar_svg_monograma, resoldre_fitxer_logotip_local
 from app.core.config import settings
 from app.core.db import get_db_with_tenant_context, set_tenant_context
 from app.core.security import require_roles
@@ -292,16 +292,7 @@ async def obtenir_logotip_empresa(
             logger.warning("No s'ha pogut llegir logotip sobirà (%s): %s", empresa.logotip_path, exc)
 
     # SVG vectorial dinàmic de contingència amb inicials de l'empresa
-    nom_text = (empresa.nom or "SEVALOR").strip()
-    inicials = "".join([w[0].upper() for w in nom_text.split()[:2]]) or "SV"
-    primari = empresa.primari_hsl or "142 71% 25%"
-
-    svg_content = f"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 160" width="160" height="160">
-  <rect width="160" height="160" rx="36" fill="hsl({primari})" />
-  <text x="50%" y="54%" font-family="system-ui, -apple-system, sans-serif" font-size="52" font-weight="900" fill="#ffffff" text-anchor="middle" dominant-baseline="middle" letter-spacing="1">
-    {inicials}
-  </text>
-</svg>"""
+    svg_content = generar_svg_monograma(empresa.nom, empresa.primari_hsl)
 
     return Response(
         content=svg_content,
