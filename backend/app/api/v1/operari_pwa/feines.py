@@ -75,6 +75,9 @@ class FeinaOperariDetailResponse(BaseModel):
     gps_fi_lat: Optional[float] = None
     gps_fi_lng: Optional[float] = None
     hores_imputades_facturables: Optional[float] = None
+    desviacio_geovalla: Optional[bool] = False
+    justificacio_geovalla: Optional[str] = None
+    foto_evidencia_desviacio: Optional[str] = None
     client: Optional[ClientResponse] = None
     vehicle: Optional[VehicleResponse] = None
     picking_id: Optional[uuid.UUID] = None
@@ -97,6 +100,7 @@ class FeinaOperariResponse(BaseModel):
     data_planificacio: Optional[date] = None
     data_programada: Optional[str] = None
     client_nom: Optional[str] = None
+    desviacio_geovalla: Optional[bool] = False
     client: Optional[ClientResponse] = None
     model_config = ConfigDict(from_attributes=True)
 
@@ -375,14 +379,32 @@ async def comencar_feina(
         feina.gps_inici_lat = payload.lat
         feina.gps_inici_lng = payload.lng
 
+    if payload.desviacio_justificada or payload.justificacio_gps:
+        feina.desviacio_geovalla = True
+        if payload.justificacio_gps:
+            feina.justificacio_geovalla = payload.justificacio_gps.strip()
+        if payload.foto_evidencia_desviacio:
+            feina.foto_evidencia_desviacio = payload.foto_evidencia_desviacio
+
     feina.estat = "EN_CURS"
-    await db.commit()
+    try:
+        await db.commit()
+    except Exception as e:
+        await db.rollback()
+        sys.stderr.write(f"ERROR db.commit a comencar_feina: {str(e)}\n")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error en persistir inici de feina i geovalla a la base de dades: {str(e)}",
+        )
+
     return {
         "feina_id": str(feina.id),
         "estat": "EN_CURS",
         "hora_inici_real": feina.hora_inici_real.isoformat(),
         "gps_inici_lat": float(feina.gps_inici_lat) if feina.gps_inici_lat is not None else None,
         "gps_inici_lng": float(feina.gps_inici_lng) if feina.gps_inici_lng is not None else None,
+        "desviacio_geovalla": feina.desviacio_geovalla,
+        "justificacio_geovalla": feina.justificacio_geovalla,
         "missatge": "Feina iniciada amb èxit",
     }
 
@@ -420,7 +442,28 @@ async def finalitzar_temps_feina(
         elapsed_hours = round(max(0.0, (now - feina.hora_inici_real).total_seconds() / 3600.0), 2)
         feina.hores_imputades_facturables = elapsed_hours
 
-    await db.commit()
+    if payload.desviacio_justificada or payload.justificacio_gps:
+        feina.desviacio_geovalla = True
+        if payload.justificacio_gps:
+            just_text = payload.justificacio_gps.strip()
+            feina.justificacio_geovalla = (
+                f"{feina.justificacio_geovalla} | Final: {just_text}"
+                if feina.justificacio_geovalla
+                else just_text
+            )
+        if payload.foto_evidencia_desviacio:
+            feina.foto_evidencia_desviacio = payload.foto_evidencia_desviacio
+
+    try:
+        await db.commit()
+    except Exception as e:
+        await db.rollback()
+        sys.stderr.write(f"ERROR db.commit a finalitzar_temps_feina: {str(e)}\n")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error en persistir final de feina i geovalla a la base de dades: {str(e)}",
+        )
+
     return {
         "feina_id": str(feina.id),
         "estat": feina.estat,
@@ -429,6 +472,8 @@ async def finalitzar_temps_feina(
         "gps_fi_lat": float(feina.gps_fi_lat) if feina.gps_fi_lat is not None else None,
         "gps_fi_lng": float(feina.gps_fi_lng) if feina.gps_fi_lng is not None else None,
         "hores_imputades_facturables": float(feina.hores_imputades_facturables or 0),
+        "desviacio_geovalla": feina.desviacio_geovalla,
+        "justificacio_geovalla": feina.justificacio_geovalla,
         "missatge": "Final de feina i posició GPS registrats",
     }
 

@@ -86,6 +86,8 @@ interface OrdreDetall {
   gps_fi_lat?: number | null;
   gps_fi_lng?: number | null;
   hores_imputades_facturables?: number | null;
+  desviacio_geovalla?: boolean;
+  justificacio_geovalla?: string | null;
 }
 
 export default function LlistaMaquinesPage() {
@@ -186,7 +188,11 @@ export default function LlistaMaquinesPage() {
         const detail =
           err.detail ||
           (accio === "inici" ? "Error en iniciar la feina" : "Error en marcar el final de la feina");
-        if (res.status === 400 && detail.includes("50m")) {
+        if (
+          detail.includes("50m") ||
+          detail.toLowerCase().includes("geovalla") ||
+          detail.toLowerCase().includes("desviaci")
+        ) {
           setRequereixJustificacioGPS(true);
         }
         throw new Error(detail);
@@ -206,6 +212,8 @@ export default function LlistaMaquinesPage() {
               gps_fi_lng: data.gps_fi_lng ?? prev.gps_fi_lng,
               hores_imputades_facturables:
                 data.hores_imputades_facturables ?? prev.hores_imputades_facturables,
+              desviacio_geovalla: data.desviacio_geovalla ?? prev.desviacio_geovalla,
+              justificacio_geovalla: data.justificacio_geovalla ?? prev.justificacio_geovalla,
             }
           : null
       );
@@ -315,6 +323,8 @@ export default function LlistaMaquinesPage() {
             gps_fi_lat: data.gps_fi_lat ?? null,
             gps_fi_lng: data.gps_fi_lng ?? null,
             hores_imputades_facturables: data.hores_imputades_facturables ?? null,
+            desviacio_geovalla: Boolean(data.desviacio_geovalla),
+            justificacio_geovalla: data.justificacio_geovalla || null,
           });
         } catch {
           throw new Error("PIN incorrecte o error de desxifratge.");
@@ -345,6 +355,8 @@ export default function LlistaMaquinesPage() {
             gps_fi_lat: data.gps_fi_lat ?? null,
             gps_fi_lng: data.gps_fi_lng ?? null,
             hores_imputades_facturables: data.hores_imputades_facturables ?? null,
+            desviacio_geovalla: Boolean(data.desviacio_geovalla),
+            justificacio_geovalla: data.justificacio_geovalla || null,
           };
           setOrdre(mapped);
           await carregarEstatFotos();
@@ -592,6 +604,15 @@ export default function LlistaMaquinesPage() {
                           </span>
                         </div>
                       )}
+                      {ordre.desviacio_geovalla && (
+                        <div className="pt-1.5 border-t border-outline-variant/20 flex items-start gap-1.5 text-amber-600 dark:text-amber-400 font-sans text-[11px] font-medium leading-tight">
+                          <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                          <span>
+                            <strong>Excepció Geovalla autoritzada:</strong>{" "}
+                            {ordre.justificacio_geovalla || "Desviació justificada"}
+                          </span>
+                        </div>
+                      )}
                     </div>
                   )}
 
@@ -635,10 +656,13 @@ export default function LlistaMaquinesPage() {
                       />
                       <button
                         type="button"
+                        disabled={iniciantFeina || !justificacioGps.trim()}
                         onClick={() => handleMarcarTempsGps(accioPendentGps)}
-                        className="w-full py-2 bg-error text-white font-bold text-xs uppercase rounded active:scale-95 transition-transform"
+                        className="w-full py-2 bg-error text-white font-bold text-xs uppercase rounded active:scale-95 transition-transform disabled:opacity-50"
                       >
-                        {accioPendentGps === "inici"
+                        {iniciantFeina
+                          ? "Registrant Excepció..."
+                          : accioPendentGps === "inici"
                           ? "Confirmar Inici amb Justificació"
                           : "Confirmar Final amb Justificació"}
                       </button>

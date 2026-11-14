@@ -23,7 +23,10 @@ def upgrade() -> None:
             ADD COLUMN IF NOT EXISTS gps_inici_lat NUMERIC(9, 6),
             ADD COLUMN IF NOT EXISTS gps_inici_lng NUMERIC(9, 6),
             ADD COLUMN IF NOT EXISTS gps_fi_lat NUMERIC(9, 6),
-            ADD COLUMN IF NOT EXISTS gps_fi_lng NUMERIC(9, 6)
+            ADD COLUMN IF NOT EXISTS gps_fi_lng NUMERIC(9, 6),
+            ADD COLUMN IF NOT EXISTS desviacio_geovalla BOOLEAN NOT NULL DEFAULT false,
+            ADD COLUMN IF NOT EXISTS justificacio_geovalla TEXT,
+            ADD COLUMN IF NOT EXISTS foto_evidencia_desviacio VARCHAR(500);
         """
     )
 
@@ -32,11 +35,14 @@ def downgrade() -> None:
     op.execute(
         """
         ALTER TABLE ordres_treball
+            DROP COLUMN IF EXISTS foto_evidencia_desviacio,
+            DROP COLUMN IF EXISTS justificacio_geovalla,
+            DROP COLUMN IF EXISTS desviacio_geovalla,
             DROP COLUMN IF EXISTS gps_fi_lng,
             DROP COLUMN IF EXISTS gps_fi_lat,
             DROP COLUMN IF EXISTS gps_inici_lng,
             DROP COLUMN IF EXISTS gps_inici_lat,
             DROP COLUMN IF EXISTS hora_fi_real,
-            DROP COLUMN IF EXISTS hora_inici_real
+            DROP COLUMN IF EXISTS hora_inici_real;
         """
     )

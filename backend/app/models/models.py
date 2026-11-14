@@ -1110,6 +1110,11 @@ class OrdreTreball(Base):
     gps_inici_lng: Mapped[Optional[float]] = mapped_column(Numeric(9, 6))
     gps_fi_lat: Mapped[Optional[float]] = mapped_column(Numeric(9, 6))
     gps_fi_lng: Mapped[Optional[float]] = mapped_column(Numeric(9, 6))
+    desviacio_geovalla: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=text("false"), nullable=False
+    )
+    justificacio_geovalla: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    foto_evidencia_desviacio: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     cap_de_colla_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True), ForeignKey("usuaris.id", ondelete="SET NULL")
     )

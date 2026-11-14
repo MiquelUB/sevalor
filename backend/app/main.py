@@ -87,6 +87,22 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                 await session.execute(
                     text("ALTER TABLE empreses ADD COLUMN IF NOT EXISTS disc_dur_url VARCHAR(255);")
                 )
+                await session.execute(
+                    text(
+                        """
+                        ALTER TABLE ordres_treball
+                            ADD COLUMN IF NOT EXISTS hora_inici_real TIMESTAMPTZ,
+                            ADD COLUMN IF NOT EXISTS hora_fi_real TIMESTAMPTZ,
+                            ADD COLUMN IF NOT EXISTS gps_inici_lat NUMERIC(9, 6),
+                            ADD COLUMN IF NOT EXISTS gps_inici_lng NUMERIC(9, 6),
+                            ADD COLUMN IF NOT EXISTS gps_fi_lat NUMERIC(9, 6),
+                            ADD COLUMN IF NOT EXISTS gps_fi_lng NUMERIC(9, 6),
+                            ADD COLUMN IF NOT EXISTS desviacio_geovalla BOOLEAN NOT NULL DEFAULT false,
+                            ADD COLUMN IF NOT EXISTS justificacio_geovalla TEXT,
+                            ADD COLUMN IF NOT EXISTS foto_evidencia_desviacio VARCHAR(500);
+                        """
+                    )
+                )
                 await session.commit()
         except Exception:
             pass
