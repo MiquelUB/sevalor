@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import Link from "next/link";
 import { useAssignacions } from "@/lib/hooks/useAssignacions";
 import { OrdreTreballLocal } from "@/lib/types/operari";
@@ -137,10 +137,16 @@ export default function FeinesKanbanPage() {
     )
   );
 
-  const avuiFormatat = new Intl.DateTimeFormat("ca-ES", {
-    day: "numeric",
-    month: "short",
-  }).format(new Date());
+  const [avuiFormatat, setAvuiFormatat] = useState<string>("");
+
+  useEffect(() => {
+    setAvuiFormatat(
+      new Intl.DateTimeFormat("ca-ES", {
+        day: "numeric",
+        month: "short",
+      }).format(new Date())
+    );
+  }, []);
 
   return (
     <div className="min-h-screen pb-20 bg-surface dark:bg-slate-950">
@@ -152,7 +158,7 @@ export default function FeinesKanbanPage() {
               Tauler de Feines
             </h1>
             <p className="text-xs text-on-surface-variant dark:text-slate-400 font-medium">
-              Les meves feines — Avui, {avuiFormatat}
+              {avuiFormatat ? `Les meves feines — Avui, ${avuiFormatat}` : "Les meves feines"}
             </p>
           </div>
           <button

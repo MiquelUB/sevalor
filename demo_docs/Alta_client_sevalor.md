@@ -1,0 +1,1 @@
+A cada ordinador client, executar bash scripts/install_client_gateway.sh --token <vault_token> --disk-a <ruta_A> --tunnel-token <cf_token> i desar la URL HTTPS del túnel a la fitxa de l'empresa al Superadmin.

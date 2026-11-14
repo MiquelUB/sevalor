@@ -101,6 +101,25 @@ export default function OperariLayout({
     };
   }, [isLoginPage, router]);
 
+  // Evitar que arrossegar fitxers al navegador provoqui navegació a file:/// (Error de seguretat navegador)
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const handleGlobalDragOver = (e: DragEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+    };
+    const handleGlobalDrop = (e: DragEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+    };
+    window.addEventListener("dragover", handleGlobalDragOver);
+    window.addEventListener("drop", handleGlobalDrop);
+    return () => {
+      window.removeEventListener("dragover", handleGlobalDragOver);
+      window.removeEventListener("drop", handleGlobalDrop);
+    };
+  }, []);
+
   const toggleTheme = () => {
     if (isDark) {
       document.documentElement.classList.remove("dark");

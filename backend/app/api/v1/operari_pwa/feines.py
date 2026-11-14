@@ -1,7 +1,7 @@
 import math
 import sys
 import uuid
-from datetime import date
+from datetime import date, datetime, timezone
 from typing import Any, List, Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
@@ -68,6 +68,13 @@ class FeinaOperariDetailResponse(BaseModel):
     estat: str
     adreca: Optional[str] = None
     data_planificacio: Optional[date] = None
+    hora_inici_real: Optional[datetime] = None
+    hora_fi_real: Optional[datetime] = None
+    gps_inici_lat: Optional[float] = None
+    gps_inici_lng: Optional[float] = None
+    gps_fi_lat: Optional[float] = None
+    gps_fi_lng: Optional[float] = None
+    hores_imputades_facturables: Optional[float] = None
     client: Optional[ClientResponse] = None
     vehicle: Optional[VehicleResponse] = None
     picking_id: Optional[uuid.UUID] = None
@@ -307,6 +314,37 @@ class ComencarFeinaRequest(BaseModel):
             self.desviacio_justificada = True
 
 
+def _validar_geovalla_feina(feina: OrdreTreball, payload: ComencarFeinaRequest) -> Optional[float]:
+    """Valida que el punt GPS es trobi dins del radi de 50m de l'obra (o justificat)."""
+    if payload.lat is None or payload.lng is None:
+        return None
+
+    dest_lat: Optional[float] = None
+    dest_lng: Optional[float] = None
+
+    if feina.latitud is not None and feina.longitud is not None:
+        dest_lat = float(feina.latitud)
+        dest_lng = float(feina.longitud)
+    elif feina.adreca and "," in feina.adreca:
+        try:
+            parts = [float(p.strip()) for p in feina.adreca.split(",")]
+            if len(parts) >= 2:
+                dest_lat, dest_lng = parts[0], parts[1]
+        except (ValueError, TypeError):
+            return None
+
+    if dest_lat is None or dest_lng is None:
+        return None
+
+    distancia = calcular_distancia_metres(payload.lat, payload.lng, dest_lat, dest_lng)
+    if distancia > 50.0 and not payload.desviacio_justificada:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Geovalla d'obra superada (distància: {distancia:.1f}m > 50m). Cal justificació de desviació.",
+        )
+    return distancia
+
+
 @router.put("/feines/{feina_id}/comencar")
 async def comencar_feina(
     feina_id: uuid.UUID,
@@ -314,7 +352,7 @@ async def comencar_feina(
     request: Request,
     db: AsyncSession = Depends(get_db_with_tenant_context),
 ):
-    """Comença el cronòmetre de la feina amb control de geovalla (Spec 013 RF-12, RF-12.1)."""
+    """Comença el cronòmetre de la feina amb control de geovalla i punt GPS d'inici (Spec 013 RF-12, RF-12.1)."""
     empresa_id = request.state.empresa_id
     if not empresa_id or empresa_id == "undefined":
         raise HTTPException(status_code=401)
@@ -328,24 +366,71 @@ async def comencar_feina(
     if not feina:
         raise HTTPException(status_code=404, detail="Feina no trobada")
 
-    # Comprovació Geovalla de 50 m si es passen coordenades i l'adreça té coordenades
-    if payload.lat is not None and payload.lng is not None and feina.adreca and "," in feina.adreca:
-        try:
-            parts = [float(p.strip()) for p in feina.adreca.split(",")]
-            if len(parts) >= 2:
-                dest_lat, dest_lng = parts[0], parts[1]
-                distancia = calcular_distancia_metres(payload.lat, payload.lng, dest_lat, dest_lng)
-                if distancia > 50.0 and not payload.desviacio_justificada:
-                    raise HTTPException(
-                        status_code=400,
-                        detail=f"Geovalla d'obra superada (distància: {distancia:.1f}m > 50m). Cal sol·licitud d'inici per desviació amb foto d'evidència.",
-                    )
-        except (ValueError, TypeError):
-            pass
+    _validar_geovalla_feina(feina, payload)
+
+    now = datetime.now(timezone.utc)
+    if feina.hora_inici_real is None:
+        feina.hora_inici_real = now
+    if payload.lat is not None and payload.lng is not None:
+        feina.gps_inici_lat = payload.lat
+        feina.gps_inici_lng = payload.lng
 
     feina.estat = "EN_CURS"
     await db.commit()
-    return {"feina_id": str(feina.id), "estat": "EN_CURS", "missatge": "Feina iniciada amb èxit"}
+    return {
+        "feina_id": str(feina.id),
+        "estat": "EN_CURS",
+        "hora_inici_real": feina.hora_inici_real.isoformat(),
+        "gps_inici_lat": float(feina.gps_inici_lat) if feina.gps_inici_lat is not None else None,
+        "gps_inici_lng": float(feina.gps_inici_lng) if feina.gps_inici_lng is not None else None,
+        "missatge": "Feina iniciada amb èxit",
+    }
+
+
+@router.put("/feines/{feina_id}/finalitzar-temps")
+async def finalitzar_temps_feina(
+    feina_id: uuid.UUID,
+    payload: ComencarFeinaRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+):
+    """Marca el final en temps de la feina i registra el punt GPS final validant la geovalla."""
+    empresa_id = request.state.empresa_id
+    if not empresa_id or empresa_id == "undefined":
+        raise HTTPException(status_code=401)
+
+    ot_res = await db.execute(
+        select(OrdreTreball).where(
+            OrdreTreball.id == feina_id, OrdreTreball.empresa_id == uuid.UUID(empresa_id)
+        )
+    )
+    feina = ot_res.scalars().first()
+    if not feina:
+        raise HTTPException(status_code=404, detail="Feina no trobada")
+
+    _validar_geovalla_feina(feina, payload)
+
+    now = datetime.now(timezone.utc)
+    feina.hora_fi_real = now
+    if payload.lat is not None and payload.lng is not None:
+        feina.gps_fi_lat = payload.lat
+        feina.gps_fi_lng = payload.lng
+
+    if feina.hora_inici_real is not None:
+        elapsed_hours = round(max(0.0, (now - feina.hora_inici_real).total_seconds() / 3600.0), 2)
+        feina.hores_imputades_facturables = elapsed_hours
+
+    await db.commit()
+    return {
+        "feina_id": str(feina.id),
+        "estat": feina.estat,
+        "hora_inici_real": feina.hora_inici_real.isoformat() if feina.hora_inici_real else None,
+        "hora_fi_real": feina.hora_fi_real.isoformat(),
+        "gps_fi_lat": float(feina.gps_fi_lat) if feina.gps_fi_lat is not None else None,
+        "gps_fi_lng": float(feina.gps_fi_lng) if feina.gps_fi_lng is not None else None,
+        "hores_imputades_facturables": float(feina.hores_imputades_facturables or 0),
+        "missatge": "Final de feina i posició GPS registrats",
+    }
 
 
 @router.post("/feines/{feina_id}/fotos")

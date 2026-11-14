@@ -79,6 +79,13 @@ interface OrdreDetall {
   planol_titol?: string | null;
   planol_codi?: string | null;
   planol_tipus_fitxer?: string | null;
+  hora_inici_real?: string | null;
+  hora_fi_real?: string | null;
+  gps_inici_lat?: number | null;
+  gps_inici_lng?: number | null;
+  gps_fi_lat?: number | null;
+  gps_fi_lng?: number | null;
+  hores_imputades_facturables?: number | null;
 }
 
 export default function LlistaMaquinesPage() {
@@ -93,9 +100,10 @@ export default function LlistaMaquinesPage() {
   const [offlinePin, setOfflinePin] = useState("");
   const [offlineError, setOfflineError] = useState<string | null>(null);
 
-  // Geovalla i inici de feina (FR-005)
+  // Geovalla i inici/final en temps de feina (FR-005)
   const [iniciantFeina, setIniciantFeina] = useState(false);
   const [requereixJustificacioGPS, setRequereixJustificacioGPS] = useState(false);
+  const [accioPendentGps, setAccioPendentGps] = useState<"inici" | "final">("inici");
   const [justificacioGps, setJustificacioGps] = useState("");
   const [gpsFeedback, setGpsFeedback] = useState<string | null>(null);
   const [gpsError, setGpsError] = useState<string | null>(null);
@@ -149,13 +157,18 @@ export default function LlistaMaquinesPage() {
       );
     });
 
-  const handleComencarFeina = async () => {
+  const handleMarcarTempsGps = async (accio: "inici" | "final") => {
     setIniciantFeina(true);
+    setAccioPendentGps(accio);
     setGpsError(null);
     setGpsFeedback(null);
     try {
       const coords = await obtenirGPS();
-      const res = await fetch(`/api/v1/operari/feines/${id}/comencar`, {
+      const endpoint =
+        accio === "inici"
+          ? `/api/v1/operari/feines/${id}/comencar`
+          : `/api/v1/operari/feines/${id}/finalitzar-temps`;
+      const res = await fetch(endpoint, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
@@ -170,16 +183,39 @@ export default function LlistaMaquinesPage() {
 
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
-        const detail = err.detail || "Error en iniciar la feina";
+        const detail =
+          err.detail ||
+          (accio === "inici" ? "Error en iniciar la feina" : "Error en marcar el final de la feina");
         if (res.status === 400 && detail.includes("50m")) {
           setRequereixJustificacioGPS(true);
         }
         throw new Error(detail);
       }
 
-      setOrdre((prev) => (prev ? { ...prev, estat: "EN_CURS" } : null));
+      const data = await res.json().catch(() => ({}));
+      setOrdre((prev) =>
+        prev
+          ? {
+              ...prev,
+              estat: data.estat || (accio === "inici" ? "EN_CURS" : prev.estat),
+              hora_inici_real: data.hora_inici_real ?? prev.hora_inici_real,
+              hora_fi_real: data.hora_fi_real ?? prev.hora_fi_real,
+              gps_inici_lat: data.gps_inici_lat ?? prev.gps_inici_lat,
+              gps_inici_lng: data.gps_inici_lng ?? prev.gps_inici_lng,
+              gps_fi_lat: data.gps_fi_lat ?? prev.gps_fi_lat,
+              gps_fi_lng: data.gps_fi_lng ?? prev.gps_fi_lng,
+              hores_imputades_facturables:
+                data.hores_imputades_facturables ?? prev.hores_imputades_facturables,
+            }
+          : null
+      );
       setRequereixJustificacioGPS(false);
-      setGpsFeedback("Arribada GPS confirmada. Feina en curs!");
+      setJustificacioGps("");
+      setGpsFeedback(
+        accio === "inici"
+          ? "Inici de feina i posició GPS registrats. Feina en curs!"
+          : "Final de feina i posició GPS registrats correctament!"
+      );
     } catch (e: unknown) {
       setGpsError(e instanceof Error ? e.message : "Error GPS");
     } finally {
@@ -272,6 +308,13 @@ export default function LlistaMaquinesPage() {
             planol_titol: data.planol_titol || null,
             planol_codi: data.planol_codi || null,
             planol_tipus_fitxer: data.planol_tipus_fitxer || null,
+            hora_inici_real: data.hora_inici_real || null,
+            hora_fi_real: data.hora_fi_real || null,
+            gps_inici_lat: data.gps_inici_lat ?? null,
+            gps_inici_lng: data.gps_inici_lng ?? null,
+            gps_fi_lat: data.gps_fi_lat ?? null,
+            gps_fi_lng: data.gps_fi_lng ?? null,
+            hores_imputades_facturables: data.hores_imputades_facturables ?? null,
           });
         } catch {
           throw new Error("PIN incorrecte o error de desxifratge.");
@@ -295,6 +338,13 @@ export default function LlistaMaquinesPage() {
             planol_titol: data.planol_titol || null,
             planol_codi: data.planol_codi || null,
             planol_tipus_fitxer: data.planol_tipus_fitxer || null,
+            hora_inici_real: data.hora_inici_real || null,
+            hora_fi_real: data.hora_fi_real || null,
+            gps_inici_lat: data.gps_inici_lat ?? null,
+            gps_inici_lng: data.gps_inici_lng ?? null,
+            gps_fi_lat: data.gps_fi_lat ?? null,
+            gps_fi_lng: data.gps_fi_lng ?? null,
+            hores_imputades_facturables: data.hores_imputades_facturables ?? null,
           };
           setOrdre(mapped);
           await carregarEstatFotos();
@@ -507,21 +557,65 @@ export default function LlistaMaquinesPage() {
                 </div>
               )}
 
-              {ordre.estat !== "TANCADA" && (
+              {ordre.estat !== "TANCADA" && ordre.estat !== "COMPLERT" && (
                 <div className="pt-2 border-t border-surface-container dark:border-slate-800 space-y-2">
+                  {(ordre.hora_inici_real || ordre.hora_fi_real) && (
+                    <div className="p-2.5 rounded-lg bg-surface-container-low dark:bg-slate-800/70 text-[11px] font-mono space-y-1 border border-outline-variant/20">
+                      {ordre.hora_inici_real && (
+                        <div className="flex items-center justify-between gap-2 text-on-surface dark:text-slate-200">
+                          <span className="font-bold text-secondary">Inici GPS:</span>
+                          <span>
+                            {new Date(ordre.hora_inici_real).toLocaleTimeString("ca-ES", {
+                              hour: "2-digit",
+                              minute: "2-digit",
+                            })}
+                            {ordre.gps_inici_lat != null && ordre.gps_inici_lng != null
+                              ? ` (${Number(ordre.gps_inici_lat).toFixed(4)}, ${Number(ordre.gps_inici_lng).toFixed(4)})`
+                              : ""}
+                          </span>
+                        </div>
+                      )}
+                      {ordre.hora_fi_real && (
+                        <div className="flex items-center justify-between gap-2 text-on-surface dark:text-slate-200">
+                          <span className="font-bold text-primary dark:text-sky-400">Final GPS:</span>
+                          <span>
+                            {new Date(ordre.hora_fi_real).toLocaleTimeString("ca-ES", {
+                              hour: "2-digit",
+                              minute: "2-digit",
+                            })}
+                            {ordre.gps_fi_lat != null && ordre.gps_fi_lng != null
+                              ? ` (${Number(ordre.gps_fi_lat).toFixed(4)}, ${Number(ordre.gps_fi_lng).toFixed(4)})`
+                              : ""}
+                            {ordre.hores_imputades_facturables != null
+                              ? ` • ${Number(ordre.hores_imputades_facturables).toFixed(2)}h`
+                              : ""}
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
                   <button
                     type="button"
                     data-testid="btn-comencar-feina-gps"
                     disabled={iniciantFeina}
-                    onClick={handleComencarFeina}
-                    className="w-full min-h-[46px] bg-primary text-white font-bold text-xs uppercase tracking-wider rounded-lg flex items-center justify-center gap-2 active:scale-95 transition-transform disabled:opacity-50"
+                    onClick={() =>
+                      handleMarcarTempsGps(ordre.estat === "EN_CURS" ? "final" : "inici")
+                    }
+                    className={`w-full min-h-[46px] text-white font-bold text-xs uppercase tracking-wider rounded-lg flex items-center justify-center gap-2 active:scale-95 transition-transform disabled:opacity-50 ${
+                      ordre.estat === "EN_CURS" && !ordre.hora_fi_real
+                        ? "bg-secondary-container"
+                        : "bg-primary"
+                    }`}
                   >
                     <MapPin className="w-4 h-4" />
                     {iniciantFeina
                       ? "Verificant Geovalla 50m..."
-                      : ordre.estat === "EN_CURS"
-                      ? "Re-validar Posició GPS (En Curs)"
-                      : "Començar Feina (Arribada GPS)"}
+                      : ordre.estat !== "EN_CURS"
+                      ? "Començar Feina (Inici Temps + GPS)"
+                      : ordre.hora_fi_real
+                      ? "Re-validar Posició GPS Final"
+                      : "Finalitzar Temps Feina (Validar GPS Final)"}
                   </button>
 
                   {requereixJustificacioGPS && (
@@ -541,10 +635,12 @@ export default function LlistaMaquinesPage() {
                       />
                       <button
                         type="button"
-                        onClick={handleComencarFeina}
+                        onClick={() => handleMarcarTempsGps(accioPendentGps)}
                         className="w-full py-2 bg-error text-white font-bold text-xs uppercase rounded active:scale-95 transition-transform"
                       >
-                        Confirmar Inici amb Justificació
+                        {accioPendentGps === "inici"
+                          ? "Confirmar Inici amb Justificació"
+                          : "Confirmar Final amb Justificació"}
                       </button>
                     </div>
                   )}
