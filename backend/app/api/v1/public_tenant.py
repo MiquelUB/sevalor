@@ -1,5 +1,6 @@
 """Endpoint públic per a la resolució de marca i dades públiques de tenant per domini (Zero-Trust)."""
 
+import logging
 import uuid
 from typing import Optional
 
@@ -12,6 +13,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.branding import servir_logotip_empresa
 from app.core.db import get_db
 from app.models.models import Empresa
+
+logger = logging.getLogger("sevalor.public_tenant")
 
 router = APIRouter(prefix="/public/tenant", tags=["Tenant Públic"])
 compat_public_router = APIRouter(prefix="/public", tags=["Tenant Públic Compat"])
@@ -37,9 +40,13 @@ class PublicTenantResponse(BaseModel):
 
 
 @router.get("/resolve", response_model=PublicTenantResponse)
+@router.get("/resolve/", response_model=PublicTenantResponse)
 @router.get("/tenant-config", response_model=PublicTenantResponse)
+@router.get("/tenant-config/", response_model=PublicTenantResponse)
 @compat_public_router.get("/tenant-config", response_model=PublicTenantResponse)
+@compat_public_router.get("/tenant-config/", response_model=PublicTenantResponse)
 @compat_public_router.get("/tenant/resolve", response_model=PublicTenantResponse)
+@compat_public_router.get("/tenant/resolve/", response_model=PublicTenantResponse)
 async def resoldre_tenant_per_domini(
     request: Request,
     host: Optional[str] = Query(None, description="Domini explícit a resoldre (opcional)"),
@@ -139,8 +146,11 @@ async def resoldre_tenant_per_domini(
 
 
 @router.get("/{empresa_id}/logo")
+@router.get("/{empresa_id}/logo/")
 @compat_public_router.get("/tenant/{empresa_id}/logo")
+@compat_public_router.get("/tenant/{empresa_id}/logo/")
 @compat_public_router.get("/logo/{empresa_id}")
+@compat_public_router.get("/logo/{empresa_id}/")
 async def obtenir_logo_public_tenant(
     empresa_id: str,
     db: AsyncSession = Depends(get_db),
