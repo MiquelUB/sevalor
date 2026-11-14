@@ -4,10 +4,12 @@ import uuid
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi.responses import Response
 from pydantic import BaseModel
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.branding import servir_logotip_empresa
 from app.core.db import get_db
 from app.models.models import Empresa
 
@@ -114,6 +116,7 @@ async def resoldre_tenant_per_domini(
     secundari = empresa.secundari_hsl or "38 92% 50%"
     accent = empresa.accent_hsl or "190 90% 50%"
     logo = empresa.logotip_path
+    logo_url = logo or f"/api/v1/public/tenant/{empresa.id}/logo"
 
     return PublicTenantResponse(
         id=empresa.id,
@@ -124,7 +127,7 @@ async def resoldre_tenant_per_domini(
         subdomini=empresa.subdomini,
         domini_custom=empresa.domini_custom,
         logotip_path=logo,
-        logotip_url=logo,
+        logotip_url=logo_url,
         primari_hsl=primari,
         secundari_hsl=secundari,
         accent_hsl=accent,
@@ -133,3 +136,15 @@ async def resoldre_tenant_per_domini(
         color_accent=accent,
         node_ia_actiu=bool(getattr(empresa, "node_ia_actiu", False)),
     )
+
+
+@router.get("/{empresa_id}/logo")
+@compat_public_router.get("/tenant/{empresa_id}/logo")
+@compat_public_router.get("/logo/{empresa_id}")
+async def obtenir_logo_public_tenant(
+    empresa_id: str,
+    db: AsyncSession = Depends(get_db),
+) -> Response:
+    """Serveix públicament el logotip oficial del tenant o el monograma dinàmic Camaleó."""
+    return await servir_logotip_empresa(db, empresa_id)
+

@@ -38,6 +38,7 @@ interface StoredUser {
 export default function TenantGatewayPage() {
   const router = useRouter();
   const { brand, loading } = useChameleon();
+  const [logoError, setLogoError] = useState(false);
 
   const [isDark, setIsDark] = useState<boolean>(true);
   const [hostname, setHostname] = useState<string>("");
@@ -134,11 +135,12 @@ export default function TenantGatewayPage() {
       <header className="w-full border-b border-outline/10 bg-surface-container/60 backdrop-blur-md sticky top-0 z-50">
         <div className="max-w-6xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            {brand?.logotip_path ? (
+            {brand?.logotip_path && !logoError ? (
               <img
                 src={brand.logotip_path}
                 alt={empresaNom}
                 className="h-9 w-auto max-w-[160px] object-contain rounded"
+                onError={() => setLogoError(true)}
               />
             ) : (
               <div

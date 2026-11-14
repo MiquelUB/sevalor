@@ -10,10 +10,24 @@ const nextConfig = {
     memoryBasedWorkersCount: true,
   },
   async rewrites() {
+    const internalBackend = process.env.INTERNAL_BACKEND_URL || 'http://backend:8000';
+    const apiUrl = process.env.NEXT_PUBLIC_API_URL && process.env.NEXT_PUBLIC_API_URL.startsWith('http://backend')
+      ? process.env.NEXT_PUBLIC_API_URL
+      : `${internalBackend}/api/v1`;
+    const backendRoot = apiUrl.replace(/\/api\/v1\/?$/, '');
+
     return [
       {
         source: '/api/v1/:path*',
-        destination: process.env.NEXT_PUBLIC_API_URL ? `${process.env.NEXT_PUBLIC_API_URL}/:path*` : 'http://backend:8000/api/v1/:path*'
+        destination: `${apiUrl}/:path*`
+      },
+      {
+        source: '/docs/:path*',
+        destination: `${backendRoot}/docs/:path*`
+      },
+      {
+        source: '/data/:path*',
+        destination: `${backendRoot}/data/:path*`
       }
     ];
   },

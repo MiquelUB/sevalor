@@ -34,6 +34,7 @@ export default function OperariLoginPage() {
   const [infoMessage, setInfoMessage] = useState<string | null>(null);
   const [failedAttempts, setFailedAttempts] = useState<number>(0);
   const [lockSeconds, setLockSeconds] = useState<number>(0);
+  const [logoError, setLogoError] = useState<boolean>(false);
   const router = useRouter();
 
   // Mode Clar / Fosc
@@ -397,11 +398,12 @@ export default function OperariLoginPage() {
         {/* Logo & Brand Name */}
         <div className="flex flex-col items-center gap-1.5">
           <div className="w-16 h-16 rounded-2xl bg-white/10 backdrop-blur-md flex items-center justify-center border border-white/15 shadow-xl p-1.5 overflow-hidden">
-            {brand?.logotip_path ? (
+            {brand?.logotip_path && !logoError ? (
               <img
                 src={brand.logotip_path}
                 alt={brand.empresa_nom || "Logo Empresa"}
                 className="w-full h-full object-contain rounded-xl"
+                onError={() => setLogoError(true)}
               />
             ) : (
               <span

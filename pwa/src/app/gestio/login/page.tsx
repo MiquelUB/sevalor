@@ -20,6 +20,7 @@ export default function GestioLogin() {
   const [loading, setLoading] = useState(false);
   const [showConfig, setShowConfig] = useState(false);
   const [apiUrl, setApiUrl] = useState("");
+  const [logoError, setLogoError] = useState(false);
 
   useEffect(() => {
     setApiUrl(getApiBaseUrl());
@@ -146,11 +147,12 @@ export default function GestioLogin() {
         {/* Branding Header */}
         <div className="flex flex-col items-center text-center mb-xl">
           <div className="mb-md p-sm bg-primary/5 rounded-xl">
-            {brand?.logotip_path ? (
+            {brand?.logotip_path && !logoError ? (
               <img
                 src={brand.logotip_path}
                 alt={brand.empresa_nom || "Logo Empresa"}
                 className="h-14 w-auto max-w-[140px] object-contain rounded-xl shadow-sm"
+                onError={() => setLogoError(true)}
               />
             ) : (
               <div className="h-12 w-12 rounded-xl bg-primary text-white flex items-center justify-center shadow-md">

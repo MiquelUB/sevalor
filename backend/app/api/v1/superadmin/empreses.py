@@ -11,6 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.superadmin.tenants import _resolve_empresa
+from app.core.branding import resoldre_fitxer_logotip_local
 from app.core.config import settings
 from app.core.db import get_db_with_tenant_context, set_tenant_context
 from app.core.security import require_roles
@@ -87,27 +88,6 @@ def desar_fitxer_logotip(empresa_id: str, content: bytes, ext: str) -> str:
     with open(target_file, "wb") as f:
         f.write(content)
     return str(target_file)
-
-
-def resoldre_fitxer_logotip_local(
-    logotip_path: Optional[str], empresa_id: str
-) -> Optional[str]:
-    """Cerca la ubicació física real del fitxer al disc dur sobirà."""
-    if logotip_path and os.path.exists(logotip_path):
-        return logotip_path
-
-    base_vaults = os.getenv("CLIENT_DISKS_MOUNT_ROOT", "/tmp/sevalor_client_disks")
-    for base in [base_vaults, "/tmp/sevalor_docs", "/tmp/docs"]:
-        for ext in ["png", "jpg", "jpeg", "webp", "svg"]:
-            p = os.path.join(
-                base, f"disc_{empresa_id}", "11_configuracio_i_backups", "identitat_camaleo", f"logo_oficial.{ext}"
-            )
-            if os.path.exists(p):
-                return p
-            p_old = os.path.join(base, str(empresa_id), "configuracio", f"logo_oficial.{ext}")
-            if os.path.exists(p_old):
-                return p_old
-    return None
 
 
 class UpdateCamaleoConfigRequest(BaseModel):

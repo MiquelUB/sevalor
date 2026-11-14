@@ -12,6 +12,7 @@ from slowapi.middleware import SlowAPIMiddleware
 from slowapi.util import get_remote_address
 
 from app.api.v1.auth import router as auth_router
+from app.api.v1.docs_serve import router as docs_serve_router
 from app.api.v1.gestio.cerca import router as cerca_router
 from app.api.v1.gestio.cerca import spotlight_router
 from app.api.v1.gestio.clients import router as clients_router
@@ -175,6 +176,8 @@ app.include_router(flota_router, prefix=settings.API_V1_STR)
 app.include_router(public_docs_router, prefix=settings.API_V1_STR)
 app.include_router(public_tenant_router, prefix=settings.API_V1_STR)
 app.include_router(compat_public_router, prefix=settings.API_V1_STR)
+app.include_router(docs_serve_router)
+app.include_router(docs_serve_router, prefix=settings.API_V1_STR)
 
 
 @app.exception_handler(Exception)

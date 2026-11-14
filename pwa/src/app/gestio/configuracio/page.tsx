@@ -591,7 +591,12 @@ export default function ConfiguracioPage() {
             {/* Monograma corporatiu / Logotip en capçalera */}
             <div className="w-14 h-14 rounded-xl bg-slate-900 dark:bg-slate-800 border-2 border-emerald-500 flex items-center justify-center text-white font-black text-xl shadow-inner overflow-hidden">
               {logotipCarregat ? (
-                <img src={logotipCarregat} alt="Logotip" className="w-full h-full object-cover" />
+                <img
+                  src={logotipCarregat}
+                  alt="Logotip"
+                  className="w-full h-full object-cover"
+                  onError={() => setLogotipCarregat(null)}
+                />
               ) : (
                 <span className="tracking-widest">{monograma}</span>
               )}
@@ -986,7 +991,12 @@ export default function ConfiguracioPage() {
               <div className="p-4 border-2 border-dashed border-slate-300 dark:border-slate-700 rounded-xl text-center space-y-3">
                 <div className="w-16 h-16 mx-auto rounded-xl bg-slate-100 dark:bg-slate-800 flex items-center justify-center text-slate-400 font-bold overflow-hidden">
                   {logotipCarregat ? (
-                    <img src={logotipCarregat} alt="Logo" className="w-full h-full object-contain" />
+                    <img
+                      src={logotipCarregat}
+                      alt="Logo"
+                      className="w-full h-full object-contain"
+                      onError={() => setLogotipCarregat(null)}
+                    />
                   ) : (
                     <span className="text-2xl font-mono text-slate-500">{monograma}</span>
                   )}
