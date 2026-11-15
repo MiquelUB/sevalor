@@ -382,7 +382,10 @@ def aplicar_regles_dures(av, ctx: ContextValidat):
     if av.estat_decisio in ("SELECCIONAT", "SELECCIONAT_SENSE_GATEKEEPER") and not gk:
         if PERMET_SENSE_GATEKEEPER and ctx.telefon_valid:
             av.estat_decisio, av.score = "SELECCIONAT_SENSE_GATEKEEPER", min(av.score, 79)
-            notes.append("sense gatekeeper verificat")
+            if "AVÍS: Decisor nominal pendent d'identificar" not in av.motiu_detallat_ia:
+                notes.append("sense gatekeeper verificat — AVÍS: Decisor nominal pendent d'identificar")
+            else:
+                notes.append("sense gatekeeper verificat")
         else:
             av.estat_decisio, av.score = "DESCARTAT", min(av.score, 49)
             notes.append("sense gatekeeper verificat"

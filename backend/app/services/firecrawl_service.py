@@ -1338,6 +1338,75 @@ def _expandir_termes_cerca_vertical(vertical: str) -> List[str]:
     ]
 
 
+_OSINT_GENERIC_STOPWORDS = frozenset({
+    "slu", "sau", "scp", "sll", "slp", "slne", "sociedad", "societat", "limitada", "anonima",
+    "grup", "grupo", "empresa", "empreses", "empresas", "servei", "serveis", "servicio",
+    "servicios", "manteniment", "mantenimiento", "installacio", "installacions", "instalacion",
+    "instalaciones", "enginyeria", "ingenieria", "tecnic", "tecnica", "tecnics", "tecnicas",
+    "tecnologia", "tecnologies", "integral", "integrals", "preventiu", "preventiva",
+    "sistemes", "sistemas", "projecte", "projectes", "proyecto", "proyectos", "solucio",
+    "solucions", "solucion", "soluciones", "comercial", "industrial", "industrials",
+    "baix", "baixa", "alta", "tensio", "tension", "rebt", "climatitzacio", "climatizacion",
+    "clima", "bombeig", "bombeo", "solar", "fotovoltaica", "aigua", "agua", "reg", "riego",
+    "construccio", "construccion", "obres", "obras", "reformes", "reformas", "fontaneria",
+    "electricitat", "electricidad", "del", "dels", "els", "les", "las", "los", "amb", "con",
+    "per", "para", "por", "una", "uns", "unes", "lleida", "barcelona", "girona", "tarragona",
+    "catalunya", "espana", "spain", "cat", "com", "org", "net", "http", "https", "www",
+    "linkedin", "instagram", "facebook",
+})
+
+
+def _normalitzar_tokens_osint(text: str) -> List[str]:
+    """Descomposa text sense accents en tokens alfanumèrics en minúscula."""
+    if not text:
+        return []
+    norm = unicodedata.normalize("NFKD", text)
+    ascii_txt = "".join(ch for ch in norm if not unicodedata.combining(ch)).lower()
+    return re.findall(r"[a-z0-9]+", ascii_txt)
+
+
+def _resultat_osint_coincideix_empresa(
+    nom_empresa: str,
+    text: str,
+    url: str = "",
+    rao_social: Optional[str] = None,
+    cif: Optional[str] = None,
+    web_url: Optional[str] = None,
+) -> bool:
+    """Verifica que un resultat de cerca web pertanyi realment a l'empresa objectiu."""
+    haystack_raw = f"{text or ''} {url or ''}"
+    cif_norm = normalitzar_cif(cif)
+    if cif_norm and cif_norm in normalitzar_cif(haystack_raw):
+        return True
+
+    haystack_tokens = set(_normalitzar_tokens_osint(haystack_raw))
+    if not haystack_tokens:
+        return False
+
+    if web_url:
+        dom = normalitzar_domini(web_url)
+        dom_parts = [p for p in dom.split(".")[:-1] if len(p) >= 4 and p not in _OSINT_GENERIC_STOPWORDS]
+        dom_norm = re.sub(r"[^a-z0-9]", "", "".join(dom_parts))
+        haystack_compact = "".join(_normalitzar_tokens_osint(haystack_raw))
+        if dom_norm and len(dom_norm) >= 5 and dom_norm in haystack_compact:
+            return True
+
+    distinctive: List[str] = []
+    seen = set()
+    for source in (nom_empresa or "", rao_social or ""):
+        for tok in _normalitzar_tokens_osint(source):
+            if len(tok) >= 3 and tok not in _OSINT_GENERIC_STOPWORDS and tok not in seen:
+                seen.add(tok)
+                distinctive.append(tok)
+
+    if not distinctive:
+        return False
+
+    matched = [tok for tok in distinctive if tok in haystack_tokens]
+    required = 1 if len(distinctive) == 1 else min(2, len(distinctive))
+    return len(matched) >= required
+
+
 class FirecrawlMultiChannelService:
     """Servei d'extracció i investigació multi-canal mitjançant Firecrawl i HTTP real."""
 
@@ -1536,6 +1605,10 @@ class FirecrawlMultiChannelService:
                 titol = it.get("title", "")
                 desc = it.get("description", "")
                 url = it.get("url", "")
+                if not _resultat_osint_coincideix_empresa(
+                    nom_empresa, f"{titol} {desc}", url=url, rao_social=rao_social, cif=cif
+                ):
+                    continue
 
                 # Cas 1: Perfil directe de LinkedIn ("Joan Marcet Vila - Gerent a Instal·lacions X | LinkedIn")
                 if "linkedin.com/in/" in url.lower():
@@ -1812,6 +1885,10 @@ class FirecrawlMultiChannelService:
             titol = (item.get("title") or "").strip()
             desc = (item.get("description") or "").strip()
             text_combinat = f"{titol} - {desc}".strip(" -")
+            if not _resultat_osint_coincideix_empresa(
+                nom_empresa, text_combinat, url=raw_url, web_url=web_url
+            ):
+                continue
 
             # Intentar extreure Gatekeeper real de qualsevol font fiable (notícies, premsa, entrevistes, linkedin)
             nom_gk_cand, carrec_gk_cand = _extreure_gatekeeper_real_de_text(text_combinat)

@@ -472,10 +472,13 @@ def _aplicar_regles_estrictes_post_avaluacio(
             if te_contacte_operatiu and avaluacio.operaris_estimats >= operaris_minims:
                 avaluacio.estat_decisio = "SELECCIONAT_SENSE_GATEKEEPER"
                 avaluacio.score = min(avaluacio.score, 79)
-                if "[AVÍS: Sense Gatekeeper verificat]" not in avaluacio.motiu_detallat_ia:
+                if (
+                    "AVÍS: Decisor nominal pendent d'identificar" not in avaluacio.motiu_detallat_ia
+                    and "[AVÍS: Sense Gatekeeper verificat" not in avaluacio.motiu_detallat_ia
+                ):
                     avaluacio.motiu_detallat_ia = (
-                        f"{avaluacio.motiu_detallat_ia} | [AVÍS: Sense Gatekeeper verificat. "
-                        f"Admesa provisionalment per quadrilla ({avaluacio.operaris_estimats} operaris) i telèfon operatiu]."
+                        f"{avaluacio.motiu_detallat_ia} | AVÍS: Decisor nominal pendent d'identificar. "
+                        f"Admesa provisionalment per quadrilla ({avaluacio.operaris_estimats} operaris) i telèfon operatiu."
                     )
             else:
                 avaluacio.estat_decisio = "DESCARTAT"
@@ -530,7 +533,11 @@ async def qualificar_candidat_amb_openrouter(
         Instància validada de `LeadEvaluationSchema`.
     """
     hints = dict(gatekeeper_hints or {})
-    if gatekeeper_bloc and not hints:
+    if gatekeeper_bloc and gatekeeper_bloc.strip().lower() == "cap":
+        hints.pop("nom", None)
+        hints.pop("carrec", None)
+        hints.pop("context", None)
+    elif gatekeeper_bloc and not hints:
         m_nom = re.search(r"Nom:\s*([^|]+)", gatekeeper_bloc)
         if m_nom and m_nom.group(1).strip() != "cap":
             hints["nom"] = m_nom.group(1).strip()

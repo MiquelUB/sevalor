@@ -1413,20 +1413,28 @@ async def crear_executar_tasca_cp(
                 fonts = list(investigacio.get("fonts_investigades", []))
                 gk = item.get("gatekeeper")
                 if not gk:
-                    nom_cand = item.get("decisor_nom") or investigacio.get("gatekeeper_hints", {}).get("nom")
-                    if nom_cand and es_nom_persona_real(nom_cand):
-                        carrec_cand = (
-                            item.get("decisor_carrec")
-                            or investigacio.get("gatekeeper_hints", {}).get("carrec")
-                            or "Direcció Tècnica"
-                        )
-                        gk = Gatekeeper(
-                            nom=nom_cand.strip(),
-                            carrec=carrec_cand.strip() if carrec_cand else "Direcció Tècnica",
-                            font_url=item.get("linkedin_url") or web or "web",
-                            cita=f"Gatekeeper verificat a les fonts: {nom_cand.strip()}",
-                            confianca="alta",
-                        )
+                    hints_inv = investigacio.get("gatekeeper_hints") or {}
+                    for nom_cand, carrec_cand, font_cand in (
+                        (
+                            item.get("decisor_nom"),
+                            item.get("decisor_carrec"),
+                            item.get("linkedin_url") or web or "web",
+                        ),
+                        (
+                            hints_inv.get("nom"),
+                            hints_inv.get("carrec"),
+                            hints_inv.get("linkedin_url") or web or "web",
+                        ),
+                    ):
+                        if nom_cand and es_nom_persona_real(nom_cand):
+                            gk = Gatekeeper(
+                                nom=nom_cand.strip(),
+                                carrec=carrec_cand.strip() if carrec_cand else "Direcció Tècnica",
+                                font_url=font_cand,
+                                cita=f"Gatekeeper verificat a les fonts: {nom_cand.strip()}",
+                                confianca="alta",
+                            )
+                            break
                 if gk:
                     fonts.append(f"web|{gk.font_url}")
 
@@ -1466,7 +1474,11 @@ async def crear_executar_tasca_cp(
                     web_markdown=web_ctx,
                     fonts_investigades=fonts,
                     fita_recent=investigacio.get("fita_recent"),
-                    gatekeeper_hints=investigacio.get("gatekeeper_hints"),
+                    gatekeeper_hints=(
+                        {"nom": gk.nom, "carrec": gk.carrec, "context": gk.cita}
+                        if gk
+                        else None
+                    ),
                     gatekeeper_bloc=bloc_gatekeeper(gk),
                     adreca_fisica=adr or "",
                     municipi=municipi_esperat,

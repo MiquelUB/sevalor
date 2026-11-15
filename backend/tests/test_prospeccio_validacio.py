@@ -266,3 +266,57 @@ def test_searxng_filtra_dominis_ignorables():
     assert _es_domini_ignorable("https://es.linkedin.com/in/pep")
     assert not _es_domini_ignorable("https://www.pratinstalacions.com/")
     assert not _es_domini_ignorable("https://fontaneriaacosta.es/")
+
+
+def test_osint_coincidencia_empresa_rebutja_perfils_aliens():
+    """Verifica que resultats OSINT d'altres persones/empreses no es confonen amb el candidat."""
+    from app.services.firecrawl_service import _resultat_osint_coincideix_empresa
+
+    nom_empresa = (
+        "Grup d'Enginyeria i Manteniment Integral de Climatització i Bombeig Solar a3e73c SL"
+    )
+    assert not _resultat_osint_coincideix_empresa(
+        nom_empresa,
+        "Luke Dunham - Operations Manager | LinkedIn",
+        url="https://uk.linkedin.com/in/luke-dunham",
+        web_url="https://instal-operatiu-a3e73c.cat",
+    )
+    assert _resultat_osint_coincideix_empresa(
+        "Clima Segria SL",
+        "Joan Marcet Vila - Gerent a Clima Segrià | LinkedIn",
+        url="https://es.linkedin.com/in/joan-marcet-vila",
+        web_url="https://climasegria.cat",
+    )
+    assert _resultat_osint_coincideix_empresa(
+        "Instal·lacions del Nord SL",
+        "Adjudicació a B25123456 Administrador Únic Pere Puig",
+        url="https://borme.es/doc/123",
+        cif="B-25123456",
+    )
+
+
+async def test_gatekeeper_bloc_cap_anul_la_hints_no_verificats():
+    """Verifica que gatekeeper_bloc='cap' impedeix que hints OSINT aliens s'injectin com a decisor."""
+    from app.services.openrouter_prospecting_service import qualificar_candidat_amb_openrouter
+
+    av = await qualificar_candidat_amb_openrouter(
+        nom_empresa="Instal·lacions Operatiu a3e73c SL",
+        web_url="https://instal-operatiu-a3e73c.cat",
+        codi_postal="25001",
+        vertical="Climatització i Baixa Tensió REBT",
+        operaris_minims=5,
+        web_markdown="Instal·lacions industrials i equips de 9 tècnics amb cobertura a 25001 Lleida.",
+        fonts_investigades=["web|https://instal-operatiu-a3e73c.cat"],
+        fita_recent="Presència corporativa verificada al Codi Postal 25001.",
+        gatekeeper_hints={"nom": "Luke Dunham", "carrec": "Gerent / Direcció (LinkedIn)"},
+        gatekeeper_bloc="cap",
+        adreca_fisica="Carrer Major, 12, 25001 Lleida",
+        municipi="Lleida",
+        te_contacte_operatiu=True,
+        db=None,
+    )
+    assert av.decisor_nom is None
+    assert av.estat_decisio == "SELECCIONAT_SENSE_GATEKEEPER"
+    assert av.score <= 79
+    assert "Luke Dunham" not in av.motiu_detallat_ia
+    assert "AVÍS: Decisor nominal pendent d'identificar" in av.motiu_detallat_ia
