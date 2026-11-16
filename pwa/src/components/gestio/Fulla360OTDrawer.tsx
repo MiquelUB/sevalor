@@ -143,6 +143,100 @@ export function Fulla360OTDrawer({
             </div>
           </section>
 
+          {/* 2.5 Control Horari, Trams GPS i Hores Facturables */}
+          {(() => {
+            const trams = feina.trams_temps || [];
+            const horesFact = Number(feina.hores_imputades_facturables || 0);
+            const preuH = Number(feina.preu_venda_hora_aplicat || 45);
+            const fmtHMS = (seg: number) => {
+              const s = Math.max(0, Math.floor(seg));
+              const hh = Math.floor(s / 3600);
+              const mm = Math.floor((s % 3600) / 60);
+              const ss = s % 60;
+              return `${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}:${String(ss).padStart(2, "0")}`;
+            };
+            return (
+              <section className="bg-surface-container-lowest dark:bg-slate-900 p-md rounded-xl border border-outline-variant/30 space-y-sm">
+                <div className="flex items-center justify-between border-b border-outline-variant/20 pb-2">
+                  <div className="flex items-center gap-2">
+                    <Clock className="w-4 h-4 text-primary" />
+                    <h3 className="font-body-strong text-sm text-on-surface dark:text-white">
+                      Control Horari i Hores Facturables
+                    </h3>
+                  </div>
+                  {feina.te_tram_obert ? (
+                    <span className="text-[10px] font-mono font-bold px-2.5 py-0.5 rounded-full bg-green-100 text-green-800 dark:bg-green-950/60 dark:text-green-300 flex items-center gap-1">
+                      <span className="w-1.5 h-1.5 rounded-full bg-green-600 animate-pulse" />
+                      TEMPS OBERT
+                    </span>
+                  ) : (
+                    <span className="text-[10px] font-mono font-bold px-2.5 py-0.5 rounded-full bg-secondary-container/20 text-secondary">
+                      {trams.length > 0 ? `${trams.length} trams` : horesFact > 0 ? "REGISTRAT" : "SENSE REGISTRE"}
+                    </span>
+                  )}
+                </div>
+
+                <div className="grid grid-cols-2 gap-sm">
+                  <div className="p-2.5 rounded-lg bg-surface-container-low dark:bg-slate-800/60 border border-outline-variant/20">
+                    <span className="text-[10px] font-label-caps text-on-surface-variant uppercase block">
+                      Total Hores Computades
+                    </span>
+                    <span className="text-lg font-mono font-black text-primary dark:text-white">
+                      {horesFact.toFixed(2)} h
+                    </span>
+                  </div>
+                  <div className="p-2.5 rounded-lg bg-secondary-container/15 border border-secondary-container/30">
+                    <span className="text-[10px] font-label-caps text-secondary uppercase block">
+                      Valor Mà d&apos;Obra ({preuH} €/h)
+                    </span>
+                    <span className="text-lg font-mono font-black text-secondary">
+                      {(horesFact * preuH).toFixed(2)} €
+                    </span>
+                  </div>
+                </div>
+
+                {trams.length > 0 && (
+                  <div className="space-y-1 pt-1">
+                    <span className="text-[10px] font-label-caps text-on-surface-variant uppercase block">
+                      Trams de Treball Registrats
+                    </span>
+                    {trams.map((t, idx) => {
+                      const ini = new Date(t.hora_inici).toLocaleTimeString("ca-ES", {
+                        hour: "2-digit",
+                        minute: "2-digit",
+                      });
+                      const fi = t.hora_fi
+                        ? new Date(t.hora_fi).toLocaleTimeString("ca-ES", {
+                            hour: "2-digit",
+                            minute: "2-digit",
+                          })
+                        : "En curs";
+                      return (
+                        <div
+                          key={t.id}
+                          className="flex items-center justify-between text-xs px-2.5 py-1.5 rounded-lg bg-surface-container-low/70 dark:bg-slate-800/40 border border-outline-variant/15"
+                        >
+                          <div className="flex items-center gap-2">
+                            <span className="font-bold text-primary">#{idx + 1}</span>
+                            <span className="font-mono text-on-surface dark:text-slate-200">
+                              {ini} → {fi}
+                            </span>
+                            {(t.gps_inici_lat != null || t.gps_fi_lat != null) && (
+                              <MapPin className="w-3 h-3 text-secondary" />
+                            )}
+                          </div>
+                          <span className="font-mono font-bold text-secondary">
+                            {t.hora_fi ? fmtHMS(t.durada_segons) : "Actiu"}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </section>
+            );
+          })()}
+
           {/* 3. Assignació Operativa & Colla de Treball */}
           <section className="bg-surface-container-lowest dark:bg-slate-900 p-md rounded-xl border border-outline-variant/30 space-y-md">
             <div className="flex items-center justify-between pb-2 border-b border-outline-variant/20">

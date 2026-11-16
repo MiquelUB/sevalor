@@ -158,7 +158,7 @@ export default function GestioDashboardPage() {
 
   // Càlcul reactiu i coherent dels KPIs operatius en temps real (Zero Mock Data)
   const feinesActives = feines.filter((f) =>
-    ["PENDENT", "ASSIGNADA", "PROGRAMADA", "EN_CURS", "EN_OBRA", "EN_RUTA"].includes(f.estat)
+    ["PENDENT", "ASSIGNADA", "PROGRAMADA", "EN_CURS", "EN_OBRA", "EN_RUTA", "PAUSADA"].includes(f.estat)
   );
   const feinesPendents = feines.filter((f) => f.estat === "PENDENT");
   const feinesCompletades = feines.filter((f) =>
@@ -298,6 +298,7 @@ export default function GestioDashboardPage() {
                       <th className="px-lg py-md font-label-caps text-on-surface-variant">TÍTOL / INTERVENCIÓ</th>
                       <th className="px-lg py-md font-label-caps text-on-surface-variant">CAP DE COLLA</th>
                       <th className="px-lg py-md font-label-caps text-on-surface-variant text-center">DATA</th>
+                      <th className="px-lg py-md font-label-caps text-on-surface-variant text-center">HORES</th>
                       <th className="px-lg py-md font-label-caps text-on-surface-variant">UBICACIÓ</th>
                       <th className="px-lg py-md font-label-caps text-on-surface-variant">ESTAT</th>
                       <th className="px-lg py-md font-label-caps text-on-surface-variant text-right">ACCIONS</th>
@@ -306,6 +307,7 @@ export default function GestioDashboardPage() {
                   <tbody className="divide-y divide-outline-variant/10">
                     {feinesResultatsFiltrades.map((feina) => {
                       const isExpanded = expandedRowId === feina.id;
+                      const horesFeina = Number(feina.hores_imputades_facturables || 0);
                       return (
                         <React.Fragment key={feina.id}>
                           <tr
@@ -331,6 +333,20 @@ export default function GestioDashboardPage() {
                             </td>
                             <td className="px-lg py-md font-data-tabular text-center">
                               {feina.data_planificacio || "—"}
+                            </td>
+                            <td className="px-lg py-md font-data-tabular text-center">
+                              {feina.te_tram_obert ? (
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-green-100 text-green-800 text-[11px] font-bold">
+                                  <span className="w-1.5 h-1.5 rounded-full bg-green-600 animate-pulse" />
+                                  EN CURS {horesFeina > 0 ? `(${horesFeina.toFixed(2)}h)` : ""}
+                                </span>
+                              ) : horesFeina > 0 ? (
+                                <span className="font-mono font-bold text-secondary">
+                                  {horesFeina.toFixed(2)} h
+                                </span>
+                              ) : (
+                                <span className="text-outline text-xs">0.00 h</span>
+                              )}
                             </td>
                             <td className="px-lg py-md text-xs text-on-surface-variant max-w-xs truncate">
                               {feina.adreca || "—"}
@@ -409,7 +425,7 @@ export default function GestioDashboardPage() {
                           </tr>
                           {isExpanded && (
                             <tr className="bg-surface-container-low/40">
-                              <td colSpan={8} className="px-xl py-lg space-y-md">
+                              <td colSpan={9} className="px-xl py-lg space-y-md">
                                 <div className="grid grid-cols-1 md:grid-cols-3 gap-lg">
                                   <div className="bg-surface-container-lowest p-md rounded-xl border border-outline-variant/30">
                                     <span className="font-label-caps text-on-surface-variant uppercase block mb-xs">
@@ -433,10 +449,17 @@ export default function GestioDashboardPage() {
                                   <div className="bg-surface-container-lowest p-md rounded-xl border border-outline-variant/30 flex flex-col justify-between">
                                     <div>
                                       <span className="font-label-caps text-on-surface-variant uppercase block mb-xs">
-                                        Assignació Operativa
+                                        Assignació i Control Horari
                                       </span>
                                       <p className="text-sm font-body-strong text-on-surface">
                                         Responsable: {feina.cap_de_colla_nom || "Pendent d'assignar"}
+                                      </p>
+                                      <p className="text-xs font-mono font-bold text-secondary mt-1">
+                                        Hores facturables: {horesFeina.toFixed(2)} h (
+                                        {(horesFeina * Number(feina.preu_venda_hora_aplicat || 45)).toFixed(2)} €)
+                                        {feina.trams_temps && feina.trams_temps.length > 0
+                                          ? ` • ${feina.trams_temps.length} trams`
+                                          : ""}
                                       </p>
                                     </div>
                                     <div className="flex gap-sm mt-md">
@@ -849,7 +872,10 @@ export default function GestioDashboardPage() {
                         ? "bg-secondary-container"
                         : feina.estat === "EN_CURS" || feina.estat === "EN_RUTA"
                         ? "bg-green-500"
+                        : feina.estat === "PAUSADA"
+                        ? "bg-amber-500"
                         : "bg-primary";
+                    const horesFeina = Number(feina.hores_imputades_facturables || 0);
 
                     return (
                       <div
@@ -876,7 +902,31 @@ export default function GestioDashboardPage() {
                             <span className="text-[10px] font-label-caps text-on-surface-variant mt-xs">
                               {feina.cap_de_colla_nom || feina.estat}
                             </span>
+                            {(feina.te_tram_obert || horesFeina > 0) && (
+                              <span
+                                className={`mt-1 text-[10px] font-mono font-bold px-1.5 py-0.5 rounded-full ${
+                                  feina.te_tram_obert
+                                    ? "bg-green-100 text-green-800"
+                                    : "bg-secondary-container/20 text-secondary"
+                                }`}
+                              >
+                                {feina.te_tram_obert
+                                  ? `⏱️ EN CURS${horesFeina > 0 ? ` (${horesFeina.toFixed(2)}h)` : ""}`
+                                  : `⏱️ ${horesFeina.toFixed(2)}h`}
+                              </span>
+                            )}
                           </div>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setSelectedOTFulla360(feina);
+                            }}
+                            className="p-1.5 rounded-lg hover:bg-surface-container-highest text-emerald-600 hover:text-emerald-700 transition-colors cursor-pointer"
+                            title="Veure Fulla 360° i hores"
+                          >
+                            <span className="material-symbols-outlined text-[16px]">visibility</span>
+                          </button>
                           <button
                             type="button"
                             onClick={(e) => {
@@ -1028,6 +1078,7 @@ export default function GestioDashboardPage() {
                       <th className="py-3 px-4">Client</th>
                       <th className="py-3 px-4">Cap de Colla</th>
                       <th className="py-3 px-4">Estat</th>
+                      <th className="py-3 px-4">Hores</th>
                       <th className="py-3 px-4">Data Planificada</th>
                       <th className="py-3 px-4">Ubicació</th>
                       <th className="py-3 px-4 text-right">Acció</th>
@@ -1036,6 +1087,7 @@ export default function GestioDashboardPage() {
                   <tbody className="divide-y divide-surface-container">
                     {feines.slice(0, 20).map((feina) => {
                       const isExpanded = expandedSistemaRowId === feina.id;
+                      const horesFeina = Number(feina.hores_imputades_facturables || 0);
                       return (
                         <React.Fragment key={feina.id}>
                           <tr
@@ -1086,6 +1138,20 @@ export default function GestioDashboardPage() {
                               >
                                 {feina.estat}
                               </span>
+                            </td>
+                            <td className="py-3 px-4 text-xs">
+                              {feina.te_tram_obert ? (
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-green-100 text-green-800 text-[10px] font-bold">
+                                  <span className="w-1.5 h-1.5 rounded-full bg-green-600 animate-pulse" />
+                                  EN CURS {horesFeina > 0 ? `(${horesFeina.toFixed(2)}h)` : ""}
+                                </span>
+                              ) : horesFeina > 0 ? (
+                                <span className="font-mono font-bold text-secondary">
+                                  {horesFeina.toFixed(2)} h
+                                </span>
+                              ) : (
+                                <span className="text-outline">0.00 h</span>
+                              )}
                             </td>
                             <td className="py-3 px-4 text-xs text-on-surface-variant flex items-center gap-1.5">
                               <Calendar className="w-3.5 h-3.5 text-outline" />
@@ -1149,7 +1215,7 @@ export default function GestioDashboardPage() {
                           </tr>
                           {isExpanded && (
                             <tr className="bg-surface-container-low/40">
-                              <td colSpan={8} className="px-xl py-lg space-y-md">
+                              <td colSpan={9} className="px-xl py-lg space-y-md">
                                 <div className="grid grid-cols-1 md:grid-cols-3 gap-lg">
                                   <div className="bg-surface-container-lowest p-md rounded-xl border border-outline-variant/30">
                                     <span className="font-label-caps text-on-surface-variant uppercase block mb-xs">
@@ -1173,10 +1239,17 @@ export default function GestioDashboardPage() {
                                   <div className="bg-surface-container-lowest p-md rounded-xl border border-outline-variant/30 flex flex-col justify-between">
                                     <div>
                                       <span className="font-label-caps text-on-surface-variant uppercase block mb-xs">
-                                        Assignació Operativa
+                                        Assignació i Control Horari
                                       </span>
                                       <p className="text-sm font-body-strong text-on-surface">
                                         Responsable: {feina.cap_de_colla_nom || "Pendent d'assignar"}
+                                      </p>
+                                      <p className="text-xs font-mono font-bold text-secondary mt-1">
+                                        Hores facturables: {horesFeina.toFixed(2)} h (
+                                        {(horesFeina * Number(feina.preu_venda_hora_aplicat || 45)).toFixed(2)} €)
+                                        {feina.trams_temps && feina.trams_temps.length > 0
+                                          ? ` • ${feina.trams_temps.length} trams`
+                                          : ""}
                                       </p>
                                     </div>
                                     <div className="flex gap-sm mt-md">

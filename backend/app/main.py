@@ -122,6 +122,84 @@ async def _ensure_schema_columns() -> None:
                         """
                     )
                 )
+
+            res_trams = await session.execute(
+                text(
+                    "SELECT 1 FROM information_schema.tables "
+                    "WHERE table_schema = 'public' AND table_name = 'ordres_treball_trams_temps'"
+                )
+            )
+            if not res_trams.scalar():
+                await session.execute(
+                    text(
+                        """
+                        CREATE TABLE IF NOT EXISTS ordres_treball_trams_temps (
+                            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                            empresa_id UUID NOT NULL REFERENCES empreses(id) ON DELETE CASCADE,
+                            ordre_treball_id UUID NOT NULL REFERENCES ordres_treball(id) ON DELETE CASCADE,
+                            operari_id UUID REFERENCES usuaris(id) ON DELETE SET NULL,
+                            hora_inici TIMESTAMPTZ NOT NULL DEFAULT now(),
+                            hora_fi TIMESTAMPTZ,
+                            gps_inici_lat NUMERIC(9, 6),
+                            gps_inici_lng NUMERIC(9, 6),
+                            gps_fi_lat NUMERIC(9, 6),
+                            gps_fi_lng NUMERIC(9, 6),
+                            durada_segons INTEGER NOT NULL DEFAULT 0,
+                            desviacio_geovalla BOOLEAN NOT NULL DEFAULT FALSE,
+                            justificacio_gps TEXT,
+                            created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                        );
+                        """
+                    )
+                )
+                await session.execute(
+                    text(
+                        "CREATE INDEX IF NOT EXISTS ix_ordres_treball_trams_temps_empresa_id ON ordres_treball_trams_temps(empresa_id);"
+                    )
+                )
+                await session.execute(
+                    text(
+                        "CREATE INDEX IF NOT EXISTS ix_ordres_treball_trams_temps_ordre_id ON ordres_treball_trams_temps(ordre_treball_id);"
+                    )
+                )
+                await session.execute(
+                    text(
+                        "CREATE INDEX IF NOT EXISTS ix_ordres_treball_trams_temps_operari_id ON ordres_treball_trams_temps(operari_id);"
+                    )
+                )
+                await session.execute(
+                    text("ALTER TABLE ordres_treball_trams_temps ENABLE ROW LEVEL SECURITY;")
+                )
+                await session.execute(
+                    text("ALTER TABLE ordres_treball_trams_temps FORCE ROW LEVEL SECURITY;")
+                )
+                await session.execute(
+                    text(
+                        "DROP POLICY IF EXISTS tenant_isolation_ordres_treball_trams_temps ON ordres_treball_trams_temps;"
+                    )
+                )
+                await session.execute(
+                    text(
+                        """
+                        CREATE POLICY tenant_isolation_ordres_treball_trams_temps ON ordres_treball_trams_temps
+                            USING (empresa_id = NULLIF(current_setting('app.current_empresa_id', true), '')::uuid)
+                            WITH CHECK (empresa_id = NULLIF(current_setting('app.current_empresa_id', true), '')::uuid);
+                        """
+                    )
+                )
+                await session.execute(
+                    text(
+                        """
+                        DO $$
+                        BEGIN
+                            IF EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'sevalor_app') THEN
+                                GRANT SELECT, INSERT, UPDATE, DELETE ON ordres_treball_trams_temps TO sevalor_app;
+                            END IF;
+                        END
+                        $$;
+                        """
+                    )
+                )
             await session.commit()
     except Exception:
         pass

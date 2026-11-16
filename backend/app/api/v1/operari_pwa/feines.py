@@ -453,6 +453,23 @@ async def _tancar_tram_actiu_i_acumular(
                     else just_txt
                 )
     elif not trams and feina.hora_inici_real is not None and feina.hora_fi_real is None:
+        if feina.hores_imputades_facturables and float(feina.hores_imputades_facturables) > 0:
+            prev_sec = int(round(float(feina.hores_imputades_facturables) * 3600.0))
+            tram_previ = OrdreTreballTramTemps(
+                empresa_id=empresa_uuid,
+                ordre_treball_id=feina.id,
+                operari_id=feina.cap_de_colla_id,
+                hora_inici=feina.hora_inici_real,
+                hora_fi=feina.hora_inici_real,
+                gps_inici_lat=feina.gps_inici_lat,
+                gps_inici_lng=feina.gps_inici_lng,
+                durada_segons=prev_sec,
+                desviacio_geovalla=bool(feina.desviacio_geovalla),
+                justificacio_gps=feina.justificacio_geovalla,
+            )
+            db.add(tram_previ)
+            trams.append(tram_previ)
+
         sec = max(0, int((now - feina.hora_inici_real).total_seconds()))
         tram_legacy = OrdreTreballTramTemps(
             empresa_id=empresa_uuid,
@@ -479,6 +496,7 @@ async def _tancar_tram_actiu_i_acumular(
         feina.cost_ma_obra_real = float(round(Decimal(str(total_hores)) * Decimal("24.00"), 2))
     else:
         total_hores = float(feina.hores_imputades_facturables or 0.0)
+        total_segons = int(round(total_hores * 3600.0))
 
     trams_resp = [TramTempsResponse.model_validate(t) for t in trams]
     return trams_resp, total_segons, total_hores
@@ -520,25 +538,47 @@ async def comencar_feina(
     )
     existing_trams = list((await db.execute(stmt_trams)).scalars().all())
 
-    # Preservar un tram previ tancat si l'ordre tenia timestamps antics però cap fila de tram
-    if not existing_trams and feina.hora_inici_real is not None and feina.hora_fi_real is not None:
-        sec_previ = max(1, int((feina.hora_fi_real - feina.hora_inici_real).total_seconds()))
-        tram_previ = OrdreTreballTramTemps(
-            empresa_id=emp_uuid,
-            ordre_treball_id=feina.id,
-            operari_id=usuari_id,
-            hora_inici=feina.hora_inici_real,
-            hora_fi=feina.hora_fi_real,
-            gps_inici_lat=feina.gps_inici_lat,
-            gps_inici_lng=feina.gps_inici_lng,
-            gps_fi_lat=feina.gps_fi_lat,
-            gps_fi_lng=feina.gps_fi_lng,
-            durada_segons=sec_previ,
-            desviacio_geovalla=bool(feina.desviacio_geovalla),
-            justificacio_gps=feina.justificacio_geovalla,
+    # Preservar un tram previ tancat o hores anteriors si l'ordre tenia dades antigues però cap fila de tram
+    if not existing_trams:
+        prev_hores_sec = (
+            int(round(float(feina.hores_imputades_facturables) * 3600.0))
+            if feina.hores_imputades_facturables and float(feina.hores_imputades_facturables) > 0
+            else 0
         )
-        db.add(tram_previ)
-        existing_trams.append(tram_previ)
+        if feina.hora_inici_real is not None and feina.hora_fi_real is not None:
+            sec_diff = max(1, int((feina.hora_fi_real - feina.hora_inici_real).total_seconds()))
+            tram_previ = OrdreTreballTramTemps(
+                empresa_id=emp_uuid,
+                ordre_treball_id=feina.id,
+                operari_id=usuari_id,
+                hora_inici=feina.hora_inici_real,
+                hora_fi=feina.hora_fi_real,
+                gps_inici_lat=feina.gps_inici_lat,
+                gps_inici_lng=feina.gps_inici_lng,
+                gps_fi_lat=feina.gps_fi_lat,
+                gps_fi_lng=feina.gps_fi_lng,
+                durada_segons=max(sec_diff, prev_hores_sec),
+                desviacio_geovalla=bool(feina.desviacio_geovalla),
+                justificacio_gps=feina.justificacio_geovalla,
+            )
+            db.add(tram_previ)
+            existing_trams.append(tram_previ)
+        elif prev_hores_sec > 0:
+            ref_inici = feina.hora_inici_real or now
+            tram_previ = OrdreTreballTramTemps(
+                empresa_id=emp_uuid,
+                ordre_treball_id=feina.id,
+                operari_id=usuari_id,
+                hora_inici=ref_inici,
+                hora_fi=ref_inici,
+                gps_inici_lat=feina.gps_inici_lat,
+                gps_inici_lng=feina.gps_inici_lng,
+                durada_segons=prev_hores_sec,
+                desviacio_geovalla=bool(feina.desviacio_geovalla),
+                justificacio_gps=feina.justificacio_geovalla,
+            )
+            db.add(tram_previ)
+            existing_trams.append(tram_previ)
 
     tram_obert = next((t for t in reversed(existing_trams) if t.hora_fi is None), None)
     if tram_obert is None:
@@ -549,6 +589,7 @@ async def comencar_feina(
             hora_inici=now,
             gps_inici_lat=payload.lat,
             gps_inici_lng=payload.lng,
+            durada_segons=0,
             desviacio_geovalla=bool(payload.desviacio_justificada or payload.justificacio_gps),
             justificacio_gps=payload.justificacio_gps.strip() if payload.justificacio_gps else None,
         )

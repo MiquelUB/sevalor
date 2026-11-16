@@ -233,3 +233,74 @@ async def test_trams_temps_aillament_rls_multi_tenant(admin_session: AsyncSessio
     ).scalars().all()
     assert len(rows_b) == 0
     await admin_session.execute(text("RESET ROLE"))
+
+
+@pytest.mark.asyncio
+async def test_suma_hores_existents_legacy_i_visibilitat_dashboard_gestio(admin_session: AsyncSession):
+    """Verifica que les hores existents prèvies es sumen al nou tram i que /gestio/feines les exposa al dashboard."""
+    emp_id = uuid.uuid4()
+    op_id = uuid.uuid4()
+    boss_id = uuid.uuid4()
+    cli_id = uuid.uuid4()
+    ot_id = uuid.uuid4()
+
+    admin_session.add(
+        Empresa(id=emp_id, nom="Emp Dash", nif=f"D{emp_id.hex[:8].upper()}", subdomini=f"dash-{emp_id.hex[:6]}")
+    )
+    await admin_session.flush()
+
+    admin_session.add_all([
+        Usuari(id=op_id, empresa_id=emp_id, nom="Op Dash", nif=f"OD{op_id.hex[:5].upper()}", rol="OPERARI", pin_hash="x"),
+        Usuari(id=boss_id, empresa_id=emp_id, nom="Boss Dash", nif=f"BD{boss_id.hex[:5].upper()}", rol="BOSS", pin_hash="x"),
+        Client(id=cli_id, empresa_id=emp_id, codi="CD1", rao_social="Cli Dash", nif="B55443322"),
+    ])
+    await admin_session.flush()
+
+    # Ordre legacy amb 1.50 hores ja imputades prèviament i estat EN_CURS (sense files a trams_temps)
+    admin_session.add(
+        OrdreTreball(
+            id=ot_id,
+            empresa_id=emp_id,
+            codi=f"OT-{ot_id.hex[:5]}",
+            client_id=cli_id,
+            cap_de_colla_id=op_id,
+            titol="OT amb hores prèvies",
+            adreca="41.3851, 2.1734",
+            estat="EN_CURS",
+            hora_inici_real=datetime.now(timezone.utc) - timedelta(minutes=30),
+            hora_fi_real=None,
+            hores_imputades_facturables=1.50,
+            preu_venda_hora_aplicat=45.0,
+        )
+    )
+    await admin_session.commit()
+
+    tok_op = _crear_token(op_id, emp_id, "OPERARI")
+    tok_boss = _crear_token(boss_id, emp_id, "BOSS")
+    h_op = {"Authorization": f"Bearer {tok_op}", "X-Empresa-ID": str(emp_id)}
+    h_boss = {"Authorization": f"Bearer {tok_boss}", "X-Empresa-ID": str(emp_id)}
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test/api/v1") as client:
+        # 1. Parar la feina: 1.50h prèvies + 0.50h actuals = 2.00h totals!
+        res_stop = await client.put(
+            f"/operari/feines/{ot_id}/finalitzar-temps",
+            json={"lat": 41.3851, "lng": 2.1734},
+            headers=h_op,
+        )
+        assert res_stop.status_code == 200, res_stop.text
+        stop_data = res_stop.json()
+        assert stop_data["estat"] == "PAUSADA"
+        assert stop_data["hores_imputades_facturables"] == pytest.approx(2.0, abs=0.05)
+
+        # 2. Verificar que el Dashboard (/gestio/feines) rep les hores, estat i trams!
+        res_dash = await client.get("/gestio/feines", headers=h_boss)
+        assert res_dash.status_code == 200, res_dash.text
+        items = res_dash.json()
+        target = next((f for f in items if f["id"] == str(ot_id)), None)
+        assert target is not None
+        assert target["estat"] == "PAUSADA"
+        assert target["hores_imputades_facturables"] == pytest.approx(2.0, abs=0.05)
+        assert target["te_tram_obert"] is False
+        assert len(target["trams_temps"]) == 2
+

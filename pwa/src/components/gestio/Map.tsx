@@ -59,6 +59,19 @@ export interface OperariAssignat {
   telefon?: string | null;
 }
 
+export interface TramTempsGestio {
+  id: string;
+  hora_inici: string;
+  hora_fi?: string | null;
+  durada_segons: number;
+  gps_inici_lat?: number | null;
+  gps_inici_lng?: number | null;
+  gps_fi_lat?: number | null;
+  gps_fi_lng?: number | null;
+  desviacio_geovalla?: boolean;
+  justificacio_gps?: string | null;
+}
+
 export interface Feina {
   id: string;
   codi: string;
@@ -75,6 +88,13 @@ export interface Feina {
   client_nom?: string | null;
   descripcio?: string | null;
   data_planificacio?: string | null;
+  hora_inici_real?: string | null;
+  hora_fi_real?: string | null;
+  hores_imputades_facturables?: number | null;
+  preu_venda_hora_aplicat?: number | null;
+  te_tram_obert?: boolean;
+  temps_acumulat_segons?: number;
+  trams_temps?: TramTempsGestio[];
   linies_picking?: LiniaPickingItem[];
   eines?: EinaItem[];
 }

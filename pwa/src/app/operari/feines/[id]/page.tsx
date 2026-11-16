@@ -144,7 +144,12 @@ export default function LlistaMaquinesPage() {
         (ordre?.estat === "EN_CURS" && ordre?.hora_inici_real && !ordre?.hora_fi_real)
     );
     const iniciActiu = ordre?.tram_actiu_inici || ordre?.hora_inici_real;
-    const acumulatPrevi = ordre?.temps_acumulat_segons || 0;
+    const acumulatPrevi = Math.max(
+      ordre?.temps_acumulat_segons || 0,
+      !(ordre?.trams_temps?.length) && ordre?.hores_imputades_facturables
+        ? Math.round(Number(ordre.hores_imputades_facturables) * 3600)
+        : 0
+    );
 
     if (tramObert && iniciActiu) {
       const actualitzarCronometre = () => {

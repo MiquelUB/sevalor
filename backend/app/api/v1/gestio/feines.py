@@ -20,6 +20,7 @@ from app.models.models import (
     LiniaPicking,
     OrdreTreball,
     OrdreTreballOperari,
+    OrdreTreballTramTemps,
     PlanolBase,
     Usuari,
     Vehicle,
@@ -85,6 +86,20 @@ class FeinaCreate(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class TramTempsGestioItem(BaseModel):
+    id: uuid.UUID
+    hora_inici: datetime
+    hora_fi: Optional[datetime] = None
+    durada_segons: int = 0
+    gps_inici_lat: Optional[float] = None
+    gps_inici_lng: Optional[float] = None
+    gps_fi_lat: Optional[float] = None
+    gps_fi_lng: Optional[float] = None
+    desviacio_geovalla: bool = False
+    justificacio_gps: Optional[str] = None
+    model_config = ConfigDict(from_attributes=True)
+
+
 class FeinaResponse(FeinaCreate):
     id: uuid.UUID
     versio: int = 1
@@ -94,6 +109,13 @@ class FeinaResponse(FeinaCreate):
     cap_de_colla_nom: Optional[str] = None
     planol_titol: Optional[str] = None
     planol_codi: Optional[str] = None
+    hora_inici_real: Optional[datetime] = None
+    hora_fi_real: Optional[datetime] = None
+    hores_imputades_facturables: Optional[float] = 0.0
+    preu_venda_hora_aplicat: Optional[float] = 45.0
+    te_tram_obert: bool = False
+    temps_acumulat_segons: int = 0
+    trams_temps: List[TramTempsGestioItem] = []
     linies_picking: List[LiniaPickingItem] = []
     eines: List[EinaItem] = []
     operaris_assignats: List[OperariAssignatItem] = []
@@ -159,6 +181,7 @@ async def llistar_feines(
     picking_by_ot: Dict[uuid.UUID, List[LiniaPickingItem]] = collections.defaultdict(list)
     eines_by_ot: Dict[uuid.UUID, List[EinaItem]] = collections.defaultdict(list)
     operaris_by_ot: Dict[uuid.UUID, List[OperariAssignatItem]] = collections.defaultdict(list)
+    trams_by_ot: Dict[uuid.UUID, List[TramTempsGestioItem]] = collections.defaultdict(list)
 
     if ot_ids:
         # 1. Carregar Fulles de picking i línies d'articles en batch
@@ -229,6 +252,19 @@ async def llistar_feines(
                 )
             )
 
+        # 4. Carregar Trams de Temps multi-interval en batch
+        trams_stmt = (
+            select(OrdreTreballTramTemps)
+            .where(
+                OrdreTreballTramTemps.ordre_treball_id.in_(ot_ids),
+                OrdreTreballTramTemps.empresa_id == uuid.UUID(empresa_id),
+            )
+            .order_by(OrdreTreballTramTemps.hora_inici.asc())
+        )
+        trams_res = (await db.execute(trams_stmt)).scalars().all()
+        for t in trams_res:
+            trams_by_ot[t.ordre_treball_id].append(TramTempsGestioItem.model_validate(t))
+
     feines = []
     for ordre, client, operari, planol in rows:
         f_resp = FeinaResponse.model_validate(ordre)
@@ -250,6 +286,16 @@ async def llistar_feines(
         f_resp.linies_picking = picking_by_ot.get(ordre.id, [])
         f_resp.eines = eines_by_ot.get(ordre.id, [])
         f_resp.eina_ids = [e.id for e in f_resp.eines]
+
+        # Assignar trams de temps treballats
+        ot_trams = trams_by_ot.get(ordre.id, [])
+        f_resp.trams_temps = ot_trams
+        f_resp.te_tram_obert = any(t.hora_fi is None for t in ot_trams) or (
+            ordre.estat == "EN_CURS" and ordre.hora_inici_real is not None and ordre.hora_fi_real is None
+        )
+        f_resp.temps_acumulat_segons = sum(t.durada_segons for t in ot_trams if t.hora_fi is not None)
+        if not ot_trams and ordre.hores_imputades_facturables:
+            f_resp.temps_acumulat_segons = int(round(float(ordre.hores_imputades_facturables) * 3600.0))
 
         # Assignar membres de colla
         assigned_ops = operaris_by_ot.get(ordre.id, [])
