@@ -86,6 +86,7 @@ interface OrdreDetall {
   gps_fi_lat?: number | null;
   gps_fi_lng?: number | null;
   hores_imputades_facturables?: number | null;
+  preu_venda_hora_aplicat?: number | null;
   desviacio_geovalla?: boolean;
   justificacio_geovalla?: string | null;
 }
@@ -101,6 +102,31 @@ export default function LlistaMaquinesPage() {
   const [showPinModal, setShowPinModal] = useState(false);
   const [offlinePin, setOfflinePin] = useState("");
   const [offlineError, setOfflineError] = useState<string | null>(null);
+
+  // Cronòmetre en viu per quan la feina està EN_CURS
+  const [tempsTranscorregut, setTempsTranscorregut] = useState<string>("00:00:00");
+  const [horesLiveEstimades, setHoresLiveEstimades] = useState<number>(0);
+
+  useEffect(() => {
+    if (ordre?.estat === "EN_CURS" && ordre.hora_inici_real && !ordre.hora_fi_real) {
+      const actualitzarCronometre = () => {
+        const inici = new Date(ordre.hora_inici_real!).getTime();
+        const ara = Date.now();
+        const diffSegons = Math.max(0, Math.floor((ara - inici) / 1000));
+        const h = Math.floor(diffSegons / 3600);
+        const m = Math.floor((diffSegons % 3600) / 60);
+        const s = diffSegons % 60;
+        setTempsTranscorregut(
+          `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`
+        );
+        const calcHores = Math.max(0.01, Number((diffSegons / 3600).toFixed(2)));
+        setHoresLiveEstimades(calcHores);
+      };
+      actualitzarCronometre();
+      const interval = setInterval(actualitzarCronometre, 1000);
+      return () => clearInterval(interval);
+    }
+  }, [ordre?.estat, ordre?.hora_inici_real, ordre?.hora_fi_real]);
 
   // Geovalla i inici/final en temps de feina (FR-005)
   const [iniciantFeina, setIniciantFeina] = useState(false);
@@ -203,15 +229,27 @@ export default function LlistaMaquinesPage() {
         prev
           ? {
               ...prev,
-              estat: data.estat || (accio === "inici" ? "EN_CURS" : prev.estat),
-              hora_inici_real: data.hora_inici_real ?? prev.hora_inici_real,
-              hora_fi_real: data.hora_fi_real ?? prev.hora_fi_real,
+              estat: data.estat || (accio === "inici" ? "EN_CURS" : "FINALITZADA"),
+              hora_inici_real:
+                data.hora_inici_real !== undefined
+                  ? data.hora_inici_real
+                  : accio === "inici"
+                  ? new Date().toISOString()
+                  : prev.hora_inici_real,
+              hora_fi_real:
+                data.hora_fi_real !== undefined
+                  ? data.hora_fi_real
+                  : accio === "final"
+                  ? new Date().toISOString()
+                  : null,
               gps_inici_lat: data.gps_inici_lat ?? prev.gps_inici_lat,
               gps_inici_lng: data.gps_inici_lng ?? prev.gps_inici_lng,
               gps_fi_lat: data.gps_fi_lat ?? prev.gps_fi_lat,
               gps_fi_lng: data.gps_fi_lng ?? prev.gps_fi_lng,
               hores_imputades_facturables:
                 data.hores_imputades_facturables ?? prev.hores_imputades_facturables,
+              preu_venda_hora_aplicat:
+                data.preu_venda_hora_aplicat ?? prev.preu_venda_hora_aplicat ?? 45,
               desviacio_geovalla: data.desviacio_geovalla ?? prev.desviacio_geovalla,
               justificacio_geovalla: data.justificacio_geovalla ?? prev.justificacio_geovalla,
             }
@@ -221,8 +259,8 @@ export default function LlistaMaquinesPage() {
       setJustificacioGps("");
       setGpsFeedback(
         accio === "inici"
-          ? "Inici de feina i posició GPS registrats. Feina en curs!"
-          : "Final de feina i posició GPS registrats correctament!"
+          ? "Inici de feina registrat amb GPS. Feina en curs!"
+          : `Final de feina registrat amb GPS. S'han computat ${data.hores_imputades_facturables != null ? Number(data.hores_imputades_facturables).toFixed(2) : ""} h per a la factura!`
       );
     } catch (e: unknown) {
       setGpsError(e instanceof Error ? e.message : "Error GPS");
@@ -323,6 +361,7 @@ export default function LlistaMaquinesPage() {
             gps_fi_lat: data.gps_fi_lat ?? null,
             gps_fi_lng: data.gps_fi_lng ?? null,
             hores_imputades_facturables: data.hores_imputades_facturables ?? null,
+            preu_venda_hora_aplicat: data.preu_venda_hora_aplicat ?? 45,
             desviacio_geovalla: Boolean(data.desviacio_geovalla),
             justificacio_geovalla: data.justificacio_geovalla || null,
           });
@@ -355,6 +394,7 @@ export default function LlistaMaquinesPage() {
             gps_fi_lat: data.gps_fi_lat ?? null,
             gps_fi_lng: data.gps_fi_lng ?? null,
             hores_imputades_facturables: data.hores_imputades_facturables ?? null,
+            preu_venda_hora_aplicat: data.preu_venda_hora_aplicat ?? 45,
             desviacio_geovalla: Boolean(data.desviacio_geovalla),
             justificacio_geovalla: data.justificacio_geovalla || null,
           };
@@ -569,118 +609,236 @@ export default function LlistaMaquinesPage() {
                 </div>
               )}
 
-              {ordre.estat !== "TANCADA" && ordre.estat !== "COMPLERT" && (
-                <div className="pt-2 border-t border-surface-container dark:border-slate-800 space-y-2">
-                  {(ordre.hora_inici_real || ordre.hora_fi_real) && (
-                    <div className="p-2.5 rounded-lg bg-surface-container-low dark:bg-slate-800/70 text-[11px] font-mono space-y-1 border border-outline-variant/20">
-                      {ordre.hora_inici_real && (
-                        <div className="flex items-center justify-between gap-2 text-on-surface dark:text-slate-200">
-                          <span className="font-bold text-secondary">Inici GPS:</span>
-                          <span>
-                            {new Date(ordre.hora_inici_real).toLocaleTimeString("ca-ES", {
-                              hour: "2-digit",
-                              minute: "2-digit",
-                            })}
-                            {ordre.gps_inici_lat != null && ordre.gps_inici_lng != null
-                              ? ` (${Number(ordre.gps_inici_lat).toFixed(4)}, ${Number(ordre.gps_inici_lng).toFixed(4)})`
-                              : ""}
-                          </span>
-                        </div>
-                      )}
-                      {ordre.hora_fi_real && (
-                        <div className="flex items-center justify-between gap-2 text-on-surface dark:text-slate-200">
-                          <span className="font-bold text-primary dark:text-sky-400">Final GPS:</span>
-                          <span>
-                            {new Date(ordre.hora_fi_real).toLocaleTimeString("ca-ES", {
-                              hour: "2-digit",
-                              minute: "2-digit",
-                            })}
-                            {ordre.gps_fi_lat != null && ordre.gps_fi_lng != null
-                              ? ` (${Number(ordre.gps_fi_lat).toFixed(4)}, ${Number(ordre.gps_fi_lng).toFixed(4)})`
-                              : ""}
-                            {ordre.hores_imputades_facturables != null
-                              ? ` • ${Number(ordre.hores_imputades_facturables).toFixed(2)}h`
-                              : ""}
-                          </span>
-                        </div>
-                      )}
-                      {ordre.desviacio_geovalla && (
-                        <div className="pt-1.5 border-t border-outline-variant/20 flex items-start gap-1.5 text-amber-600 dark:text-amber-400 font-sans text-[11px] font-medium leading-tight">
-                          <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
-                          <span>
-                            <strong>Excepció Geovalla autoritzada:</strong>{" "}
-                            {ordre.justificacio_geovalla || "Desviació justificada"}
-                          </span>
-                        </div>
-                      )}
-                    </div>
-                  )}
+              {ordre.estat !== "TANCADA" && ordre.estat !== "COMPLERT" && (() => {
+                const isFeinaEnCurs = ordre.estat === "EN_CURS" && !ordre.hora_fi_real;
+                const isFeinaFinalitzada = Boolean(ordre.hora_fi_real || ordre.estat === "FINALITZADA");
+                const isFeinaNoIniciada = !isFeinaEnCurs && !isFeinaFinalitzada;
+                const preuHora = ordre.preu_venda_hora_aplicat || 45;
+                const horesFacturables = Number(ordre.hores_imputades_facturables || 0);
 
-                  <button
-                    type="button"
-                    data-testid="btn-comencar-feina-gps"
-                    disabled={iniciantFeina}
-                    onClick={() =>
-                      handleMarcarTempsGps(ordre.estat === "EN_CURS" ? "final" : "inici")
-                    }
-                    className={`w-full min-h-[46px] text-white font-bold text-xs uppercase tracking-wider rounded-lg flex items-center justify-center gap-2 active:scale-95 transition-transform disabled:opacity-50 ${
-                      ordre.estat === "EN_CURS" && !ordre.hora_fi_real
-                        ? "bg-secondary-container"
-                        : "bg-primary"
-                    }`}
-                  >
-                    <MapPin className="w-4 h-4" />
-                    {iniciantFeina
-                      ? "Verificant Geovalla 50m..."
-                      : ordre.estat !== "EN_CURS"
-                      ? "Començar Feina (Inici Temps + GPS)"
-                      : ordre.hora_fi_real
-                      ? "Re-validar Posició GPS Final"
-                      : "Finalitzar Temps Feina (Validar GPS Final)"}
-                  </button>
+                return (
+                  <div className="pt-2 border-t border-surface-container dark:border-slate-800 space-y-3">
+                    {/* ESTAT 1: FEINA NO INICIADA */}
+                    {isFeinaNoIniciada && (
+                      <div className="space-y-2">
+                        <button
+                          type="button"
+                          data-testid="btn-comencar-feina-gps"
+                          disabled={iniciantFeina}
+                          onClick={() => handleMarcarTempsGps("inici")}
+                          className="w-full min-h-[48px] bg-primary hover:brightness-110 text-white font-bold text-xs uppercase tracking-wider rounded-xl flex items-center justify-center gap-2 shadow-sm active:scale-95 transition-all disabled:opacity-50"
+                        >
+                          <MapPin className="w-4 h-4 text-secondary-container" />
+                          <span>
+                            {iniciantFeina
+                              ? "Verificant Geovalla 50m..."
+                              : "Començar Feina (Inici Temps + GPS)"}
+                          </span>
+                        </button>
+                        <p className="text-[11px] text-center text-on-surface-variant dark:text-slate-400">
+                          En prémer començar, s&apos;activarà el registre horari i la validació GPS d&apos;arribada a l&apos;obra.
+                        </p>
+                      </div>
+                    )}
 
-                  {requereixJustificacioGPS && (
-                    <div
-                      data-testid="geofence-justification-box"
-                      className="p-3 rounded-lg bg-error-container/25 border border-error space-y-2"
-                    >
-                      <p className="text-[11px] font-bold text-error uppercase">
-                        Fora del radi de 50m de l&apos;obra (FR-005)
-                      </p>
-                      <textarea
-                        value={justificacioGps}
-                        onChange={(e) => setJustificacioGps(e.target.value)}
-                        placeholder="Motiu de la desviació (ex: accés bloquejat, aparcament a 100m...)"
-                        className="w-full p-2 text-xs rounded bg-surface-container-lowest border border-outline-variant text-on-surface"
-                        rows={2}
-                      />
-                      <button
-                        type="button"
-                        disabled={iniciantFeina || !justificacioGps.trim()}
-                        onClick={() => handleMarcarTempsGps(accioPendentGps)}
-                        className="w-full py-2 bg-error text-white font-bold text-xs uppercase rounded active:scale-95 transition-transform disabled:opacity-50"
+                    {/* ESTAT 2: FEINA EN CURS */}
+                    {isFeinaEnCurs && (
+                      <div className="space-y-3">
+                        {/* Panell Cronòmetre en viu */}
+                        <div className="p-3.5 rounded-xl bg-secondary-container/10 border border-secondary-container/30 space-y-2">
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-2">
+                              <span className="w-2.5 h-2.5 rounded-full bg-secondary-container animate-pulse" />
+                              <span className="text-xs font-extrabold uppercase tracking-wider text-secondary">
+                                Feina En Curs
+                              </span>
+                            </div>
+                            <span className="font-mono text-base font-extrabold text-primary dark:text-slate-100">
+                              ⏱️ {tempsTranscorregut}
+                            </span>
+                          </div>
+                          <div className="flex items-center justify-between text-[11px] text-on-surface-variant dark:text-slate-400 border-t border-secondary-container/20 pt-2">
+                            <span>
+                              Inici:{" "}
+                              <strong className="text-slate-800 dark:text-slate-200">
+                                {ordre.hora_inici_real
+                                  ? new Date(ordre.hora_inici_real).toLocaleTimeString("ca-ES", {
+                                      hour: "2-digit",
+                                      minute: "2-digit",
+                                    })
+                                  : "—"}
+                              </strong>
+                              {ordre.gps_inici_lat != null && ordre.gps_inici_lng != null
+                                ? ` (${Number(ordre.gps_inici_lat).toFixed(4)}, ${Number(ordre.gps_inici_lng).toFixed(4)})`
+                                : ""}
+                            </span>
+                            <span className="font-bold text-secondary font-mono">
+                              ~{horesLiveEstimades.toFixed(2)} h facturables
+                            </span>
+                          </div>
+                        </div>
+
+                        {/* Botó Finalitzar Feina */}
+                        <button
+                          type="button"
+                          data-testid="btn-comencar-feina-gps"
+                          disabled={iniciantFeina}
+                          onClick={() => handleMarcarTempsGps("final")}
+                          className="w-full min-h-[48px] bg-secondary-container hover:brightness-110 text-white font-bold text-xs uppercase tracking-wider rounded-xl flex items-center justify-center gap-2 shadow-sm active:scale-95 transition-all disabled:opacity-50"
+                        >
+                          <CheckCircle2 className="w-4 h-4" />
+                          <span>
+                            {iniciantFeina
+                              ? "Verificant Geovalla 50m..."
+                              : "Finalitzar Feina (Aturar Temps + GPS)"}
+                          </span>
+                        </button>
+                      </div>
+                    )}
+
+                    {/* ESTAT 3: FEINA FINALITZADA / TEMPS COMPUTAT */}
+                    {isFeinaFinalitzada && (
+                      <div className="p-3.5 rounded-xl bg-surface-container-low dark:bg-slate-800/80 border border-secondary-container/40 space-y-3">
+                        <div className="flex items-center justify-between border-b border-outline-variant/20 dark:border-slate-700/60 pb-2">
+                          <div className="flex items-center gap-2">
+                            <CheckCircle2 className="w-4 h-4 text-secondary" />
+                            <span className="text-xs font-extrabold uppercase tracking-wider text-primary dark:text-slate-100">
+                              Feina Finalitzada • Temps Computat
+                            </span>
+                          </div>
+                          <span className="text-[10px] font-extrabold px-2.5 py-0.5 rounded-full bg-secondary-container/20 text-secondary border border-secondary-container/30 uppercase tracking-wider">
+                            Temps Registrat
+                          </span>
+                        </div>
+
+                        {/* Registres GPS Inici i Final */}
+                        <div className="grid grid-cols-2 gap-2 text-[11px]">
+                          <div className="p-2.5 rounded-lg bg-surface-container-lowest dark:bg-slate-900 border border-outline-variant/15">
+                            <span className="text-[10px] font-bold uppercase tracking-wider text-on-surface-variant block mb-0.5">
+                              Inici GPS
+                            </span>
+                            <span className="font-mono font-bold text-slate-800 dark:text-slate-200">
+                              {ordre.hora_inici_real
+                                ? new Date(ordre.hora_inici_real).toLocaleTimeString("ca-ES", {
+                                    hour: "2-digit",
+                                    minute: "2-digit",
+                                  })
+                                : "—"}
+                            </span>
+                            {ordre.gps_inici_lat != null && ordre.gps_inici_lng != null && (
+                              <span className="text-[9px] font-mono text-on-surface-variant block truncate">
+                                {Number(ordre.gps_inici_lat).toFixed(4)}, {Number(ordre.gps_inici_lng).toFixed(4)}
+                              </span>
+                            )}
+                          </div>
+
+                          <div className="p-2.5 rounded-lg bg-surface-container-lowest dark:bg-slate-900 border border-outline-variant/15">
+                            <span className="text-[10px] font-bold uppercase tracking-wider text-on-surface-variant block mb-0.5">
+                              Final GPS
+                            </span>
+                            <span className="font-mono font-bold text-slate-800 dark:text-slate-200">
+                              {ordre.hora_fi_real
+                                ? new Date(ordre.hora_fi_real).toLocaleTimeString("ca-ES", {
+                                    hour: "2-digit",
+                                    minute: "2-digit",
+                                  })
+                                : "—"}
+                            </span>
+                            {ordre.gps_fi_lat != null && ordre.gps_fi_lng != null && (
+                              <span className="text-[9px] font-mono text-on-surface-variant block truncate">
+                                {Number(ordre.gps_fi_lat).toFixed(4)}, {Number(ordre.gps_fi_lng).toFixed(4)}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Targeta clau: Còmput a la Factura */}
+                        <div className="p-3 rounded-lg bg-secondary-container/15 border border-secondary-container/40 flex items-center justify-between">
+                          <div>
+                            <span className="text-[10px] font-extrabold uppercase tracking-wider text-secondary block">
+                              Hores computades a la factura
+                            </span>
+                            <span className="text-xs text-on-surface-variant dark:text-slate-400">
+                              Tarifa mà d&apos;obra: {preuHora} €/h
+                            </span>
+                          </div>
+                          <div className="text-right">
+                            <span className="text-xl font-mono font-black text-primary dark:text-slate-100">
+                              {horesFacturables.toFixed(2)} h
+                            </span>
+                            <span className="block text-xs font-mono font-bold text-secondary">
+                              {(horesFacturables * preuHora).toFixed(2)} €
+                            </span>
+                          </div>
+                        </div>
+
+                        {ordre.desviacio_geovalla && (
+                          <div className="pt-1 flex items-start gap-1.5 text-amber-600 dark:text-amber-400 text-[11px] font-medium leading-tight">
+                            <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                            <span>
+                              <strong>Excepció Geovalla autoritzada:</strong>{" "}
+                              {ordre.justificacio_geovalla || "Desviació justificada"}
+                            </span>
+                          </div>
+                        )}
+
+                        <div className="flex items-center gap-2 pt-1">
+                          <button
+                            type="button"
+                            disabled={iniciantFeina}
+                            onClick={() => handleMarcarTempsGps("inici")}
+                            className="flex-1 py-2 px-3 rounded-lg border border-outline-variant/60 bg-surface-container-lowest dark:bg-slate-900 text-on-surface dark:text-slate-300 hover:bg-surface-container text-xs font-semibold flex items-center justify-center gap-1.5 transition-all active:scale-95"
+                          >
+                            <Navigation className="w-3.5 h-3.5 text-primary" />
+                            <span>Re-obrir o Continuar Feina</span>
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
+                    {requereixJustificacioGPS && (
+                      <div
+                        data-testid="geofence-justification-box"
+                        className="p-3 rounded-lg bg-error-container/25 border border-error space-y-2"
                       >
-                        {iniciantFeina
-                          ? "Registrant Excepció..."
-                          : accioPendentGps === "inici"
-                          ? "Confirmar Inici amb Justificació"
-                          : "Confirmar Final amb Justificació"}
-                      </button>
-                    </div>
-                  )}
+                        <p className="text-[11px] font-bold text-error uppercase">
+                          Fora del radi de 50m de l&apos;obra (FR-005)
+                        </p>
+                        <textarea
+                          value={justificacioGps}
+                          onChange={(e) => setJustificacioGps(e.target.value)}
+                          placeholder="Motiu de la desviació (ex: accés bloquejat, aparcament a 100m...)"
+                          className="w-full p-2 text-xs rounded bg-surface-container-lowest border border-outline-variant text-on-surface"
+                          rows={2}
+                        />
+                        <button
+                          type="button"
+                          disabled={iniciantFeina || !justificacioGps.trim()}
+                          onClick={() => handleMarcarTempsGps(accioPendentGps)}
+                          className="w-full py-2 bg-error text-white font-bold text-xs uppercase rounded active:scale-95 transition-transform disabled:opacity-50"
+                        >
+                          {iniciantFeina
+                            ? "Registrant Excepció..."
+                            : accioPendentGps === "inici"
+                            ? "Confirmar Inici amb Justificació"
+                            : "Confirmar Final amb Justificació"}
+                        </button>
+                      </div>
+                    )}
 
-                  {gpsFeedback && (
-                    <p className="text-xs font-semibold text-secondary bg-secondary-container/20 p-2 rounded">
-                      {gpsFeedback}
-                    </p>
-                  )}
-                  {gpsError && (
-                    <p className="text-xs font-semibold text-error bg-error-container/25 p-2 rounded">
-                      {gpsError}
-                    </p>
-                  )}
-                </div>
-              )}
+                    {gpsFeedback && (
+                      <p className="text-xs font-semibold text-secondary bg-secondary-container/20 p-2 rounded">
+                        {gpsFeedback}
+                      </p>
+                    )}
+                    {gpsError && (
+                      <p className="text-xs font-semibold text-error bg-error-container/25 p-2 rounded">
+                        {gpsError}
+                      </p>
+                    )}
+                  </div>
+                );
+              })()}
             </div>
           </div>
 

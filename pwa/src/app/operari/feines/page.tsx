@@ -136,6 +136,9 @@ export default function FeinesKanbanPage() {
       o.estat_local || (o as any).estat
     )
   );
+  const finalitzades = filteredOrdres.filter(
+    (o) => (o.estat_local || (o as any).estat) === "FINALITZADA"
+  );
 
   const [avuiFormatat, setAvuiFormatat] = useState<string>("");
 
@@ -259,6 +262,21 @@ export default function FeinesKanbanPage() {
                 </div>
               )}
             </section>
+
+            {/* Column: Finalitzades */}
+            {finalitzades.length > 0 && (
+              <section>
+                <div className="flex items-center justify-between mb-3">
+                  <h2 className="text-xs font-extrabold uppercase tracking-wider text-secondary flex items-center gap-2">
+                    <span className="w-2.5 h-2.5 rounded-full bg-secondary-container" />
+                    Finalitzades per Tancar ({finalitzades.length})
+                  </h2>
+                </div>
+                {finalitzades.map((ordre) => (
+                  <AssignacioCard key={ordre.id} ordre={ordre} />
+                ))}
+              </section>
+            )}
 
             {/* Column: Pendents */}
             <section>

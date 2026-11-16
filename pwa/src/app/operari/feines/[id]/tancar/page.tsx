@@ -1,10 +1,17 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { useParams, useRouter } from "next/navigation";
 import SignaturePad from "@/components/operari/SignaturePad";
 import TiquetScanner from "@/components/operari/TiquetScanner";
 import { db } from "@/lib/offline/db";
+
+interface OrdreResum {
+  codi?: string;
+  titol?: string;
+  hores_imputades_facturables?: number | null;
+  preu_venda_hora_aplicat?: number | null;
+}
 
 export default function TancarFeinaPage() {
   const params = useParams();
@@ -12,11 +19,41 @@ export default function TancarFeinaPage() {
   const [signatureSaved, setSignatureSaved] = useState(false);
   const [nomSignant, setNomSignant] = useState("");
   const [dniSignant, setDniSignant] = useState("");
+  const [ordre, setOrdre] = useState<OrdreResum | null>(null);
 
   const feinaId = params.id as string;
 
+  useEffect(() => {
+    const carregarOrdre = async () => {
+      try {
+        if (typeof navigator !== "undefined" && navigator.onLine) {
+          const res = await fetch(`/api/v1/operari/feines/${feinaId}`, {
+            credentials: "include",
+          });
+          if (res.ok) {
+            const data = await res.json();
+            setOrdre({
+              codi: data.codi,
+              titol: data.titol,
+              hores_imputades_facturables: data.hores_imputades_facturables,
+              preu_venda_hora_aplicat: data.preu_venda_hora_aplicat,
+            });
+          }
+        }
+      } catch {
+        // Mode offline silenciós
+      }
+    };
+    carregarOrdre();
+  }, [feinaId]);
+
   const handleSaveSignature = async (base64Signature: string) => {
     try {
+      const horesAImputar =
+        ordre?.hores_imputades_facturables != null && ordre.hores_imputades_facturables > 0
+          ? ordre.hores_imputades_facturables
+          : undefined;
+
       if (typeof navigator !== "undefined" && navigator.onLine) {
         const res = await fetch(`/api/v1/operari/feines/${feinaId}/finalitzar`, {
           method: "PUT",
@@ -25,7 +62,7 @@ export default function TancarFeinaPage() {
           body: JSON.stringify({
             signatura_base64: base64Signature,
             observacions: nomSignant ? `Receptor: ${nomSignant} (${dniSignant})` : undefined,
-            hores: 1.0,
+            hores: horesAImputar,
           }),
         });
         if (!res.ok) {
@@ -40,6 +77,7 @@ export default function TancarFeinaPage() {
             signatura_base64: base64Signature,
             nom_signant: nomSignant.trim() || undefined,
             dni_signant: dniSignant.trim() || undefined,
+            hores: horesAImputar,
             data_tancament: new Date().toISOString(),
           },
           status: "pending",
@@ -57,6 +95,9 @@ export default function TancarFeinaPage() {
     router.push("/operari/feines");
   };
 
+  const preuHora = ordre?.preu_venda_hora_aplicat || 45;
+  const hores = Number(ordre?.hores_imputades_facturables || 0);
+
   return (
     <div className="p-4 max-w-md mx-auto flex flex-col gap-5 bg-surface dark:bg-slate-950 min-h-screen">
       {/* Header Stitch Screen 7b207f2eb5474f77b6138461df461858 */}
@@ -72,7 +113,7 @@ export default function TancarFeinaPage() {
           </button>
           <div>
             <span className="text-[10px] font-bold uppercase tracking-widest text-on-surface-variant block">
-              Ordre #{feinaId}
+              Ordre #{ordre?.codi || feinaId}
             </span>
             <h1 className="text-base font-extrabold text-primary dark:text-white leading-tight">
               Tancament de Jornada / Feina
@@ -83,6 +124,28 @@ export default function TancarFeinaPage() {
           fact_check
         </span>
       </header>
+
+      {/* Targeta Resum Hores a Facturar */}
+      <div className="bg-secondary-container/15 border border-secondary-container/30 rounded-xl p-3.5 flex items-center justify-between shadow-sm">
+        <div>
+          <span className="text-[10px] font-extrabold uppercase tracking-wider text-secondary block">
+            Hores computades a la factura
+          </span>
+          <span className="text-xs text-on-surface-variant dark:text-slate-400">
+            Tarifa mà d&apos;obra: {preuHora} €/h
+          </span>
+        </div>
+        <div className="text-right">
+          <span className="text-lg font-mono font-black text-primary dark:text-slate-100 block">
+            {hores > 0 ? `${hores.toFixed(2)} h` : "Segons GPS"}
+          </span>
+          {hores > 0 && (
+            <span className="text-[11px] font-mono font-bold text-secondary">
+              {(hores * preuHora).toFixed(2)} €
+            </span>
+          )}
+        </div>
+      </div>
 
       <p className="text-xs text-on-surface-variant dark:text-slate-400 leading-relaxed px-1">
         Per favor, escaneja els tiquets de combustible o despeses necessaris i recull la conformitat del client o operari abans de tancar l&apos;ordre.

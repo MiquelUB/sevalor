@@ -2,6 +2,7 @@ import math
 import sys
 import uuid
 from datetime import date, datetime, timezone
+from decimal import Decimal
 from typing import Any, List, Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
@@ -75,6 +76,7 @@ class FeinaOperariDetailResponse(BaseModel):
     gps_fi_lat: Optional[float] = None
     gps_fi_lng: Optional[float] = None
     hores_imputades_facturables: Optional[float] = None
+    preu_venda_hora_aplicat: Optional[float] = 45.0
     desviacio_geovalla: Optional[bool] = False
     justificacio_geovalla: Optional[str] = None
     foto_evidencia_desviacio: Optional[str] = None
@@ -132,7 +134,7 @@ async def llistar_les_meves_feines(
                     )
                 ),
             ),
-            OrdreTreball.estat.in_(["PENDENT", "ASSIGNADA", "PROGRAMADA", "EN_CURS", "EN_RUTA", "EN_OBRA", "PAUSADA"]),
+            OrdreTreball.estat.in_(["PENDENT", "ASSIGNADA", "PROGRAMADA", "EN_CURS", "EN_RUTA", "EN_OBRA", "PAUSADA", "FINALITZADA"]),
         )
         .order_by(OrdreTreball.data_planificacio.asc())
     )
@@ -373,8 +375,9 @@ async def comencar_feina(
     _validar_geovalla_feina(feina, payload)
 
     now = datetime.now(timezone.utc)
-    if feina.hora_inici_real is None:
+    if feina.hora_inici_real is None or feina.hora_fi_real is not None:
         feina.hora_inici_real = now
+        feina.hora_fi_real = None  # Reiniciar marca final en iniciar o reprendre la feina
     if payload.lat is not None and payload.lng is not None:
         feina.gps_inici_lat = payload.lat
         feina.gps_inici_lng = payload.lng
@@ -401,6 +404,7 @@ async def comencar_feina(
         "feina_id": str(feina.id),
         "estat": "EN_CURS",
         "hora_inici_real": feina.hora_inici_real.isoformat(),
+        "hora_fi_real": None,
         "gps_inici_lat": float(feina.gps_inici_lat) if feina.gps_inici_lat is not None else None,
         "gps_inici_lng": float(feina.gps_inici_lng) if feina.gps_inici_lng is not None else None,
         "desviacio_geovalla": feina.desviacio_geovalla,
@@ -416,7 +420,7 @@ async def finalitzar_temps_feina(
     request: Request,
     db: AsyncSession = Depends(get_db_with_tenant_context),
 ):
-    """Marca el final en temps de la feina i registra el punt GPS final validant la geovalla."""
+    """Marca el final en temps de la feina, valida geovalla i computa les hores facturables."""
     empresa_id = request.state.empresa_id
     if not empresa_id or empresa_id == "undefined":
         raise HTTPException(status_code=401)
@@ -438,9 +442,20 @@ async def finalitzar_temps_feina(
         feina.gps_fi_lat = payload.lat
         feina.gps_fi_lng = payload.lng
 
-    if feina.hora_inici_real is not None:
-        elapsed_hours = round(max(0.0, (now - feina.hora_inici_real).total_seconds() / 3600.0), 2)
-        feina.hores_imputades_facturables = elapsed_hours
+    if feina.hora_inici_real is None:
+        feina.hora_inici_real = now
+
+    elapsed_seconds = max(0.0, (now - feina.hora_inici_real).total_seconds())
+    # Càlcul precís d'hores amb un mínim de 0.01h si s'ha executat
+    elapsed_hours = round(max(0.01 if elapsed_seconds > 0 else 0.0, elapsed_seconds / 3600.0), 2)
+    feina.hores_imputades_facturables = elapsed_hours
+
+    # Còmput econòmic del cost de mà d'obra
+    cost_ma_obra = round(Decimal(str(elapsed_hours)) * Decimal("24.00"), 2)
+    feina.cost_ma_obra_real = float(cost_ma_obra)
+
+    feina.estat = "FINALITZADA"
+    feina.data_finalitzacio_camp = now.date()
 
     if payload.desviacio_justificada or payload.justificacio_gps:
         feina.desviacio_geovalla = True
@@ -464,17 +479,22 @@ async def finalitzar_temps_feina(
             detail=f"Error en persistir final de feina i geovalla a la base de dades: {str(e)}",
         )
 
+    preu_hora = float(feina.preu_venda_hora_aplicat or 45.0)
+    total_facturable = round(elapsed_hours * preu_hora, 2)
+
     return {
         "feina_id": str(feina.id),
-        "estat": feina.estat,
+        "estat": "FINALITZADA",
         "hora_inici_real": feina.hora_inici_real.isoformat() if feina.hora_inici_real else None,
         "hora_fi_real": feina.hora_fi_real.isoformat(),
         "gps_fi_lat": float(feina.gps_fi_lat) if feina.gps_fi_lat is not None else None,
         "gps_fi_lng": float(feina.gps_fi_lng) if feina.gps_fi_lng is not None else None,
-        "hores_imputades_facturables": float(feina.hores_imputades_facturables or 0),
+        "hores_imputades_facturables": elapsed_hours,
+        "preu_venda_hora_aplicat": preu_hora,
+        "total_facturable_estimat": total_facturable,
         "desviacio_geovalla": feina.desviacio_geovalla,
         "justificacio_geovalla": feina.justificacio_geovalla,
-        "missatge": "Final de feina i posició GPS registrats",
+        "missatge": f"Final de feina i GPS registrats. {elapsed_hours}h computades a la factura ({total_facturable}€).",
     }
 
 
@@ -588,6 +608,20 @@ async def finalitzar_feina(
             detail=f"Falten fotografies requerides de control de qualitat: {', '.join(faltants)} (Spec 013 RF-14)",
         )
 
+    if payload and payload.hores is not None and payload.hores > 0:
+        feina.hores_imputades_facturables = round(payload.hores, 2)
+    elif not feina.hores_imputades_facturables or float(feina.hores_imputades_facturables) <= 0:
+        if feina.hora_inici_real is not None:
+            if feina.hora_fi_real is None:
+                feina.hora_fi_real = datetime.now(timezone.utc)
+            elapsed_seconds = max(0.0, (feina.hora_fi_real - feina.hora_inici_real).total_seconds())
+            feina.hores_imputades_facturables = round(max(0.01 if elapsed_seconds > 0 else 0.0, elapsed_seconds / 3600.0), 2)
+
+    if feina.hores_imputades_facturables:
+        cost_ma_obra = round(Decimal(str(feina.hores_imputades_facturables)) * Decimal("24.00"), 2)
+        feina.cost_ma_obra_real = float(cost_ma_obra)
+
+    feina.data_finalitzacio_camp = datetime.now(timezone.utc).date()
     feina.estat = "COMPLERT"
     await db.commit()
 
@@ -610,7 +644,7 @@ async def finalitzar_feina(
                 f"ot_{feina_id}_foto_intermedia.webp",
                 f"ot_{feina_id}_foto_final.webp",
             ],
-            "hores": payload.hores if payload else None,
+            "hores": float(feina.hores_imputades_facturables or (payload.hores if payload else 0.0)),
             "observacions": payload.observacions if payload else None,
             "signatura_present": bool(payload and payload.signatura_base64),
         },
