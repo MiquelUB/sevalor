@@ -1205,6 +1205,51 @@ class OrdreTreballOperari(Base):
     )
 
 
+class OrdreTreballTramTemps(Base):
+    """Registre multi-tram de temps treballat i GPS per ordre de treball (obrir/tancar/reprendre)."""
+
+    __tablename__ = "ordres_treball_trams_temps"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+        server_default=text("gen_random_uuid()"),
+    )
+    empresa_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("empreses.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    ordre_treball_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("ordres_treball.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    operari_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("usuaris.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    hora_inici: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        server_default=text("now()"),
+    )
+    hora_fi: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    gps_inici_lat: Mapped[Optional[float]] = mapped_column(Numeric(9, 6), nullable=True)
+    gps_inici_lng: Mapped[Optional[float]] = mapped_column(Numeric(9, 6), nullable=True)
+    gps_fi_lat: Mapped[Optional[float]] = mapped_column(Numeric(9, 6), nullable=True)
+    gps_fi_lng: Mapped[Optional[float]] = mapped_column(Numeric(9, 6), nullable=True)
+    durada_segons: Mapped[int] = mapped_column(
+        Integer, default=0, server_default=text("0"), nullable=False
+    )
+    desviacio_geovalla: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=text("false"), nullable=False
+    )
+    justificacio_gps: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        server_default=text("now()"),
+    )
+
+
 class FullaPicking(Base):
     __tablename__ = "fulles_picking"
 

@@ -148,6 +148,7 @@ export async function apiFetch<T = any>(
   try {
     response = await fetch(url, {
       ...options,
+      credentials: options.credentials || "include",
       headers,
     });
   } catch (networkErr: any) {

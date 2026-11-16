@@ -63,6 +63,19 @@ interface EinaCustodia {
   estat: string;
 }
 
+interface TramTemps {
+  id: string;
+  hora_inici: string;
+  hora_fi?: string | null;
+  durada_segons: number;
+  gps_inici_lat?: number | null;
+  gps_inici_lng?: number | null;
+  gps_fi_lat?: number | null;
+  gps_fi_lng?: number | null;
+  desviacio_geovalla?: boolean;
+  justificacio_gps?: string | null;
+}
+
 interface OrdreDetall {
   id: string;
   codi: string;
@@ -89,6 +102,23 @@ interface OrdreDetall {
   preu_venda_hora_aplicat?: number | null;
   desviacio_geovalla?: boolean;
   justificacio_geovalla?: string | null;
+  te_tram_obert?: boolean;
+  tram_actiu_inici?: string | null;
+  temps_acumulat_segons?: number;
+  trams_temps?: TramTemps[];
+}
+
+function formatSegonsHMS(totalSegons: number): string {
+  const safe = Math.max(0, Math.floor(totalSegons));
+  const h = Math.floor(safe / 3600);
+  const m = Math.floor((safe % 3600) / 60);
+  const s = safe % 60;
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+}
+
+function acumulatPreviLabel(acumulatSegons: number): string {
+  if (acumulatSegons <= 0) return "";
+  return ` (+ ${formatSegonsHMS(acumulatSegons)} previs)`;
 }
 
 export default function LlistaMaquinesPage() {
@@ -103,30 +133,42 @@ export default function LlistaMaquinesPage() {
   const [offlinePin, setOfflinePin] = useState("");
   const [offlineError, setOfflineError] = useState<string | null>(null);
 
-  // Cronòmetre en viu per quan la feina està EN_CURS
+  // Cronòmetre en viu multi-tram (obrir/tancar/reprendre)
   const [tempsTranscorregut, setTempsTranscorregut] = useState<string>("00:00:00");
+  const [tempsSessioActual, setTempsSessioActual] = useState<string>("00:00:00");
   const [horesLiveEstimades, setHoresLiveEstimades] = useState<number>(0);
 
   useEffect(() => {
-    if (ordre?.estat === "EN_CURS" && ordre.hora_inici_real && !ordre.hora_fi_real) {
+    const tramObert = Boolean(
+      ordre?.te_tram_obert ||
+        (ordre?.estat === "EN_CURS" && ordre?.hora_inici_real && !ordre?.hora_fi_real)
+    );
+    const iniciActiu = ordre?.tram_actiu_inici || ordre?.hora_inici_real;
+    const acumulatPrevi = ordre?.temps_acumulat_segons || 0;
+
+    if (tramObert && iniciActiu) {
       const actualitzarCronometre = () => {
-        const inici = new Date(ordre.hora_inici_real!).getTime();
-        const ara = Date.now();
-        const diffSegons = Math.max(0, Math.floor((ara - inici) / 1000));
-        const h = Math.floor(diffSegons / 3600);
-        const m = Math.floor((diffSegons % 3600) / 60);
-        const s = diffSegons % 60;
-        setTempsTranscorregut(
-          `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`
+        const iniciMs = new Date(iniciActiu).getTime();
+        const segonsSessio = Math.max(0, Math.floor((Date.now() - iniciMs) / 1000));
+        const totalSegons = acumulatPrevi + segonsSessio;
+        setTempsSessioActual(formatSegonsHMS(segonsSessio));
+        setTempsTranscorregut(formatSegonsHMS(totalSegons));
+        setHoresLiveEstimades(
+          totalSegons > 0 ? Math.max(0.01, Number((totalSegons / 3600).toFixed(2))) : 0.01
         );
-        const calcHores = Math.max(0.01, Number((diffSegons / 3600).toFixed(2)));
-        setHoresLiveEstimades(calcHores);
       };
       actualitzarCronometre();
       const interval = setInterval(actualitzarCronometre, 1000);
       return () => clearInterval(interval);
     }
-  }, [ordre?.estat, ordre?.hora_inici_real, ordre?.hora_fi_real]);
+  }, [
+    ordre?.te_tram_obert,
+    ordre?.estat,
+    ordre?.tram_actiu_inici,
+    ordre?.hora_inici_real,
+    ordre?.hora_fi_real,
+    ordre?.temps_acumulat_segons,
+  ]);
 
   // Geovalla i inici/final en temps de feina (FR-005)
   const [iniciantFeina, setIniciantFeina] = useState(false);
@@ -148,11 +190,8 @@ export default function LlistaMaquinesPage() {
   const carregarEstatFotos = async () => {
     if (typeof navigator !== "undefined" && !navigator.onLine) return;
     try {
-      const res = await fetch(`/api/v1/operari/feines/${id}/fotos`, {
-        credentials: "include",
-      });
-      if (res.ok) {
-        const data = await res.json();
+      const data = await apiFetch<any>(`/operari/feines/${id}/fotos`);
+      if (data) {
         const fotosDict = data.fotos || {};
         const pujades: TipusFotoQA[] = [];
         if (fotosDict.inicial) pujades.push("INICIAL");
@@ -172,18 +211,43 @@ export default function LlistaMaquinesPage() {
     }
   };
 
-  const obtenirGPS = (): Promise<{ latitud: number; longitud: number }> =>
-    new Promise((resolve, reject) => {
-      if (!navigator.geolocation) {
-        reject(new Error("Geolocalització no disponible"));
-        return;
+  const obtenirGPS = async (): Promise<{
+    latitud: number | null;
+    longitud: number | null;
+    gpsAvis?: string;
+  }> => {
+    if (typeof navigator === "undefined" || !navigator.geolocation) {
+      return { latitud: null, longitud: null, gpsAvis: "Navegador sense API de geolocalització" };
+    }
+
+    const intentarPosicio = (highAccuracy: boolean, timeoutMs: number) =>
+      new Promise<{ latitud: number; longitud: number }>((resolve, reject) => {
+        navigator.geolocation.getCurrentPosition(
+          (pos) => resolve({ latitud: pos.coords.latitude, longitud: pos.coords.longitude }),
+          (err) => reject(err),
+          {
+            enableHighAccuracy: highAccuracy,
+            timeout: timeoutMs,
+            maximumAge: highAccuracy ? 15000 : 60000,
+          }
+        );
+      });
+
+    try {
+      return await intentarPosicio(true, 5000);
+    } catch {
+      try {
+        return await intentarPosicio(false, 5000);
+      } catch (err: unknown) {
+        const geoErr = err as { code?: number; message?: string };
+        const msg =
+          geoErr?.code === 1
+            ? "Permís GPS denegat al navegador"
+            : "Senyal GPS no disponible al dispositiu";
+        return { latitud: null, longitud: null, gpsAvis: msg };
       }
-      navigator.geolocation.getCurrentPosition(
-        (pos) => resolve({ latitud: pos.coords.latitude, longitud: pos.coords.longitude }),
-        () => reject(new Error("No s'ha pogut obtenir el senyal GPS")),
-        { enableHighAccuracy: true, timeout: 10000 }
-      );
-    });
+    }
+  };
 
   const handleMarcarTempsGps = async (accio: "inici" | "final") => {
     setIniciantFeina(true);
@@ -194,12 +258,11 @@ export default function LlistaMaquinesPage() {
       const coords = await obtenirGPS();
       const endpoint =
         accio === "inici"
-          ? `/api/v1/operari/feines/${id}/comencar`
-          : `/api/v1/operari/feines/${id}/finalitzar-temps`;
-      const res = await fetch(endpoint, {
+          ? `/operari/feines/${id}/comencar`
+          : `/operari/feines/${id}/finalitzar-temps`;
+
+      const data = await apiFetch<any>(endpoint, {
         method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
         body: JSON.stringify({
           lat: coords.latitud,
           lng: coords.longitud,
@@ -209,31 +272,15 @@ export default function LlistaMaquinesPage() {
         }),
       });
 
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        const detail =
-          err.detail ||
-          (accio === "inici" ? "Error en iniciar la feina" : "Error en marcar el final de la feina");
-        if (
-          detail.includes("50m") ||
-          detail.toLowerCase().includes("geovalla") ||
-          detail.toLowerCase().includes("desviaci")
-        ) {
-          setRequereixJustificacioGPS(true);
-        }
-        throw new Error(detail);
-      }
-
-      const data = await res.json().catch(() => ({}));
       setOrdre((prev) =>
         prev
           ? {
               ...prev,
-              estat: data.estat || (accio === "inici" ? "EN_CURS" : "FINALITZADA"),
+              estat: data.estat || (accio === "inici" ? "EN_CURS" : "PAUSADA"),
               hora_inici_real:
                 data.hora_inici_real !== undefined
                   ? data.hora_inici_real
-                  : accio === "inici"
+                  : accio === "inici" && !prev.hora_inici_real
                   ? new Date().toISOString()
                   : prev.hora_inici_real,
               hora_fi_real:
@@ -242,6 +289,23 @@ export default function LlistaMaquinesPage() {
                   : accio === "final"
                   ? new Date().toISOString()
                   : null,
+              te_tram_obert:
+                data.te_tram_obert !== undefined
+                  ? Boolean(data.te_tram_obert)
+                  : accio === "inici",
+              tram_actiu_inici:
+                data.tram_actiu_inici !== undefined
+                  ? data.tram_actiu_inici
+                  : accio === "inici"
+                  ? new Date().toISOString()
+                  : null,
+              temps_acumulat_segons:
+                data.temps_acumulat_segons !== undefined
+                  ? Number(data.temps_acumulat_segons)
+                  : prev.temps_acumulat_segons ?? 0,
+              trams_temps: Array.isArray(data.trams_temps)
+                ? data.trams_temps
+                : prev.trams_temps || [],
               gps_inici_lat: data.gps_inici_lat ?? prev.gps_inici_lat,
               gps_inici_lng: data.gps_inici_lng ?? prev.gps_inici_lng,
               gps_fi_lat: data.gps_fi_lat ?? prev.gps_fi_lat,
@@ -257,13 +321,26 @@ export default function LlistaMaquinesPage() {
       );
       setRequereixJustificacioGPS(false);
       setJustificacioGps("");
+      const avisSuffix = coords.gpsAvis ? ` (${coords.gpsAvis})` : "";
       setGpsFeedback(
         accio === "inici"
-          ? "Inici de feina registrat amb GPS. Feina en curs!"
-          : `Final de feina registrat amb GPS. S'han computat ${data.hores_imputades_facturables != null ? Number(data.hores_imputades_facturables).toFixed(2) : ""} h per a la factura!`
+          ? `Temps de feina obert i en curs!${avisSuffix}`
+          : `Tram de temps tancat. Total acumulat a la factura: ${
+              data.hores_imputades_facturables != null
+                ? Number(data.hores_imputades_facturables).toFixed(2)
+                : "0.00"
+            } h${avisSuffix}`
       );
     } catch (e: unknown) {
-      setGpsError(e instanceof Error ? e.message : "Error GPS");
+      const detail = e instanceof Error ? e.message : "Error registrant el temps de feina";
+      if (
+        detail.includes("50m") ||
+        detail.toLowerCase().includes("geovalla") ||
+        detail.toLowerCase().includes("desviaci")
+      ) {
+        setRequereixJustificacioGPS(true);
+      }
+      setGpsError(detail);
     } finally {
       setIniciantFeina(false);
     }
@@ -282,16 +359,10 @@ export default function LlistaMaquinesPage() {
       formData.append("foto", blob, `ot_${id}_foto_${tipus.toLowerCase()}.webp`);
       formData.append("fitxer", blob, `ot_${id}_foto_${tipus.toLowerCase()}.webp`);
 
-      const res = await fetch(`/api/v1/operari/feines/${id}/fotos`, {
+      await apiFetch(`/operari/feines/${id}/fotos`, {
         method: "POST",
-        credentials: "include",
         body: formData,
       });
-
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.detail || "Error pujant la fotografia QA.");
-      }
 
       await carregarEstatFotos();
     } catch (e: unknown) {
@@ -364,6 +435,10 @@ export default function LlistaMaquinesPage() {
             preu_venda_hora_aplicat: data.preu_venda_hora_aplicat ?? 45,
             desviacio_geovalla: Boolean(data.desviacio_geovalla),
             justificacio_geovalla: data.justificacio_geovalla || null,
+            te_tram_obert: Boolean(data.te_tram_obert),
+            tram_actiu_inici: data.tram_actiu_inici || null,
+            temps_acumulat_segons: Number(data.temps_acumulat_segons || 0),
+            trams_temps: Array.isArray(data.trams_temps) ? data.trams_temps : [],
           });
         } catch {
           throw new Error("PIN incorrecte o error de desxifratge.");
@@ -397,6 +472,10 @@ export default function LlistaMaquinesPage() {
             preu_venda_hora_aplicat: data.preu_venda_hora_aplicat ?? 45,
             desviacio_geovalla: Boolean(data.desviacio_geovalla),
             justificacio_geovalla: data.justificacio_geovalla || null,
+            te_tram_obert: Boolean(data.te_tram_obert),
+            tram_actiu_inici: data.tram_actiu_inici || null,
+            temps_acumulat_segons: Number(data.temps_acumulat_segons || 0),
+            trams_temps: Array.isArray(data.trams_temps) ? data.trams_temps : [],
           };
           setOrdre(mapped);
           await carregarEstatFotos();
@@ -609,147 +688,120 @@ export default function LlistaMaquinesPage() {
                 </div>
               )}
 
-              {ordre.estat !== "TANCADA" && ordre.estat !== "COMPLERT" && (() => {
-                const isFeinaEnCurs = ordre.estat === "EN_CURS" && !ordre.hora_fi_real;
-                const isFeinaFinalitzada = Boolean(ordre.hora_fi_real || ordre.estat === "FINALITZADA");
-                const isFeinaNoIniciada = !isFeinaEnCurs && !isFeinaFinalitzada;
+              {(() => {
+                const trams = ordre.trams_temps || [];
+                const isTancadaDefinitivament =
+                  ordre.estat === "TANCADA" || ordre.estat === "COMPLERT";
+                const isTramObert = Boolean(
+                  !isTancadaDefinitivament &&
+                    (ordre.te_tram_obert ||
+                      (ordre.estat === "EN_CURS" &&
+                        ordre.hora_inici_real &&
+                        !ordre.hora_fi_real))
+                );
+                const teHistorialPrevi = Boolean(
+                  trams.length > 0 ||
+                    (ordre.temps_acumulat_segons || 0) > 0 ||
+                    ordre.hora_fi_real ||
+                    (ordre.hores_imputades_facturables &&
+                      Number(ordre.hores_imputades_facturables) > 0)
+                );
                 const preuHora = ordre.preu_venda_hora_aplicat || 45;
                 const horesFacturables = Number(ordre.hores_imputades_facturables || 0);
+                const acumulatSegons = ordre.temps_acumulat_segons || 0;
 
                 return (
                   <div className="pt-2 border-t border-surface-container dark:border-slate-800 space-y-3">
-                    {/* ESTAT 1: FEINA NO INICIADA */}
-                    {isFeinaNoIniciada && (
-                      <div className="space-y-2">
-                        <button
-                          type="button"
-                          data-testid="btn-comencar-feina-gps"
-                          disabled={iniciantFeina}
-                          onClick={() => handleMarcarTempsGps("inici")}
-                          className="w-full min-h-[48px] bg-primary hover:brightness-110 text-white font-bold text-xs uppercase tracking-wider rounded-xl flex items-center justify-center gap-2 shadow-sm active:scale-95 transition-all disabled:opacity-50"
-                        >
-                          <MapPin className="w-4 h-4 text-secondary-container" />
-                          <span>
-                            {iniciantFeina
-                              ? "Verificant Geovalla 50m..."
-                              : "Començar Feina (Inici Temps + GPS)"}
-                          </span>
-                        </button>
-                        <p className="text-[11px] text-center text-on-surface-variant dark:text-slate-400">
-                          En prémer començar, s&apos;activarà el registre horari i la validació GPS d&apos;arribada a l&apos;obra.
-                        </p>
-                      </div>
-                    )}
-
-                    {/* ESTAT 2: FEINA EN CURS */}
-                    {isFeinaEnCurs && (
-                      <div className="space-y-3">
-                        {/* Panell Cronòmetre en viu */}
-                        <div className="p-3.5 rounded-xl bg-secondary-container/10 border border-secondary-container/30 space-y-2">
-                          <div className="flex items-center justify-between">
-                            <div className="flex items-center gap-2">
-                              <span className="w-2.5 h-2.5 rounded-full bg-secondary-container animate-pulse" />
-                              <span className="text-xs font-extrabold uppercase tracking-wider text-secondary">
-                                Feina En Curs
-                              </span>
+                    {/* BOTÓ PRINCIPAL OBRIR / TANCAR TEMPS + ESTAT EN VIU */}
+                    {!isTancadaDefinitivament && (
+                      <>
+                        {isTramObert ? (
+                          <div className="space-y-3">
+                            {/* Panell Cronòmetre en viu (Acumulat + Sessió Actual) */}
+                            <div className="p-3.5 rounded-xl bg-secondary-container/10 border border-secondary-container/30 space-y-2">
+                              <div className="flex items-center justify-between">
+                                <div className="flex items-center gap-2">
+                                  <span className="w-2.5 h-2.5 rounded-full bg-secondary-container animate-pulse" />
+                                  <span className="text-xs font-extrabold uppercase tracking-wider text-secondary">
+                                    Temps Obert • En Curs
+                                  </span>
+                                </div>
+                                <span className="font-mono text-lg font-black text-primary dark:text-slate-100">
+                                  ⏱️ {tempsTranscorregut}
+                                </span>
+                              </div>
+                              <div className="flex items-center justify-between text-[11px] text-on-surface-variant dark:text-slate-400 border-t border-secondary-container/20 pt-2">
+                                <span>
+                                  Tram actual:{" "}
+                                  <strong className="font-mono text-slate-800 dark:text-slate-200">
+                                    {tempsSessioActual}
+                                  </strong>
+                                  {acumulatPreviLabel(acumulatSegons)}
+                                </span>
+                                <span className="font-bold text-secondary font-mono">
+                                  ~{horesLiveEstimades.toFixed(2)} h facturables
+                                </span>
+                              </div>
                             </div>
-                            <span className="font-mono text-base font-extrabold text-primary dark:text-slate-100">
-                              ⏱️ {tempsTranscorregut}
-                            </span>
-                          </div>
-                          <div className="flex items-center justify-between text-[11px] text-on-surface-variant dark:text-slate-400 border-t border-secondary-container/20 pt-2">
-                            <span>
-                              Inici:{" "}
-                              <strong className="text-slate-800 dark:text-slate-200">
-                                {ordre.hora_inici_real
-                                  ? new Date(ordre.hora_inici_real).toLocaleTimeString("ca-ES", {
-                                      hour: "2-digit",
-                                      minute: "2-digit",
-                                    })
-                                  : "—"}
-                              </strong>
-                              {ordre.gps_inici_lat != null && ordre.gps_inici_lng != null
-                                ? ` (${Number(ordre.gps_inici_lat).toFixed(4)}, ${Number(ordre.gps_inici_lng).toFixed(4)})`
-                                : ""}
-                            </span>
-                            <span className="font-bold text-secondary font-mono">
-                              ~{horesLiveEstimades.toFixed(2)} h facturables
-                            </span>
-                          </div>
-                        </div>
 
-                        {/* Botó Finalitzar Feina */}
-                        <button
-                          type="button"
-                          data-testid="btn-comencar-feina-gps"
-                          disabled={iniciantFeina}
-                          onClick={() => handleMarcarTempsGps("final")}
-                          className="w-full min-h-[48px] bg-secondary-container hover:brightness-110 text-white font-bold text-xs uppercase tracking-wider rounded-xl flex items-center justify-center gap-2 shadow-sm active:scale-95 transition-all disabled:opacity-50"
-                        >
-                          <CheckCircle2 className="w-4 h-4" />
-                          <span>
-                            {iniciantFeina
-                              ? "Verificant Geovalla 50m..."
-                              : "Finalitzar Feina (Aturar Temps + GPS)"}
-                          </span>
-                        </button>
-                      </div>
+                            <button
+                              type="button"
+                              data-testid="btn-comencar-feina-gps"
+                              disabled={iniciantFeina}
+                              onClick={() => handleMarcarTempsGps("final")}
+                              className="w-full min-h-[48px] bg-secondary-container hover:brightness-110 text-white font-bold text-xs uppercase tracking-wider rounded-xl flex items-center justify-center gap-2 shadow-sm active:scale-95 transition-all disabled:opacity-50"
+                            >
+                              <CheckCircle2 className="w-4 h-4" />
+                              <span>
+                                {iniciantFeina
+                                  ? "Registrant posició GPS..."
+                                  : "Tancar Temps (Pausa / Finalitzar + GPS)"}
+                              </span>
+                            </button>
+                          </div>
+                        ) : (
+                          <div className="space-y-2">
+                            <button
+                              type="button"
+                              data-testid="btn-comencar-feina-gps"
+                              disabled={iniciantFeina}
+                              onClick={() => handleMarcarTempsGps("inici")}
+                              className="w-full min-h-[48px] bg-primary hover:brightness-110 text-white font-bold text-xs uppercase tracking-wider rounded-xl flex items-center justify-center gap-2 shadow-sm active:scale-95 transition-all disabled:opacity-50"
+                            >
+                              <MapPin className="w-4 h-4 text-secondary-container" />
+                              <span>
+                                {iniciantFeina
+                                  ? "Registrant posició GPS..."
+                                  : teHistorialPrevi
+                                  ? "Obrir Temps (Continuar Feina + GPS)"
+                                  : "Obrir Temps (Començar Feina + GPS)"}
+                              </span>
+                            </button>
+                            <p className="text-[11px] text-center text-on-surface-variant dark:text-slate-400">
+                              {teHistorialPrevi
+                                ? "Pots tornar a obrir el temporitzador quan reprenguis la feina (p. ex. després de dinar)."
+                                : "En obrir el temps, s'enregistrarà l'hora d'inici i la posició GPS."}
+                            </p>
+                          </div>
+                        )}
+                      </>
                     )}
 
-                    {/* ESTAT 3: FEINA FINALITZADA / TEMPS COMPUTAT */}
-                    {isFeinaFinalitzada && (
-                      <div className="p-3.5 rounded-xl bg-surface-container-low dark:bg-slate-800/80 border border-secondary-container/40 space-y-3">
+                    {/* RESUM D'HORES ACUMULADES PER A FACTURACIÓ I TRAMS */}
+                    {teHistorialPrevi && (
+                      <div className="p-3.5 rounded-xl bg-surface-container-low dark:bg-slate-800/80 border border-secondary-container/35 space-y-3">
                         <div className="flex items-center justify-between border-b border-outline-variant/20 dark:border-slate-700/60 pb-2">
                           <div className="flex items-center gap-2">
                             <CheckCircle2 className="w-4 h-4 text-secondary" />
                             <span className="text-xs font-extrabold uppercase tracking-wider text-primary dark:text-slate-100">
-                              Feina Finalitzada • Temps Computat
+                              {isTramObert
+                                ? "Hores Acumulades Prèvies"
+                                : "Còmput Total de Treball"}
                             </span>
                           </div>
-                          <span className="text-[10px] font-extrabold px-2.5 py-0.5 rounded-full bg-secondary-container/20 text-secondary border border-secondary-container/30 uppercase tracking-wider">
-                            Temps Registrat
+                          <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded-full bg-secondary-container/20 text-secondary">
+                            {trams.length > 0 ? `${trams.length} trams` : "Registrat"}
                           </span>
-                        </div>
-
-                        {/* Registres GPS Inici i Final */}
-                        <div className="grid grid-cols-2 gap-2 text-[11px]">
-                          <div className="p-2.5 rounded-lg bg-surface-container-lowest dark:bg-slate-900 border border-outline-variant/15">
-                            <span className="text-[10px] font-bold uppercase tracking-wider text-on-surface-variant block mb-0.5">
-                              Inici GPS
-                            </span>
-                            <span className="font-mono font-bold text-slate-800 dark:text-slate-200">
-                              {ordre.hora_inici_real
-                                ? new Date(ordre.hora_inici_real).toLocaleTimeString("ca-ES", {
-                                    hour: "2-digit",
-                                    minute: "2-digit",
-                                  })
-                                : "—"}
-                            </span>
-                            {ordre.gps_inici_lat != null && ordre.gps_inici_lng != null && (
-                              <span className="text-[9px] font-mono text-on-surface-variant block truncate">
-                                {Number(ordre.gps_inici_lat).toFixed(4)}, {Number(ordre.gps_inici_lng).toFixed(4)}
-                              </span>
-                            )}
-                          </div>
-
-                          <div className="p-2.5 rounded-lg bg-surface-container-lowest dark:bg-slate-900 border border-outline-variant/15">
-                            <span className="text-[10px] font-bold uppercase tracking-wider text-on-surface-variant block mb-0.5">
-                              Final GPS
-                            </span>
-                            <span className="font-mono font-bold text-slate-800 dark:text-slate-200">
-                              {ordre.hora_fi_real
-                                ? new Date(ordre.hora_fi_real).toLocaleTimeString("ca-ES", {
-                                    hour: "2-digit",
-                                    minute: "2-digit",
-                                  })
-                                : "—"}
-                            </span>
-                            {ordre.gps_fi_lat != null && ordre.gps_fi_lng != null && (
-                              <span className="text-[9px] font-mono text-on-surface-variant block truncate">
-                                {Number(ordre.gps_fi_lat).toFixed(4)}, {Number(ordre.gps_fi_lng).toFixed(4)}
-                              </span>
-                            )}
-                          </div>
                         </div>
 
                         {/* Targeta clau: Còmput a la Factura */}
@@ -772,6 +824,59 @@ export default function LlistaMaquinesPage() {
                           </div>
                         </div>
 
+                        {/* Llista de trams (Obrir / Tancar) */}
+                        {trams.length > 0 && (
+                          <div className="space-y-1.5">
+                            <span className="text-[10px] font-bold uppercase tracking-wider text-on-surface-variant block">
+                              Registre de trams horaris ({trams.length})
+                            </span>
+                            <div className="space-y-1">
+                              {trams.map((tram, idx) => {
+                                const iniciFmt = new Date(tram.hora_inici).toLocaleTimeString(
+                                  "ca-ES",
+                                  { hour: "2-digit", minute: "2-digit" }
+                                );
+                                const fiFmt = tram.hora_fi
+                                  ? new Date(tram.hora_fi).toLocaleTimeString("ca-ES", {
+                                      hour: "2-digit",
+                                      minute: "2-digit",
+                                    })
+                                  : "En curs";
+                                const hasGpsInici =
+                                  tram.gps_inici_lat != null && tram.gps_inici_lng != null;
+                                const hasGpsFi =
+                                  tram.gps_fi_lat != null && tram.gps_fi_lng != null;
+                                return (
+                                  <div
+                                    key={tram.id}
+                                    className="px-2.5 py-1.5 rounded-lg bg-surface-container-lowest dark:bg-slate-900 border border-outline-variant/15 flex items-center justify-between text-[11px]"
+                                  >
+                                    <div className="flex items-center gap-2">
+                                      <span className="font-bold text-primary dark:text-slate-200">
+                                        #{idx + 1}
+                                      </span>
+                                      <span className="font-mono text-slate-700 dark:text-slate-300">
+                                        {iniciFmt} → {fiFmt}
+                                      </span>
+                                      {(hasGpsInici || hasGpsFi) && (
+                                        <MapPin
+                                          className="w-3 h-3 text-secondary shrink-0"
+                                          aria-label="GPS registrat"
+                                        />
+                                      )}
+                                    </div>
+                                    <span className="font-mono font-bold text-secondary">
+                                      {tram.hora_fi
+                                        ? formatSegonsHMS(tram.durada_segons)
+                                        : "Actiu"}
+                                    </span>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        )}
+
                         {ordre.desviacio_geovalla && (
                           <div className="pt-1 flex items-start gap-1.5 text-amber-600 dark:text-amber-400 text-[11px] font-medium leading-tight">
                             <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
@@ -781,18 +886,6 @@ export default function LlistaMaquinesPage() {
                             </span>
                           </div>
                         )}
-
-                        <div className="flex items-center gap-2 pt-1">
-                          <button
-                            type="button"
-                            disabled={iniciantFeina}
-                            onClick={() => handleMarcarTempsGps("inici")}
-                            className="flex-1 py-2 px-3 rounded-lg border border-outline-variant/60 bg-surface-container-lowest dark:bg-slate-900 text-on-surface dark:text-slate-300 hover:bg-surface-container text-xs font-semibold flex items-center justify-center gap-1.5 transition-all active:scale-95"
-                          >
-                            <Navigation className="w-3.5 h-3.5 text-primary" />
-                            <span>Re-obrir o Continuar Feina</span>
-                          </button>
-                        </div>
                       </div>
                     )}
 
@@ -820,8 +913,8 @@ export default function LlistaMaquinesPage() {
                           {iniciantFeina
                             ? "Registrant Excepció..."
                             : accioPendentGps === "inici"
-                            ? "Confirmar Inici amb Justificació"
-                            : "Confirmar Final amb Justificació"}
+                            ? "Confirmar Obertura amb Justificació"
+                            : "Confirmar Tancament amb Justificació"}
                         </button>
                       </div>
                     )}

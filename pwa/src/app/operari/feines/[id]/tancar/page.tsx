@@ -4,6 +4,7 @@ import React, { useState, useEffect } from "react";
 import { useParams, useRouter } from "next/navigation";
 import SignaturePad from "@/components/operari/SignaturePad";
 import TiquetScanner from "@/components/operari/TiquetScanner";
+import { apiFetch } from "@/lib/api";
 import { db } from "@/lib/offline/db";
 
 interface OrdreResum {
@@ -27,11 +28,8 @@ export default function TancarFeinaPage() {
     const carregarOrdre = async () => {
       try {
         if (typeof navigator !== "undefined" && navigator.onLine) {
-          const res = await fetch(`/api/v1/operari/feines/${feinaId}`, {
-            credentials: "include",
-          });
-          if (res.ok) {
-            const data = await res.json();
+          const data = await apiFetch<any>(`/operari/feines/${feinaId}`);
+          if (data) {
             setOrdre({
               codi: data.codi,
               titol: data.titol,
@@ -55,20 +53,14 @@ export default function TancarFeinaPage() {
           : undefined;
 
       if (typeof navigator !== "undefined" && navigator.onLine) {
-        const res = await fetch(`/api/v1/operari/feines/${feinaId}/finalitzar`, {
+        await apiFetch(`/operari/feines/${feinaId}/finalitzar`, {
           method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          credentials: "include",
           body: JSON.stringify({
             signatura_base64: base64Signature,
             observacions: nomSignant ? `Receptor: ${nomSignant} (${dniSignant})` : undefined,
             hores: horesAImputar,
           }),
         });
-        if (!res.ok) {
-          const errData = await res.json().catch(() => ({}));
-          throw new Error(errData.detail || "Error en finalitzar l'ordre al servidor.");
-        }
       } else {
         await db.sync_queue.add({
           action: "TANCAR_ORDRE",

@@ -20,6 +20,7 @@ from app.models.models import (
     LiniaPicking,
     OrdreTreball,
     OrdreTreballOperari,
+    OrdreTreballTramTemps,
     Vehicle,
 )
 
@@ -61,6 +62,20 @@ class LiniaPickingDetailResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class TramTempsResponse(BaseModel):
+    id: uuid.UUID
+    hora_inici: datetime
+    hora_fi: Optional[datetime] = None
+    durada_segons: int = 0
+    gps_inici_lat: Optional[float] = None
+    gps_inici_lng: Optional[float] = None
+    gps_fi_lat: Optional[float] = None
+    gps_fi_lng: Optional[float] = None
+    desviacio_geovalla: bool = False
+    justificacio_gps: Optional[str] = None
+    model_config = ConfigDict(from_attributes=True)
+
+
 class FeinaOperariDetailResponse(BaseModel):
     id: uuid.UUID
     codi: str
@@ -80,6 +95,10 @@ class FeinaOperariDetailResponse(BaseModel):
     desviacio_geovalla: Optional[bool] = False
     justificacio_geovalla: Optional[str] = None
     foto_evidencia_desviacio: Optional[str] = None
+    te_tram_obert: bool = False
+    tram_actiu_inici: Optional[datetime] = None
+    temps_acumulat_segons: int = 0
+    trams_temps: List[TramTempsResponse] = []
     client: Optional[ClientResponse] = None
     vehicle: Optional[VehicleResponse] = None
     picking_id: Optional[uuid.UUID] = None
@@ -243,6 +262,15 @@ async def obtenir_detall_feina(
                 resp.planol_codi = p_obj.codi_referencia
                 resp.planol_tipus_fitxer = p_obj.tipus_fitxer
 
+        # Trams de temps treballat multi-interval
+        trams_resp, _, tram_actiu_inici, temps_acumulat_segons, te_tram_obert = (
+            await _carregar_estat_trams(db, uuid.UUID(empresa_id), feina)
+        )
+        resp.trams_temps = trams_resp
+        resp.te_tram_obert = te_tram_obert
+        resp.tram_actiu_inici = tram_actiu_inici
+        resp.temps_acumulat_segons = temps_acumulat_segons
+
         return resp
     except HTTPException:
         raise
@@ -351,6 +379,111 @@ def _validar_geovalla_feina(feina: OrdreTreball, payload: ComencarFeinaRequest) 
     return distancia
 
 
+async def _carregar_estat_trams(
+    db: AsyncSession, empresa_uuid: uuid.UUID, feina: OrdreTreball
+) -> tuple[List[TramTempsResponse], Optional[OrdreTreballTramTemps], Optional[datetime], int, bool]:
+    """Carrega els trams de temps d'una ordre i retorna el resum multi-interval."""
+    stmt = (
+        select(OrdreTreballTramTemps)
+        .where(
+            OrdreTreballTramTemps.empresa_id == empresa_uuid,
+            OrdreTreballTramTemps.ordre_treball_id == feina.id,
+        )
+        .order_by(OrdreTreballTramTemps.hora_inici.asc())
+    )
+    trams = list((await db.execute(stmt)).scalars().all())
+    trams_resp = [TramTempsResponse.model_validate(t) for t in trams]
+    tram_obert = next((t for t in reversed(trams) if t.hora_fi is None), None)
+    temps_acumulat_segons = sum(int(t.durada_segons or 0) for t in trams if t.hora_fi is not None)
+
+    if tram_obert is not None:
+        return trams_resp, tram_obert, tram_obert.hora_inici, temps_acumulat_segons, True
+
+    # Compatibilitat amb ordres anteriors a la taula de trams
+    if not trams:
+        if feina.estat == "EN_CURS" and feina.hora_inici_real is not None and feina.hora_fi_real is None:
+            return trams_resp, None, feina.hora_inici_real, 0, True
+        if feina.hora_inici_real is not None and feina.hora_fi_real is not None:
+            legacy_sec = max(0, int((feina.hora_fi_real - feina.hora_inici_real).total_seconds()))
+            if legacy_sec == 0 and feina.hores_imputades_facturables:
+                legacy_sec = int(round(float(feina.hores_imputades_facturables) * 3600.0))
+            return trams_resp, None, None, legacy_sec, False
+        if feina.hores_imputades_facturables and float(feina.hores_imputades_facturables) > 0:
+            return trams_resp, None, None, int(round(float(feina.hores_imputades_facturables) * 3600.0)), False
+
+    return trams_resp, None, None, temps_acumulat_segons, False
+
+
+async def _tancar_tram_actiu_i_acumular(
+    db: AsyncSession,
+    empresa_uuid: uuid.UUID,
+    feina: OrdreTreball,
+    now: datetime,
+    lat: Optional[float] = None,
+    lng: Optional[float] = None,
+    desviacio_justificada: bool = False,
+    justificacio_gps: Optional[str] = None,
+) -> tuple[List[TramTempsResponse], int, float]:
+    """Tanca el tram actiu (si existeix) i recalcula les hores acumulades facturables."""
+    stmt = (
+        select(OrdreTreballTramTemps)
+        .where(
+            OrdreTreballTramTemps.empresa_id == empresa_uuid,
+            OrdreTreballTramTemps.ordre_treball_id == feina.id,
+        )
+        .order_by(OrdreTreballTramTemps.hora_inici.asc())
+    )
+    trams = list((await db.execute(stmt)).scalars().all())
+    tram_obert = next((t for t in reversed(trams) if t.hora_fi is None), None)
+
+    if tram_obert is not None:
+        tram_obert.hora_fi = now
+        if lat is not None and lng is not None:
+            tram_obert.gps_fi_lat = lat
+            tram_obert.gps_fi_lng = lng
+        sec = max(0, int((now - tram_obert.hora_inici).total_seconds()))
+        tram_obert.durada_segons = max(1, sec) if now >= tram_obert.hora_inici else 0
+        if desviacio_justificada or justificacio_gps:
+            tram_obert.desviacio_geovalla = True
+            if justificacio_gps:
+                just_txt = justificacio_gps.strip()
+                tram_obert.justificacio_gps = (
+                    f"{tram_obert.justificacio_gps} | Final: {just_txt}"
+                    if tram_obert.justificacio_gps
+                    else just_txt
+                )
+    elif not trams and feina.hora_inici_real is not None and feina.hora_fi_real is None:
+        sec = max(0, int((now - feina.hora_inici_real).total_seconds()))
+        tram_legacy = OrdreTreballTramTemps(
+            empresa_id=empresa_uuid,
+            ordre_treball_id=feina.id,
+            operari_id=feina.cap_de_colla_id,
+            hora_inici=feina.hora_inici_real,
+            hora_fi=now,
+            gps_inici_lat=feina.gps_inici_lat,
+            gps_inici_lng=feina.gps_inici_lng,
+            gps_fi_lat=lat,
+            gps_fi_lng=lng,
+            durada_segons=max(1, sec) if now >= feina.hora_inici_real else 0,
+            desviacio_geovalla=bool(desviacio_justificada or feina.desviacio_geovalla),
+            justificacio_gps=justificacio_gps.strip() if justificacio_gps else feina.justificacio_geovalla,
+        )
+        db.add(tram_legacy)
+        trams.append(tram_legacy)
+
+    await db.flush()
+    total_segons = sum(int(t.durada_segons or 0) for t in trams if t.hora_fi is not None)
+    if total_segons > 0:
+        total_hores = round(max(0.01, total_segons / 3600.0), 2)
+        feina.hores_imputades_facturables = total_hores
+        feina.cost_ma_obra_real = float(round(Decimal(str(total_hores)) * Decimal("24.00"), 2))
+    else:
+        total_hores = float(feina.hores_imputades_facturables or 0.0)
+
+    trams_resp = [TramTempsResponse.model_validate(t) for t in trams]
+    return trams_resp, total_segons, total_hores
+
+
 @router.put("/feines/{feina_id}/comencar")
 async def comencar_feina(
     feina_id: uuid.UUID,
@@ -358,14 +491,16 @@ async def comencar_feina(
     request: Request,
     db: AsyncSession = Depends(get_db_with_tenant_context),
 ):
-    """Comença el cronòmetre de la feina amb control de geovalla i punt GPS d'inici (Spec 013 RF-12, RF-12.1)."""
+    """Obre un tram de temps de feina (inici o represa després de pausa) amb GPS i geovalla."""
     empresa_id = request.state.empresa_id
     if not empresa_id or empresa_id == "undefined":
         raise HTTPException(status_code=401)
+    emp_uuid = uuid.UUID(empresa_id)
+    usuari_id = uuid.UUID(_get_usuari_id(request))
 
     ot_res = await db.execute(
         select(OrdreTreball).where(
-            OrdreTreball.id == feina_id, OrdreTreball.empresa_id == uuid.UUID(empresa_id)
+            OrdreTreball.id == feina_id, OrdreTreball.empresa_id == emp_uuid
         )
     )
     feina = ot_res.scalars().first()
@@ -375,17 +510,69 @@ async def comencar_feina(
     _validar_geovalla_feina(feina, payload)
 
     now = datetime.now(timezone.utc)
-    if feina.hora_inici_real is None or feina.hora_fi_real is not None:
+    stmt_trams = (
+        select(OrdreTreballTramTemps)
+        .where(
+            OrdreTreballTramTemps.empresa_id == emp_uuid,
+            OrdreTreballTramTemps.ordre_treball_id == feina.id,
+        )
+        .order_by(OrdreTreballTramTemps.hora_inici.asc())
+    )
+    existing_trams = list((await db.execute(stmt_trams)).scalars().all())
+
+    # Preservar un tram previ tancat si l'ordre tenia timestamps antics però cap fila de tram
+    if not existing_trams and feina.hora_inici_real is not None and feina.hora_fi_real is not None:
+        sec_previ = max(1, int((feina.hora_fi_real - feina.hora_inici_real).total_seconds()))
+        tram_previ = OrdreTreballTramTemps(
+            empresa_id=emp_uuid,
+            ordre_treball_id=feina.id,
+            operari_id=usuari_id,
+            hora_inici=feina.hora_inici_real,
+            hora_fi=feina.hora_fi_real,
+            gps_inici_lat=feina.gps_inici_lat,
+            gps_inici_lng=feina.gps_inici_lng,
+            gps_fi_lat=feina.gps_fi_lat,
+            gps_fi_lng=feina.gps_fi_lng,
+            durada_segons=sec_previ,
+            desviacio_geovalla=bool(feina.desviacio_geovalla),
+            justificacio_gps=feina.justificacio_geovalla,
+        )
+        db.add(tram_previ)
+        existing_trams.append(tram_previ)
+
+    tram_obert = next((t for t in reversed(existing_trams) if t.hora_fi is None), None)
+    if tram_obert is None:
+        nou_tram = OrdreTreballTramTemps(
+            empresa_id=emp_uuid,
+            ordre_treball_id=feina.id,
+            operari_id=usuari_id,
+            hora_inici=now,
+            gps_inici_lat=payload.lat,
+            gps_inici_lng=payload.lng,
+            desviacio_geovalla=bool(payload.desviacio_justificada or payload.justificacio_gps),
+            justificacio_gps=payload.justificacio_gps.strip() if payload.justificacio_gps else None,
+        )
+        db.add(nou_tram)
+        existing_trams.append(nou_tram)
+        tram_obert = nou_tram
+
+    if feina.hora_inici_real is None:
         feina.hora_inici_real = now
-        feina.hora_fi_real = None  # Reiniciar marca final en iniciar o reprendre la feina
-    if payload.lat is not None and payload.lng is not None:
+    feina.hora_fi_real = None
+
+    if payload.lat is not None and payload.lng is not None and feina.gps_inici_lat is None:
         feina.gps_inici_lat = payload.lat
         feina.gps_inici_lng = payload.lng
 
     if payload.desviacio_justificada or payload.justificacio_gps:
         feina.desviacio_geovalla = True
         if payload.justificacio_gps:
-            feina.justificacio_geovalla = payload.justificacio_gps.strip()
+            just_txt = payload.justificacio_gps.strip()
+            feina.justificacio_geovalla = (
+                f"{feina.justificacio_geovalla} | Inici tram: {just_txt}"
+                if feina.justificacio_geovalla
+                else just_txt
+            )
         if payload.foto_evidencia_desviacio:
             feina.foto_evidencia_desviacio = payload.foto_evidencia_desviacio
 
@@ -400,16 +587,26 @@ async def comencar_feina(
             detail=f"Error en persistir inici de feina i geovalla a la base de dades: {str(e)}",
         )
 
+    temps_acumulat_segons = sum(
+        int(t.durada_segons or 0) for t in existing_trams if t.hora_fi is not None
+    )
+    trams_resp = [TramTempsResponse.model_validate(t).model_dump(mode="json") for t in existing_trams]
+
     return {
         "feina_id": str(feina.id),
         "estat": "EN_CURS",
         "hora_inici_real": feina.hora_inici_real.isoformat(),
         "hora_fi_real": None,
+        "te_tram_obert": True,
+        "tram_actiu_inici": tram_obert.hora_inici.isoformat(),
+        "temps_acumulat_segons": temps_acumulat_segons,
+        "hores_imputades_facturables": float(feina.hores_imputades_facturables or 0),
+        "trams_temps": trams_resp,
         "gps_inici_lat": float(feina.gps_inici_lat) if feina.gps_inici_lat is not None else None,
         "gps_inici_lng": float(feina.gps_inici_lng) if feina.gps_inici_lng is not None else None,
         "desviacio_geovalla": feina.desviacio_geovalla,
         "justificacio_geovalla": feina.justificacio_geovalla,
-        "missatge": "Feina iniciada amb èxit",
+        "missatge": "Temps de feina obert amb èxit",
     }
 
 
@@ -420,14 +617,15 @@ async def finalitzar_temps_feina(
     request: Request,
     db: AsyncSession = Depends(get_db_with_tenant_context),
 ):
-    """Marca el final en temps de la feina, valida geovalla i computa les hores facturables."""
+    """Tanca el tram de temps actiu amb GPS, acumula el temps treballat i computa hores facturables."""
     empresa_id = request.state.empresa_id
     if not empresa_id or empresa_id == "undefined":
         raise HTTPException(status_code=401)
+    emp_uuid = uuid.UUID(empresa_id)
 
     ot_res = await db.execute(
         select(OrdreTreball).where(
-            OrdreTreball.id == feina_id, OrdreTreball.empresa_id == uuid.UUID(empresa_id)
+            OrdreTreball.id == feina_id, OrdreTreball.empresa_id == emp_uuid
         )
     )
     feina = ot_res.scalars().first()
@@ -437,24 +635,26 @@ async def finalitzar_temps_feina(
     _validar_geovalla_feina(feina, payload)
 
     now = datetime.now(timezone.utc)
+    if feina.hora_inici_real is None:
+        feina.hora_inici_real = now
+
+    trams_resp, total_segons, total_hores = await _tancar_tram_actiu_i_acumular(
+        db=db,
+        empresa_uuid=emp_uuid,
+        feina=feina,
+        now=now,
+        lat=payload.lat,
+        lng=payload.lng,
+        desviacio_justificada=payload.desviacio_justificada,
+        justificacio_gps=payload.justificacio_gps,
+    )
+
     feina.hora_fi_real = now
     if payload.lat is not None and payload.lng is not None:
         feina.gps_fi_lat = payload.lat
         feina.gps_fi_lng = payload.lng
 
-    if feina.hora_inici_real is None:
-        feina.hora_inici_real = now
-
-    elapsed_seconds = max(0.0, (now - feina.hora_inici_real).total_seconds())
-    # Càlcul precís d'hores amb un mínim de 0.01h si s'ha executat
-    elapsed_hours = round(max(0.01 if elapsed_seconds > 0 else 0.0, elapsed_seconds / 3600.0), 2)
-    feina.hores_imputades_facturables = elapsed_hours
-
-    # Còmput econòmic del cost de mà d'obra
-    cost_ma_obra = round(Decimal(str(elapsed_hours)) * Decimal("24.00"), 2)
-    feina.cost_ma_obra_real = float(cost_ma_obra)
-
-    feina.estat = "FINALITZADA"
+    feina.estat = "PAUSADA"
     feina.data_finalitzacio_camp = now.date()
 
     if payload.desviacio_justificada or payload.justificacio_gps:
@@ -480,21 +680,25 @@ async def finalitzar_temps_feina(
         )
 
     preu_hora = float(feina.preu_venda_hora_aplicat or 45.0)
-    total_facturable = round(elapsed_hours * preu_hora, 2)
+    total_facturable = round(total_hores * preu_hora, 2)
 
     return {
         "feina_id": str(feina.id),
-        "estat": "FINALITZADA",
+        "estat": "PAUSADA",
         "hora_inici_real": feina.hora_inici_real.isoformat() if feina.hora_inici_real else None,
         "hora_fi_real": feina.hora_fi_real.isoformat(),
+        "te_tram_obert": False,
+        "tram_actiu_inici": None,
+        "temps_acumulat_segons": total_segons,
+        "trams_temps": [t.model_dump(mode="json") for t in trams_resp],
         "gps_fi_lat": float(feina.gps_fi_lat) if feina.gps_fi_lat is not None else None,
         "gps_fi_lng": float(feina.gps_fi_lng) if feina.gps_fi_lng is not None else None,
-        "hores_imputades_facturables": elapsed_hours,
+        "hores_imputades_facturables": total_hores,
         "preu_venda_hora_aplicat": preu_hora,
         "total_facturable_estimat": total_facturable,
         "desviacio_geovalla": feina.desviacio_geovalla,
         "justificacio_geovalla": feina.justificacio_geovalla,
-        "missatge": f"Final de feina i GPS registrats. {elapsed_hours}h computades a la factura ({total_facturable}€).",
+        "missatge": f"Tram de temps tancat amb GPS. Total acumulat: {total_hores}h ({total_facturable}€).",
     }
 
 
@@ -608,20 +812,29 @@ async def finalitzar_feina(
             detail=f"Falten fotografies requerides de control de qualitat: {', '.join(faltants)} (Spec 013 RF-14)",
         )
 
-    if payload and payload.hores is not None and payload.hores > 0:
+    now = datetime.now(timezone.utc)
+    await _tancar_tram_actiu_i_acumular(
+        db=db,
+        empresa_uuid=uuid.UUID(empresa_id),
+        feina=feina,
+        now=now,
+    )
+    if feina.hora_inici_real is not None and feina.hora_fi_real is None:
+        feina.hora_fi_real = now
+
+    if (
+        (not feina.hores_imputades_facturables or float(feina.hores_imputades_facturables) <= 0)
+        and payload
+        and payload.hores is not None
+        and payload.hores > 0
+    ):
         feina.hores_imputades_facturables = round(payload.hores, 2)
-    elif not feina.hores_imputades_facturables or float(feina.hores_imputades_facturables) <= 0:
-        if feina.hora_inici_real is not None:
-            if feina.hora_fi_real is None:
-                feina.hora_fi_real = datetime.now(timezone.utc)
-            elapsed_seconds = max(0.0, (feina.hora_fi_real - feina.hora_inici_real).total_seconds())
-            feina.hores_imputades_facturables = round(max(0.01 if elapsed_seconds > 0 else 0.0, elapsed_seconds / 3600.0), 2)
 
     if feina.hores_imputades_facturables:
         cost_ma_obra = round(Decimal(str(feina.hores_imputades_facturables)) * Decimal("24.00"), 2)
         feina.cost_ma_obra_real = float(cost_ma_obra)
 
-    feina.data_finalitzacio_camp = datetime.now(timezone.utc).date()
+    feina.data_finalitzacio_camp = now.date()
     feina.estat = "COMPLERT"
     await db.commit()
 
