@@ -582,7 +582,7 @@ async def test_assignacio_colla_multi_operaris_sense_duplicar(admin_session, hea
         # Comprovar la colla assignada (sense duplicats)
         operaris_assignats = data.get("operaris_assignats", [])
         assert len(operaris_assignats) == 3, f"Expected 3 members in colla, got {len(operaris_assignats)}"
-        
+
         # El cap de colla ha de tenir es_cap_de_colla = True
         cap_item = next((op for op in operaris_assignats if op["id"] == str(op1_id)), None)
         assert cap_item is not None
@@ -620,6 +620,76 @@ async def test_assignacio_colla_multi_operaris_sense_duplicar(admin_session, hea
         assert str(op3_id) not in ids_actualitzats
         assert str(op1_id) in ids_actualitzats
         assert str(op2_id) in ids_actualitzats
+
+
+@pytest.mark.asyncio
+async def test_feina_sense_finca_i_adreca_obligatoria(admin_session, headers, boss_token):
+    """Verifica que finca_id és opcional en una OT mentre que adreca és obligatòria i no pot ser buida."""
+    _, empresa_id = boss_token
+    emp_uuid = uuid.UUID(empresa_id)
+
+    admin_session.add(
+        Empresa(
+            id=emp_uuid,
+            nom="Empresa Test Sense Finca",
+            nif="B" + str(uuid.uuid4())[:8].upper(),
+            subdomini="testsensefinca-" + str(uuid.uuid4())[:5],
+            pla_subscripcio="STARTER",
+            estat_pagament="ACTIU",
+        )
+    )
+    await admin_session.flush()
+
+    client_id = uuid.uuid4()
+    admin_session.add(
+        Client(
+            id=client_id,
+            empresa_id=emp_uuid,
+            codi="CLI-NOFINCA",
+            rao_social="Client Sense Finca SL",
+            nif="B55443322",
+        )
+    )
+    await admin_session.flush()
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        # 1. Crear OT sense finca_id però amb adreça vàlida -> 201 Created
+        payload_ok = {
+            "codi": "OT-NOFINCA-01",
+            "client_id": str(client_id),
+            "finca_id": None,
+            "titol": "Reparació quadre elèctric domicili",
+            "adreca": "  Carrer Major 15, Lleida  ",
+            "estat": "PENDENT",
+            "data_planificacio": "2027-04-01",
+        }
+        res_ok = await ac.post("/api/v1/gestio/feines", json=payload_ok, headers=headers)
+        assert res_ok.status_code == 201, f"Expected 201, got {res_ok.status_code}: {res_ok.text}"
+        data_ok = res_ok.json()
+        assert data_ok["finca_id"] is None
+        assert data_ok["adreca"] == "Carrer Major 15, Lleida"
+
+        # 2. Crear OT amb adreça buida o només espais -> 422 Unprocessable Entity
+        for bad_adreca in ("", "   "):
+            payload_bad = {
+                "codi": f"OT-BAD-{uuid.uuid4().hex[:5]}",
+                "client_id": str(client_id),
+                "finca_id": None,
+                "titol": "OT sense adreça",
+                "adreca": bad_adreca,
+                "estat": "PENDENT",
+                "data_planificacio": "2027-04-01",
+            }
+            res_bad = await ac.post("/api/v1/gestio/feines", json=payload_bad, headers=headers)
+            assert res_bad.status_code == 422, f"Expected 422 for adreca={bad_adreca!r}, got {res_bad.status_code}"
+
+        # 3. Modificar OT amb adreça en blanc -> 422
+        res_put_bad = await ac.put(
+            f"/api/v1/gestio/feines/{data_ok['id']}",
+            json={"adreca": "   ", "versio": data_ok["versio"]},
+            headers=headers,
+        )
+        assert res_put_bad.status_code == 422
 
 
 

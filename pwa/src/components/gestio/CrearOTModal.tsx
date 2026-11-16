@@ -244,10 +244,15 @@ export function CrearOTModal({ onClose, onSuccess }: CrearOTModalProps) {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    const adrecaNet = formData.adreca.trim();
+    if (!adrecaNet) {
+      alert("L'adreça o coordenades GPS de l'obra és obligatòria.");
+      return;
+    }
     setLoading(true);
 
     try {
-      const geo = geocodificarAdreca(formData.adreca);
+      const geo = geocodificarAdreca(adrecaNet);
       const horaIniciDate = horaInici
         ? `${formData.data_planificacio}T${horaInici}:00`
         : null;
@@ -261,6 +266,7 @@ export function CrearOTModal({ onClose, onSuccess }: CrearOTModalProps) {
 
       const payload = {
         ...formData,
+        adreca: adrecaNet,
         planol_id: formData.planol_id || null,
         estat:
           formData.cap_de_colla_id || collaOperariIds.length > 0
@@ -319,7 +325,7 @@ export function CrearOTModal({ onClose, onSuccess }: CrearOTModalProps) {
   };
 
   const step1Done = Boolean(formData.titol.trim() && formData.client_id);
-  const step2Done = Boolean(formData.finca_id || formData.adreca.trim());
+  const step2Done = Boolean(formData.adreca.trim());
   const step3Done = Boolean(formData.cap_de_colla_id);
   const step4Done = liniesPicking.length > 0 || selectedEinaIds.length > 0;
 
@@ -925,11 +931,10 @@ export function CrearOTModal({ onClose, onSuccess }: CrearOTModalProps) {
 
                 <div className="space-y-xs">
                   <label className="font-label-caps text-on-surface-variant uppercase flex items-center gap-1">
-                    <Map className="w-3.5 h-3.5" /> Finca del Client
+                    <Map className="w-3.5 h-3.5" /> Finca del Client (Opcional)
                   </label>
                   <select
-                    required
-                    disabled={!formData.client_id}
+                    disabled={!formData.client_id || finques.length === 0}
                     value={formData.finca_id}
                     onChange={(e) => {
                       const selId = e.target.value;
@@ -945,7 +950,13 @@ export function CrearOTModal({ onClose, onSuccess }: CrearOTModalProps) {
                     }}
                     className="w-full p-sm bg-surface-container-low rounded-lg border border-outline-variant focus:border-primary outline-none text-sm disabled:opacity-50"
                   >
-                    <option value="">Selecciona una finca...</option>
+                    <option value="">
+                      {!formData.client_id
+                        ? "Selecciona un client primer..."
+                        : finques.length === 0
+                          ? "Aquest client no té finques (opcional)"
+                          : "Sense finca específica (opcional)"}
+                    </option>
                     {finques.map((f) => (
                       <option key={f.id} value={f.id}>
                         {f.nom || f.nom_finca || f.id}
@@ -956,9 +967,10 @@ export function CrearOTModal({ onClose, onSuccess }: CrearOTModalProps) {
 
                 <div className="space-y-xs">
                   <label className="font-label-caps text-on-surface-variant uppercase flex items-center gap-1">
-                    <MapPin className="w-3.5 h-3.5" /> Adreça / Coordenades GPS
+                    <MapPin className="w-3.5 h-3.5" /> Adreça / Coordenades GPS *
                   </label>
                   <input
+                    required
                     type="text"
                     placeholder="Ex: Polígon 4, Parcel·la 12 o 41.6176, 0.6200..."
                     value={formData.adreca}

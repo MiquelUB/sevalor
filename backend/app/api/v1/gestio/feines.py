@@ -4,7 +4,7 @@ from datetime import date, datetime
 from typing import Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -85,6 +85,14 @@ class FeinaCreate(BaseModel):
     eina_ids: Optional[List[uuid.UUID]] = None
     model_config = ConfigDict(from_attributes=True)
 
+    @field_validator("adreca")
+    @classmethod
+    def validar_adreca_no_buida(cls, v: str) -> str:
+        v_clean = v.strip()
+        if not v_clean:
+            raise ValueError("L'adreça de l'obra és obligatòria i no pot estar buida")
+        return v_clean
+
 
 class TramTempsGestioItem(BaseModel):
     id: uuid.UUID
@@ -143,6 +151,16 @@ class FeinaUpdate(BaseModel):
     eina_ids: Optional[List[uuid.UUID]] = None
     linies_picking: Optional[List[LiniaPickingItem]] = None
     model_config = ConfigDict(from_attributes=True)
+
+    @field_validator("adreca")
+    @classmethod
+    def validar_adreca_no_buida(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return None
+        v_clean = v.strip()
+        if not v_clean:
+            raise ValueError("L'adreça de l'obra no pot estar buida")
+        return v_clean
 
 
 @router.get("", response_model=List[FeinaResponse])
