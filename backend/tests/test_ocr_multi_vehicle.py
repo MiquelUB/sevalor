@@ -1,3 +1,5 @@
+from datetime import date
+
 import pytest
 
 from app.services.flota_service import consolidar_i_validar_ocr_flota
@@ -273,7 +275,9 @@ async def test_ocr_draft_furgoneta_propia_n1_ok():
             res["nom_fitxer"] = fitxer
             docs_extrets.append(res)
 
-    draft = consolidar_i_validar_ocr_flota(docs_extrets, tenant_cif="B55891234")
+    draft = consolidar_i_validar_ocr_flota(
+        docs_extrets, tenant_cif="B55891234", avui=date(2026, 11, 11)
+    )
 
     # Identificadors principals
     assert draft["matricula"] == "4829-LWT"
@@ -323,7 +327,9 @@ async def test_ocr_draft_renting_venciment_imminent():
             res["nom_fitxer"] = fitxer
             docs_extrets.append(res)
 
-    draft = consolidar_i_validar_ocr_flota(docs_extrets, tenant_cif="B55891234")
+    draft = consolidar_i_validar_ocr_flota(
+        docs_extrets, tenant_cif="B55891234", avui=date(2026, 11, 11)
+    )
 
     # Identificadors principals
     assert draft["matricula"] == "7314-LJH"
@@ -377,7 +383,9 @@ async def test_ocr_draft_camio_pesant_n3_grua():
             res["nom_fitxer"] = fitxer
             docs_extrets.append(res)
 
-    draft = consolidar_i_validar_ocr_flota(docs_extrets, tenant_cif="B55891234")
+    draft = consolidar_i_validar_ocr_flota(
+        docs_extrets, tenant_cif="B55891234", avui=date(2026, 11, 11)
+    )
 
     # Identificadors principals
     assert draft["matricula"] == "9104-MBB"
