@@ -407,7 +407,7 @@ export function CrearOTModal({ onClose, onSuccess }: CrearOTModalProps) {
         </div>
 
         {/* Main 2-Column Stitch Form */}
-        <form onSubmit={handleSubmit} className="flex-1 overflow-y-auto p-xl custom-scrollbar">
+        <form id="form-crear-ot" onSubmit={handleSubmit} className="flex-1 overflow-y-auto p-xl custom-scrollbar">
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-xl items-start">
             {/* LEFT COLUMN: Core Form & Picking (7 Cols) */}
             <div className="lg:col-span-7 space-y-lg">
@@ -1268,12 +1268,13 @@ export function CrearOTModal({ onClose, onSuccess }: CrearOTModalProps) {
                 <div className="pt-sm flex flex-col gap-sm">
                   <button
                     type="submit"
+                    form="form-crear-ot"
                     disabled={loading}
                     className="w-full py-md bg-secondary-container hover:bg-secondary text-on-secondary-container hover:text-white font-body-strong rounded-lg shadow-lg transition-all flex items-center justify-center gap-sm cursor-pointer disabled:opacity-60"
                   >
                     <Save className="w-4 h-4" />
                     <span>
-                      {loading ? "Processant..." : "Crear Intervenció i Picking"}
+                      {loading ? "Validant..." : "Validar Ordre de Treball"}
                     </span>
                   </button>
 
@@ -1303,6 +1304,36 @@ export function CrearOTModal({ onClose, onSuccess }: CrearOTModalProps) {
             </div>
           </div>
         </form>
+
+        {/* Peu de la Modal: Barra fixa permanent amb botó per validar l'ordre de treball */}
+        <div className="px-xl py-md bg-surface-container-lowest border-t border-surface-container-high flex items-center justify-between shrink-0">
+          <div className="text-xs text-on-surface-variant flex items-center gap-2">
+            <span className="font-mono text-primary font-bold">{formData.codi}</span>
+            <span>•</span>
+            <span className="truncate max-w-xs sm:max-w-md">
+              {formData.adreca.trim() ? formData.adreca : "Adreça d'obra pendent"}
+            </span>
+          </div>
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={onClose}
+              disabled={loading}
+              className="px-4 py-2 rounded-lg text-xs font-body-strong text-on-surface-variant hover:bg-surface-container-high transition-colors cursor-pointer"
+            >
+              Cancel·lar
+            </button>
+            <button
+              type="submit"
+              form="form-crear-ot"
+              disabled={loading}
+              className="px-6 py-2.5 rounded-lg bg-primary hover:bg-primary/90 text-on-primary font-body-strong text-xs shadow-md flex items-center gap-2 cursor-pointer disabled:opacity-60 transition-all"
+            >
+              <Save className="w-4 h-4" />
+              <span>{loading ? "Validant..." : "Validar Ordre de Treball"}</span>
+            </button>
+          </div>
+        </div>
       </div>
     </div>
   );
