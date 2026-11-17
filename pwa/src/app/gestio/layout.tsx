@@ -44,6 +44,7 @@ function GestioLayoutContent({ children }: { children: React.ReactNode }) {
 
   const navLinks = [
     { label: "Dashboard", href: "/gestio", icon: "dashboard", badge: "GIS" },
+    { label: "Ordres de Treball", href: "/gestio/feines", icon: "assignment", badge: "OTs" },
     { label: "Mapa en Temps Real", href: "/gestio/mapa", icon: "explore", badge: "MAP" },
     { label: "Clients", href: "/gestio/clients", icon: "group", badge: "CLI" },
     { label: "Magatzem", href: "/gestio/magatzem", icon: "inventory_2", badge: "STK" },
@@ -61,10 +62,13 @@ function GestioLayoutContent({ children }: { children: React.ReactNode }) {
 
   // Base de dades per al meta-cercador Spotlight (carregada des del backend)
   const [itemsSpotlight, setItemsSpotlight] = useState<any[]>([]);
+  const [resultatsCercaSpotlight, setResultatsCercaSpotlight] = useState<any[]>([]);
+  const [cercantSpotlight, setCercantSpotlight] = useState(false);
   const [empresa, setEmpresa] = useState<{
     nom?: string;
     nif?: string;
     feature_copilot_ia?: boolean;
+    node_ia_actiu?: boolean;
   } | null>(null);
 
   const isLoginPage =
@@ -89,7 +93,9 @@ function GestioLayoutContent({ children }: { children: React.ReactNode }) {
             tokenIsImpersonation = Boolean(payload?.is_impersonation);
           }
         }
-      } catch {}
+      } catch {
+        /* token parse fallback */
+      }
     }
 
     try {
@@ -103,7 +109,9 @@ function GestioLayoutContent({ children }: { children: React.ReactNode }) {
           return;
         }
       }
-    } catch {}
+    } catch {
+      /* localStorage parse fallback */
+    }
 
     apiFetch("/auth/me")
       .then((me: any) => {
@@ -126,18 +134,50 @@ function GestioLayoutContent({ children }: { children: React.ReactNode }) {
       .catch(() => setEmpresa(null));
   }, [pathname]);
 
+  useEffect(() => {
+    if (!spotlightObert) return;
+    const q = cercaSpotlight.trim();
+    if (q.length < 2) {
+      setResultatsCercaSpotlight([]);
+      setCercantSpotlight(false);
+      return;
+    }
+    const timer = setTimeout(() => {
+      setCercantSpotlight(true);
+      apiFetch<any[]>(`/gestio/cerca?q=${encodeURIComponent(q)}`)
+        .then((res) => setResultatsCercaSpotlight(Array.isArray(res) ? res : []))
+        .catch(() => setResultatsCercaSpotlight([]))
+        .finally(() => setCercantSpotlight(false));
+    }, 180);
+    return () => clearTimeout(timer);
+  }, [cercaSpotlight, spotlightObert]);
+
   if (isLoginPage) {
     return <div className="min-h-screen bg-surface">{children}</div>;
   }
 
-  const resultatsFiltrats = itemsSpotlight.filter((item) => {
-    // Spec 001 RF-03: Veto d'Enginyer (ocultar resultats financers)
-    if (rolActiu === "ENGINYER" && item.esFinancera) return false;
-    return (
-      item.titol.toLowerCase().includes(cercaSpotlight.toLowerCase()) ||
-      item.desc.toLowerCase().includes(cercaSpotlight.toLowerCase())
-    );
-  });
+  const esEnginyerLayout = (rolActiu || "").toUpperCase() === "ENGINYER";
+  const fontResultats =
+    cercaSpotlight.trim().length >= 2 ? resultatsCercaSpotlight : itemsSpotlight;
+
+  const resultatsFiltrats = fontResultats
+    .map((item) => ({
+      id: item.id,
+      tipus: item.tipus || item.entitat || "REGISTRE",
+      titol: item.titol || "",
+      desc: item.desc || item.subtitol || "",
+      ref: item.ref || item.enllac || "/gestio",
+      esFinancera: Boolean(item.esFinancera),
+    }))
+    .filter((item) => {
+      // Spec 001 RF-03: Veto d'Enginyer (ocultar resultats financers)
+      if (esEnginyerLayout && item.esFinancera) return false;
+      if (cercaSpotlight.trim().length >= 2) return true;
+      return (
+        item.titol.toLowerCase().includes(cercaSpotlight.toLowerCase()) ||
+        item.desc.toLowerCase().includes(cercaSpotlight.toLowerCase())
+      );
+    });
 
   if (isEmbed) {
     return (
@@ -175,7 +215,16 @@ function GestioLayoutContent({ children }: { children: React.ReactNode }) {
         <nav className="flex-1 space-y-xs overflow-y-auto custom-scrollbar py-xs">
           {navLinks
             .filter((link) => {
-              if (link.href === "/gestio/copilot" && (!usuari || empresa?.feature_copilot_ia === false)) {
+              if (
+                link.href === "/gestio/copilot" &&
+                (!usuari || empresa?.feature_copilot_ia !== true || empresa?.node_ia_actiu !== true)
+              ) {
+                return false;
+              }
+              if (
+                esEnginyerLayout &&
+                (link.href === "/gestio/contractes" || link.href === "/gestio/comptabilitat")
+              ) {
                 return false;
               }
               return true;
@@ -329,7 +378,7 @@ function GestioLayoutContent({ children }: { children: React.ReactNode }) {
                 )}
               </button>
 
-              {Boolean(usuari) && empresa?.feature_copilot_ia !== false && (
+              {Boolean(usuari) && empresa?.feature_copilot_ia === true && empresa?.node_ia_actiu === true && (
                 <Link
                   href="/gestio/copilot"
                   className="p-2 rounded-lg hover:bg-surface-container-high text-on-surface-variant hover:text-primary transition-colors"
@@ -421,7 +470,7 @@ function GestioLayoutContent({ children }: { children: React.ReactNode }) {
         </main>
       </div>
 
-      {Boolean(usuari) && empresa?.feature_copilot_ia !== false && <CopilotWidget />}
+      {Boolean(usuari) && empresa?.feature_copilot_ia === true && empresa?.node_ia_actiu === true && <CopilotWidget />}
 
       {/* MODAL SPOTLIGHT META-SEARCH (<200 ms) */}
       {spotlightObert && (
@@ -446,17 +495,21 @@ function GestioLayoutContent({ children }: { children: React.ReactNode }) {
             </div>
 
             <div className="max-h-80 overflow-y-auto p-2 space-y-1">
-              {resultatsFiltrats.length === 0 ? (
+              {cercantSpotlight ? (
+                <div className="p-6 text-center text-xs text-outline">
+                  Cercant al servidor del tenant...
+                </div>
+              ) : resultatsFiltrats.length === 0 ? (
                 <div className="p-6 text-center text-xs text-outline">
                   Cap resultat trobat per a &quot;{cercaSpotlight}&quot;.
                 </div>
               ) : (
                 resultatsFiltrats.map((item, idx) => (
                   <div
-                    key={idx}
+                    key={item.id || idx}
                     onClick={() => {
                       setSpotlightObert(false);
-                      router.push(item.ref);
+                      if (item.ref) router.push(item.ref);
                     }}
                     className="p-2.5 rounded-xl hover:bg-surface-container-low cursor-pointer flex items-center justify-between transition-colors"
                   >

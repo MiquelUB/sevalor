@@ -1,24 +1,11 @@
-"""Subagent de Magatzem, Logística i Proveïment."""
+"""Subagent de Magatzem, Logística i Proveïment (Lectura Exclusiva al Disc Sobirà de l'Empresa)."""
 
 import re
 import uuid
-from typing import Any, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
-from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.models import (
-    AlbaraProveidor,
-    Article,
-    EinaCustodia,
-    EstocMagatzem,
-    FacturaProveidor,
-    Magatzem,
-    MovimentEstoc,
-    OrdreTreball,
-    Proveidor,
-    Usuari,
-)
 from app.services.subagents.base import BaseSubagent
 from app.services.subagents.schemas import SCHEMAS_LOGISTICA_ESTOC
 
@@ -29,16 +16,25 @@ class SubagentLogisticaEstoc(BaseSubagent):
     descripcio = (
         "Especialista en inventari físic, disponibilitat d'articles, alertes de ruptura, moviments i replanificació de material."
     )
-    allowed_roles = ["CAP_DE_MAGATZEM", "ENGINYER", "SECRETARIA", "BOSS", "OPERARI", "CAP_DE_COLLA", "ADMIN"]
+    allowed_roles = [
+        "CAP_DE_MAGATZEM",
+        "ENGINYER",
+        "SECRETARIA",
+        "BOSS",
+        "OPERARI",
+        "CAP_DE_COLLA",
+        "ADMIN",
+    ]
     tools_schema = SCHEMAS_LOGISTICA_ESTOC
     system_prompt = (
         "Ets l'assistent expert en Logística i Magatzem de SEVALOR. "
-        "La teva funció és verificar l'estoc real als magatzems, alertar de ruptures d'inventari, "
-        "auditar moviments i documents de proveïdors, i consultar l'estat i custòdia d'eines i maquinària. "
+        "La teva funció és verificar l'estoc real als magatzems al disc dur dedicat de l'empresa, "
+        "alertar de ruptures d'inventari, auditar moviments i documents de proveïdors, i consultar "
+        "l'estat i custòdia d'eines i maquinària. "
         "Tens dues eines mestres d'inventari: 'get_real_stock' per a materials consumibles (tubs, cables, vàlvules, químics) "
         "i 'get_eines_stock' per a eines, maquinària i equips de treball (trepants, radials, escombres, escales). "
         "Si l'usuari pregunta per eines, maquinària o qui té un equip, utilitza sempre 'get_eines_stock'. "
-        "Respon sempre en català de forma concisa, professional i basant-te estrictament en les dades consultades a la base de dades."
+        "Respon sempre en català de forma concisa, professional i basant-te estrictament en les dades del disc."
     )
 
     def can_handle(self, query: str, rol: str) -> bool:
@@ -60,7 +56,6 @@ class SubagentLogisticaEstoc(BaseSubagent):
             ]
         ):
             return False
-        # No capturar consultes de flota ni hores/fitxatges d'equip
         if any(f_k in q for f_k in ["vehicle", "furgoneta", "itv", "quota", "fitxatge", "hores"]):
             return False
         paraules_clau = [
@@ -110,6 +105,31 @@ class SubagentLogisticaEstoc(BaseSubagent):
         ]
         return any(k in q for k in paraules_clau)
 
+    @staticmethod
+    def _is_article_record(item: Dict[str, Any]) -> bool:
+        if item.get("tipus_registre") == "MOVIMENT_ESTOC" or item.get("tipus_moviment"):
+            return False
+        return bool(item.get("nom") or item.get("referencia_inventari") or item.get("referencia"))
+
+    @staticmethod
+    def _calc_article_stock(art: Dict[str, Any]) -> float:
+        estocs = art.get("estocs")
+        if isinstance(estocs, list) and estocs:
+            total = 0.0
+            for e in estocs:
+                if isinstance(e, dict):
+                    fis = float(e.get("quantitat_fisica") or 0.0)
+                    res = float(e.get("quantitat_virtual_reservada") or 0.0)
+                    total += fis - res
+            return total
+        if art.get("quantitat_fisica") is not None:
+            fis = float(art.get("quantitat_fisica") or 0.0)
+            res = float(art.get("quantitat_virtual_reservada") or 0.0)
+            return fis - res
+        if art.get("estoc_disponible") is not None:
+            return float(art.get("estoc_disponible") or 0.0)
+        return float(art.get("estoc_real") or 0.0)
+
     async def execute_tool(
         self,
         tool_name: str,
@@ -122,34 +142,34 @@ class SubagentLogisticaEstoc(BaseSubagent):
     ) -> dict:
         if tool_name == "get_real_stock":
             return await self.tool_get_real_stock(db, empresa_id, args.get("article_ref", ""))
-        elif tool_name == "get_eines_stock":
+        if tool_name == "get_eines_stock":
             return await self.tool_get_eines_stock(db, empresa_id, args.get("terme_cerca", ""))
-        elif tool_name == "replanificar_ot":
+        if tool_name == "replanificar_ot":
             return await self.tool_replanificar_ot(
                 db, empresa_id, args.get("codi_ot", ""), args.get("nova_data", "")
             )
-        elif tool_name == "check_allocation_safety":
+        if tool_name == "check_allocation_safety":
             return await self.tool_check_allocation_safety(
                 db, empresa_id, args.get("article_ref", ""), float(args.get("quantitat", 0.0))
             )
-        elif tool_name == "propose_purchase_order":
+        if tool_name == "propose_purchase_order":
             return await self.tool_propose_purchase_order(
                 db, empresa_id, args.get("article_ref", ""), float(args.get("quantitat", 0.0))
             )
-        elif tool_name == "get_stock_movements":
+        if tool_name == "get_stock_movements":
             return await self.tool_get_stock_movements(
                 db,
                 empresa_id,
                 material_id=args.get("material_id"),
                 limit=int(args.get("limit", 10)),
             )
-        elif tool_name == "get_low_stock_alerts":
+        if tool_name == "get_low_stock_alerts":
             return await self.tool_get_low_stock_alerts(
                 db,
                 empresa_id,
                 familia=args.get("familia"),
             )
-        elif tool_name == "get_supplier_docs":
+        if tool_name == "get_supplier_docs":
             return await self.tool_get_supplier_docs(
                 db,
                 empresa_id,
@@ -163,16 +183,50 @@ class SubagentLogisticaEstoc(BaseSubagent):
     async def tool_get_real_stock(
         self, db: AsyncSession, empresa_id: uuid.UUID, article_ref: str
     ) -> dict:
-        terme = article_ref.strip().lower()
+        terme = (article_ref or "").strip().lower()
         stopwords = {
-            "material", "materials", "familia", "família", "article", "articles", "d", "de", "del",
-            "dels", "la", "el", "els", "les", "per", "obra", "tenim", "disposem", "quants",
-            "queden", "queda", "al", "als", "en", "i", "un", "una", "uns", "unes", "hi", "ha",
-            "quin", "quina", "quins", "quines", "estoc", "stock", "magatzem", "inventari"
+            "material",
+            "materials",
+            "familia",
+            "família",
+            "article",
+            "articles",
+            "d",
+            "de",
+            "del",
+            "dels",
+            "la",
+            "el",
+            "els",
+            "les",
+            "per",
+            "obra",
+            "tenim",
+            "disposem",
+            "quants",
+            "queden",
+            "queda",
+            "al",
+            "als",
+            "en",
+            "i",
+            "un",
+            "una",
+            "uns",
+            "unes",
+            "hi",
+            "ha",
+            "quin",
+            "quina",
+            "quins",
+            "quines",
+            "estoc",
+            "stock",
+            "magatzem",
+            "inventari",
         }
         words = [w for w in terme.split() if w not in stopwords and len(w) > 1]
 
-        # Mapatge de sinònims tècnics habituals
         sinonims_map = {
             "tub": ["tub", "canonada", "pe-100", "polietil"],
             "tubs": ["tub", "canonada", "pe-100", "polietil"],
@@ -183,8 +237,8 @@ class SubagentLogisticaEstoc(BaseSubagent):
             "vàlvula": ["valv", "bermad", "vàlvul"],
             "valvules": ["valv", "bermad", "vàlvul"],
             "vàlvules": ["valv", "bermad", "vàlvul"],
-            "electrovalvula": ["valv", "bermad"],
-            "electrovàlvula": ["valv", "bermad"],
+            "electrovalvula": ["valv", "bermad", "electrovàlvul", "electrovalvul"],
+            "electrovàlvula": ["valv", "bermad", "electrovàlvul", "electrovalvul"],
             "filtre": ["filtr", "anell"],
             "filtres": ["filtr", "anell"],
             "bomba": ["bomb", "submergibl"],
@@ -200,71 +254,56 @@ class SubagentLogisticaEstoc(BaseSubagent):
             if w in sinonims_map:
                 search_tokens.update(sinonims_map[w])
 
-        articles: Sequence[Article] = []
-        if search_tokens:
-            clauses = []
-            for token in search_tokens:
-                clauses.append(Article.referencia_inventari.ilike(f"%{token}%"))
-                clauses.append(Article.nom.ilike(f"%{token}%"))
-                clauses.append(Article.familia.ilike(f"%{token}%"))
-            stmt = select(Article).where(Article.empresa_id == empresa_id, or_(*clauses))
-            res = await db.execute(stmt)
-            articles = res.scalars().all()
+        raw_records = await self.read_sovereign_category(db, empresa_id, "magatzem_articles")
+        tots_articles = [r for r in raw_records if self._is_article_record(r)]
 
-        # Si la consulta és genèrica o no s'ha trobat cap article específic, obtenir catàleg actiu complet
-        es_consulta_generica = not words or any(g in terme for g in ("tots", "general", "global", "inventari", "magatzem"))
+        articles: List[Dict[str, Any]] = []
+        if search_tokens:
+            for art in tots_articles:
+                ref_val = str(art.get("referencia_inventari") or art.get("referencia") or "").lower()
+                nom_val = str(art.get("nom") or "").lower()
+                fam_val = str(art.get("familia") or "").lower()
+                blob = f"{ref_val} {nom_val} {fam_val}"
+                if any(tok in blob for tok in search_tokens):
+                    articles.append(art)
+
+        es_consulta_generica = not words or any(
+            g in terme for g in ("tots", "general", "global", "inventari", "magatzem")
+        )
         if not articles and es_consulta_generica:
-            stmt_all = (
-                select(Article)
-                .where(Article.empresa_id == empresa_id, Article.actiu.is_(True))
-                .order_by(Article.familia.asc(), Article.nom.asc())
-                .limit(25)
-            )
-            res_all = await db.execute(stmt_all)
-            articles = res_all.scalars().all()
+            articles = [a for a in tots_articles if a.get("actiu", True)][:25]
 
         if not articles:
-            # Obtenir llista de famílies disponibles per suggerir a l'usuari
-            stmt_fams = select(Article.familia).where(Article.empresa_id == empresa_id).distinct()
-            res_fams = await db.execute(stmt_fams)
-            families_disponibles = [f[0] for f in res_fams.all() if f[0]]
+            families_disponibles = sorted(
+                {str(a.get("familia")) for a in tots_articles if a.get("familia")}
+            )
             fam_str = ", ".join(families_disponibles) if families_disponibles else "Cap família registrada"
-
             return {
                 "trobat": False,
                 "article_cercat": article_ref,
                 "total_disponible": 0.0,
                 "articles": [],
                 "missatge": (
-                    f"No s'ha trobat cap article coincident amb '{article_ref}' als magatzems de l'empresa. "
+                    f"No s'ha trobat cap article coincident amb '{article_ref}' al disc dur de l'empresa. "
                     f"Famílies disponibles a l'inventari: {fam_str}."
                 ),
             }
 
-        articles_data = []
+        articles_data: List[Dict[str, Any]] = []
         total_disponible_global = 0.0
-
         for art in articles:
-            q_stock = select(
-                func.coalesce(
-                    func.sum(
-                        EstocMagatzem.quantitat_fisica - EstocMagatzem.quantitat_virtual_reservada
-                    ),
-                    0,
-                )
-            ).where(EstocMagatzem.article_id == art.id, EstocMagatzem.empresa_id == empresa_id)
-            stock_val = float((await db.execute(q_stock)).scalar_one() or 0.0)
+            stock_val = self._calc_article_stock(art)
             total_disponible_global += stock_val
             articles_data.append(
                 {
-                    "id": str(art.id),
-                    "referencia": art.referencia_inventari,
-                    "nom": art.nom,
+                    "id": str(art.get("id")),
+                    "referencia": art.get("referencia_inventari") or art.get("referencia"),
+                    "nom": art.get("nom"),
                     "estoc_disponible": stock_val,
-                    "unitat_mesura": art.unitat_mesura,
-                    "estoc_minim": float(art.estoc_minim),
-                    "estoc_optim": float(art.estoc_optim),
-                    "familia": art.familia,
+                    "unitat_mesura": art.get("unitat_mesura") or "UNITAT",
+                    "estoc_minim": float(art.get("estoc_minim") or 0.0),
+                    "estoc_optim": float(art.get("estoc_optim") or 0.0),
+                    "familia": art.get("familia"),
                 }
             )
 
@@ -275,15 +314,14 @@ class SubagentLogisticaEstoc(BaseSubagent):
             "articles": articles_data,
         }
 
-
     async def tool_replanificar_ot(
         self, db: AsyncSession, empresa_id: uuid.UUID, codi_ot: str, nova_data: str
     ) -> dict:
-        q = select(OrdreTreball).where(
-            OrdreTreball.empresa_id == empresa_id, OrdreTreball.codi == codi_ot
+        ots = await self.read_sovereign_category(db, empresa_id, "ots_actives")
+        ot = next(
+            (o for o in ots if str(o.get("codi", "")).upper() == codi_ot.strip().upper()),
+            None,
         )
-        res = await db.execute(q)
-        ot = res.scalar_one_or_none()
         if not ot:
             return {"trobat": False, "missatge": f"No s'ha trobat l'ordre de treball {codi_ot}."}
 
@@ -292,12 +330,15 @@ class SubagentLogisticaEstoc(BaseSubagent):
             "requires_confirmation": True,
             "action": "confirm_replanificar_ot",
             "payload": {
-                "ot_id": str(ot.id),
+                "ot_id": str(ot.get("id")),
                 "codi_ot": codi_ot,
                 "nova_data": nova_data,
-                "titol": ot.titol,
+                "titol": ot.get("titol"),
             },
-            "missatge": f"He preparat la proposta per moure l'ordre {codi_ot} ({ot.titol}) al dia {nova_data}. Necessito la teva confirmació per executar l'acció.",
+            "missatge": (
+                f"He preparat la proposta per moure l'ordre {codi_ot} ({ot.get('titol')}) al dia {nova_data}. "
+                "Necessito la teva confirmació per executar l'acció."
+            ),
         }
 
     async def tool_check_allocation_safety(
@@ -314,8 +355,8 @@ class SubagentLogisticaEstoc(BaseSubagent):
         disponible = art_item["estoc_disponible"]
         minim = art_item["estoc_minim"]
         resultat_post_consum = disponible - quantitat
-
         es_segur = resultat_post_consum >= minim
+
         return {
             "trobat": True,
             "segur": es_segur,
@@ -342,18 +383,18 @@ class SubagentLogisticaEstoc(BaseSubagent):
             }
 
         art_data = st["articles"][0]
-        q_prov = select(Proveidor).where(
-            Proveidor.empresa_id == empresa_id, Proveidor.actiu.is_(True)
-        )
-        res_prov = await db.execute(q_prov)
-        prov = res_prov.scalars().first()
+        proveidors = await self.read_sovereign_category(db, empresa_id, "proveidors")
+        prov = next((p for p in proveidors if p.get("actiu", True)), None)
+        prov_nom = str(prov.get("rao_social")) if prov and prov.get("rao_social") else "Proveïdor General"
 
         return {
             "proposta_creada": True,
             "article": art_data["nom"],
             "quantitat_suggerida": quantitat,
-            "proveidor_habitual": prov.rao_social if prov else "Proveïdor General",
-            "missatge": f"Proposta de comanda de compra preparada: {quantitat} unitats de '{art_data['nom']}' a {prov.rao_social if prov else 'Proveïdor per defecte'}.",
+            "proveidor_habitual": prov_nom,
+            "missatge": (
+                f"Proposta de comanda de compra preparada: {quantitat} unitats de '{art_data['nom']}' a {prov_nom}."
+            ),
         }
 
     async def tool_get_stock_movements(
@@ -363,48 +404,94 @@ class SubagentLogisticaEstoc(BaseSubagent):
         material_id: Optional[str] = None,
         limit: int = 10,
     ) -> dict:
-        stmt = (
-            select(MovimentEstoc, Article.nom, Article.referencia_inventari)
-            .join(Article, MovimentEstoc.article_id == Article.id)
-            .where(MovimentEstoc.empresa_id == empresa_id)
-        )
-        if material_id and material_id.strip():
-            mat_clean = material_id.strip()
-            try:
-                m_uuid = uuid.UUID(mat_clean)
-                stmt = stmt.where(MovimentEstoc.article_id == m_uuid)
-            except (ValueError, AttributeError):
-                terme = f"%{mat_clean}%"
-                stmt = stmt.where(
-                    or_(
-                        Article.referencia_inventari.ilike(terme),
-                        Article.nom.ilike(terme),
-                    )
-                )
+        raw_mag = await self.read_sovereign_category(db, empresa_id, "magatzem_articles")
+        picking_docs = await self.read_sovereign_category(db, empresa_id, "picking")
 
-        stmt = stmt.order_by(MovimentEstoc.created_at.desc()).limit(limit)
-        res = await db.execute(stmt)
-        rows = res.all()
-        moviments = [
-            {
-                "id": str(m.id),
-                "article_nom": art_nom,
-                "referencia": art_ref,
-                "tipus_moviment": m.tipus_moviment,
-                "quantitat": float(m.quantitat) if m.quantitat is not None else 0.0,
-                "referencia_document": m.referencia_document,
-                "notes": m.notes,
-                "data": m.created_at.isoformat() if m.created_at else None,
-            }
-            for m, art_nom, art_ref in rows
-        ]
+        arts_by_id = {
+            str(r.get("id")): r
+            for r in raw_mag
+            if self._is_article_record(r) and r.get("id")
+        }
+
+        candidats: List[Dict[str, Any]] = []
+        for r in raw_mag:
+            if r.get("tipus_registre") == "MOVIMENT_ESTOC" or r.get("tipus_moviment"):
+                art = arts_by_id.get(str(r.get("article_id")), {})
+                candidats.append(
+                    {
+                        "id": str(r.get("id")),
+                        "article_id": str(r.get("article_id") or ""),
+                        "article_nom": r.get("article_nom") or art.get("nom") or "Article",
+                        "referencia": r.get("referencia") or art.get("referencia_inventari") or art.get("referencia"),
+                        "tipus_moviment": r.get("tipus_moviment") or "MOVIMENT",
+                        "quantitat": float(r.get("quantitat") or 0.0),
+                        "referencia_document": r.get("referencia_document"),
+                        "notes": r.get("notes"),
+                        "data": r.get("created_at") or r.get("data"),
+                    }
+                )
+            elif isinstance(r.get("moviments"), list):
+                for m in r["moviments"]:
+                    if isinstance(m, dict):
+                        candidats.append(
+                            {
+                                "id": str(m.get("id") or r.get("id")),
+                                "article_id": str(r.get("id") or ""),
+                                "article_nom": r.get("nom"),
+                                "referencia": r.get("referencia_inventari") or r.get("referencia"),
+                                "tipus_moviment": m.get("tipus_moviment") or "MOVIMENT",
+                                "quantitat": float(m.get("quantitat") or 0.0),
+                                "referencia_document": m.get("referencia_document"),
+                                "notes": m.get("notes"),
+                                "data": m.get("created_at") or m.get("data"),
+                            }
+                        )
+
+        for p in picking_docs:
+            art = arts_by_id.get(str(p.get("article_id")), {})
+            candidats.append(
+                {
+                    "id": str(p.get("id")),
+                    "article_id": str(p.get("article_id") or ""),
+                    "article_nom": p.get("article_nom") or art.get("nom") or "Material Picking",
+                    "referencia": p.get("referencia") or art.get("referencia_inventari"),
+                    "tipus_moviment": p.get("tipus_moviment") or "SORTIDA_PICKING",
+                    "quantitat": float(p.get("quantitat_retirada") or p.get("quantitat_solicitada") or p.get("quantitat") or 0.0),
+                    "referencia_document": p.get("ordre_treball_codi") or p.get("referencia_document"),
+                    "notes": p.get("notes"),
+                    "data": p.get("created_at") or p.get("data"),
+                }
+            )
+
+        mat_filter = (material_id or "").strip().lower()
+        filtrats: List[Dict[str, Any]] = []
+        for m in candidats:
+            if mat_filter:
+                blob = f"{m.get('article_id', '')} {m.get('article_nom', '')} {m.get('referencia', '')}".lower()
+                if mat_filter not in blob:
+                    continue
+            filtrats.append(
+                {
+                    "id": m["id"],
+                    "article_nom": m["article_nom"],
+                    "referencia": m["referencia"],
+                    "tipus_moviment": m["tipus_moviment"],
+                    "quantitat": m["quantitat"],
+                    "referencia_document": m["referencia_document"],
+                    "notes": m["notes"],
+                    "data": m["data"],
+                }
+            )
+            if len(filtrats) >= limit:
+                break
+
         return {
-            "trobat": len(moviments) > 0,
-            "total": len(moviments),
-            "moviments": moviments,
+            "trobat": len(filtrats) > 0,
+            "total": len(filtrats),
+            "moviments": filtrats,
             "missatge": (
-                f"S'han trobat {len(moviments)} moviments recents d'estoc."
-                if moviments
+                f"S'han trobat {len(filtrats)} moviments recents d'estoc."
+                if filtrats
                 else "No s'ha trobat cap moviment d'estoc registrat."
             ),
         }
@@ -415,38 +502,29 @@ class SubagentLogisticaEstoc(BaseSubagent):
         empresa_id: uuid.UUID,
         familia: Optional[str] = None,
     ) -> dict:
-        stmt_arts = select(Article).where(
-            Article.empresa_id == empresa_id,
-            Article.actiu.is_(True),
-        )
-        if familia and familia.strip():
-            stmt_arts = stmt_arts.where(Article.familia.ilike(f"%{familia.strip()}%"))
+        raw_mag = await self.read_sovereign_category(db, empresa_id, "magatzem_articles")
+        articles = [r for r in raw_mag if self._is_article_record(r) and r.get("actiu", True)]
+        fam_filter = (familia or "").strip().lower()
 
-        articles = (await db.execute(stmt_arts)).scalars().all()
-        alertes = []
+        alertes: List[Dict[str, Any]] = []
         for art in articles:
-            q_stock = select(
-                func.coalesce(
-                    func.sum(
-                        EstocMagatzem.quantitat_fisica - EstocMagatzem.quantitat_virtual_reservada
-                    ),
-                    0,
-                )
-            ).where(EstocMagatzem.article_id == art.id, EstocMagatzem.empresa_id == empresa_id)
-            stock_val = float((await db.execute(q_stock)).scalar_one() or 0.0)
-            minim = float(art.estoc_minim) if art.estoc_minim is not None else 0.0
+            art_fam = str(art.get("familia") or "")
+            if fam_filter and fam_filter not in art_fam.lower():
+                continue
+            stock_val = self._calc_article_stock(art)
+            minim = float(art.get("estoc_minim") or 0.0)
             if stock_val <= minim:
                 alertes.append(
                     {
-                        "article_id": str(art.id),
-                        "referencia": art.referencia_inventari,
-                        "nom": art.nom,
-                        "familia": art.familia,
+                        "article_id": str(art.get("id")),
+                        "referencia": art.get("referencia_inventari") or art.get("referencia"),
+                        "nom": art.get("nom"),
+                        "familia": art.get("familia"),
                         "estoc_disponible": stock_val,
                         "estoc_minim": minim,
-                        "estoc_optim": float(art.estoc_optim) if art.estoc_optim is not None else 0.0,
+                        "estoc_optim": float(art.get("estoc_optim") or 0.0),
                         "deficit": max(0.0, minim - stock_val),
-                        "unitat_mesura": art.unitat_mesura,
+                        "unitat_mesura": art.get("unitat_mesura") or "UNITAT",
                     }
                 )
 
@@ -470,55 +548,57 @@ class SubagentLogisticaEstoc(BaseSubagent):
         limit: int = 5,
         caller_role: Optional[str] = None,
     ) -> dict:
-        docs = []
+        docs: List[Dict[str, Any]] = []
         tipus_filtre = (tipus or "").strip().lower()
+        prov_filter = (proveidor_nom or "").strip().lower()
 
-        # 1. Albarans de compra
+        proveidors = await self.read_sovereign_category(db, empresa_id, "proveidors")
+        prov_map = {str(p.get("id")): str(p.get("rao_social") or "") for p in proveidors if p.get("id")}
+
         if tipus_filtre in ("", "albara", "albarans", "albarà"):
-            stmt_alb = (
-                select(AlbaraProveidor, Proveidor.rao_social)
-                .join(Proveidor, AlbaraProveidor.proveidor_id == Proveidor.id)
-                .where(AlbaraProveidor.empresa_id == empresa_id)
-            )
-            if proveidor_nom and proveidor_nom.strip():
-                stmt_alb = stmt_alb.where(Proveidor.rao_social.ilike(f"%{proveidor_nom.strip()}%"))
-            stmt_alb = stmt_alb.order_by(AlbaraProveidor.created_at.desc()).limit(limit)
-            res_alb = await db.execute(stmt_alb)
-            for alb, prov_nom in res_alb.all():
+            albarans = await self.read_sovereign_category(db, empresa_id, "albarans")
+            for alb in albarans:
+                p_nom = (
+                    prov_map.get(str(alb.get("proveidor_id")))
+                    or str(alb.get("proveidor_nom") or alb.get("proveidor") or "Proveïdor")
+                )
+                if prov_filter and prov_filter not in p_nom.lower():
+                    continue
                 docs.append(
                     {
-                        "id": str(alb.id),
+                        "id": str(alb.get("id")),
                         "tipus": "ALBARA",
-                        "numero": alb.numero_albara,
-                        "proveidor": prov_nom,
-                        "data": alb.data_albara.isoformat() if alb.data_albara else None,
-                        "estat": alb.estat,
+                        "numero": alb.get("numero_albara") or alb.get("numero"),
+                        "proveidor": p_nom,
+                        "data": alb.get("data_albara") or alb.get("data"),
+                        "estat": alb.get("estat"),
                     }
                 )
+                if len(docs) >= limit:
+                    break
 
-        # 2. Factures de proveïdor (només BOSS / ADMIN)
         if tipus_filtre in ("", "factura", "factures") and caller_role in ("BOSS", "ADMIN"):
-            stmt_fac = (
-                select(FacturaProveidor, Proveidor.rao_social)
-                .join(Proveidor, FacturaProveidor.proveidor_id == Proveidor.id)
-                .where(FacturaProveidor.empresa_id == empresa_id)
-            )
-            if proveidor_nom and proveidor_nom.strip():
-                stmt_fac = stmt_fac.where(Proveidor.rao_social.ilike(f"%{proveidor_nom.strip()}%"))
-            stmt_fac = stmt_fac.order_by(FacturaProveidor.created_at.desc()).limit(limit)
-            res_fac = await db.execute(stmt_fac)
-            for fac, prov_nom in res_fac.all():
+            factures_prov = await self.read_sovereign_category(db, empresa_id, "factures_proveidors")
+            for fac in factures_prov:
+                p_nom = (
+                    prov_map.get(str(fac.get("proveidor_id")))
+                    or str(fac.get("proveidor_nom") or fac.get("proveidor") or "Proveïdor")
+                )
+                if prov_filter and prov_filter not in p_nom.lower():
+                    continue
                 docs.append(
                     {
-                        "id": str(fac.id),
+                        "id": str(fac.get("id")),
                         "tipus": "FACTURA",
-                        "numero": fac.numero_factura,
-                        "proveidor": prov_nom,
-                        "data": fac.data_factura.isoformat() if fac.data_factura else None,
-                        "estat": fac.estat,
-                        "total": float(fac.total) if fac.total is not None else 0.0,
+                        "numero": fac.get("numero_factura") or fac.get("numero"),
+                        "proveidor": p_nom,
+                        "data": fac.get("data_factura") or fac.get("data"),
+                        "estat": fac.get("estat"),
+                        "total": float(fac.get("total") or 0.0),
                     }
                 )
+                if len(docs) >= limit * 2:
+                    break
 
         return {
             "trobat": len(docs) > 0,
@@ -534,51 +614,38 @@ class SubagentLogisticaEstoc(BaseSubagent):
     async def tool_get_eines_stock(
         self, db: AsyncSession, empresa_id: uuid.UUID, terme_cerca: Optional[str] = None
     ) -> dict:
-        stmt = (
-            select(
-                EinaCustodia,
-                Magatzem.nom.label("magatzem_nom"),
-                Magatzem.tipus.label("magatzem_tipus"),
-                Usuari.nom.label("custodi_nom"),
-                Usuari.cognoms.label("custodi_cognoms"),
-            )
-            .outerjoin(Magatzem, EinaCustodia.magatzem_id == Magatzem.id)
-            .outerjoin(Usuari, EinaCustodia.custodiat_per_operari_id == Usuari.id)
-            .where(EinaCustodia.empresa_id == empresa_id)
-        )
-        if terme_cerca and terme_cerca.strip():
-            filtre = f"%{terme_cerca.strip().lower()}%"
-            stmt = stmt.where(
-                or_(
-                    func.lower(EinaCustodia.nom).ilike(filtre),
-                    func.lower(func.coalesce(EinaCustodia.model, "")).ilike(filtre),
-                    func.lower(EinaCustodia.numero_serie).ilike(filtre),
-                )
-            )
+        eines_raw = await self.read_sovereign_category(db, empresa_id, "magatzem_eines")
+        operaris_raw = await self.read_sovereign_category(db, empresa_id, "operaris")
+        op_map = {
+            str(u.get("id")): f"{u.get('nom') or ''} {u.get('cognoms') or ''}".strip()
+            for u in operaris_raw
+            if u.get("id")
+        }
 
-        res = await db.execute(stmt)
-        rows = res.all()
-
-        llista = []
-        for eina, mag_nom, mag_tipus, c_nom, c_cognoms in rows:
-            custodi = f"{c_nom} {c_cognoms}".strip() if c_nom else "Cap (Disponible a nau)"
-            ubicacio = mag_nom or "Nau Central Base"
-            es_furgoneta = mag_tipus == "FURGONETA"
+        filtre = (terme_cerca or "").strip().lower()
+        llista: List[Dict[str, Any]] = []
+        for e in eines_raw:
+            blob = f"{e.get('nom', '')} {e.get('model', '')} {e.get('numero_serie', '')}".lower()
+            if filtre and filtre not in blob:
+                continue
+            custodi = (
+                op_map.get(str(e.get("custodiat_per_operari_id")))
+                or str(e.get("custodi") or e.get("custodiat_per") or "").strip()
+                or "Cap (Disponible a nau)"
+            )
+            ubicacio = str(e.get("ubicacio") or e.get("magatzem_nom") or "Nau Central Base")
+            es_furgoneta = bool(e.get("es_furgoneta") or e.get("magatzem_tipus") == "FURGONETA")
             llista.append(
                 {
-                    "id": str(eina.id),
-                    "nom": eina.nom,
-                    "model": eina.model,
-                    "numero_serie": eina.numero_serie,
-                    "estat": eina.estat,
+                    "id": str(e.get("id")),
+                    "nom": e.get("nom"),
+                    "model": e.get("model"),
+                    "numero_serie": e.get("numero_serie"),
+                    "estat": e.get("estat"),
                     "ubicacio": ubicacio,
                     "es_furgoneta": es_furgoneta,
                     "custodi": custodi,
-                    "propera_calibracio": (
-                        eina.data_propera_calibracio.isoformat()
-                        if eina.data_propera_calibracio
-                        else None
-                    ),
+                    "propera_calibracio": e.get("data_propera_calibracio"),
                 }
             )
 
@@ -603,24 +670,23 @@ class SubagentLogisticaEstoc(BaseSubagent):
     ) -> Tuple[str, Optional[str], Optional[dict], Optional[dict], List[dict]]:
         pregunta_lower = pregunta.lower()
         enllacos: List[dict] = [{"titol": "Inventari de Magatzem", "url": "/gestio/magatzem"}]
-        tool_args: dict[str, Any] = {}
 
-        # 1. Alertes de baix estoc / ruptura d'estoc
         if any(
             w in pregunta_lower
             for w in ["ruptura", "ruptures", "alerta estoc", "falta estoc", "baix estoc", "sota minim", "sota mínim"]
         ):
             tool_name = "get_low_stock_alerts"
-            tool_args = {"familia": None}
+            tool_args: dict[str, Any] = {"familia": None}
             tool_res = await self.tool_get_low_stock_alerts(db, empresa_id)
             if tool_res.get("trobat"):
-                detalls = ", ".join([f"{a['nom']} (disponible: {a['estoc_disponible']}, mínim: {a['estoc_minim']})" for a in tool_res["alertes"][:5]])
+                detalls = ", ".join(
+                    [f"{a['nom']} (disponible: {a['estoc_disponible']}, mínim: {a['estoc_minim']})" for a in tool_res["alertes"][:5]]
+                )
                 resposta = f"Alerta de magatzem: {tool_res['total_alertes']} articles tenen estoc crític. Principals: {detalls}."
             else:
                 resposta = "Tots els materials es troben per sobre del nivell d'estoc mínim de seguretat."
             return resposta, tool_name, tool_args, tool_res, enllacos
 
-        # 2. Moviments recents d'estoc
         if any(
             w in pregunta_lower
             for w in ["moviment", "moviments", "entrades i sortides", "entrades de material", "sortides de material"]
@@ -629,27 +695,26 @@ class SubagentLogisticaEstoc(BaseSubagent):
             tool_args = {"material_id": None, "limit": 10}
             tool_res = await self.tool_get_stock_movements(db, empresa_id, limit=10)
             if tool_res.get("trobat"):
-                detalls = ", ".join([f"{m['article_nom']} ({m['tipus_moviment']} {m['quantitat']})" for m in tool_res["moviments"][:4]])
+                detalls = ", ".join(
+                    [f"{m['article_nom']} ({m['tipus_moviment']} {m['quantitat']})" for m in tool_res["moviments"][:4]]
+                )
                 resposta = f"Últims moviments d'estoc registrats: {detalls}."
             else:
                 resposta = "No hi ha constància de moviments recents d'estoc al magatzem."
             return resposta, tool_name, tool_args, tool_res, enllacos
 
-        # 3. Documents de proveïdor (albarans / comandes de compra)
         if any(
             w in pregunta_lower
             for w in ["albarà de proveïdor", "albara de proveidor", "albarans de compra", "albarans de proveïdor", "documents de proveïdor"]
         ):
             tool_name = "get_supplier_docs"
             tool_args = {"proveidor_nom": None, "tipus": "albara", "limit": 5}
-            tool_res = await self.tool_get_supplier_docs(db, empresa_id, tipus="albara", limit=5, caller_role=caller_role)
+            tool_res = await self.tool_get_supplier_docs(
+                db, empresa_id, tipus="albara", limit=5, caller_role=caller_role
+            )
             return tool_res.get("missatge", "Consulta de documents de proveïdor completada."), tool_name, tool_args, tool_res, enllacos
 
-        # 4. Replanificació d'OT
-        if any(
-            w in pregunta_lower
-            for w in ["replanificar", "replanifica", "moure al dia", "passar al dia"]
-        ):
+        if any(w in pregunta_lower for w in ["replanificar", "replanifica", "moure al dia", "passar al dia"]):
             ot_match = re.search(r"\bOT[-\d\w]+\b", pregunta, re.IGNORECASE)
             data_match = re.search(r"\b\d{4}-\d{2}-\d{2}\b", pregunta)
             if ot_match and data_match:
@@ -659,11 +724,24 @@ class SubagentLogisticaEstoc(BaseSubagent):
                 t_res = await self.tool_replanificar_ot(db, empresa_id, codi_ot, nova_data)
                 return t_res.get("missatge", ""), "replanificar_ot", t_args, t_res, enllacos
 
-        # 5. Eines i maquinària (EinaCustodia)
         paraules_eines = [
-            "eina", "eines", "trepant", "trepants", "radial", "radials",
-            "escombra", "escombres", "maquinària", "maquinaria", "escala",
-            "escales", "serra", "martell", "calibració", "calibracio", "qui té"
+            "eina",
+            "eines",
+            "trepant",
+            "trepants",
+            "radial",
+            "radials",
+            "escombra",
+            "escombres",
+            "maquinària",
+            "maquinaria",
+            "escala",
+            "escales",
+            "serra",
+            "martell",
+            "calibració",
+            "calibracio",
+            "qui té",
         ]
         if any(w in pregunta_lower for w in paraules_eines):
             tool_name = "get_eines_stock"
@@ -687,24 +765,23 @@ class SubagentLogisticaEstoc(BaseSubagent):
                 resposta = f"No s'ha trobat cap eina o equip registrat per a '{terme_eina or 'la cerca'}'."
             return resposta, tool_name, tool_args, tool_res, enllacos
 
-        # 6. Estoc físic real d'un article consumible (Article)
-        stmt_arts = select(Article).where(Article.empresa_id == empresa_id)
-        articles_db = (await db.execute(stmt_arts)).scalars().all()
+        raw_mag = await self.read_sovereign_category(db, empresa_id, "magatzem_articles")
+        articles_disc = [r for r in raw_mag if self._is_article_record(r)]
 
         target_ref = ""
         best_match_len = 0
-        for art in articles_db:
-            nom_l = art.nom.lower()
-            ref_l = art.referencia_inventari.lower()
-            if nom_l in pregunta_lower and len(nom_l) > best_match_len:
-                target_ref = art.nom
+        for art in articles_disc:
+            nom_l = str(art.get("nom") or "").lower()
+            ref_l = str(art.get("referencia_inventari") or art.get("referencia") or "").lower()
+            if nom_l and nom_l in pregunta_lower and len(nom_l) > best_match_len:
+                target_ref = str(art.get("nom"))
                 best_match_len = len(nom_l)
-            elif ref_l in pregunta_lower and len(ref_l) > best_match_len:
-                target_ref = art.referencia_inventari
+            elif ref_l and ref_l in pregunta_lower and len(ref_l) > best_match_len:
+                target_ref = str(art.get("referencia_inventari") or art.get("referencia"))
                 best_match_len = len(ref_l)
 
         if not target_ref:
-            stopwords = [
+            stopwords = {
                 "tenim",
                 "suficient",
                 "per",
@@ -722,10 +799,8 @@ class SubagentLogisticaEstoc(BaseSubagent):
                 "la",
                 "els",
                 "les",
-            ]
-            cleaned = " ".join(
-                [w for w in pregunta_lower.split() if w not in stopwords and len(w) > 1]
-            )
+            }
+            cleaned = " ".join([w for w in pregunta_lower.split() if w not in stopwords and len(w) > 1])
             target_ref = cleaned or pregunta_lower
 
         tool_name = "get_real_stock"
@@ -742,10 +817,10 @@ class SubagentLogisticaEstoc(BaseSubagent):
                 ]
             )
             resposta = (
-                f"Segons la consulta en temps real d'inventari a magatzem (eina get_real_stock), "
+                f"Segons la consulta en temps real d'inventari al disc de l'empresa (eina get_real_stock), "
                 f"disposem de {tot_str} unitats disponibles en total. Detall d'estoc: {detalls}."
             )
         else:
-            resposta = f"No s'ha trobat cap registre d'estoc per a '{target_ref}' als magatzems de l'empresa."
+            resposta = f"No s'ha trobat cap registre d'estoc per a '{target_ref}' al disc dur de l'empresa."
 
         return resposta, tool_name, tool_args, tool_res, enllacos

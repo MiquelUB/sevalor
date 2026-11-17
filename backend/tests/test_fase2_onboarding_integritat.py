@@ -9,6 +9,7 @@ from httpx import AsyncClient
 from sqlalchemy import select
 
 from app.core.config import settings
+from app.core.security import blind_email, blind_nif
 from app.models.models import Empresa, Usuari
 
 
@@ -69,20 +70,25 @@ async def test_onboarding_persistencia_100_i_fitxers_inicials_disc(
         await db_session.execute(select(Usuari).where(Usuari.empresa_id == emp_db.id))
     ).scalar_one()
 
-    assert emp_db.adreca == "Avinguda Generalitat 120, Tortosa"
+    # Zero-Storage Hetzner: PostgreSQL només conserva pseudònims i índexs cecs
+    assert emp_db.nom == f"Tenant-{slug}"
+    assert emp_db.adreca is None
+    assert emp_db.nif == blind_nif(cif_empresa)
+    assert emp_db.agent_prompt_system is None
     assert emp_db.pla_subscripcio == "ENTERPRISE"
     assert emp_db.disc_dur_url == str(disc_client)
     assert emp_db.vault_token is not None
     assert emp_db.vault_token.startswith("svlt_")
     assert emp_db.telegram_webhook_secret is None
     assert tenant["vault_token"] == emp_db.vault_token
-    assert boss_db.nif == dni_boss
+    assert boss_db.nif == blind_nif(dni_boss)
     assert boss_db.nif != emp_db.nif
-    assert boss_db.nom == "Joan Josep"
-    assert boss_db.cognoms == "Rovira i Soler"
+    assert boss_db.nom == "Usuari"
+    assert boss_db.cognoms == ""
+    assert boss_db.email == blind_email(f"jjrovira_{slug}@sevalormante.cat")
     assert boss_db.telefon is None
 
-    # Verificar que les carpetes del disc contenen les dades des del minut 1
+    # Verificar que les carpetes del disc contenen les dades reals des del minut 1
     fitxa_empresa = disc_client / "11_configuracio_i_backups/identitat_camaleo/empresa.json"
     fitxa_boss = disc_client / f"08_flota_i_operaris/operaris/{boss_db.id}.json"
     prompt_file = disc_client / "09_copilot_ia/prompt_sistema/system_prompt.txt"
@@ -90,5 +96,11 @@ async def test_onboarding_persistencia_100_i_fitxers_inicials_disc(
     assert fitxa_empresa.is_file()
     assert fitxa_boss.is_file()
     assert prompt_file.is_file()
-    assert json.loads(fitxa_empresa.read_text("utf-8"))["nif"] == cif_empresa
+    emp_disk_data = json.loads(fitxa_empresa.read_text("utf-8"))
+    boss_disk_data = json.loads(fitxa_boss.read_text("utf-8"))
+    assert emp_disk_data["nif"] == cif_empresa
+    assert emp_disk_data["adreca"] == "Avinguda Generalitat 120, Tortosa"
+    assert boss_disk_data["nif"] == dni_boss
+    assert boss_disk_data["nom"] == "Joan Josep"
+    assert boss_disk_data["cognoms"] == "Rovira i Soler"
     assert prompt_file.read_text("utf-8") == "Ets el Copilot tècnic de Sevalormante."

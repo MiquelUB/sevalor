@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.db import get_db_with_tenant_context
-from app.core.security import require_roles
+from app.core.security import blind_email, blind_nif, blind_telefon, require_roles
 from app.models.models import (
     Article,
     Client,
@@ -61,6 +61,7 @@ from app.services.prospeccio_validacio import (
     construir_context,
     telefons_es,
 )
+from app.services.sovereign_storage import SuperadminStorageGateway
 from app.services.stalwart_mail_service import (
     aprovar_i_enviar_correu_calendari,
     processar_resposta_inbound,
@@ -405,6 +406,48 @@ async def crear_lead(
 
     await db.commit()
 
+    try:
+        await SuperadminStorageGateway.desar_entitat_json(
+            "crm_leads",
+            str(lead_id),
+            {
+                "id": str(lead_id),
+                "nom_empresa": nou_lead.nom_empresa,
+                "nom_contacte": nou_lead.nom_contacte,
+                "email": nou_lead.email,
+                "telefon": nou_lead.telefon,
+                "vertical": nou_lead.vertical,
+                "origen": nou_lead.origen,
+                "estat_qualificacio": nou_lead.estat_qualificacio,
+                "created_at": ara.isoformat(),
+            },
+        )
+        if oportunitat_id:
+            await SuperadminStorageGateway.desar_entitat_json(
+                "crm_oportunitats",
+                str(oportunitat_id),
+                {
+                    "id": str(oportunitat_id),
+                    "lead_id": str(lead_id),
+                    "etapa": "PROSPECCIO",
+                    "created_at": ara.isoformat(),
+                },
+            )
+        await SuperadminStorageGateway.desar_entitat_json(
+            "crm_activitats",
+            str(act.id),
+            {
+                "id": str(act.id),
+                "lead_id": str(lead_id),
+                "tipus": act.tipus,
+                "titol": act.titol,
+                "descripcio": act.descripcio,
+                "created_at": ara.isoformat(),
+            },
+        )
+    except HTTPException as exc:
+        logger.warning("CRM lead creat però no sincronitzat al Disc Superadmin: %s", exc.detail)
+
     return {
         "status": "OK",
         "lead_id": str(lead_id),
@@ -610,6 +653,25 @@ async def actualitzar_lead(
     lead.updated_at = datetime.now(timezone.utc)
     await db.commit()
 
+    try:
+        await SuperadminStorageGateway.desar_entitat_json(
+            "crm_leads",
+            str(lead.id),
+            {
+                "id": str(lead.id),
+                "nom_empresa": lead.nom_empresa,
+                "nom_contacte": lead.nom_contacte,
+                "email": lead.email,
+                "telefon": lead.telefon,
+                "vertical": lead.vertical,
+                "estat_qualificacio": lead.estat_qualificacio,
+                "notes": lead.notes,
+                "updated_at": lead.updated_at.isoformat(),
+            },
+        )
+    except HTTPException as exc:
+        logger.warning("Lead actualitzat però no sincronitzat al Disc Superadmin: %s", exc.detail)
+
     return {"status": "OK", "missatge": "Lead actualitzat correctament.", "lead_id": str(lead.id)}
 
 
@@ -651,6 +713,10 @@ async def eliminar_lead(
 
     await db.delete(lead)
     await db.commit()
+    try:
+        await SuperadminStorageGateway.eliminar_entitat_json("crm_leads", str(lid))
+    except HTTPException:
+        pass
     return {"status": "OK", "missatge": f"Lead '{nom_emp}' eliminat correctament."}
 
 
@@ -684,6 +750,21 @@ async def afegir_activitat_lead(
     db.add(act)
     lead.updated_at = ara
     await db.commit()
+    try:
+        await SuperadminStorageGateway.desar_entitat_json(
+            "crm_activitats",
+            str(act.id),
+            {
+                "id": str(act.id),
+                "lead_id": str(lid),
+                "tipus": act.tipus,
+                "titol": act.titol,
+                "descripcio": act.descripcio,
+                "created_at": ara.isoformat(),
+            },
+        )
+    except HTTPException:
+        pass
 
     return {"status": "OK", "activitat_id": str(act.id)}
 
@@ -892,6 +973,23 @@ async def actualitzar_o_canviar_etapa_oportunitat(
         db.add(act_edit)
 
     await db.commit()
+    try:
+        await SuperadminStorageGateway.desar_entitat_json(
+            "crm_oportunitats",
+            str(op.id),
+            {
+                "id": str(op.id),
+                "lead_id": str(op.lead_id),
+                "titol": op.titol,
+                "etapa": op.etapa,
+                "valor_mensual_estimat": float(op.valor_mensual_estimat),
+                "valor_ia_setup": float(op.valor_ia_setup),
+                "probabilitat_percent": op.probabilitat_percent,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            },
+        )
+    except HTTPException:
+        pass
     return {
         "status": "OK",
         "oportunitat_id": str(op.id),
@@ -940,6 +1038,10 @@ async def eliminar_oportunitat(
         db.add(act)
 
     await db.commit()
+    try:
+        await SuperadminStorageGateway.eliminar_entitat_json("crm_oportunitats", str(op_id))
+    except HTTPException:
+        pass
     return {"status": "OK", "missatge": f"Oportunitat '{titol_op}' eliminada correctament."}
 
 
@@ -1025,8 +1127,8 @@ async def activar_demo_lead(
 
     nova_empresa = Empresa(
         id=nou_tenant_id,
-        nom=f"{lead.nom_empresa} (Demo {durada_dies}D)",
-        nif=nif_provisional,
+        nom=f"Tenant-{subdomini_provisional}",
+        nif=blind_nif(nif_provisional),
         subdomini=subdomini_provisional,
         estat_domini="NO_CONFIGURAT",
         pla_subscripcio="PRO",
@@ -1054,9 +1156,10 @@ async def activar_demo_lead(
     u_boss = Usuari(
         id=boss_id,
         empresa_id=nou_tenant_id,
-        nif=f"B{uuid.uuid4().hex[:8].upper()}",
-        email=boss_email,
-        nom=lead.nom_contacte,
+        nif=blind_nif(f"B{uuid.uuid4().hex[:8].upper()}"),
+        email=blind_email(boss_email),
+        nom="Usuari",
+        cognoms="",
         password_hash=_hash_pwd("Password123!"),
         pin_hash=_hash_pin("0000"),
         rol="BOSS",
@@ -1067,13 +1170,14 @@ async def activar_demo_lead(
 
     # 3. Dos Operaris de camp per a la PWA mòbil
     op1_id = uuid.uuid4()
+    op1_nif_raw = f"OP{uuid.uuid4().hex[:7].upper()}"
     u_op1 = Usuari(
         id=op1_id,
         empresa_id=nou_tenant_id,
-        nif=f"OP{uuid.uuid4().hex[:7].upper()}",
-        email=f"operari1@{subdomini_provisional}.cat",
-        nom="Marc Tècnic (Camp)",
-        telefon="600000001",
+        nif=blind_nif(op1_nif_raw),
+        email=blind_email(f"operari1@{subdomini_provisional}.cat"),
+        nom="Operari Demo 1",
+        telefon=blind_telefon("600000001"),
         password_hash=_hash_pwd("Password123!"),
         pin_hash=_hash_pin("1111"),
         rol="OPERARI",
@@ -1084,13 +1188,14 @@ async def activar_demo_lead(
     db.add(u_op1)
 
     op2_id = uuid.uuid4()
+    op2_nif_raw = f"OP{uuid.uuid4().hex[:7].upper()}"
     u_op2 = Usuari(
         id=op2_id,
         empresa_id=nou_tenant_id,
-        nif=f"OP{uuid.uuid4().hex[:7].upper()}",
-        email=f"operari2@{subdomini_provisional}.cat",
-        nom="Jordi Ajudant (Camp)",
-        telefon="600000002",
+        nif=blind_nif(op2_nif_raw),
+        email=blind_email(f"operari2@{subdomini_provisional}.cat"),
+        nom="Operari Demo 2",
+        telefon=blind_telefon("600000002"),
         password_hash=_hash_pwd("Password123!"),
         pin_hash=_hash_pin("2222"),
         rol="OPERARI",
@@ -1267,6 +1372,29 @@ async def activar_demo_lead(
     db.add(venciment_demo_cal)
 
     await db.commit()
+
+    try:
+        await SuperadminStorageGateway.desar_entitat_json(
+            "tenants_fitxes",
+            str(nou_tenant_id),
+            {
+                "id": str(nou_tenant_id),
+                "empresa_id": str(nou_tenant_id),
+                "nom": f"{lead.nom_empresa} (Demo {durada_dies}D)",
+                "rao_social": f"{lead.nom_empresa} (Demo {durada_dies}D)",
+                "nif": nif_provisional,
+                "subdomini": subdomini_provisional,
+                "vertical": vertical_escollida,
+                "pla_subscripcio": "PRO",
+                "estat_pagament": "TRIAL",
+                "boss_usuari_id": str(boss_id),
+                "boss_nom": lead.nom_contacte,
+                "boss_email": boss_email,
+                "created_at": ara.isoformat(),
+            },
+        )
+    except HTTPException:
+        pass
 
     logger.info(f"[CRM Demo] Tenant Demo '{subdomini_provisional}' activat per al lead '{lead.nom_empresa}'.")
 
@@ -1684,6 +1812,25 @@ async def crear_executar_tasca_cp(
             detail=f"Error finalitzant la transacció del lot de prospecció: {str(commit_exc)[:250]}",
         )
 
+    try:
+        await SuperadminStorageGateway.desar_entitat_json(
+            "rascador_tasques",
+            str(tasca_id),
+            {
+                "id": str(tasca_id),
+                "codi_postal": payload.codi_postal.strip(),
+                "vertical": payload.vertical.strip(),
+                "total_trobats": tasca.total_trobats,
+                "total_seleccionats": tot_sel,
+                "total_descartats": tot_desc,
+                "total_duplicats": tot_dup,
+                "resum_execucio": tasca.resum_execucio,
+                "completed_at": tasca.completed_at.isoformat() if tasca.completed_at else None,
+            },
+        )
+    except HTTPException:
+        pass
+
     return {
         "status": "OK",
         "tasca_id": str(tasca_id),
@@ -1998,6 +2145,22 @@ async def corregir_criteri_candidat(
     )
     db.add(feedback)
     await db.commit()
+
+    try:
+        await SuperadminStorageGateway.desar_entitat_json(
+            "rascador_criteris",
+            str(feedback.id),
+            {
+                "id": str(feedback.id),
+                "candidat_id": str(cid),
+                "decisio_ia_original": decisio_anterior,
+                "decisio_humana_correcta": nova,
+                "explicacio_humana": payload.motiu_correccio_humana.strip(),
+                "created_at": ara.isoformat(),
+            },
+        )
+    except HTTPException:
+        pass
 
     return {
         "status": "OK",
@@ -2519,6 +2682,22 @@ async def afegir_exclusio_rgpd(
     )
     db.add(item)
     await db.commit()
+
+    try:
+        await SuperadminStorageGateway.desar_entitat_json(
+            "rascador_exclusions",
+            str(item.id),
+            {
+                "id": str(item.id),
+                "email": item.email,
+                "domini": dom,
+                "cif": item.cif,
+                "motiu": item.motiu,
+                "created_at": ara.isoformat(),
+            },
+        )
+    except HTTPException:
+        pass
 
     return {"status": "OK", "id": str(item.id), "missatge": f"Domini '{dom}' afegit a la llista d'exclusió."}
 

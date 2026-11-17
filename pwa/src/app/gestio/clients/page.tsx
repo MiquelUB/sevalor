@@ -18,8 +18,10 @@ import { ClipboardList, Package, Factory,
   Mail,
   RefreshCw,
 } from "lucide-react";
-import { apiFetch } from "@/lib/api";
+import { apiFetch, getApiBaseUrl, getAuthToken, extractTenantId } from "@/lib/api";
+import { geocodificarAdreca } from "@/lib/geocoding";
 import { useGestio } from "@/lib/gestio-context";
+import { CrearOTModal } from "@/components/gestio/CrearOTModal";
 
 interface Client {
   id: string;
@@ -49,29 +51,30 @@ interface Fitxa360Response {
 
 export default function GestioClientsPage() {
   const { rolActiu } = useGestio();
+  const esEnginyer = (rolActiu || "").toUpperCase() === "ENGINYER";
   const [clients, setClients] = useState<Client[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [filtreCerca, setFiltreCerca] = useState("");
   const [clientSeleccionat, setClientSeleccionat] = useState<Client | null>(null);
   const [modalNouClient, setModalNouClient] = useState(false);
+  const [modalEditarClient, setModalEditarClient] = useState(false);
+  const [clientEditant, setClientEditant] = useState<Client | null>(null);
+  const [modalNovaFinca, setModalNovaFinca] = useState(false);
+  const [novaFinca, setNovaFinca] = useState({
+    nom: "",
+    adreca: "",
+    latitud: "",
+    longitud: "",
+    ref_cadastral: "",
+    superficie_ha: "",
+  });
+  const [guardantFinca, setGuardantFinca] = useState(false);
+  const [exportantCsv, setExportantCsv] = useState(false);
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
   
-  // Gestió de Tasques
+  // Gestió de Tasques (reutilitzant CrearOTModal unificat)
   const [modalNovaTasca, setModalNovaTasca] = useState(false);
-  const [guardantTasca, setGuardantTasca] = useState(false);
-  const [operaris, setOperaris] = useState<any[]>([]);
-  const [vehicles, setVehicles] = useState<any[]>([]);
-  const [novaTasca, setNovaTasca] = useState({
-    codi: `OT-${Math.floor(Math.random() * 10000)}`,
-    titol: "",
-    adreca: "",
-    data_planificacio: new Date().toISOString().split('T')[0],
-    descripcio: "",
-    cap_de_colla_id: "",
-    vehicle_id: "",
-    finca_id: ""
-  });
   const [guardant, setGuardant] = useState(false);
   const [fitxa360, setFitxa360] = useState<Fitxa360Response | null>(null);
   const [loadingFitxa, setLoadingFitxa] = useState(false);
@@ -126,50 +129,125 @@ export default function GestioClientsPage() {
 
 
 
-  const handleObrirModalTasca = () => {
-    setModalNovaTasca(true);
-    setNovaTasca({
-      ...novaTasca,
-      codi: `OT-${Math.floor(Math.random() * 10000)}`
-    });
-    // Fetch operaris and vehicles if not loaded
-    if (operaris.length === 0) {
-      apiFetch("/gestio/operaris").then((data: any) => setOperaris(data)).catch(() => {});
-    }
-    if (vehicles.length === 0) {
-      apiFetch("/gestio/flota").then((data: any) => setVehicles(data)).catch(() => {});
+  const recarregarFitxa360 = async (clientId: string) => {
+    setLoadingFitxa(true);
+    try {
+      const data = await apiFetch<Fitxa360Response>(`/gestio/clients/${clientId}/fitxa360`);
+      setFitxa360(data);
+    } catch (err) {
+      console.error("Error carregant fitxa360:", err);
+    } finally {
+      setLoadingFitxa(false);
     }
   };
 
-  const handleCrearTasca = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!clientSeleccionat || !novaTasca.cap_de_colla_id) return;
-    setGuardantTasca(true);
+  const handleExportarCsv = async () => {
+    setExportantCsv(true);
+    setError(null);
     try {
-      const payload = {
-        ...novaTasca,
-        client_id: clientSeleccionat.id,
-        vehicle_id: novaTasca.vehicle_id || null,
-        finca_id: novaTasca.finca_id || null
-      };
-      await apiFetch("/gestio/feines", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify(payload)
-      });
-      setModalNovaTasca(false);
-      // Reload Fitxa 360 to see the new tasca
-      setLoadingFitxa(true);
-      apiFetch<Fitxa360Response>('/gestio/clients/' + clientSeleccionat.id + '/fitxa360')
-        .then(data => setFitxa360(data))
-        .catch(err => console.error("Error carregant fitxa360:", err))
-        .finally(() => setLoadingFitxa(false));
+      const token = getAuthToken();
+      const tenantId = extractTenantId();
+      const hdrs: Record<string, string> = {};
+      if (token) hdrs["Authorization"] = `Bearer ${token}`;
+      if (tenantId) hdrs["X-Empresa-ID"] = tenantId;
+
+      const resp = await fetch(`${getApiBaseUrl()}/gestio/clients/export`, { headers: hdrs });
+      if (!resp.ok) {
+        throw new Error(`Error exportant CSV (${resp.status})`);
+      }
+      const blob = await resp.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "clients_export.csv";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
     } catch (err: any) {
-      alert("Error al crear la tasca: " + (err.message || ""));
+      setError(err.message || "Error exportant clients a CSV");
     } finally {
-      setGuardantTasca(false);
+      setExportantCsv(false);
+    }
+  };
+
+  const handleDesarEdicioClient = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!clientEditant) return;
+    setGuardant(true);
+    setError(null);
+    try {
+      const updated = await apiFetch<Client>(`/gestio/clients/${clientEditant.id}`, {
+        method: "PUT",
+        body: JSON.stringify({
+          codi: clientEditant.codi,
+          rao_social: clientEditant.rao_social,
+          nif: clientEditant.nif,
+          telefon: clientEditant.telefon || null,
+          email: clientEditant.email || null,
+          adreca_fiscal: clientEditant.adreca_fiscal || null,
+          iban: esEnginyer ? null : (clientEditant.iban || null),
+        }),
+      });
+      setModalEditarClient(false);
+      setClientEditant(null);
+      await carregarClients();
+      if (updated) {
+        setClientSeleccionat(updated);
+        recarregarFitxa360(updated.id);
+      }
+    } catch (err: any) {
+      setError(err.message || "Error en modificar la fitxa del client");
+    } finally {
+      setGuardant(false);
+    }
+  };
+
+  const handleCrearFinca = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!clientSeleccionat) return;
+    setGuardantFinca(true);
+    setError(null);
+    try {
+      let lat = parseFloat(novaFinca.latitud);
+      let lng = parseFloat(novaFinca.longitud);
+      if ((Number.isNaN(lat) || Number.isNaN(lng)) && novaFinca.adreca.trim()) {
+        const geo = await geocodificarAdreca(novaFinca.adreca.trim());
+        if (geo) {
+          lat = geo.lat;
+          lng = geo.lng;
+        }
+      }
+      if (Number.isNaN(lat) || Number.isNaN(lng)) {
+        setError("Cal indicar latitud i longitud vàlides (o una adreça geocodificable).");
+        setGuardantFinca(false);
+        return;
+      }
+      await apiFetch(`/gestio/clients/${clientSeleccionat.id}/finques`, {
+        method: "POST",
+        body: JSON.stringify({
+          nom: novaFinca.nom,
+          adreca: novaFinca.adreca || null,
+          latitud: lat,
+          longitud: lng,
+          ref_cadastral: novaFinca.ref_cadastral || null,
+          superficie_ha: novaFinca.superficie_ha ? parseFloat(novaFinca.superficie_ha) : null,
+        }),
+      });
+      setModalNovaFinca(false);
+      setNovaFinca({
+        nom: "",
+        adreca: "",
+        latitud: "",
+        longitud: "",
+        ref_cadastral: "",
+        superficie_ha: "",
+      });
+      await recarregarFitxa360(clientSeleccionat.id);
+    } catch (err: any) {
+      setError(err.message || "Error donant d'alta la finca");
+    } finally {
+      setGuardantFinca(false);
     }
   };
 
@@ -180,7 +258,10 @@ export default function GestioClientsPage() {
     try {
       const creat = await apiFetch<Client>("/gestio/clients", {
         method: "POST",
-        body: JSON.stringify(nouClient),
+        body: JSON.stringify({
+          ...nouClient,
+          iban: esEnginyer ? null : (nouClient.iban || null),
+        }),
       });
       setModalNouClient(false);
       setNouClient({
@@ -245,14 +326,12 @@ export default function GestioClientsPage() {
 
           
           <button
-            onClick={() => {
-              const token = localStorage.getItem('sevalor_token');
-              window.open(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/v1/gestio/clients/export?token=${token}`, '_blank');
-            }}
-            className="px-3 py-1.5 rounded-xl bg-blue-50 text-blue-600 hover:bg-blue-100 dark:bg-blue-900/30 dark:text-blue-400 dark:hover:bg-blue-900/50 text-xs font-bold flex items-center gap-1 shadow-sm transition-all"
+            onClick={handleExportarCsv}
+            disabled={exportantCsv}
+            className="px-3 py-1.5 rounded-xl bg-blue-50 text-blue-600 hover:bg-blue-100 dark:bg-blue-900/30 dark:text-blue-400 dark:hover:bg-blue-900/50 text-xs font-bold flex items-center gap-1 shadow-sm transition-all disabled:opacity-50"
             title="Exportar a CSV"
           >
-            <span>Exportar CSV</span>
+            <span>{exportantCsv ? "Exportant..." : "Exportar CSV"}</span>
           </button>
           
           <button
@@ -380,22 +459,36 @@ export default function GestioClientsPage() {
                   </div>
                 </div>
 
-                {clientSeleccionat.iban && (
-                  <div className="px-3 py-1.5 rounded-xl bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs flex items-center gap-2">
-                    <Lock className="w-3.5 h-3.5 text-emerald-600" />
-                    <span className="font-mono text-slate-700 dark:text-slate-300">
-                      {clientSeleccionat.iban}
-                    </span>
-                  </div>
-                )}
-                
-                <button
-                  onClick={handleObrirModalTasca}
-                  className="mt-2 ml-4 px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold shadow-sm flex items-center gap-2 transition-all cursor-pointer"
-                >
-                  <ClipboardList className="w-4 h-4" />
-                  Assignar Tasca
-                </button>
+                <div className="flex flex-wrap items-center gap-2">
+                  {!esEnginyer && clientSeleccionat.iban && (
+                    <div className="px-3 py-1.5 rounded-xl bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs flex items-center gap-2">
+                      <Lock className="w-3.5 h-3.5 text-emerald-600" />
+                      <span className="font-mono text-slate-700 dark:text-slate-300">
+                        {clientSeleccionat.iban}
+                      </span>
+                    </div>
+                  )}
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setClientEditant({ ...clientSeleccionat });
+                      setModalEditarClient(true);
+                    }}
+                    className="px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 hover:bg-slate-50 text-xs font-bold transition-all cursor-pointer"
+                  >
+                    Editar Fitxa
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setModalNovaTasca(true)}
+                    className="px-4 py-2 rounded-xl bg-primary hover:opacity-90 text-white text-xs font-bold shadow-sm flex items-center gap-2 transition-all cursor-pointer"
+                  >
+                    <ClipboardList className="w-4 h-4" />
+                    Nova OT / Pressupost
+                  </button>
+                </div>
               </div>
 
               {clientSeleccionat.adreca_fiscal && (
@@ -416,10 +509,20 @@ export default function GestioClientsPage() {
                 
                 {/* 1. INSTAL·LACIONS / FINQUES */}
                 <div className="p-5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm">
-                  <h3 className="text-sm font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2 mb-4">
-                    <MapPin className="w-4 h-4 text-emerald-600" />
-                    Instal·lacions (Finques)
-                  </h3>
+                  <div className="flex items-center justify-between mb-4">
+                    <h3 className="text-sm font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2">
+                      <MapPin className="w-4 h-4 text-primary" />
+                      Instal·lacions (Finques)
+                    </h3>
+                    <button
+                      type="button"
+                      onClick={() => setModalNovaFinca(true)}
+                      className="px-3 py-1.5 rounded-xl bg-primary/10 hover:bg-primary/20 text-primary text-xs font-bold flex items-center gap-1 transition-colors"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      <span>Nova Finca</span>
+                    </button>
+                  </div>
                   <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
                     {fitxa360.finques.length === 0 ? (
                       <p className="text-xs text-slate-400">Cap instal·lació registrada.</p>
@@ -481,7 +584,7 @@ export default function GestioClientsPage() {
                         <p className="text-xs text-slate-400">Sense intervencions recents.</p>
                       ) : (
                         fitxa360.intervencions.slice(0,5).map(ot => (
-                          <a key={ot.id} href={'/gestio/feines?c=' + ot.codi} className="block p-3 rounded-xl border border-slate-100 dark:border-slate-800 hover:border-emerald-200 dark:hover:border-emerald-800 hover:bg-emerald-50/50 dark:hover:bg-emerald-900/10 transition-colors">
+                          <a key={ot.id} href={`/gestio/feines?id=${ot.id}`} className="block p-3 rounded-xl border border-slate-100 dark:border-slate-800 hover:border-emerald-200 dark:hover:border-emerald-800 hover:bg-emerald-50/50 dark:hover:bg-emerald-900/10 transition-colors">
                             <div className="flex justify-between items-start mb-1">
                               <span className="font-mono text-[10px] font-bold text-slate-500">{ot.codi}</span>
                               <span className="text-[10px] px-1.5 py-0.5 bg-slate-100 dark:bg-slate-800 rounded">{ot.estat}</span>
@@ -547,7 +650,7 @@ export default function GestioClientsPage() {
         isOpen={isImportModalOpen} 
         onClose={() => setIsImportModalOpen(false)} 
         resourceName="Clients"
-        endpoint={`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/v1/gestio/clients/import`}
+        endpoint={`${getApiBaseUrl()}/gestio/clients/import`}
         onSuccess={() => {
           setIsImportModalOpen(false);
           carregarClients();
@@ -655,18 +758,20 @@ export default function GestioClientsPage() {
                 />
               </div>
 
-              <div>
-                <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-400 mb-1">
-                  IBAN Bancari (opcional, xifrat al backend)
-                </label>
-                <input
-                  type="text"
-                  placeholder="ES00 0000 0000 0000 0000 0000"
-                  value={nouClient.iban}
-                  onChange={(e) => setNouClient({ ...nouClient, iban: e.target.value })}
-                  className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-mono"
-                />
-              </div>
+              {!esEnginyer && (
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-400 mb-1">
+                    IBAN Bancari (opcional, xifrat al backend)
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="ES00 0000 0000 0000 0000 0000"
+                    value={nouClient.iban}
+                    onChange={(e) => setNouClient({ ...nouClient, iban: e.target.value })}
+                    className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-mono"
+                  />
+                </div>
+              )}
 
               <div className="pt-3 border-t border-slate-200 dark:border-slate-800 flex items-center justify-end gap-2">
                 <button
@@ -689,156 +794,233 @@ export default function GestioClientsPage() {
         </div>
       )}
 
-      {/* Modal Crear Tasca */}
+      {/* Modal Unificat Nova OT (CrearOTModal preomplert amb client_id) */}
       {modalNovaTasca && clientSeleccionat && (
+        <CrearOTModal
+          initialClientId={clientSeleccionat.id}
+          onClose={() => setModalNovaTasca(false)}
+          onSuccess={() => {
+            setModalNovaTasca(false);
+            recarregarFitxa360(clientSeleccionat.id);
+          }}
+        />
+      )}
+
+      {/* Modal Editar Client */}
+      {modalEditarClient && clientEditant && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="w-full max-w-lg bg-white dark:bg-slate-900 rounded-3xl shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden">
             <div className="p-5 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between">
-              <h3 className="font-bold text-sm text-slate-800 dark:text-slate-100 flex items-center gap-2">
-                <ClipboardList className="w-4 h-4 text-blue-600" />
-                Assignar Tasca a {clientSeleccionat.rao_social}
+              <h3 className="font-bold text-sm text-slate-800 dark:text-slate-100">
+                Editar Fitxa Client: {clientEditant.rao_social}
               </h3>
               <button
-                onClick={() => setModalNovaTasca(false)}
-                className="p-1 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
+                type="button"
+                onClick={() => {
+                  setModalEditarClient(false);
+                  setClientEditant(null);
+                }}
+                className="p-1 rounded-lg text-slate-400 hover:text-slate-600"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
-
-            <form onSubmit={handleCrearTasca} className="p-5 space-y-4">
+            <form onSubmit={handleDesarEdicioClient} className="p-5 space-y-3">
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-400 mb-1">
-                    Codi Tasca *
-                  </label>
+                  <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-400 mb-1">Codi *</label>
                   <input
                     type="text"
                     required
-                    value={novaTasca.codi}
-                    onChange={(e) => setNovaTasca({ ...novaTasca, codi: e.target.value })}
+                    value={clientEditant.codi}
+                    onChange={(e) => setClientEditant({ ...clientEditant, codi: e.target.value })}
                     className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-mono"
                   />
                 </div>
                 <div>
-                  <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-400 mb-1">
-                    Data Planificació *
-                  </label>
+                  <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-400 mb-1">NIF / CIF *</label>
                   <input
-                    type="date"
+                    type="text"
                     required
-                    value={novaTasca.data_planificacio}
-                    onChange={(e) => setNovaTasca({ ...novaTasca, data_planificacio: e.target.value })}
+                    value={clientEditant.nif}
+                    onChange={(e) => setClientEditant({ ...clientEditant, nif: e.target.value.toUpperCase() })}
+                    className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-mono"
+                  />
+                </div>
+              </div>
+              <div>
+                <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-400 mb-1">Raó Social *</label>
+                <input
+                  type="text"
+                  required
+                  value={clientEditant.rao_social}
+                  onChange={(e) => setClientEditant({ ...clientEditant, rao_social: e.target.value })}
+                  className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs"
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-400 mb-1">Telèfon</label>
+                  <input
+                    type="tel"
+                    value={clientEditant.telefon || ""}
+                    onChange={(e) => setClientEditant({ ...clientEditant, telefon: e.target.value })}
+                    className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-400 mb-1">Correu</label>
+                  <input
+                    type="email"
+                    value={clientEditant.email || ""}
+                    onChange={(e) => setClientEditant({ ...clientEditant, email: e.target.value })}
                     className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs"
                   />
                 </div>
               </div>
-
               <div>
-                <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-400 mb-1">
-                  Títol de la Feina *
-                </label>
+                <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-400 mb-1">Adreça Fiscal</label>
                 <input
                   type="text"
-                  required
-                  placeholder="Ex: Reparació fuita principal"
-                  value={novaTasca.titol}
-                  onChange={(e) => setNovaTasca({ ...novaTasca, titol: e.target.value })}
-                  className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-medium"
-                />
-              </div>
-
-              <div>
-                <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-400 mb-1">
-                  Adreça de l'Obra *
-                </label>
-                <input
-                  type="text"
-                  required
-                  placeholder="Carrer de l'Obra, 123"
-                  value={novaTasca.adreca}
-                  onChange={(e) => setNovaTasca({ ...novaTasca, adreca: e.target.value })}
+                  value={clientEditant.adreca_fiscal || ""}
+                  onChange={(e) => setClientEditant({ ...clientEditant, adreca_fiscal: e.target.value })}
                   className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs"
                 />
               </div>
-              
-              <div>
-                <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-400 mb-1">
-                  Finca (Opcional)
-                </label>
-                <select
-                  value={novaTasca.finca_id}
-                  onChange={(e) => setNovaTasca({ ...novaTasca, finca_id: e.target.value })}
-                  className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs"
-                >
-                  <option value="">-- Sense Finca Específica --</option>
-                  {fitxa360?.finques.map(f => (
-                    <option key={f.id} value={f.id}>{f.nom} ({f.adreca})</option>
-                  ))}
-                </select>
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
+              {!esEnginyer && (
                 <div>
-                  <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-400 mb-1">
-                    Cap de Colla *
-                  </label>
-                  <select
-                    required
-                    value={novaTasca.cap_de_colla_id}
-                    onChange={(e) => setNovaTasca({ ...novaTasca, cap_de_colla_id: e.target.value })}
-                    className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs"
-                  >
-                    <option value="">-- Seleccionar --</option>
-                    {operaris.map(op => (
-                      <option key={op.id} value={op.id}>{op.nom} {op.cognoms}</option>
-                    ))}
-                  </select>
+                  <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-400 mb-1">IBAN Bancari</label>
+                  <input
+                    type="text"
+                    value={clientEditant.iban || ""}
+                    onChange={(e) => setClientEditant({ ...clientEditant, iban: e.target.value })}
+                    className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-mono"
+                  />
                 </div>
-                <div>
-                  <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-400 mb-1">
-                    Vehicle (Opcional)
-                  </label>
-                  <select
-                    value={novaTasca.vehicle_id}
-                    onChange={(e) => setNovaTasca({ ...novaTasca, vehicle_id: e.target.value })}
-                    className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs"
-                  >
-                    <option value="">-- Seleccionar --</option>
-                    {vehicles.map(v => (
-                      <option key={v.id} value={v.id}>{v.matricula} ({v.marca})</option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-400 mb-1">
-                  Descripció (Opcional)
-                </label>
-                <textarea
-                  placeholder="Instruccions per a l'operari..."
-                  value={novaTasca.descripcio}
-                  onChange={(e) => setNovaTasca({ ...novaTasca, descripcio: e.target.value })}
-                  className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs min-h-[60px]"
-                />
-              </div>
-
-              <div className="pt-3 border-t border-slate-200 dark:border-slate-800 flex items-center justify-end gap-2">
+              )}
+              <div className="pt-3 border-t border-slate-200 dark:border-slate-800 flex justify-end gap-2">
                 <button
                   type="button"
-                  onClick={() => setModalNovaTasca(false)}
-                  className="px-4 py-2 rounded-xl border border-slate-300 dark:border-slate-700 text-slate-600 dark:text-slate-300 text-xs font-medium hover:bg-slate-100 dark:hover:bg-slate-800"
+                  onClick={() => {
+                    setModalEditarClient(false);
+                    setClientEditant(null);
+                  }}
+                  className="px-4 py-2 rounded-xl border border-slate-300 dark:border-slate-700 text-xs font-medium"
                 >
                   Cancel·lar
                 </button>
                 <button
                   type="submit"
-                  disabled={guardantTasca}
-                  className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold shadow disabled:opacity-50 flex items-center gap-2"
+                  disabled={guardant}
+                  className="px-4 py-2 rounded-xl bg-primary hover:opacity-90 text-white text-xs font-bold disabled:opacity-50"
                 >
-                  <ClipboardList className="w-4 h-4" />
-                  {guardantTasca ? "Creant Tasca..." : "Crear i Assignar Tasca"}
+                  {guardant ? "Desant..." : "Desar Canvis"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Alta Nova Finca */}
+      {modalNovaFinca && clientSeleccionat && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="w-full max-w-md bg-white dark:bg-slate-900 rounded-3xl shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden">
+            <div className="p-5 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between">
+              <h3 className="font-bold text-sm text-slate-800 dark:text-slate-100 flex items-center gap-2">
+                <MapPin className="w-4 h-4 text-primary" />
+                Nova Finca per a {clientSeleccionat.rao_social}
+              </h3>
+              <button
+                type="button"
+                onClick={() => setModalNovaFinca(false)}
+                className="p-1 rounded-lg text-slate-400 hover:text-slate-600"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <form onSubmit={handleCrearFinca} className="p-5 space-y-3">
+              <div>
+                <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-400 mb-1">Nom de la Finca *</label>
+                <input
+                  type="text"
+                  required
+                  placeholder="Ex: Finca Les Garrigues Nord"
+                  value={novaFinca.nom}
+                  onChange={(e) => setNovaFinca({ ...novaFinca, nom: e.target.value })}
+                  className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs"
+                />
+              </div>
+              <div>
+                <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-400 mb-1">Adreça / Partida (per geocodificar)</label>
+                <input
+                  type="text"
+                  placeholder="Camí Rural s/n, Municipi"
+                  value={novaFinca.adreca}
+                  onChange={(e) => setNovaFinca({ ...novaFinca, adreca: e.target.value })}
+                  className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs"
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-400 mb-1">Latitud</label>
+                  <input
+                    type="number"
+                    step="any"
+                    placeholder="Auto via adreça"
+                    value={novaFinca.latitud}
+                    onChange={(e) => setNovaFinca({ ...novaFinca, latitud: e.target.value })}
+                    className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-400 mb-1">Longitud</label>
+                  <input
+                    type="number"
+                    step="any"
+                    placeholder="Auto via adreça"
+                    value={novaFinca.longitud}
+                    onChange={(e) => setNovaFinca({ ...novaFinca, longitud: e.target.value })}
+                    className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-mono"
+                  />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-400 mb-1">Ref. Cadastral</label>
+                  <input
+                    type="text"
+                    value={novaFinca.ref_cadastral}
+                    onChange={(e) => setNovaFinca({ ...novaFinca, ref_cadastral: e.target.value })}
+                    className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-400 mb-1">Superfície (ha)</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    value={novaFinca.superficie_ha}
+                    onChange={(e) => setNovaFinca({ ...novaFinca, superficie_ha: e.target.value })}
+                    className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-mono"
+                  />
+                </div>
+              </div>
+              <div className="pt-3 border-t border-slate-200 dark:border-slate-800 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setModalNovaFinca(false)}
+                  className="px-4 py-2 rounded-xl border border-slate-300 dark:border-slate-700 text-xs font-medium"
+                >
+                  Cancel·lar
+                </button>
+                <button
+                  type="submit"
+                  disabled={guardantFinca}
+                  className="px-4 py-2 rounded-xl bg-primary hover:opacity-90 text-white text-xs font-bold disabled:opacity-50"
+                >
+                  {guardantFinca ? "Desant..." : "Registrar Finca"}
                 </button>
               </div>
             </form>

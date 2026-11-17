@@ -639,16 +639,19 @@ async def cridar_lm_studio(
     vault_token: Optional[str] = None,
 ) -> Optional[str]:
     """Cridar el node d'IA local dedicat de l'empresa. Zero egress a Hetzner."""
-    raw_target = (
-        empresa.node_ia_url.strip()
-        if (
-            empresa
-            and empresa.node_ia_actiu
-            and getattr(empresa, "feature_copilot_ia", True)
-            and empresa.node_ia_url
+    if empresa is not None:
+        raw_target = (
+            empresa.node_ia_url.strip()
+            if (
+                empresa.node_ia_actiu
+                and getattr(empresa, "feature_copilot_ia", False)
+                and empresa.node_ia_url
+                and empresa.node_ia_url.strip()
+            )
+            else None
         )
-        else None
-    ) or (node_ia_url.strip() if (node_ia_url and node_ia_url.strip()) else None)
+    else:
+        raw_target = node_ia_url.strip() if (node_ia_url and node_ia_url.strip()) else None
     lm_url = resolve_effective_node_url(raw_target)
     if not lm_url:
         return None
@@ -1894,7 +1897,7 @@ async def consultar_xat_tecnic(
     empresa = res_emp.scalar_one_or_none()
     vertical = empresa.vertical if empresa else "SEVALOR"
 
-    usuari_nom = claims.get("nom") or claims.get("email")
+    usuari_nom = claims.get("nom") or None
 
     resposta = await copilot_dispatcher.dispatch(
         pregunta=dades.pregunta,
@@ -1908,52 +1911,52 @@ async def consultar_xat_tecnic(
         historial=dades.historial,
         agent_prompt_system=empresa.agent_prompt_system if empresa else None,
     )
-
-    # Persistir la conversa/feedback al disc dur del client per a l'autoaprenentatge
-    try:
-        await SovereignStorageGateway.desar_entitat_json(
-            db=db,
-            empresa_id=empresa_id,
-            categoria="copilot_feedback",
-            item_id=str(uuid.uuid4()),
-            dades={
-                "data": datetime.now(timezone.utc).isoformat(),
-                "usuari_id": str(usuari_id) if usuari_id else None,
-                "rol": rol_usuari,
-                "pregunta": dades.pregunta,
-                "resposta": resposta.get("resposta")
-                if isinstance(resposta, dict)
-                else str(resposta),
-                "context_id": dades.context_id,
-            },
-        )
-    except Exception as exc:
-        logger.warning("No s'ha pogut registrar la conversa al disc del client: %s", exc)
-
     return resposta
 
 
 @router.get("/ia-status")
-async def obtenir_estat_ia() -> Dict[str, Any]:
-    """Comprova la connectivitat en viu amb el node local LM Studio (http://127.0.0.1:1234)."""
-    lm_url = (
-        getattr(settings, "LM_STUDIO_URL", None)
-        or getattr(settings, "LMSTUDIO_URL", None)
-        or "http://127.0.0.1:1234/v1"
-    )
+async def obtenir_estat_ia(
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+    claims: Dict[str, Any] = Depends(get_current_user_claims),
+) -> Dict[str, Any]:
+    """Comprova la connectivitat en viu amb el túnel Copilot / Node IA local de l'empresa."""
+    empresa_id = aplicar_tenant_context(claims)
+    res_emp = await db.execute(select(Empresa).where(Empresa.id == empresa_id))
+    empresa = res_emp.scalar_one_or_none()
+
+    if (
+        not empresa
+        or not empresa.node_ia_actiu
+        or not getattr(empresa, "feature_copilot_ia", False)
+        or not (empresa.node_ia_url and empresa.node_ia_url.strip())
+    ):
+        return {
+            "estat": "OFFLINE",
+            "node_ia_actiu": bool(empresa.node_ia_actiu) if empresa else False,
+            "url": None,
+            "error": "Copilot IA desactivat o sense túnel configurat per a l'empresa",
+            "latencia_ms": None,
+        }
+
+    lm_url = resolve_effective_node_url(empresa.node_ia_url.strip()) or empresa.node_ia_url.strip()
     base_url = lm_url.rstrip("/")
     models_url = f"{base_url}/models" if base_url.endswith("/v1") else f"{base_url}/v1/models"
+    headers = build_node_ia_headers(
+        api_key=getattr(settings, "LM_STUDIO_API_KEY", "lm-studio"),
+        vault_token=getattr(empresa, "vault_token", None),
+    )
 
     try:
         start_t = datetime.now()
         async with httpx.AsyncClient(timeout=8.0) as client:
-            resp = await client.get(models_url)
+            resp = await client.get(models_url, headers=headers)
             elapsed_ms = int((datetime.now() - start_t).total_seconds() * 1000)
             if resp.status_code == 200:
                 data = resp.json()
                 models = [m.get("id") for m in data.get("data", [])]
                 return {
                     "estat": "ONLINE",
+                    "node_ia_actiu": True,
                     "url": lm_url,
                     "model_actiu": getattr(settings, "LM_STUDIO_MODEL", "qwen2.5-vl-7b-instruct"),
                     "models_disponibles": models,
@@ -1962,6 +1965,7 @@ async def obtenir_estat_ia() -> Dict[str, Any]:
     except Exception as e:
         return {
             "estat": "OFFLINE",
+            "node_ia_actiu": True,
             "url": lm_url,
             "error": str(e),
             "latencia_ms": None,
@@ -1969,6 +1973,7 @@ async def obtenir_estat_ia() -> Dict[str, Any]:
 
     return {
         "estat": "OFFLINE",
+        "node_ia_actiu": True,
         "url": lm_url,
         "error": "Resposta no vàlida del node d'IA",
         "latencia_ms": None,
@@ -2016,38 +2021,29 @@ async def afegir_document_rag(
     db: AsyncSession = Depends(get_db_with_tenant_context),
     claims: Dict[str, Any] = Depends(get_current_user_claims),
 ):
-    """Permet als administradors afegir protocols i documentació al RAG del Copilot."""
+    """Permet als administradors afegir protocols al disc dur sobirà del client per al RAG del Copilot."""
     empresa_id = aplicar_tenant_context(claims)
+    doc_id = str(uuid.uuid4())
 
-    nou_doc = FaqCorporativaRag(
+    await SovereignStorageGateway.desar_entitat_json(
+        db=db,
         empresa_id=empresa_id,
-        pregunta=dades.pregunta,
-        resposta=dades.resposta,
-        paraules_clau=dades.paraules_clau,
-        actiu=True,
+        categoria="protocols_interns",
+        item_id=doc_id,
+        dades={
+            "id": doc_id,
+            "titol": dades.pregunta,
+            "pregunta": dades.pregunta,
+            "contingut": dades.resposta,
+            "resposta": dades.resposta,
+            "tags": dades.paraules_clau,
+            "paraules_clau": dades.paraules_clau,
+            "actiu": True,
+            "creat_el": datetime.now(timezone.utc).isoformat(),
+        },
     )
-    db.add(nou_doc)
-    await db.commit()
 
-    # Sincronitzar el protocol/FAQ interna al disc dur del client
-    try:
-        await SovereignStorageGateway.desar_entitat_json(
-            db=db,
-            empresa_id=empresa_id,
-            categoria="protocols_interns",
-            item_id=str(nou_doc.id),
-            dades={
-                "id": str(nou_doc.id),
-                "titol": nou_doc.pregunta,
-                "contingut": nou_doc.resposta,
-                "tags": nou_doc.paraules_clau,
-                "creat_el": datetime.now(timezone.utc).isoformat(),
-            },
-        )
-    except Exception as exc:
-        logger.warning("No s'ha pogut desar el protocol al disc del client: %s", exc)
-
-    return {"estat": "OK", "missatge": "Document afegit a la base de coneixement de la IA."}
+    return {"id": doc_id, "estat": "OK", "missatge": "Document afegit al disc dur de l'empresa per a la IA."}
 
 
 @router.get("/rag/document")
@@ -2055,26 +2051,23 @@ async def llistar_documents_rag(
     db: AsyncSession = Depends(get_db_with_tenant_context),
     claims: Dict[str, Any] = Depends(get_current_user_claims),
 ):
-    """Llista els protocols del RAG actius."""
+    """Llista els protocols del RAG actius des del disc dur sobirà de l'empresa."""
     empresa_id = aplicar_tenant_context(claims)
-
-    q = select(FaqCorporativaRag).where(
-        FaqCorporativaRag.empresa_id == empresa_id, FaqCorporativaRag.actiu.is_(True)
+    docs_disc = await SovereignStorageGateway.llegir_entitats_json(
+        db, empresa_id, "protocols_interns"
     )
-    res = await db.execute(q)
-    docs = res.scalars().all()
-
     return [
         {
-            "id": str(d.id),
-            "titol": d.pregunta,
-            "contingut": d.resposta,
-            "tags": d.paraules_clau,
-            "pregunta": d.pregunta,
-            "resposta": d.resposta,
-            "paraules_clau": d.paraules_clau,
+            "id": str(d.get("id") or ""),
+            "titol": d.get("titol") or d.get("pregunta") or "",
+            "contingut": d.get("contingut") or d.get("resposta") or "",
+            "tags": d.get("tags") or d.get("paraules_clau") or "",
+            "pregunta": d.get("pregunta") or d.get("titol") or "",
+            "resposta": d.get("resposta") or d.get("contingut") or "",
+            "paraules_clau": d.get("paraules_clau") or d.get("tags") or "",
         }
-        for d in docs
+        for d in docs_disc
+        if d.get("actiu", True)
     ]
 
 

@@ -79,6 +79,10 @@ export default function GestioProveidorsPage() {
   const [provSeleccionatCae, setProvSeleccionatCae] = useState<ProveidorItem | null>(null);
   const [dataCaducitatCae, setDataCaducitatCae] = useState<string>("");
   const [tipusDocCae, setTipusDocCae] = useState<string>("POLISSA_RC");
+  const [fitxerCae, setFitxerCae] = useState<File | null>(null);
+  const [pujantCae, setPujantCae] = useState<boolean>(false);
+  const [modalSolicitudBecObert, setModalSolicitudBecObert] = useState<boolean>(false);
+  const [provSolicitudBec, setProvSolicitudBec] = useState<ProveidorItem | null>(null);
   const [alternativesSubcontractes, setAlternativesSubcontractes] = useState<any[]>([]);
   const [cercantAlternatives, setCercantAlternatives] = useState<boolean>(false);
 
@@ -112,13 +116,14 @@ export default function GestioProveidorsPage() {
           telefon: provEdicio.telefon || null,
           email: provEdicio.email || null,
           especialitat: provEdicio.especialitat,
-          iban: provEdicio.iban_visible,
+          iban: null,
         }),
       });
       setModalFitxaObert(false);
-      fetchProveidors();
-    } catch {
-      // Ignorar
+      setProvEdicio(null);
+      await fetchProveidors();
+    } catch (err: any) {
+      alert(err?.message || "Error actualitzant la fitxa del proveïdor");
     }
   };
 
@@ -206,40 +211,26 @@ export default function GestioProveidorsPage() {
     };
   }, [rolActiu]);
 
-  // Simular / Reportar canvi d'IBAN (Spec 003 RF-09 / EDGE-01)
-  const handleReportarCanviIban = async (prov: ProveidorItem, nouIbanStr: string) => {
+  // Protocol antifrau BEC real: registrar sol·licitud de canvi d'IBAN i desbloquejar amb trucada SIF
+  const handleReportarCanviIban = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!provSolicitudBec || !nouIbanInput.trim()) return;
     try {
       await apiFetch("/gestio/proveidors/canvi-iban", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          proveidor_id: prov.id,
-          nou_iban: nouIbanStr,
-          origen_deteccio: "OCR_FACTURA",
+          proveidor_id: provSolicitudBec.id,
+          nou_iban: nouIbanInput.trim(),
+          origen_deteccio: "SOL_LICITUD_CANVI_MANUAL",
         }),
       });
-
-      // Actualització optimista
-      setProveidors((prev) =>
-        prev.map((p) => {
-          if (p.id === prov.id) {
-            return {
-              ...p,
-              bloqueig_bec: true,
-              detall_antifrau: {
-                estat: "BLOQUEIG_ANTIFRAU_IBAN",
-                iban_vell: p.iban_visible,
-                iban_nou: nouIbanStr,
-                origen: "OCR_FACTURA",
-                data_deteccio: new Date().toISOString(),
-              },
-            };
-          }
-          return p;
-        })
-      );
-    } catch {
-      // Fallback
+      setModalSolicitudBecObert(false);
+      setProvSolicitudBec(null);
+      setNouIbanInput("");
+      await fetchProveidors();
+    } catch (err: any) {
+      alert(err?.message || "Error registrant sol·licitud de canvi d'IBAN");
     }
   };
 
@@ -256,27 +247,39 @@ export default function GestioProveidorsPage() {
           proveidor_id: provSeleccionatBec.id,
           verificacio_telefonica_feta: true,
           persona_contactada: personaContactada || "Responsable d'administració acreditat",
-          observacions: observacionsBec,
+          observacions: observacionsBec || null,
         }),
       });
 
-      setProveidors((prev) =>
-        prev.map((p) => {
-          if (p.id === provSeleccionatBec.id) {
-            const nouIbanAprovat = p.detall_antifrau?.iban_nou || p.iban_visible;
-            return {
-              ...p,
-              bloqueig_bec: false,
-              iban_visible: nouIbanAprovat,
-              detall_antifrau: undefined,
-            };
-          }
-          return p;
-        })
-      );
       setModalBecObert(false);
-    } catch {
-      setModalBecObert(false);
+      setProvSeleccionatBec(null);
+      await fetchProveidors();
+    } catch (err: any) {
+      alert(err?.message || "Error autoritzant el canvi d'IBAN");
+    }
+  };
+
+  const handlePujarCae = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!provSeleccionatCae || !fitxerCae || !dataCaducitatCae) return;
+    setPujantCae(true);
+    try {
+      const formData = new FormData();
+      formData.append("tipus_document", tipusDocCae);
+      formData.append("data_caducitat", dataCaducitatCae);
+      formData.append("file", fitxerCae);
+
+      await apiFetch(`/gestio/proveidors/${provSeleccionatCae.id}/cae`, {
+        method: "POST",
+        body: formData,
+      });
+      setFitxerCae(null);
+      setModalCaeObert(false);
+      await fetchProveidors();
+    } catch (err: any) {
+      alert(err?.message || "Error pujant document CAE");
+    } finally {
+      setPujantCae(false);
     }
   };
 
@@ -285,7 +288,7 @@ export default function GestioProveidorsPage() {
     setCercantAlternatives(true);
     try {
       const data = await apiFetch<any[]>("/gestio/proveidors");
-      setAlternativesSubcontractes(data || []);
+      setAlternativesSubcontractes((data || []).filter((p) => p.estat_cae === "EN_VIGOR"));
     } catch {
       // Fallback
     } finally {
@@ -309,37 +312,20 @@ export default function GestioProveidorsPage() {
           telefon: nouTelefon || null,
           email: nouEmail || null,
           especialitat: novaEspecialitat,
-          iban: nouIban || "ES8200491823442819481920",
+          es_recc: nouEsRecc,
+          aplica_isp_defecte: nouAplicaIsp,
+          iban: rolActiu === "ENGINYER" ? null : (nouIban.trim() || null),
         }),
       });
       setModalAltaObert(false);
-      fetchProveidors();
-      if (false) {
-        // Fallback optimista si no hi ha backend
-        const nouItem: ProveidorItem = {
-          id: `prov-${Date.now()}`,
-          codi: `PRV-${String(proveidors.length + 1).padStart(4, "0")}`,
-          rao_social: novaRaoSocial,
-          nif: nouNif.toUpperCase(),
-          telefon: nouTelefon || "Sense telèfon",
-          email: nouEmail || "Sense correu",
-          especialitat: novaEspecialitat,
-          es_recc: nouEsRecc,
-          aplica_isp_defecte: nouAplicaIsp,
-          actiu: true,
-          estat_cae: "EN_VIGOR",
-          dies_restants_cae: 180,
-          alerta_cae: "OK",
-          bloqueig_bec: false,
-          iban_visible: nouIban || "ES82 0049 1823 44 2819481920",
-          volum_compres_eur: 0,
-          retencio_salvaguarda_percent: novaEspecialitat === "SUBCONTRACTA" ? 60.0 : 0.0,
-        };
-        setProveidors((prev) => [nouItem, ...prev]);
-        setModalAltaObert(false);
-      }
-    } catch {
-      setModalAltaObert(false);
+      setNovaRaoSocial("");
+      setNouNif("");
+      setNouTelefon("");
+      setNouEmail("");
+      setNouIban("");
+      await fetchProveidors();
+    } catch (err: any) {
+      alert(err?.message || "Error donant d'alta el proveïdor");
     }
   };
 
@@ -675,7 +661,17 @@ export default function GestioProveidorsPage() {
                     {/* Accions */}
                     <td className="p-3.5 text-right">
                       <div className="flex items-center justify-end gap-1.5">
-                        {p.bloqueig_bec && rolActiu !== "ENGINYER" && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setProvEdicio({ ...p });
+                            setModalFitxaObert(true);
+                          }}
+                          className="px-2 py-1 rounded bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 text-[10px] font-mono border border-slate-300 dark:border-slate-700"
+                        >
+                          Editar
+                        </button>
+                        {p.bloqueig_bec && rolActiu === "BOSS" && (
                           <button
                             onClick={() => {
                               setProvSeleccionatBec(p);
@@ -691,18 +687,20 @@ export default function GestioProveidorsPage() {
                         {!p.bloqueig_bec && rolActiu !== "ENGINYER" && (
                           <button
                             onClick={() => {
-                              const nouIbanSimulat = "ES44 2100 1234 56 9988776655";
-                              handleReportarCanviIban(p, nouIbanSimulat);
+                              setProvSolicitudBec(p);
+                              setNouIbanInput("");
+                              setModalSolicitudBecObert(true);
                             }}
                             className="px-2 py-1 rounded bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 text-[10px] font-mono border border-slate-300 dark:border-slate-700"
-                            title="Simular detecció de canvi d'IBAN per OCR de factura"
+                            title="Sol·licitar canvi d'IBAN subjecte a doble verificació BEC"
                           >
-                            Simular BEC
+                            Canvi IBAN
                           </button>
                         )}
                         <button
                           onClick={() => {
                             setProvSeleccionatCae(p);
+                            setFitxerCae(null);
                             setDataCaducitatCae(new Date(Date.now() + 180 * 86400000).toISOString().split("T")[0]);
                             setModalCaeObert(true);
                           }}
@@ -754,7 +752,7 @@ export default function GestioProveidorsPage() {
               <div className="flex items-center justify-between text-rose-600 dark:text-rose-400">
                 <span className="font-bold">Nou IBAN Detectat (OCR Factura):</span>
                 <span className="font-bold bg-rose-100 dark:bg-rose-900/60 px-2 py-0.5 rounded border border-rose-300 dark:border-rose-700">
-                  {provSeleccionatBec.detall_antifrau?.iban_nou || "ES44 2100 1234 56 9988776655"}
+                  {provSeleccionatBec.detall_antifrau?.iban_nou || "No informat"}
                 </span>
               </div>
             </div>
@@ -913,6 +911,56 @@ export default function GestioProveidorsPage() {
                 </div>
               )}
 
+              {/* Formulari real de càrrega documental CAE al disc sobirà */}
+              {rolActiu !== "ENGINYER" && (
+                <form onSubmit={handlePujarCae} className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700 space-y-3">
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-600 dark:text-slate-400 mb-1">Tipus Document</label>
+                      <select
+                        value={tipusDocCae}
+                        onChange={(e) => setTipusDocCae(e.target.value)}
+                        className="w-full p-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs"
+                      >
+                        <option value="POLISSA_RC">Pòlissa RC</option>
+                        <option value="CORRENT_SS">Corrent Seguretat Social</option>
+                        <option value="CORRENT_AEAT">Corrent Hisenda (AEAT)</option>
+                        <option value="PRL_ACREDITACIO">Acreditació PRL</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-600 dark:text-slate-400 mb-1">Data Caducitat *</label>
+                      <input
+                        type="date"
+                        required
+                        value={dataCaducitatCae}
+                        onChange={(e) => setDataCaducitatCae(e.target.value)}
+                        className="w-full p-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs"
+                      />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-600 dark:text-slate-400 mb-1">Fitxer PDF o Imatge *</label>
+                    <input
+                      type="file"
+                      accept=".pdf,image/png,image/jpeg,image/webp"
+                      required
+                      onChange={(e) => setFitxerCae(e.target.files?.[0] || null)}
+                      className="w-full text-xs"
+                    />
+                  </div>
+                  <div className="flex justify-end">
+                    <button
+                      type="submit"
+                      disabled={pujantCae || !fitxerCae}
+                      className="px-3 py-1.5 rounded-lg bg-primary text-white text-xs font-bold disabled:opacity-50"
+                    >
+                      {pujantCae ? "Pujant..." : "Pujar Document CAE"}
+                    </button>
+                  </div>
+                </form>
+              )}
+
               {/* Botó de tancament */}
               <div className="flex items-center justify-end pt-2 border-t border-slate-200 dark:border-slate-800">
                 <button
@@ -1010,16 +1058,18 @@ export default function GestioProveidorsPage() {
                   </select>
                 </div>
 
-                <div className="space-y-1">
-                  <label className="font-bold text-slate-700 dark:text-slate-300">IBAN de Transferència:</label>
-                  <input
-                    type="text"
-                    placeholder="ES82 0049 1823 44 2819481920"
-                    value={nouIban}
-                    onChange={(e) => setNouIban(e.target.value)}
-                    className="w-full p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-slate-100 font-mono text-xs focus:outline-none"
-                  />
-                </div>
+                {rolActiu !== "ENGINYER" && (
+                  <div className="space-y-1">
+                    <label className="font-bold text-slate-700 dark:text-slate-300">IBAN de Transferència (Opcional):</label>
+                    <input
+                      type="text"
+                      placeholder="ES00 0000 0000 0000 0000 0000"
+                      value={nouIban}
+                      onChange={(e) => setNouIban(e.target.value)}
+                      className="w-full p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-slate-100 font-mono text-xs focus:outline-none"
+                    />
+                  </div>
+                )}
               </div>
 
               <div className="flex items-center gap-4 pt-1">
@@ -1174,6 +1224,60 @@ export default function GestioProveidorsPage() {
                 <span>Desar Canvis</span>
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Sol·licitud real de Canvi d'IBAN subjecte a BEC */}
+      {modalSolicitudBecObert && provSolicitudBec && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="w-full max-w-md bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-6 space-y-4 shadow-2xl">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-200 dark:border-slate-800">
+              <h3 className="font-bold text-sm text-slate-900 dark:text-white">
+                Registrar Canvi d&apos;IBAN (Doble Verificació BEC)
+              </h3>
+              <button
+                type="button"
+                onClick={() => {
+                  setModalSolicitudBecObert(false);
+                  setProvSolicitudBec(null);
+                }}
+                className="text-slate-400 hover:text-slate-600"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <form onSubmit={handleReportarCanviIban} className="space-y-4 text-xs">
+              <p className="text-slate-500">
+                Proveïdor: <strong>{provSolicitudBec.rao_social}</strong>. El nou compte quedarà bloquejat fins verificació telefònica de Direcció (BOSS).
+              </p>
+              <div>
+                <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">Nou IBAN *</label>
+                <input
+                  type="text"
+                  required
+                  placeholder="ES00 0000 0000 0000 0000 0000"
+                  value={nouIbanInput}
+                  onChange={(e) => setNouIbanInput(e.target.value)}
+                  className="w-full p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 font-mono text-xs"
+                />
+              </div>
+              <div className="flex justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setModalSolicitudBecObert(false)}
+                  className="px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 font-bold"
+                >
+                  Cancel·lar
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-2 rounded-xl bg-primary text-white font-bold"
+                >
+                  Registrar i Bloquejar per Revisió
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

@@ -11,7 +11,7 @@ export function useAssignacions() {
 
   const fetchLocalAndRemote = useCallback(async () => {
     setLoading(true);
-    let cachedOrdres: OrdreTreballLocal[] = [];
+    const cachedOrdres: OrdreTreballLocal[] = [];
 
     try {
       // 1. Offline-First: llegir registres xifrats des de db.ordres

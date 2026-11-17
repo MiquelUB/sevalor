@@ -1,0 +1,747 @@
+"""Tests del BLOC 4 — Magatzem, Codi de barres, Estoc Disponible, Picking per magatzem, Recompra HITL i Zero-Storage."""
+
+import json
+import shutil
+import uuid
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from typing import Any
+
+import jwt
+import pytest
+from httpx import ASGITransport, AsyncClient
+from sqlalchemy import select
+
+from app.core.config import settings
+from app.main import app
+from app.models.models import (
+    AlertaGarantiaRecompra,
+    Article,
+    Client,
+    Empresa,
+    EstocMagatzem,
+    FullaPicking,
+    LiniaPicking,
+    Magatzem,
+    MovimentEstoc,
+    OrdreTreball,
+    Proveidor,
+    Usuari,
+)
+from app.services.sovereign_storage import inicialitzar_arbre_carpetes_disc
+
+
+def _make_token(usuari_id: uuid.UUID, empresa_id: uuid.UUID, rol: str) -> str:
+    payload: dict[str, Any] = {
+        "sub": str(usuari_id),
+        "rol": rol,
+        "empresa_id": str(empresa_id),
+        "exp": datetime.now(timezone.utc) + timedelta(minutes=20),
+    }
+    return jwt.encode(payload, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
+
+
+async def _seed_empresa_amb_usuaris(
+    admin_session,
+    disc_root: Path,
+    nom: str = "Empresa Bloc4 S.L.",
+):
+    inicialitzar_arbre_carpetes_disc(disc_root)
+    emp_id = uuid.uuid4()
+    boss_id = uuid.uuid4()
+    eng_id = uuid.uuid4()
+
+    admin_session.add(
+        Empresa(
+            id=emp_id,
+            nom=nom,
+            nif="B" + uuid.uuid4().hex[:8].upper(),
+            subdomini="b4-" + uuid.uuid4().hex[:6],
+            pla_subscripcio="PRO",
+            estat_pagament="ACTIU",
+            disc_dur_url=str(disc_root),
+        )
+    )
+    await admin_session.flush()
+
+    admin_session.add(
+        Usuari(
+            id=boss_id,
+            empresa_id=emp_id,
+            nif=f"1{boss_id.hex[:7].upper()}A",
+            nom="Maria",
+            cognoms="Direcció",
+            email=f"boss-{emp_id.hex[:6]}@sevalor.test",
+            telefon="600111222",
+            rol="BOSS",
+            pin_hash="fake",
+            password_hash="fake",
+            estat="ACTIU",
+        )
+    )
+    admin_session.add(
+        Usuari(
+            id=eng_id,
+            empresa_id=emp_id,
+            nif=f"2{eng_id.hex[:7].upper()}B",
+            nom="Jordi",
+            cognoms="Enginyeria",
+            email=f"eng-{eng_id.hex[:6]}@sevalor.test",
+            telefon="600333444",
+            rol="ENGINYER",
+            pin_hash="fake",
+            password_hash="fake",
+            estat="ACTIU",
+        )
+    )
+
+    nau = Magatzem(
+        id=uuid.uuid4(),
+        empresa_id=emp_id,
+        nom="Nau Central",
+        tipus="NAU_CENTRAL",
+        actiu=True,
+    )
+    furgo = Magatzem(
+        id=uuid.uuid4(),
+        empresa_id=emp_id,
+        nom="Furgoneta 01",
+        tipus="FURGONETA",
+        actiu=True,
+    )
+    admin_session.add_all([nau, furgo])
+    await admin_session.commit()
+
+    boss_headers = {
+        "Authorization": f"Bearer {_make_token(boss_id, emp_id, 'BOSS')}",
+        "X-Empresa-ID": str(emp_id),
+    }
+    eng_headers = {
+        "Authorization": f"Bearer {_make_token(eng_id, emp_id, 'ENGINYER')}",
+        "X-Empresa-ID": str(emp_id),
+    }
+    return emp_id, nau, furgo, boss_headers, eng_headers
+
+
+@pytest.mark.asyncio
+async def test_bloc4_alta_article_estoc_inicial_codi_barres_sense_qr_i_sync_disc(
+    admin_session, tmp_path: Path
+):
+    """Alta d'article valida codi de barres no-QR, crea estoc_inicial i sincronitza al disc 03_magatzem."""
+    disc_root = tmp_path / "disc_b4_art"
+    emp_id, nau, _furgo, boss_headers, _eng_headers = await _seed_empresa_amb_usuaris(
+        admin_session, disc_root
+    )
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        # 1. Rebutjar QR (FR-007)
+        res_qr = await ac.post(
+            "/api/v1/gestio/magatzem/articles",
+            json={
+                "referencia_inventari": "ART-QR-01",
+                "codi_barres": "qr:https://example.com/item",
+                "nom": "Article invàlid QR",
+                "unitat_mesura": "UNITAT",
+                "estoc_inicial": 10,
+                "magatzem_id": str(nau.id),
+            },
+            headers=boss_headers,
+        )
+        assert res_qr.status_code == 422, res_qr.text
+
+        # 2. Alta vàlida amb EAN13 + estoc_inicial = 50 a Nau Central
+        res_ok = await ac.post(
+            "/api/v1/gestio/magatzem/articles",
+            json={
+                "referencia_inventari": "TUB-PE100-50",
+                "codi_barres": "8412345000012",
+                "nom": "Tub PE-100 Ø50mm",
+                "unitat_mesura": "METRES_LINEALS",
+                "familia": "TUBERIA",
+                "estoc_optim": 100.0,
+                "estoc_minim": 15.0,
+                "preu_cost": 4.5,
+                "descompte_proveidor": 10.0,
+                "marge_guanys": 25.0,
+                "preu_venda": 5.06,
+                "estoc_inicial": 50.0,
+                "magatzem_id": str(nau.id),
+            },
+            headers=boss_headers,
+        )
+        assert res_ok.status_code == 201, res_ok.text
+        body = res_ok.json()
+        assert body["codi_barres"] == "8412345000012"
+        assert body["estoc_fisic"] == 50.0
+        assert body["estoc_reservat"] == 0.0
+        assert body["estoc_disponible"] == 50.0
+        assert body["estoc_real"] == 50.0
+
+    art_id = uuid.UUID(body["id"])
+    estoc_db = (
+        await admin_session.execute(
+            select(EstocMagatzem).where(
+                EstocMagatzem.empresa_id == emp_id,
+                EstocMagatzem.article_id == art_id,
+                EstocMagatzem.magatzem_id == nau.id,
+            )
+        )
+    ).scalars().first()
+    assert estoc_db is not None
+    assert float(estoc_db.quantitat_fisica) == 50.0
+
+    mov_db = (
+        await admin_session.execute(
+            select(MovimentEstoc).where(
+                MovimentEstoc.empresa_id == emp_id,
+                MovimentEstoc.article_id == art_id,
+                MovimentEstoc.magatzem_id == nau.id,
+            )
+        )
+    ).scalars().first()
+    assert mov_db is not None
+    assert mov_db.tipus_moviment == "ENTRADA"
+    assert float(mov_db.quantitat) == 50.0
+
+    fitxer_disc = disc_root / "03_magatzem" / "articles_i_estoc" / f"{art_id}.json"
+    assert fitxer_disc.exists(), f"Manca JSON sobirà a {fitxer_disc}"
+    disc_data = json.loads(fitxer_disc.read_text(encoding="utf-8"))
+    assert disc_data["codi_barres"] == "8412345000012"
+    assert disc_data["estoc_disponible"] == 50.0
+
+
+@pytest.mark.asyncio
+async def test_bloc4_picking_pick_in_pick_out_per_magatzem_descompta_consum_real_i_hud(
+    admin_session, tmp_path: Path
+):
+    """Picking reserva i descompta el consum real (50 -> 43) al magatzem exacte i actualitza HUD critical_stock."""
+    disc_root = tmp_path / "disc_b4_pick"
+    emp_id, nau, furgo, boss_headers, _eng_headers = await _seed_empresa_amb_usuaris(
+        admin_session, disc_root
+    )
+
+    client_id = uuid.uuid4()
+    ot_id = uuid.uuid4()
+    art_id = uuid.uuid4()
+    art_hud_id = uuid.uuid4()
+
+    admin_session.add(
+        Client(
+            id=client_id,
+            empresa_id=emp_id,
+            codi="CLI-PICK",
+            rao_social="Agrícola Nord S.L.",
+            nif="B22334455",
+        )
+    )
+    await admin_session.flush()
+    admin_session.add(
+        OrdreTreball(
+            id=ot_id,
+            empresa_id=emp_id,
+            codi="OT-B4-001",
+            client_id=client_id,
+            titol="Sector reg Nord",
+            adreca="Finca Sector Nord, Lleida",
+            estat="PENDENT",
+        )
+    )
+    admin_session.add_all(
+        [
+            Article(
+                id=art_id,
+                empresa_id=emp_id,
+                referencia_inventari="VALV-090",
+                codi_barres="8400000000901",
+                nom="Vàlvula Ø90",
+                unitat_mesura="UNITAT",
+                estoc_minim=5.0,
+                estoc_optim=60.0,
+                preu_cost=10.0,
+                preu_venda=20.0,
+            ),
+            Article(
+                id=art_hud_id,
+                empresa_id=emp_id,
+                referencia_inventari="HUD-MIN-10",
+                nom="Sensor Crític HUD",
+                unitat_mesura="UNITAT",
+                estoc_minim=10.0,
+                estoc_optim=30.0,
+                preu_cost=15.0,
+                preu_venda=30.0,
+            ),
+        ]
+    )
+    await admin_session.flush()
+    admin_session.add_all(
+        [
+            EstocMagatzem(
+                empresa_id=emp_id,
+                magatzem_id=nau.id,
+                article_id=art_id,
+                quantitat_fisica=50.0,
+                quantitat_virtual_reservada=0.0,
+            ),
+            EstocMagatzem(
+                empresa_id=emp_id,
+                magatzem_id=furgo.id,
+                article_id=art_id,
+                quantitat_fisica=20.0,
+                quantitat_virtual_reservada=0.0,
+            ),
+            EstocMagatzem(
+                empresa_id=emp_id,
+                magatzem_id=nau.id,
+                article_id=art_hud_id,
+                quantitat_fisica=15.0,
+                quantitat_virtual_reservada=0.0,
+            ),
+        ]
+    )
+    await admin_session.commit()
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        # HUD inicial: 15 disponibles vs mínim 10 -> 0 crítics
+        hud_before = await ac.get("/api/v1/gestio/dashboard/hud", headers=boss_headers)
+        assert hud_before.status_code == 200, hud_before.text
+        assert hud_before.json()["critical_stock"] == 0
+
+        # Crear fulla de picking
+        res_fp = await ac.post(
+            "/api/v1/gestio/magatzem/picking",
+            json={"ordre_treball_id": str(ot_id)},
+            headers=boss_headers,
+        )
+        assert res_fp.status_code == 201, res_fp.text
+        picking_id = res_fp.json()["id"]
+
+        # Reservar 10 unitats a Nau Central (50 físics, 20 a Furgoneta intactes)
+        res_lin = await ac.post(
+            f"/api/v1/gestio/magatzem/picking/{picking_id}/linies",
+            json={
+                "article_id": str(art_id),
+                "magatzem_id": str(nau.id),
+                "quantitat_prevista": 10.0,
+            },
+            headers=boss_headers,
+        )
+        assert res_lin.status_code == 201, res_lin.text
+        lin_body = res_lin.json()
+        assert lin_body["magatzem_id"] == str(nau.id)
+        linia_id = lin_body["id"]
+
+        # Reservar 6 unitats del sensor HUD (15 físics - 6 reservats = 9 <= 10 mínim!)
+        res_hud_lin = await ac.post(
+            f"/api/v1/gestio/magatzem/picking/{picking_id}/linies",
+            json={
+                "article_id": str(art_hud_id),
+                "magatzem_id": str(nau.id),
+                "quantitat_prevista": 6.0,
+            },
+            headers=boss_headers,
+        )
+        assert res_hud_lin.status_code == 201, res_hud_lin.text
+
+        # Verificar que /dashboard/hud detecta critical_stock == 1 per estoc disponible
+        hud_after_reserve = await ac.get("/api/v1/gestio/dashboard/hud", headers=boss_headers)
+        assert hud_after_reserve.status_code == 200
+        assert hud_after_reserve.json()["critical_stock"] == 1
+
+        # Verificar estoc Nau Central vs consolidat després de reservar 10
+        res_nau_estoc = await ac.get(
+            f"/api/v1/gestio/magatzem/magatzems/{nau.id}/estoc", headers=boss_headers
+        )
+        assert res_nau_estoc.status_code == 200
+        estoc_nau_valv = next(x for x in res_nau_estoc.json() if x["article_id"] == str(art_id))
+        assert estoc_nau_valv["quantitat_fisica"] == 50.0
+        assert estoc_nau_valv["quantitat_virtual_reservada"] == 10.0
+        assert estoc_nau_valv["quantitat_disponible"] == 40.0
+
+        # Pick-in (carregar 10 unitats)
+        res_in = await ac.put(
+            f"/api/v1/gestio/magatzem/picking/linies/{linia_id}/pick-in", headers=boss_headers
+        )
+        assert res_in.status_code == 200, res_in.text
+        assert res_in.json()["quantitat_carregada_pick_in"] == 10.0
+
+        # Pick-out amb retorn de 3 unitats -> consum real = 7 -> Nau Central passa de 50 a 43!
+        res_out = await ac.put(
+            f"/api/v1/gestio/magatzem/picking/linies/{linia_id}/pick-out",
+            params={"quantitat_retornada": 3.0, "quantitat_mermada": 0.0},
+            headers=boss_headers,
+        )
+        assert res_out.status_code == 200, res_out.text
+
+        res_nau_final = await ac.get(
+            f"/api/v1/gestio/magatzem/magatzems/{nau.id}/estoc", headers=boss_headers
+        )
+        estoc_nau_final = next(x for x in res_nau_final.json() if x["article_id"] == str(art_id))
+        assert estoc_nau_final["quantitat_fisica"] == 43.0
+        assert estoc_nau_final["quantitat_virtual_reservada"] == 0.0
+        assert estoc_nau_final["quantitat_disponible"] == 43.0
+
+        # Furgoneta ha de continuar intacta amb 20.0
+        res_furgo_final = await ac.get(
+            f"/api/v1/gestio/magatzem/magatzems/{furgo.id}/estoc", headers=boss_headers
+        )
+        estoc_furgo_final = next(x for x in res_furgo_final.json() if x["article_id"] == str(art_id))
+        assert estoc_furgo_final["quantitat_fisica"] == 20.0
+
+    # Verificar columna a023 linies_picking.magatzem_id i MovimentEstoc SORTIDA = 7.0 a PostgreSQL
+    linia_db = (
+        await admin_session.execute(
+            select(LiniaPicking).where(LiniaPicking.id == uuid.UUID(linia_id))
+        )
+    ).scalars().first()
+    assert linia_db is not None
+    assert linia_db.magatzem_id == nau.id
+
+    mov_sortida = (
+        await admin_session.execute(
+            select(MovimentEstoc).where(
+                MovimentEstoc.empresa_id == emp_id,
+                MovimentEstoc.article_id == art_id,
+                MovimentEstoc.magatzem_id == nau.id,
+                MovimentEstoc.tipus_moviment == "SORTIDA",
+            )
+        )
+    ).scalars().first()
+    assert mov_sortida is not None
+    assert float(mov_sortida.quantitat) == 7.0
+
+    # Sync sobirà a 03_magatzem
+    picking_json = disc_root / "03_magatzem" / "picking_fulles" / f"{picking_id}.json"
+    art_json = disc_root / "03_magatzem" / "articles_i_estoc" / f"{art_id}.json"
+    assert picking_json.exists()
+    assert art_json.exists()
+    assert json.loads(art_json.read_text(encoding="utf-8"))["estoc_disponible"] == 63.0
+
+
+@pytest.mark.asyncio
+async def test_bloc4_enginyer_oculta_costos_i_no_sobreescriu_preu_cost_en_put(
+    admin_session, tmp_path: Path
+):
+    """ENGINYER rep camps de cost emmascarats (None) i no els pot sobreescriure per PUT."""
+    disc_root = tmp_path / "disc_b4_eng"
+    emp_id, nau, _furgo, boss_headers, eng_headers = await _seed_empresa_amb_usuaris(
+        admin_session, disc_root
+    )
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        res_c = await ac.post(
+            "/api/v1/gestio/magatzem/articles",
+            json={
+                "referencia_inventari": "BOMBA-3CV",
+                "codi_barres": "8411111222333",
+                "nom": "Bomba Submergible 3CV",
+                "unitat_mesura": "UNITAT",
+                "preu_cost": 420.0,
+                "descompte_proveidor": 15.0,
+                "marge_guanys": 30.0,
+                "preu_venda": 464.1,
+                "estoc_inicial": 3.0,
+                "magatzem_id": str(nau.id),
+            },
+            headers=boss_headers,
+        )
+        assert res_c.status_code == 201, res_c.text
+        art_id = res_c.json()["id"]
+
+        # GET com ENGINYER: costos None, preu_venda i estoc_disponible visibles
+        res_list_eng = await ac.get("/api/v1/gestio/magatzem/articles", headers=eng_headers)
+        assert res_list_eng.status_code == 200
+        art_eng = next(x for x in res_list_eng.json() if x["id"] == art_id)
+        assert art_eng["preu_cost"] is None
+        assert art_eng["pmp_actual"] is None
+        assert art_eng["descompte_proveidor"] is None
+        assert art_eng["marge_guanys"] is None
+        assert art_eng["preu_venda"] == 464.1
+        assert art_eng["estoc_disponible"] == 3.0
+
+        # PUT com ENGINYER enviant preu_cost=0 -> no pot destruir el cost real de BD
+        res_put_eng = await ac.put(
+            f"/api/v1/gestio/magatzem/articles/{art_id}",
+            json={
+                "referencia_inventari": "BOMBA-3CV",
+                "codi_barres": "8411111999888",
+                "nom": "Bomba Submergible 3CV Rev2",
+                "unitat_mesura": "UNITAT",
+                "preu_cost": 0.0,
+                "descompte_proveidor": 0.0,
+                "marge_guanys": 0.0,
+                "preu_venda": 464.1,
+            },
+            headers=eng_headers,
+        )
+        assert res_put_eng.status_code == 200, res_put_eng.text
+        put_eng_body = res_put_eng.json()
+        assert put_eng_body["codi_barres"] == "8411111999888"
+        assert put_eng_body["preu_cost"] is None
+        assert put_eng_body["pmp_actual"] is None
+
+        # BOSS confirma que el cost i marge originals s'han preservat
+        res_list_boss = await ac.get("/api/v1/gestio/magatzem/articles", headers=boss_headers)
+        art_boss = next(x for x in res_list_boss.json() if x["id"] == art_id)
+        assert art_boss["preu_cost"] == 420.0
+        assert art_boss["descompte_proveidor"] == 15.0
+        assert art_boss["marge_guanys"] == 30.0
+        assert art_boss["codi_barres"] == "8411111999888"
+
+
+@pytest.mark.asyncio
+async def test_bloc4_recompra_stock_hitl_sense_autoenviament_i_veto_enginyer(
+    admin_session, tmp_path: Path
+):
+    """Escaneig genera esborrany RECOMPRA_STOCK HITL sense auto-enviar; només BOSS/SECRETARIA aproven."""
+    disc_root = tmp_path / "disc_b4_rec"
+    emp_id, nau, _furgo, boss_headers, eng_headers = await _seed_empresa_amb_usuaris(
+        admin_session, disc_root
+    )
+
+    prov_id = uuid.uuid4()
+    admin_session.add(
+        Proveidor(
+            id=prov_id,
+            empresa_id=emp_id,
+            codi="PRV-REC",
+            rao_social="Subministraments Industrials S.A.",
+            nif="A88776655",
+            email="comandes@subministraments.test",
+            especialitat="MATERIALS",
+        )
+    )
+    await admin_session.flush()
+
+    art_id = uuid.uuid4()
+    admin_session.add(
+        Article(
+            id=art_id,
+            empresa_id=emp_id,
+            referencia_inventari="ASP-25",
+            nom="Aspersor Sectorial 3/4",
+            unitat_mesura="UNITAT",
+            estoc_minim=15.0,
+            estoc_optim=40.0,
+            preu_cost=12.0,
+            preu_venda=24.0,
+            proveidor_id=prov_id,
+        )
+    )
+    await admin_session.flush()
+    admin_session.add(
+        EstocMagatzem(
+            empresa_id=emp_id,
+            magatzem_id=nau.id,
+            article_id=art_id,
+            quantitat_fisica=4.0,
+            quantitat_virtual_reservada=0.0,
+        )
+    )
+    await admin_session.commit()
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        res_scan = await ac.post("/api/v1/gestio/magatzem/recompra/escanejar", headers=boss_headers)
+        assert res_scan.status_code == 201, res_scan.text
+        scan_body = res_scan.json()
+        assert scan_body["esborranys_generats"] == 1
+        alerta = scan_body["alertes"][0]
+        assert alerta["estat"] == "ACTIVA"
+        assert alerta["enviat_automaticament"] is False
+        assert alerta["dades_comanda_proposta"]["enviat_automaticament"] is False
+        assert alerta["dades_comanda_proposta"]["requereix_aprovacio_humana"] is True
+        assert alerta["dades_comanda_proposta"]["quantitat_proposada"] == 36.0
+        alerta_id = alerta["id"]
+
+        # ENGINYER pot veure la safata però amb imports ocults i 403 en intentar aprovar
+        res_eng_get = await ac.get("/api/v1/gestio/magatzem/recompra", headers=eng_headers)
+        assert res_eng_get.status_code == 200
+        eng_alerta = res_eng_get.json()[0]
+        assert eng_alerta["dades_comanda_proposta"]["preu_unitari_estimat"] is None
+        assert eng_alerta["dades_comanda_proposta"]["import_estimat"] is None
+
+        res_eng_patch = await ac.patch(
+            f"/api/v1/gestio/magatzem/recompra/{alerta_id}",
+            json={"accio": "APROVAR", "quantitat_aprovada": 36.0},
+            headers=eng_headers,
+        )
+        assert res_eng_patch.status_code == 403
+
+        # BOSS aprova manualment l'esborrany HITL (sense auto-enviament)
+        res_boss_patch = await ac.patch(
+            f"/api/v1/gestio/magatzem/recompra/{alerta_id}",
+            json={"accio": "APROVAR", "quantitat_aprovada": 35.0, "notes": "Validat per BOSS"},
+            headers=boss_headers,
+        )
+        assert res_boss_patch.status_code == 200, res_boss_patch.text
+        approved = res_boss_patch.json()
+        assert approved["estat"] == "APROVADA"
+        assert approved["enviat_automaticament"] is False
+        assert approved["dades_comanda_proposta"]["quantitat_aprovada"] == 35.0
+        assert approved["dades_comanda_proposta"]["enviat_automaticament"] is False
+
+
+@pytest.mark.asyncio
+async def test_bloc4_albara_confirmar_zero_storage_sense_tmp_data(
+    admin_session, tmp_path: Path
+):
+    """Confirmar albarà OCR usa SovereignStorageGateway (vault://) i mai escriu a /tmp/data."""
+    disc_root = tmp_path / "disc_b4_alb"
+    emp_id, _nau, _furgo, boss_headers, _eng_headers = await _seed_empresa_amb_usuaris(
+        admin_session, disc_root
+    )
+    tmp_legacy_dir = Path(f"/tmp/data/{emp_id}")
+    if tmp_legacy_dir.exists():
+        shutil.rmtree(tmp_legacy_dir, ignore_errors=True)
+
+    payload = {
+        "proveidor": {
+            "nif": "B55443322",
+            "nom": "Proveïdor ZeroStorage S.L.",
+            "telefon": "930001122",
+            "email": "prov@zerostorage.test",
+        },
+        "numero_document": "ALB-ZS-2026-01",
+        "tipus_document": "ALBARA",
+        "data_document": "2026-11-17",
+        "linies": [
+            {
+                "referencia": "PE-COLZE-50",
+                "nom": "Colze Electrosoldable 50mm",
+                "quantitat": 20.0,
+                "preu": 8.5,
+                "descompte_percent": 10.0,
+                "tipus": "MATERIAL",
+            }
+        ],
+    }
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        res = await ac.post(
+            "/api/v1/gestio/magatzem/albara/confirmar", json=payload, headers=boss_headers
+        )
+        assert res.status_code == 201, res.text
+        body = res.json()
+        assert body["estat"] == "OK"
+        assert not str(body["carpeta"]).startswith("/tmp/data"), body["carpeta"]
+        assert str(disc_root) in str(body["carpeta"]) or str(body["carpeta"]).startswith("vault://")
+        assert "02_proveidors/fitxes" in str(body["carpeta"])
+
+    assert not tmp_legacy_dir.exists(), "/tmp/data no pot existir amb Zero-Storage"
+    prov_files = list((disc_root / "02_proveidors" / "fitxes").glob("*.json"))
+    alb_files = list((disc_root / "03_magatzem" / "albarans_compra").glob("*.json"))
+    art_files = list((disc_root / "03_magatzem" / "articles_i_estoc").glob("*.json"))
+    assert len(prov_files) == 1
+    assert len(alb_files) == 1
+    assert len(art_files) == 1
+
+
+@pytest.mark.asyncio
+async def test_bloc4_aillament_rls_multitenant_magatzem_i_picking(
+    admin_session, tmp_path: Path
+):
+    """Tenant B no pot llegir, modificar ni reservar articles/pickings/alertes de Tenant A."""
+    disc_a = tmp_path / "disc_a"
+    disc_b = tmp_path / "disc_b"
+    emp_a, nau_a, _furgo_a, boss_a, _eng_a = await _seed_empresa_amb_usuaris(
+        admin_session, disc_a, nom="Tenant A S.L."
+    )
+    emp_b, _nau_b, _furgo_b, boss_b, _eng_b = await _seed_empresa_amb_usuaris(
+        admin_session, disc_b, nom="Tenant B S.L."
+    )
+
+    art_a = Article(
+        id=uuid.uuid4(),
+        empresa_id=emp_a,
+        referencia_inventari="PRIV-A-01",
+        codi_barres="8499990000011",
+        nom="Article Confidencial A",
+        unitat_mesura="UNITAT",
+        estoc_minim=10.0,
+        preu_cost=50.0,
+        preu_venda=90.0,
+    )
+    client_a = Client(
+        id=uuid.uuid4(),
+        empresa_id=emp_a,
+        codi="CLI-A",
+        rao_social="Client Privat A",
+        nif="B99988877",
+    )
+    admin_session.add_all([art_a, client_a])
+    await admin_session.flush()
+
+    ot_a = OrdreTreball(
+        id=uuid.uuid4(),
+        empresa_id=emp_a,
+        codi="OT-PRIV-A",
+        client_id=client_a.id,
+        titol="Feina A",
+        adreca="Carrer Privat A, 1",
+        estat="PENDENT",
+    )
+    admin_session.add(ot_a)
+    await admin_session.flush()
+
+    picking_a = FullaPicking(
+        id=uuid.uuid4(),
+        empresa_id=emp_a,
+        ordre_treball_id=ot_a.id,
+        estat_picking="PENDENT",
+    )
+    alerta_a = AlertaGarantiaRecompra(
+        id=uuid.uuid4(),
+        empresa_id=emp_a,
+        tipus_alerta="RECOMPRA_STOCK",
+        article_id=art_a.id,
+        missatge="Alerta privada A",
+        estat="ACTIVA",
+        dades_comanda_proposta={"enviat_automaticament": False},
+    )
+    estoc_a = EstocMagatzem(
+        empresa_id=emp_a,
+        magatzem_id=nau_a.id,
+        article_id=art_a.id,
+        quantitat_fisica=20.0,
+        quantitat_virtual_reservada=0.0,
+    )
+    admin_session.add_all([picking_a, alerta_a, estoc_a])
+    await admin_session.commit()
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        res_list_b = await ac.get("/api/v1/gestio/magatzem/articles", headers=boss_b)
+        assert res_list_b.status_code == 200
+        assert all(x["id"] != str(art_a.id) for x in res_list_b.json())
+
+        res_put_b = await ac.put(
+            f"/api/v1/gestio/magatzem/articles/{art_a.id}",
+            json={
+                "referencia_inventari": "HACKED",
+                "nom": "Intent Intrús",
+                "unitat_mesura": "UNITAT",
+            },
+            headers=boss_b,
+        )
+        assert res_put_b.status_code == 404
+
+        res_pick_b = await ac.post(
+            f"/api/v1/gestio/magatzem/picking/{picking_a.id}/linies",
+            json={"article_id": str(art_a.id), "magatzem_id": str(nau_a.id), "quantitat_prevista": 1.0},
+            headers=boss_b,
+        )
+        assert res_pick_b.status_code == 404
+
+        res_rec_list_b = await ac.get("/api/v1/gestio/magatzem/recompra", headers=boss_b)
+        assert res_rec_list_b.status_code == 200
+        assert all(x["id"] != str(alerta_a.id) for x in res_rec_list_b.json())
+
+        res_rec_patch_b = await ac.patch(
+            f"/api/v1/gestio/magatzem/recompra/{alerta_a.id}",
+            json={"accio": "APROVAR"},
+            headers=boss_b,
+        )
+        assert res_rec_patch_b.status_code == 404
+
+        # Tenant A sí que conserva tot intacte
+        res_list_a = await ac.get("/api/v1/gestio/magatzem/articles", headers=boss_a)
+        assert any(x["id"] == str(art_a.id) for x in res_list_a.json())

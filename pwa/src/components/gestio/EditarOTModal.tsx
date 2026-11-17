@@ -68,6 +68,9 @@ interface ArticleCataleg {
   referencia_inventari: string;
   unitat_mesura: string;
   familia?: string;
+  estoc_fisic?: number;
+  estoc_reservat?: number;
+  estoc_disponible?: number;
   estoc_real?: number;
   actiu?: boolean;
 }
@@ -238,7 +241,9 @@ export function EditarOTModal({ feinaId, onClose, onSuccess }: EditarOTModalProp
             const hh = String(d.getHours()).padStart(2, "0");
             const mm = String(d.getMinutes()).padStart(2, "0");
             setHoraInici(`${hh}:${mm}`);
-          } catch {}
+          } catch {
+            /* ignore invalid start date */
+          }
         }
         if (feinaData.hora_fi_prevista) {
           try {
@@ -246,7 +251,9 @@ export function EditarOTModal({ feinaId, onClose, onSuccess }: EditarOTModalProp
             const hh = String(d.getHours()).padStart(2, "0");
             const mm = String(d.getMinutes()).padStart(2, "0");
             setHoraFi(`${hh}:${mm}`);
-          } catch {}
+          } catch {
+            /* ignore invalid end date */
+          }
         }
 
         // Initialize picking lines
@@ -355,6 +362,14 @@ export function EditarOTModal({ feinaId, onClose, onSuccess }: EditarOTModalProp
       return;
     }
 
+    const estocDisp = Number(article.estoc_disponible ?? article.estoc_real ?? 0);
+    if (estocDisp <= 0 || quantitatPickingInput > estocDisp) {
+      setErrorMsg(
+        `Estoc disponible insuficient per a ${article.nom}: disponible ${estocDisp} ${article.unitat_mesura || "UNITAT"}.`
+      );
+      return;
+    }
+
     // Check if already in list
     const existentIndex = liniesPicking.findIndex((l) => l.article_id === article.id);
     if (existentIndex >= 0) {
@@ -370,7 +385,7 @@ export function EditarOTModal({ feinaId, onClose, onSuccess }: EditarOTModalProp
           referencia_inventari: article.referencia_inventari,
           quantitat_prevista: quantitatPickingInput,
           unitat_mesura: article.unitat_mesura || "UNITAT",
-          estoc_disponible: article.estoc_real || 0,
+          estoc_disponible: estocDisp,
         },
       ]);
     }
@@ -1090,8 +1105,16 @@ export function EditarOTModal({ feinaId, onClose, onSuccess }: EditarOTModalProp
                           <span>Cerca d&apos;Article (Codi, Nom o Referència)</span>
                         </span>
                         {selectedArticle && (
-                          <span className="text-[11px] font-mono font-bold text-emerald-600 dark:text-emerald-400">
-                            Estoc: {selectedArticle.estoc_real ?? 0} {selectedArticle.unitat_mesura}
+                          <span
+                            className={`text-[11px] font-mono font-bold ${
+                              Number(selectedArticle.estoc_disponible ?? selectedArticle.estoc_real ?? 0) <= 0
+                                ? "text-error"
+                                : "text-emerald-600 dark:text-emerald-400"
+                            }`}
+                          >
+                            Disponible:{" "}
+                            {Number(selectedArticle.estoc_disponible ?? selectedArticle.estoc_real ?? 0)}{" "}
+                            {selectedArticle.unitat_mesura}
                           </span>
                         )}
                       </label>
@@ -1159,12 +1182,12 @@ export function EditarOTModal({ feinaId, onClose, onSuccess }: EditarOTModalProp
                                 <div className="text-right shrink-0">
                                   <span
                                     className={`font-mono text-[11px] font-bold ${
-                                      (art.estoc_real ?? 0) <= 0
+                                      Number(art.estoc_disponible ?? art.estoc_real ?? 0) <= 0
                                         ? "text-error"
                                         : "text-slate-600 dark:text-slate-300"
                                     }`}
                                   >
-                                    {art.estoc_real ?? 0} {art.unitat_mesura}
+                                    {Number(art.estoc_disponible ?? art.estoc_real ?? 0)} {art.unitat_mesura}
                                   </span>
                                 </div>
                               </button>
@@ -1201,7 +1224,8 @@ export function EditarOTModal({ feinaId, onClose, onSuccess }: EditarOTModalProp
                         )
                         .map((a) => (
                           <option key={a.id} value={a.id}>
-                            [{a.referencia_inventari}] {a.nom} — {a.estoc_real ?? 0} {a.unitat_mesura} disp.
+                            [{a.referencia_inventari}] {a.nom} —{" "}
+                            {Number(a.estoc_disponible ?? a.estoc_real ?? 0)} {a.unitat_mesura} disp.
                           </option>
                         ))}
                     </select>
@@ -1217,8 +1241,16 @@ export function EditarOTModal({ feinaId, onClose, onSuccess }: EditarOTModalProp
                         <p className="text-xs font-bold text-slate-900 dark:text-white truncate">
                           [{selectedArticle.referencia_inventari}] {selectedArticle.nom}
                         </p>
-                        <span className="inline-block mt-1 text-xs font-mono font-bold text-emerald-600 dark:text-emerald-400">
-                          Estoc disponible: {selectedArticle.estoc_real ?? 0} {selectedArticle.unitat_mesura}
+                        <span
+                          className={`inline-block mt-1 text-xs font-mono font-bold ${
+                            Number(selectedArticle.estoc_disponible ?? selectedArticle.estoc_real ?? 0) <= 0
+                              ? "text-error"
+                              : "text-emerald-600 dark:text-emerald-400"
+                          }`}
+                        >
+                          Estoc disponible:{" "}
+                          {Number(selectedArticle.estoc_disponible ?? selectedArticle.estoc_real ?? 0)}{" "}
+                          {selectedArticle.unitat_mesura}
                         </span>
                       </div>
 
@@ -1245,7 +1277,12 @@ export function EditarOTModal({ feinaId, onClose, onSuccess }: EditarOTModalProp
                       <button
                         type="button"
                         onClick={handleAfegirMaterial}
-                        disabled={quantitatPickingInput <= 0}
+                        disabled={
+                          quantitatPickingInput <= 0 ||
+                          Number(selectedArticle.estoc_disponible ?? selectedArticle.estoc_real ?? 0) <= 0 ||
+                          quantitatPickingInput >
+                            Number(selectedArticle.estoc_disponible ?? selectedArticle.estoc_real ?? 0)
+                        }
                         className="w-full sm:w-auto px-4 py-2.5 rounded-xl bg-primary hover:bg-primary-container text-white text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-40 shrink-0 shadow-sm"
                       >
                         <Plus className="w-4 h-4" />

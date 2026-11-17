@@ -7,6 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.core.security import blind_email
 from app.main import app
 from app.models.models import Empresa, Usuari
 from app.workers.tasks import crear_directoris_sobirans
@@ -26,11 +27,12 @@ def superadmin_headers():
 
 
 @pytest.mark.asyncio
-async def test_superadmin_onboarding_nou_tenant(superadmin_headers, admin_session: AsyncSession):
+async def test_superadmin_onboarding_nou_tenant(superadmin_headers, admin_session: AsyncSession, tmp_path):
     """Verifica el provisionament real d'un tenant via POST /superadmin/tenants/onboarding."""
     subdomini_test = f"tenant-{uuid.uuid4().hex[:8]}"
     nif_test = f"B{uuid.uuid4().hex[:8].upper()}"
     boss_email = f"boss.{subdomini_test}@sevalor-test.cat"
+    disc_dir = tmp_path / subdomini_test
 
     payload = {
         "rao_social": "Serveis Agrícoles del Segrià S.L.",
@@ -45,7 +47,8 @@ async def test_superadmin_onboarding_nou_tenant(superadmin_headers, admin_sessio
         "boss_email": boss_email,
         "boss_telefon": "+34611223344",
         "agent_prompt_system": "Prompt d'especialista del sector agronòmic per a Sevalor.",
-        "node_ia_url": "http://192.168.1.100:1234",
+        "node_ia_url": str(disc_dir),
+        "disc_dur_url": str(disc_dir),
         "feature_flags": {
             "copilot_ia": True,
             "flota_avancada": True,
@@ -57,7 +60,7 @@ async def test_superadmin_onboarding_nou_tenant(superadmin_headers, admin_sessio
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test/api/v1") as client:
         res = await client.post("/superadmin/tenants/onboarding", json=payload, headers=superadmin_headers)
-        assert res.status_code == 201
+        assert res.status_code == 201, res.text
         data = res.json()
         assert data["status"] == "CREATED"
         tenant_info = data["tenant"]
@@ -65,16 +68,18 @@ async def test_superadmin_onboarding_nou_tenant(superadmin_headers, admin_sessio
         assert tenant_info["pla_subscripcio"] == "PRO"
         assert "enllac_activacio_2fa" in tenant_info
 
-        # Verificar persistència real a PostgreSQL
+        # Verificar persistència Zero-Storage real a PostgreSQL
         emp_res = await admin_session.execute(select(Empresa).where(Empresa.subdomini == subdomini_test))
         empresa = emp_res.scalars().first()
         assert empresa is not None
-        assert empresa.nom == "Serveis Agrícoles del Segrià S.L."
+        assert empresa.nom == f"Tenant-{subdomini_test}"
         assert empresa.estat_pagament == "TRIAL"
         assert empresa.vertical == "SEVALOR"
 
-        # Verificar creació de l'usuari Boss
-        boss_res = await admin_session.execute(select(Usuari).where(Usuari.email == boss_email))
+        # Verificar creació de l'usuari Boss amb índex cec HMAC
+        boss_res = await admin_session.execute(
+            select(Usuari).where(Usuari.email == blind_email(boss_email))
+        )
         boss = boss_res.scalars().first()
         assert boss is not None
         assert boss.rol == "BOSS"

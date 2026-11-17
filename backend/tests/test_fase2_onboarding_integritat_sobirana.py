@@ -1,16 +1,21 @@
 import json
 import os
+import socket
+import threading
+import time
 import uuid
 from datetime import datetime, timedelta, timezone
-from unittest.mock import patch
 
 import httpx
 import jwt
 import pytest
-from httpx import ASGITransport, AsyncClient, Response
+import uvicorn
+from fastapi import FastAPI, Header, HTTPException, Request
+from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
 
 from app.core.config import settings
+from app.core.security import blind_email, blind_nif, blind_telefon
 from app.main import app
 from app.models.models import Empresa, Usuari
 from app.services.sovereign_storage import MAPA_CARPETES_CLIENT
@@ -117,12 +122,13 @@ async def test_onboarding_integritat_dades_i_persistencia_local_fs(headers, db_s
         empresa_id = uuid.UUID(tenant_info["id"])
         boss_id = uuid.UUID(tenant_info["boss_usuari_id"])
 
-    # 1. Comprovació d'integritat en Base de Dades
+    # 1. Comprovació d'integritat Zero-Storage en Base de Dades (Hetzner)
     res_emp = await db_session.execute(select(Empresa).where(Empresa.id == empresa_id))
     empresa_db = res_emp.scalars().first()
     assert empresa_db is not None
-    assert empresa_db.adreca == adreca_real
-    assert empresa_db.nif == cif_empresa
+    assert empresa_db.nom == f"Tenant-{sub_slug}"
+    assert empresa_db.adreca is None
+    assert empresa_db.nif == blind_nif(cif_empresa)
     assert empresa_db.subdomini == sub_slug
     assert empresa_db.pla_subscripcio == "ENTERPRISE"
     assert empresa_db.vault_token is not None
@@ -134,10 +140,11 @@ async def test_onboarding_integritat_dades_i_persistencia_local_fs(headers, db_s
     res_boss = await db_session.execute(select(Usuari).where(Usuari.id == boss_id))
     boss_db = res_boss.scalars().first()
     assert boss_db is not None
-    assert boss_db.nif == nif_boss
-    assert boss_db.nom == "Miquel Àngel"
-    assert boss_db.cognoms == "Pons Roig"
-    assert boss_db.telefon == telefon_real
+    assert boss_db.nif == blind_nif(nif_boss)
+    assert boss_db.nom == "Usuari"
+    assert boss_db.cognoms == ""
+    assert boss_db.email == blind_email(f"gerencia_{rnd}@sevalortest.cat")
+    assert boss_db.telefon == blind_telefon(telefon_real)
     assert boss_db.rol == "BOSS"
 
     # 2. Comprovació de persistència de fitxers al disc dur del client (Minut 1)
@@ -174,70 +181,120 @@ async def test_onboarding_integritat_dades_i_persistencia_local_fs(headers, db_s
 
 
 @pytest.mark.asyncio
-async def test_onboarding_integritat_i_persistencia_http_vault(headers, db_session):
+async def test_onboarding_integritat_i_persistencia_http_vault(headers, db_session, tmp_path):
     """
-    Verifica l'onboarding de Fase 2 en mode HTTP_VAULT (Opció A+):
-    - disc_dur_url apunta a un Agent HTTP Local (ex: https://node-empresa.projectexinoxano.cat)
+    Verifica l'onboarding de Fase 2 en mode HTTP_VAULT real (Opció A+):
+    - disc_dur_url apunta a un Agent HTTP Local real aixecat sobre Uvicorn TCP
     - Es valida que les crides PUT es fan amb el header X-Vault-Token = svlt_...
-    - Es valida el pas de dades a l'Agent Local sense error
+    - Es valida la persistència de fitxers reals sense mocks prohibits
     """
     rnd = uuid.uuid4().hex[:6]
     cif_empresa = f"B{uuid.uuid4().int % 10000000:07d}A"
     sub_slug = f"sevalornode-{rnd}"
-    vault_base = "http://node-local.test:9001"
-
-    payload = {
-        "rao_social": f"Sevalor Node HTTP {rnd} SL",
-        "nif": cif_empresa,
-        "adreca": "Carrer Major 50, Tortosa",
-        "subdomini": sub_slug,
-        "vertical": "HYDROPRO",
-        "pla_subscripcio": "PRO",
-        "boss_nif": "39887766K",
-        "boss_nom": "Carles",
-        "boss_cognoms": "Fabra",
-        "boss_email": f"carles_{rnd}@sevalornode.cat",
-        "boss_telefon": "+34677889900",
-        "disc_dur_url": vault_base,
-    }
-
+    secret_token = f"svlt_{rnd}_sovereign_token"
     recorded_puts = []
-    original_put = httpx.AsyncClient.put
 
-    async def fake_put(self, url, *args, **kwargs):
-        if "/entitats/" in str(url):
-            content = kwargs.get("content")
-            json_body = kwargs.get("json")
-            if content and not json_body:
-                json_body = json.loads(content.decode("utf-8"))
-            recorded_puts.append((str(url), kwargs.get("headers", {}), json_body or {}))
-            return Response(status_code=200, json={"status": "SAVED"})
-        return await original_put(self, url, *args, **kwargs)
+    vapp = FastAPI()
+    vault_root = tmp_path / f"vault_http_{rnd}"
+    vault_root.mkdir(parents=True, exist_ok=True)
 
-    with patch.object(httpx.AsyncClient, "put", new=fake_put):
+    @vapp.get("/health")
+    async def _health():
+        return {"status": "OK", "vault_root": str(vault_root), "disc_a_lliure_gb": 50.0}
+
+    @vapp.post("/admin/inicialitzar-ruta")
+    async def _init_ruta(x_vault_token: str | None = Header(default=None, alias="X-Vault-Token")):
+        if x_vault_token != secret_token:
+            raise HTTPException(status_code=403)
+        return {"status": "OK", "carpetes_count": 38}
+
+    @vapp.put("/entitats/{subcarpeta:path}/{item_id}")
+    async def _put_ent(
+        subcarpeta: str,
+        item_id: str,
+        request: Request,
+        x_vault_token: str | None = Header(default=None, alias="X-Vault-Token"),
+    ):
+        if x_vault_token != secret_token:
+            raise HTTPException(status_code=403)
+        body = json.loads((await request.body()).decode("utf-8"))
+        full_url = str(request.url)
+        recorded_puts.append((full_url, dict(request.headers), body))
+        dest = vault_root / subcarpeta
+        dest.mkdir(parents=True, exist_ok=True)
+        (dest / f"{item_id}.json").write_text(json.dumps(body), encoding="utf-8")
+        return {"status": "SAVED"}
+
+    @vapp.get("/entitats/{subcarpeta:path}")
+    async def _list_ent(subcarpeta: str, x_vault_token: str | None = Header(default=None, alias="X-Vault-Token")):
+        if x_vault_token != secret_token:
+            raise HTTPException(status_code=403)
+        return []
+
+    @vapp.delete("/entitats/{subcarpeta:path}/{item_id}")
+    async def _del_ent(subcarpeta: str, item_id: str, x_vault_token: str | None = Header(default=None, alias="X-Vault-Token")):
+        if x_vault_token != secret_token:
+            raise HTTPException(status_code=403)
+        return {"status": "OK"}
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        port = int(s.getsockname()[1])
+    srv = uvicorn.Server(uvicorn.Config(vapp, host="127.0.0.1", port=port, log_level="error"))
+    thr = threading.Thread(target=srv.run, daemon=True)
+    thr.start()
+
+    try:
+        deadline = time.time() + 6.0
+        while time.time() < deadline:
+            try:
+                if httpx.get(f"http://127.0.0.1:{port}/health", timeout=0.3).status_code == 200:
+                    break
+            except Exception:
+                time.sleep(0.05)
+
+        vault_base = f"http://127.0.0.1:{port}"
+        payload = {
+            "rao_social": f"Sevalor Node HTTP {rnd} SL",
+            "nif": cif_empresa,
+            "adreca": "Carrer Major 50, Tortosa",
+            "subdomini": sub_slug,
+            "vertical": "HYDROPRO",
+            "pla_subscripcio": "PRO",
+            "boss_nif": "39887766K",
+            "boss_nom": "Carles",
+            "boss_cognoms": "Fabra",
+            "boss_email": f"carles_{rnd}@sevalornode.cat",
+            "boss_telefon": "+34677889900",
+            "disc_dur_url": vault_base,
+            "vault_token": secret_token,
+        }
+
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
             res = await ac.post("/api/v1/superadmin/tenants/onboarding", json=payload, headers=headers)
             assert res.status_code == 201, f"Error: {res.status_code} - {res.text}"
             data = res.json()
             assert data["status"] == "CREATED"
             empresa_id = uuid.UUID(data["tenant"]["id"])
+    finally:
+        srv.should_exit = True
+        thr.join(timeout=2.0)
 
     # Comprovem el token generat a BD
     res_emp = await db_session.execute(select(Empresa).where(Empresa.id == empresa_id))
     emp_db = res_emp.scalars().first()
     assert emp_db is not None
-    assert emp_db.vault_token is not None
-    assert emp_db.vault_token.startswith("svlt_")
+    assert emp_db.vault_token == secret_token
     assert emp_db.telegram_webhook_secret is None
-    vault_token = emp_db.vault_token
 
-    # Comprovem que s'han fet les crides PUT a l'agent local amb el token correcte
-    assert len(recorded_puts) >= 2  # empresa i boss
-    urls = [p[0] for p in recorded_puts]
+    # Comprovem que s'han fet les crides PUT a l'agent local amb el token correcte (excloent _healthcheck_)
+    onboarding_puts = [p for p in recorded_puts if "_healthcheck_" not in p[0]]
+    assert len(onboarding_puts) >= 2  # empresa i boss
+    urls = [p[0] for p in onboarding_puts]
     subcarpeta_cfg = MAPA_CARPETES_CLIENT["configuracio"]
     assert any(f"{subcarpeta_cfg}/empresa" in u for u in urls)
     assert any(f"{subcarpeta_cfg}/boss" in u for u in urls)
 
-    for url, hdrs, body in recorded_puts:
-        assert hdrs.get("X-Vault-Token") == vault_token
+    for _url, hdrs, body in onboarding_puts:
+        assert hdrs.get("x-vault-token") == secret_token
         assert "_sovereign_meta" in body

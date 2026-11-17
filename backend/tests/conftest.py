@@ -1,6 +1,13 @@
+import atexit
 import os
+import shutil
+import tempfile
 
 os.environ.setdefault('REDIS_URL', 'redis://:sevalor_redis_pass@127.0.0.1:6380/0')
+if "SUPERADMIN_VAULT_URL" not in os.environ:
+    _TEST_SUPERADMIN_DISK_DIR = tempfile.mkdtemp(prefix=f"sevalor_sa_disk_{os.getpid()}_")
+    os.environ["SUPERADMIN_VAULT_URL"] = _TEST_SUPERADMIN_DISK_DIR
+    atexit.register(lambda p=_TEST_SUPERADMIN_DISK_DIR: shutil.rmtree(p, ignore_errors=True))
 """Configuració de fixtures per a Pytest amb aïllament SAVEPOINT per test.
 
 Compleix Audotoria_i_Normativa_Tests_Backend.md:

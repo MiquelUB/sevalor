@@ -70,7 +70,9 @@ export default function OperariCameraPage() {
     try {
       const u = JSON.parse(localStorage.getItem("sevalor_user") || "{}");
       if (u?.empresa_id) empresaId = u.empresa_id;
-    } catch {}
+    } catch {
+      /* localStorage parse fallback */
+    }
 
     const id = crypto.randomUUID();
     await localDB.camera_captures.add({

@@ -116,7 +116,7 @@ function hexToHsl(hex: string): string {
     const max = Math.max(r, g, b);
     const min = Math.min(r, g, b);
     const delta = max - min;
-    let l = (max + min) / 2;
+    const l = (max + min) / 2;
     let s = 0;
     let h = 0;
 

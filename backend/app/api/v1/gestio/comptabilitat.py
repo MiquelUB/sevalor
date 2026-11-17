@@ -1,9 +1,12 @@
 import os
 import uuid
-from datetime import datetime, timezone
-from typing import List, Optional
+import xml.etree.ElementTree as ET
+from datetime import date, datetime, timezone
+from decimal import Decimal
+from typing import Any, Dict, List, Optional, Sequence
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi.responses import Response
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -19,6 +22,7 @@ from app.schemas.comptabilitat import (
     DashboardEconomicResponseDTO,
     DespesaComptableDTO,
     FacturaEmissioCreateDTO,
+    FacturaLiniaCreateDTO,
     Norma43ConciliarRequestDTO,
     Norma43MovimentDTO,
     OperariCostEfectiuDTO,
@@ -74,7 +78,7 @@ class FacturaResponse(BaseModel):
 @router.get("/factures", response_model=List[FacturaResponse])
 async def llistar_factures(
     request: Request, db: AsyncSession = Depends(get_db_with_tenant_context)
-):
+) -> Sequence[FacturaCapcalera]:
     empresa_id = request.state.empresa_id
     if not empresa_id or empresa_id == "undefined":
         raise HTTPException(status_code=401)
@@ -91,7 +95,7 @@ async def llistar_factures(
 @router.post("/factures", response_model=FacturaResponse, status_code=status.HTTP_201_CREATED)
 async def crear_factura(
     request: Request, payload: FacturaCreate, db: AsyncSession = Depends(get_db_with_tenant_context)
-):
+) -> FacturaCapcalera:
     empresa_id = request.state.empresa_id
     if not empresa_id or empresa_id == "undefined":
         raise HTTPException(status_code=401)
@@ -245,7 +249,7 @@ async def descarregar_factura_pdf(
     factura_id: uuid.UUID,
     request: Request,
     db: AsyncSession = Depends(get_db_with_tenant_context),
-):
+) -> Response:
     """Serveix el PDF de la factura des del disc dur del client."""
     empresa_id = request.state.empresa_id
     if not empresa_id or empresa_id == "undefined":
@@ -267,15 +271,10 @@ async def descarregar_factura_pdf(
     )
 
 
-import xml.etree.ElementTree as ET  # noqa: E402
-
-from fastapi.responses import Response  # noqa: E402
-
-
 @router.get("/factures/{factura_id}/xml")
 async def exportar_factura_xml(
     factura_id: uuid.UUID, request: Request, db: AsyncSession = Depends(get_db_with_tenant_context)
-):
+) -> Response:
     empresa_id = request.state.empresa_id
     if not empresa_id or empresa_id == "undefined":
         raise HTTPException(status_code=401)
@@ -335,7 +334,9 @@ async def exportar_factura_xml(
 # ==============================================================================
 
 
-def _get_tenant_and_user(request: Request, claims: Optional[dict] = None) -> tuple[uuid.UUID, uuid.UUID, str]:
+def _get_tenant_and_user(
+    request: Request, claims: Optional[Dict[str, Any]] = None
+) -> tuple[uuid.UUID, uuid.UUID, str]:
     emp = getattr(request.state, "empresa_id", None)
     uid = (claims or {}).get("sub") or getattr(request.state, "user_id", None)
     rol = (claims or {}).get("rol") or getattr(request.state, "rol", "SECRETARIA")
@@ -348,11 +349,12 @@ def _get_tenant_and_user(request: Request, claims: Optional[dict] = None) -> tup
 async def obtenir_dashboard_economic(
     request: Request,
     criteri_caixa: bool = False,
+    periode: Optional[str] = None,
     db: AsyncSession = Depends(get_db_with_tenant_context),
-):
+) -> DashboardEconomicResponseDTO:
     empresa_id, _, _ = _get_tenant_and_user(request)
     return await EconomicSuiteService.obtenir_dashboard_economic(
-        db=db, empresa_id=empresa_id, criteri_caixa=criteri_caixa
+        db=db, empresa_id=empresa_id, criteri_caixa=criteri_caixa, periode=periode
     )
 
 
@@ -360,9 +362,151 @@ async def obtenir_dashboard_economic(
 async def obtenir_wip_control(
     request: Request,
     db: AsyncSession = Depends(get_db_with_tenant_context),
-):
+) -> WIPControlResponseDTO:
     empresa_id, _, _ = _get_tenant_and_user(request)
     return await EconomicSuiteService.obtenir_control_wip(db=db, empresa_id=empresa_id)
+
+
+@router.post("/wip-control/{ordre_treball_id}/prefacturar", status_code=status.HTTP_201_CREATED)
+async def convertir_wip_a_prefactura(
+    ordre_treball_id: uuid.UUID,
+    request: Request,
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+) -> Dict[str, Any]:
+    """Converteix en 1 clic una OT pendent en WIP a Pre-factura (Sèrie PRE)."""
+    empresa_id, usuari_id, _ = _get_tenant_and_user(request)
+    ot = (
+        await db.execute(
+            select(OrdreTreball).where(
+                OrdreTreball.id == ordre_treball_id,
+                OrdreTreball.empresa_id == empresa_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if not ot:
+        raise HTTPException(status_code=404, detail="Ordre de treball no trobada.")
+    if ot.factura_id is not None:
+        raise HTTPException(status_code=400, detail="L'OT ja es troba facturada o prefacturada.")
+    if not ot.client_id:
+        raise HTTPException(status_code=400, detail="L'OT no té un client associat.")
+
+    hores = Decimal(str(ot.hores_imputades_facturables or 0))
+    pvp_h = Decimal(str(ot.preu_venda_hora_aplicat or 45))
+    pvp_mat = Decimal(str(ot.pvp_materials_aplicat or 0))
+    pressup = Decimal(str(ot.import_pressupostat_net or 0))
+
+    linies: List[FacturaLiniaCreateDTO] = []
+    if hores > 0:
+        linies.append(
+            FacturaLiniaCreateDTO(
+                concepte=f"Mà d'obra tècnica OT {ot.codi} ({ot.titol})",
+                obra_id=ot.id,
+                quantitat=hores,
+                preu_venda_unitari=pvp_h,
+                tipus_iva_pct=Decimal("21.00"),
+            )
+        )
+    if pvp_mat > 0:
+        linies.append(
+            FacturaLiniaCreateDTO(
+                concepte=f"Subministrament i materials OT {ot.codi}",
+                obra_id=ot.id,
+                quantitat=Decimal("1.00"),
+                preu_venda_unitari=pvp_mat,
+                tipus_iva_pct=Decimal("21.00"),
+            )
+        )
+    if not linies:
+        linies.append(
+            FacturaLiniaCreateDTO(
+                concepte=f"Treballs tècnics executats OT {ot.codi} ({ot.titol})",
+                obra_id=ot.id,
+                quantitat=Decimal("1.00"),
+                preu_venda_unitari=pressup if pressup > 0 else Decimal("0.00"),
+                tipus_iva_pct=Decimal("21.00"),
+            )
+        )
+
+    avui = date.today()
+    dto_pre = FacturaEmissioCreateDTO(
+        client_id=ot.client_id,
+        serie="PRE",
+        data_emissio=avui,
+        data_venciment=avui,
+        linies=linies,
+    )
+    factura = await EconomicSuiteService.emetre_factura_verifactu(
+        db=db, empresa_id=empresa_id, usuari_id=usuari_id, payload=dto_pre
+    )
+    return {
+        "id": factura.id,
+        "numero_factura": factura.numero_factura,
+        "serie": factura.serie,
+        "liquid_exigible": factura.liquid_exigible,
+        "ordre_treball_id": str(ot.id),
+    }
+
+
+class RectificativaRequestDTO(BaseModel):
+    motiu: str = Field(..., min_length=3, max_length=300)
+
+
+@router.post("/factures/{factura_id}/rectificar", status_code=status.HTTP_201_CREATED)
+async def emetre_rectificativa_serie_r(
+    factura_id: uuid.UUID,
+    payload: RectificativaRequestDTO,
+    request: Request,
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+) -> Dict[str, Any]:
+    """Emet una factura rectificativa Sèrie R (Spec 007 RF-14) vinculada a una factura emesa."""
+    empresa_id, usuari_id, _ = _get_tenant_and_user(request)
+    orig = (
+        await db.execute(
+            select(FacturaCapcalera).where(
+                FacturaCapcalera.id == factura_id,
+                FacturaCapcalera.empresa_id == empresa_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if not orig:
+        raise HTTPException(status_code=404, detail="Factura original no trobada.")
+    if str(orig.serie or "").upper().startswith("R"):
+        raise HTTPException(status_code=400, detail="No es pot rectificar una factura rectificativa.")
+
+    avui = date.today()
+    base_orig = Decimal(str(orig.base_imposable or 0))
+    iva_pct = (
+        Decimal("21.00")
+        if not orig.es_inversio_subjecte_passiu and Decimal(str(orig.quota_iva or 0)) > 0
+        else Decimal("0.00")
+    )
+    dto_rect = FacturaEmissioCreateDTO(
+        client_id=orig.client_id,
+        serie="R",
+        data_emissio=avui,
+        data_venciment=avui,
+        es_inversio_subjecte_passiu=bool(orig.es_inversio_subjecte_passiu),
+        factura_rectificada_id=orig.id,
+        motiu_rectificacio=payload.motiu.strip(),
+        linies=[
+            FacturaLiniaCreateDTO(
+                concepte=f"Rectificativa Sèrie R de {orig.serie}-{orig.numero_factura}: {payload.motiu.strip()}",
+                quantitat=Decimal("1.00"),
+                preu_venda_unitari=max(Decimal("0.00"), base_orig),
+                tipus_iva_pct=iva_pct,
+            )
+        ],
+    )
+    rect = await EconomicSuiteService.emetre_factura_verifactu(
+        db=db, empresa_id=empresa_id, usuari_id=usuari_id, payload=dto_rect
+    )
+    return {
+        "id": rect.id,
+        "serie": rect.serie,
+        "numero_factura": rect.numero_factura,
+        "liquid_exigible": rect.liquid_exigible,
+        "factura_rectificada_id": str(orig.id),
+    }
 
 
 @router.post("/factures/emetre", status_code=status.HTTP_201_CREATED)
@@ -370,7 +514,7 @@ async def emetre_factura_suite(
     payload: FacturaEmissioCreateDTO,
     request: Request,
     db: AsyncSession = Depends(get_db_with_tenant_context),
-):
+) -> Dict[str, Any]:
     empresa_id, usuari_id, _ = _get_tenant_and_user(request)
     factura = await EconomicSuiteService.emetre_factura_verifactu(
         db=db, empresa_id=empresa_id, usuari_id=usuari_id, payload=payload
@@ -389,7 +533,7 @@ async def emetre_factura_suite(
 async def llistar_retencions_garantia(
     request: Request,
     db: AsyncSession = Depends(get_db_with_tenant_context),
-):
+) -> List[RetencioGarantiaDTO]:
     empresa_id, _, _ = _get_tenant_and_user(request)
     return await EconomicSuiteService.llistar_retencions_garantia(db=db, empresa_id=empresa_id)
 
@@ -399,7 +543,7 @@ async def reclamar_retencio_garantia(
     retencio_id: uuid.UUID,
     request: Request,
     db: AsyncSession = Depends(get_db_with_tenant_context),
-):
+) -> Dict[str, Any]:
     empresa_id, usuari_id, _ = _get_tenant_and_user(request)
     ret = await EconomicSuiteService.reclamar_retencio_garantia(
         db=db, empresa_id=empresa_id, usuari_id=usuari_id, retencio_id=retencio_id
@@ -412,7 +556,7 @@ async def evaluar_risc_client(
     client_id: uuid.UUID,
     request: Request,
     db: AsyncSession = Depends(get_db_with_tenant_context),
-):
+) -> ClientRiscSanititzatDTO:
     empresa_id, _, _ = _get_tenant_and_user(request)
     return await EconomicSuiteService.validar_operacio_camp_client(
         db=db, empresa_id=empresa_id, client_id=client_id, enforce_lock=False, evaluate_risk=True
@@ -428,7 +572,7 @@ async def override_risc_client(
     payload: OverrideRiscRequestDTO,
     request: Request,
     db: AsyncSession = Depends(get_db_with_tenant_context),
-):
+) -> Dict[str, Any]:
     empresa_id, boss_id, _ = _get_tenant_and_user(request)
     client = await EconomicSuiteService.override_risc_pel_boss(
         db=db, empresa_id=empresa_id, boss_id=boss_id, client_id=client_id, motiu=payload.motiu
@@ -440,7 +584,7 @@ async def override_risc_client(
 async def llistar_art80_incobrables(
     request: Request,
     db: AsyncSession = Depends(get_db_with_tenant_context),
-):
+) -> List[Art80ItemDTO]:
     empresa_id, _, _ = _get_tenant_and_user(request)
     return await EconomicSuiteService.processar_finestres_art80_liva(db=db, empresa_id=empresa_id)
 
@@ -452,7 +596,7 @@ async def generar_rectificativa_art80(
     payload: Art80ReclamacioRequestDTO,
     request: Request,
     db: AsyncSession = Depends(get_db_with_tenant_context),
-):
+) -> Dict[str, Any]:
     empresa_id, usuari_id, _ = _get_tenant_and_user(request)
     rect = await EconomicSuiteService.generar_rectificativa_art80(
         db=db,
@@ -467,9 +611,9 @@ async def generar_rectificativa_art80(
 @router.get("/operaris-cost-efectiu", response_model=List[OperariCostEfectiuDTO])
 async def obtenir_operaris_cost_efectiu(
     request: Request,
-    claims: dict = Depends(get_current_user_claims),
+    claims: Dict[str, Any] = Depends(get_current_user_claims),
     db: AsyncSession = Depends(get_db_with_tenant_context),
-):
+) -> List[OperariCostEfectiuDTO]:
     empresa_id, _, rol = _get_tenant_and_user(request, claims)
     return await EconomicSuiteService.calcular_cost_efectiu_operaris(
         db=db, empresa_id=empresa_id, rol_peticio=rol
@@ -480,7 +624,7 @@ async def obtenir_operaris_cost_efectiu(
 async def obtenir_contractes_mrr_auditoria(
     request: Request,
     db: AsyncSession = Depends(get_db_with_tenant_context),
-):
+) -> List[ContracteMRRAuditoriaDTO]:
     empresa_id, _, _ = _get_tenant_and_user(request)
     return await EconomicSuiteService.auditar_contractes_mrr(db=db, empresa_id=empresa_id)
 
@@ -489,7 +633,7 @@ async def obtenir_contractes_mrr_auditoria(
 async def llistar_tiquets_comptabilitat(
     request: Request,
     db: AsyncSession = Depends(get_db_with_tenant_context),
-):
+) -> List[TiquetDespesaResponseDTO]:
     empresa_id, _, _ = _get_tenant_and_user(request)
     return await EconomicSuiteService.llistar_tiquets_despesa(db=db, empresa_id=empresa_id)
 
@@ -499,9 +643,9 @@ async def auditar_tiquet_comptabilitat(
     tiquet_id: uuid.UUID,
     payload: TiquetAuditoriaRequestDTO,
     request: Request,
-    claims: dict = Depends(get_current_user_claims),
+    claims: Dict[str, Any] = Depends(get_current_user_claims),
     db: AsyncSession = Depends(get_db_with_tenant_context),
-):
+) -> Dict[str, Any]:
     empresa_id, usuari_id, rol = _get_tenant_and_user(request, claims)
     tiquet = await EconomicSuiteService.auditar_tiquet_despesa(
         db=db,
@@ -519,7 +663,7 @@ async def conciliar_norma43(
     payload: Norma43ConciliarRequestDTO,
     request: Request,
     db: AsyncSession = Depends(get_db_with_tenant_context),
-):
+) -> List[Norma43MovimentDTO]:
     empresa_id, usuari_id, _ = _get_tenant_and_user(request)
     return await EconomicSuiteService.conciliar_norma43(
         db=db,
@@ -535,7 +679,7 @@ async def obtenir_cost_marge_analitic_ot(
     ordre_treball_id: uuid.UUID,
     request: Request,
     db: AsyncSession = Depends(get_db_with_tenant_context),
-):
+) -> Dict[str, Any]:
     """Calcula en temps real el cost real (PickIn/Out PMP + Mermes + Tiquets + Mà d'obra + Flota) i marge brut d'una OT."""
     empresa_id, _, _ = _get_tenant_and_user(request)
     return await calcular_cost_i_marge_analitic_ot(
@@ -550,7 +694,7 @@ async def llistar_marges_analitics_ots(
     request: Request,
     limit: int = 30,
     db: AsyncSession = Depends(get_db_with_tenant_context),
-):
+) -> List[Dict[str, Any]]:
     """Llista el càlcul determinista de costos i marges bruts per a les OTs del tenant."""
     empresa_id, _, _ = _get_tenant_and_user(request)
     ot_ids = (
@@ -578,7 +722,7 @@ async def llistar_despeses_analitiques(
     request: Request,
     limit: int = 50,
     db: AsyncSession = Depends(get_db_with_tenant_context),
-):
+) -> Sequence[DespesaComptable]:
     """Llista els assentaments analítics procedents de Mermes de Magatzem i Tiquets OCR de camp."""
     empresa_id, _, _ = _get_tenant_and_user(request)
     rows = (

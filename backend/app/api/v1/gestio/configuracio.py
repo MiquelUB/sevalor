@@ -7,7 +7,7 @@ import string
 import time as time_lib
 import uuid
 from datetime import date, time
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import bcrypt
 import httpx
@@ -260,6 +260,21 @@ class TelegramConfigRequest(BaseModel):
     telegram_webhook_secret: str = Field(..., min_length=8)
 
 
+class BaremaPartidaDTO(BaseModel):
+    codi: str = Field(..., max_length=40)
+    descripcio: str = Field(..., max_length=200)
+    unitat: str = Field("h", max_length=20)
+    preu_eur: float = Field(..., ge=0)
+
+
+class BaremaConfigRequest(BaseModel):
+    preu_hora_standard_eur: float = Field(45.0, ge=0)
+    tarifa_urgencia_eur: float = Field(65.0, ge=0)
+    suplement_desplacament_eur: float = Field(25.0, ge=0)
+    marge_materials_defecte_pct: float = Field(25.0, ge=0)
+    partides: list[BaremaPartidaDTO] = Field(default_factory=list)
+
+
 class Emergencia2faBossRequest(BaseModel):
     nif: str
     codi_recuperacio: str
@@ -272,7 +287,7 @@ class Emergencia2faBossRequest(BaseModel):
 
 def validar_permisos_gestio(
     claims: Dict[str, Any], requereix_escriptura: bool = False, nomes_boss: bool = False
-):
+) -> None:
     """Aplica la matriu de permisos de Spec 011."""
     rol = claims.get("rol", "").upper()
     is_impersonation = bool(claims.get("is_impersonation", False))
@@ -309,7 +324,7 @@ def validar_permisos_gestio(
 async def obtenir_dades_empresa(
     claims: Dict[str, Any] = Depends(get_current_user_claims),
     db: AsyncSession = Depends(get_db),
-):
+) -> Dict[str, Any]:
     """Consulta els paràmetres de l'empresa autenticada sota RLS."""
     validar_permisos_gestio(claims, requereix_escriptura=False)
     empresa_id = claims.get("empresa_id")
@@ -362,7 +377,7 @@ async def actualitzar_dades_empresa(
     payload: EmpresaUpdateRequest,
     claims: Dict[str, Any] = Depends(get_current_user_claims),
     db: AsyncSession = Depends(get_db),
-):
+) -> Dict[str, Any]:
     """Actualitza dades bàsiques de l'empresa (Boss i Secretaria; Enginyer 403)."""
     validar_permisos_gestio(claims, requereix_escriptura=True, nomes_boss=True)
     empresa_id = claims.get("empresa_id")
@@ -398,7 +413,7 @@ async def actualitzar_dades_empresa(
 async def obtenir_marca_camaleonica(
     claims: Dict[str, Any] = Depends(get_current_user_claims),
     db: AsyncSession = Depends(get_db),
-):
+) -> Dict[str, Any]:
     """Retorna la configuració cromàtica i visual de la marca de l'empresa."""
     empresa_id = claims.get("empresa_id")
     if not empresa_id or empresa_id == "undefined":
@@ -424,7 +439,7 @@ async def actualitzar_marca_camaleonica(
     payload: MarcaUpdateRequest,
     claims: Dict[str, Any] = Depends(get_current_user_claims),
     db: AsyncSession = Depends(get_db),
-):
+) -> Dict[str, Any]:
     """Modifica els colors HSL corporatius amb validació algorítmica WCAG 2.1 AA (EDGE-02)."""
     validar_permisos_gestio(claims, requereix_escriptura=True)
     empresa_id = claims.get("empresa_id")
@@ -466,7 +481,7 @@ async def analitzar_adn_marca(
     payload: AdnAnalisiRequest,
     claims: Dict[str, Any] = Depends(get_current_user_claims),
     db: AsyncSession = Depends(get_db),
-):
+) -> Dict[str, Any]:
     """Analitza l'ADN de marca per Copilot IA i proposa un esborrany de paleta (RF-12)."""
     validar_permisos_gestio(claims, requereix_escriptura=True)
     empresa_id = claims.get("empresa_id")
@@ -517,7 +532,7 @@ async def aprovar_paleta_adn(
     payload: AdnAprovacioRequest,
     claims: Dict[str, Any] = Depends(get_current_user_claims),
     db: AsyncSession = Depends(get_db),
-):
+) -> Dict[str, Any]:
     """Aprovació HITL de la paleta proposada per la IA, reservada al Boss (RF-13)."""
     validar_permisos_gestio(claims, requereix_escriptura=True, nomes_boss=True)
     empresa_id = claims.get("empresa_id")
@@ -565,7 +580,7 @@ async def pujar_logotip_corporatiu(
     fitxer: UploadFile = File(...),
     claims: Dict[str, Any] = Depends(get_current_user_claims),
     db: AsyncSession = Depends(get_db),
-):
+) -> Dict[str, Any]:
     """Pujada de logotip amb comprovació de Magic Bytes i redimensionament sobirà (EDGE-03)."""
     validar_permisos_gestio(claims, requereix_escriptura=True)
     empresa_id_raw = claims.get("empresa_id")
@@ -634,7 +649,7 @@ async def pujar_logotip_corporatiu(
 async def llistar_usuaris_administratius(
     claims: Dict[str, Any] = Depends(get_current_user_claims),
     db: AsyncSession = Depends(get_db),
-):
+) -> List[Dict[str, Any]]:
     """Llistat complet de personal d'oficina (Zero Mock Data, RF-01, RF-04)."""
     validar_permisos_gestio(claims, requereix_escriptura=False)
     empresa_id = claims.get("empresa_id")
@@ -678,7 +693,7 @@ async def crear_usuari_administratiu(
     payload: UsuariAdminCreateRequest,
     claims: Dict[str, Any] = Depends(get_current_user_claims),
     db: AsyncSession = Depends(get_db),
-):
+) -> Dict[str, Any]:
     """Alta de personal administratiu amb contrasenya forta de 12 caràcters (RF-02; Enginyer 403)."""
     validar_permisos_gestio(claims, requereix_escriptura=True)
     empresa_id = claims.get("empresa_id")
@@ -789,7 +804,7 @@ async def actualitzar_usuari_administratiu(
     payload: UsuariAdminUpdateRequest,
     claims: Dict[str, Any] = Depends(get_current_user_claims),
     db: AsyncSession = Depends(get_db),
-):
+) -> Dict[str, Any]:
     """Modifica dades de l'empleat administratiu (Boss i Secretaria; Enginyer 403)."""
     validar_permisos_gestio(claims, requereix_escriptura=True)
     empresa_id = claims.get("empresa_id")
@@ -850,7 +865,7 @@ async def eliminar_usuari_administratiu(
     usuari_id: uuid.UUID,
     claims: Dict[str, Any] = Depends(get_current_user_claims),
     db: AsyncSession = Depends(get_db),
-):
+) -> Dict[str, Any]:
     """Eliminació o baixa d'usuari amb protecció contra orfandat de l'inquilí (EDGE-05)."""
     validar_permisos_gestio(claims, requereix_escriptura=True)
     empresa_id = claims.get("empresa_id")
@@ -894,7 +909,7 @@ async def restablir_contrasenya_usuari(
     usuari_id: uuid.UUID,
     claims: Dict[str, Any] = Depends(get_current_user_claims),
     db: AsyncSession = Depends(get_db),
-):
+) -> Dict[str, Any]:
     """Genera una nova contrasenya temporal de 12 caràcters per a l'usuari administratiu (Boss o Secretaria)."""
     validar_permisos_gestio(claims, requereix_escriptura=True)
     empresa_id = claims.get("empresa_id")
@@ -951,7 +966,7 @@ async def reiniciar_2fa_usuari(
     usuari_id: uuid.UUID,
     claims: Dict[str, Any] = Depends(get_current_user_claims),
     db: AsyncSession = Depends(get_db),
-):
+) -> Dict[str, Any]:
     """Reinici de secret 2FA TOTP reservat exclusivament al Boss (RF-06)."""
     validar_permisos_gestio(claims, requereix_escriptura=True, nomes_boss=True)
     empresa_id = claims.get("empresa_id")
@@ -994,7 +1009,7 @@ async def acces_emergencia_2fa_boss(
     request: Request,
     payload: Emergencia2faBossRequest,
     db: AsyncSession = Depends(get_db),
-):
+) -> Dict[str, Any]:
     """Accés d'emergència de l'últim Boss mitjançant codi de recuperació estàtic (EDGE-01)."""
     # Cercar l'usuari Boss pel seu NIF (endpoint d'emergència sense sessió autenticada prèvia)
     await db.execute(text("RESET ROLE;"))
@@ -1050,7 +1065,7 @@ async def acces_emergencia_2fa_boss(
 async def llistar_slots_jornada(
     claims: Dict[str, Any] = Depends(get_current_user_claims),
     db: AsyncSession = Depends(get_db),
-):
+) -> List[Dict[str, Any]]:
     """Llistat d'slots de jornada laboral de l'empresa."""
     validar_permisos_gestio(claims, requereix_escriptura=False)
     empresa_id = claims.get("empresa_id")
@@ -1090,7 +1105,7 @@ async def crear_slot_jornada(
     payload: SlotJornadaCreateUpdateRequest,
     claims: Dict[str, Any] = Depends(get_current_user_claims),
     db: AsyncSession = Depends(get_db),
-):
+) -> Dict[str, Any]:
     """Crea un nou slot de jornada laboral amb validació de rangs coherents (EDGE-08; Enginyer 403)."""
     validar_permisos_gestio(claims, requereix_escriptura=True)
     empresa_id = claims.get("empresa_id")
@@ -1164,12 +1179,36 @@ async def crear_slot_jornada(
 # ---------------------------------------------------------------------------
 
 
+@router.get("/telegram")
+async def obtenir_estat_telegram(
+    claims: Dict[str, Any] = Depends(get_current_user_claims),
+    db: AsyncSession = Depends(get_db),
+) -> Dict[str, Any]:
+    """Consulta l'estat del Bot de Telegram de l'empresa sense exposar secrets."""
+    validar_permisos_gestio(claims, requereix_escriptura=False)
+    empresa_id = claims.get("empresa_id")
+    if not empresa_id:
+        raise HTTPException(status_code=401, detail="Tenant no identificat")
+    await set_tenant_context(db, empresa_id)
+
+    res = await db.execute(select(Empresa).where(Empresa.id == uuid.UUID(empresa_id)))
+    empresa = res.scalar_one_or_none()
+    if not empresa:
+        raise HTTPException(status_code=404, detail="Empresa no trobada")
+
+    return {
+        "estat": empresa.telegram_estat_connexio or "NO_CONFIGURAT",
+        "telegram_bot_actiu": bool(empresa.telegram_bot_actiu),
+        "te_token": bool(empresa.telegram_bot_token),
+    }
+
+
 @router.put("/telegram")
 async def actualitzar_credencials_telegram(
     payload: TelegramConfigRequest,
     claims: Dict[str, Any] = Depends(get_current_user_claims),
     db: AsyncSession = Depends(get_db),
-):
+) -> Dict[str, Any]:
     """Guarda les credencials del Bot de Telegram (Boss i Secretaria; Enginyer 403)."""
     validar_permisos_gestio(claims, requereix_escriptura=True)
     empresa_id = claims.get("empresa_id")
@@ -1196,7 +1235,7 @@ async def actualitzar_credencials_telegram(
 async def provar_connexio_telegram(
     claims: Dict[str, Any] = Depends(get_current_user_claims),
     db: AsyncSession = Depends(get_db),
-):
+) -> Dict[str, Any]:
     """Test asíncron de getMe contra l'API de Telegram amb timeout de 5s (RF-20, EDGE-09)."""
     validar_permisos_gestio(claims, requereix_escriptura=True)
     empresa_id = claims.get("empresa_id")
@@ -1255,7 +1294,7 @@ async def provar_connexio_telegram(
 async def obtenir_configuracio_node_ia(
     claims: Dict[str, Any] = Depends(get_current_user_claims),
     db: AsyncSession = Depends(get_db),
-):
+) -> Dict[str, Any]:
     """Consulta els paràmetres de l'ordinador dedicat per a la IA sobirana."""
     validar_permisos_gestio(claims, requereix_escriptura=False)
     empresa_id = claims.get("empresa_id")
@@ -1286,7 +1325,7 @@ async def actualitzar_configuracio_node_ia(
     payload: NodeIaConfigRequest,
     claims: Dict[str, Any] = Depends(get_current_user_claims),
     db: AsyncSession = Depends(get_db),
-):
+) -> Dict[str, Any]:
     """Guarda els paràmetres de l'ordinador dedicat de l'empresa (Constitució §2.V: Només Boss)."""
     validar_permisos_gestio(claims, requereix_escriptura=True, nomes_boss=True)
     empresa_id = claims.get("empresa_id")
@@ -1333,7 +1372,7 @@ async def actualitzar_configuracio_node_ia(
 async def provar_connexio_node_ia(
     claims: Dict[str, Any] = Depends(get_current_user_claims),
     db: AsyncSession = Depends(get_db),
-):
+) -> Dict[str, Any]:
     """Test asíncron de connectivitat contra l'ordinador dedicat de la seu de l'empresa (GET /v1/models amb timeout de 4s)."""
     validar_permisos_gestio(claims, requereix_escriptura=True, nomes_boss=True)
     empresa_id = claims.get("empresa_id")
@@ -1383,3 +1422,73 @@ async def provar_connexio_node_ia(
             "missatge": "No s'ha pogut establir connexió amb l'ordinador dedicat. Verifiqueu que el servidor local de la seu estigui encès i el túnel o xarxa privada estigui actiu.",
             "detall": str(exc),
         }
+
+
+# ---------------------------------------------------------------------------
+# 9. BAREMA DE PREUS I TARIFES ESTÀNDARD (Spec 01 FR-017)
+# ---------------------------------------------------------------------------
+
+
+_BAREMA_DEFECTE: Dict[str, Any] = {
+    "id": "barema_preus",
+    "preu_hora_standard_eur": 45.0,
+    "tarifa_urgencia_eur": 65.0,
+    "suplement_desplacament_eur": 25.0,
+    "marge_materials_defecte_pct": 25.0,
+    "partides": [],
+}
+
+
+@router.get("/barema")
+async def obtenir_barema_preus(
+    claims: Dict[str, Any] = Depends(get_current_user_claims),
+    db: AsyncSession = Depends(get_db),
+) -> Dict[str, Any]:
+    """Retorna el Barema de Preus sobirà de l'empresa (FR-017; Enginyer 403)."""
+    validar_permisos_gestio(claims, requereix_escriptura=False)
+    if claims.get("rol", "").upper() == "ENGINYER":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="HTTP 403 Forbidden: Veto d'Enginyer sobre tarifes i baremes econòmics",
+        )
+    empresa_id = str(claims.get("empresa_id") or "")
+    if not empresa_id:
+        raise HTTPException(status_code=401, detail="Tenant no identificat")
+    await set_tenant_context(db, empresa_id)
+
+    items = await SovereignStorageGateway.llegir_entitats_json(db, empresa_id, "configuracio")
+    for item in items:
+        if isinstance(item, dict) and item.get("id") == "barema_preus":
+            return {**_BAREMA_DEFECTE, **item}
+    return dict(_BAREMA_DEFECTE)
+
+
+@router.put("/barema")
+async def desar_barema_preus(
+    payload: BaremaConfigRequest,
+    claims: Dict[str, Any] = Depends(get_current_user_claims),
+    db: AsyncSession = Depends(get_db),
+) -> Dict[str, Any]:
+    """Desa el Barema de Preus i tarifes al disc sobirà del client (FR-017)."""
+    validar_permisos_gestio(claims, requereix_escriptura=True)
+    empresa_id = str(claims.get("empresa_id") or "")
+    if not empresa_id:
+        raise HTTPException(status_code=401, detail="Tenant no identificat")
+    await set_tenant_context(db, empresa_id)
+
+    dades = {
+        "id": "barema_preus",
+        "preu_hora_standard_eur": payload.preu_hora_standard_eur,
+        "tarifa_urgencia_eur": payload.tarifa_urgencia_eur,
+        "suplement_desplacament_eur": payload.suplement_desplacament_eur,
+        "marge_materials_defecte_pct": payload.marge_materials_defecte_pct,
+        "partides": [p.model_dump() for p in payload.partides],
+    }
+    await SovereignStorageGateway.desar_entitat_json(
+        db=db,
+        empresa_id=empresa_id,
+        categoria="configuracio",
+        item_id="barema_preus",
+        dades=dades,
+    )
+    return {"status": "OK", "barema": dades}

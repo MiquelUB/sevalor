@@ -8,6 +8,7 @@ Verifica:
 
 import uuid
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import jwt
 import pytest
@@ -15,7 +16,8 @@ from httpx import ASGITransport, AsyncClient
 
 from app.core.config import settings
 from app.main import app
-from app.models.models import Article, Empresa, EstocMagatzem, Magatzem, Usuari, Vehicle
+from app.models.models import Empresa, Usuari
+from app.services.sovereign_storage import SovereignStorageGateway
 from app.services.subagents import (
     CopilotDispatcher,
     SubagentAuditoriaMarge,
@@ -92,7 +94,7 @@ async def test_subagents_dispatcher_intent_routing():
 
 
 @pytest.mark.asyncio
-async def test_subagents_rbac_double_barrier(admin_session):
+async def test_subagents_rbac_double_barrier(admin_session, tmp_path: Path):
     """Verifica el veto estricte de seguretat RBAC per a operaris i consultes financeres d'enginyers."""
     empresa_id = uuid.uuid4()
     boss_id = uuid.uuid4()
@@ -107,6 +109,10 @@ async def test_subagents_rbac_double_barrier(admin_session):
             subdomini="sec-" + uuid.uuid4().hex[:5],
             pla_subscripcio="ENTERPRISE",
             estat_pagament="ACTIU",
+            disc_dur_url=str(tmp_path),
+            node_ia_url=str(tmp_path),
+            node_ia_actiu=True,
+            feature_copilot_ia=True,
         )
     )
     admin_session.add(
@@ -179,7 +185,7 @@ async def test_subagents_rbac_double_barrier(admin_session):
 
 
 @pytest.mark.asyncio
-async def test_subagent_logistica_and_flota_execution(admin_session, boss_token):
+async def test_subagent_logistica_and_flota_execution(admin_session, boss_token, tmp_path: Path):
     """Verifica l'execució en viu de subagent_logistica_estoc i subagent_flota_despatx."""
     token_jwt, empresa_id_str = boss_token
     empresa_id = uuid.UUID(empresa_id_str)
@@ -193,6 +199,10 @@ async def test_subagent_logistica_and_flota_execution(admin_session, boss_token)
         subdomini="malog-" + uuid.uuid4().hex[:5],
         pla_subscripcio="ENTERPRISE",
         estat_pagament="ACTIU",
+        disc_dur_url=str(tmp_path),
+        node_ia_url=str(tmp_path),
+        node_ia_actiu=True,
+        feature_copilot_ia=True,
     )
     admin_session.add(empresa)
     await admin_session.flush()
@@ -207,52 +217,45 @@ async def test_subagent_logistica_and_flota_execution(admin_session, boss_token)
             estat="ACTIU",
         )
     )
-
-    art = Article(
-        id=uuid.uuid4(),
-        empresa_id=empresa_id,
-        referencia_inventari="TUB-PE-100",
-        nom="Tub Polietilè 100mm",
-        familia="REG",
-        unitat_mesura="METRES",
-        preu_cost=4.20,
-        preu_venda=8.50,
-        estoc_minim=20.0,
-        estoc_optim=100.0,
-    )
-    admin_session.add(art)
-
-    mag = Magatzem(
-        id=uuid.uuid4(),
-        empresa_id=empresa_id,
-        nom="Magatzem Lleida",
-        tipus="CENTRAL",
-    )
-    admin_session.add(mag)
-
-    veh = Vehicle(
-        id=uuid.uuid4(),
-        empresa_id=empresa_id,
-        matricula="5566-BBB",
-        marca="Renault",
-        model="Master",
-        tipus="FURGONETA",
-        estat="OPERATIU",
-        odometre_acumulat=45000,
-    )
-    admin_session.add(veh)
     await admin_session.flush()
 
-    st = EstocMagatzem(
-        id=uuid.uuid4(),
-        empresa_id=empresa_id,
-        article_id=art.id,
-        magatzem_id=mag.id,
-        quantitat_fisica=150.0,
-        quantitat_virtual_reservada=10.0,
+    art_id = uuid.uuid4()
+    veh_id = uuid.uuid4()
+    await SovereignStorageGateway.desar_entitat_json(
+        admin_session,
+        empresa_id,
+        "magatzem_articles",
+        art_id,
+        {
+            "id": str(art_id),
+            "referencia_inventari": "TUB-PE-100",
+            "nom": "Tub Polietilè 100mm",
+            "familia": "REG",
+            "unitat_mesura": "METRES",
+            "preu_cost": 4.20,
+            "preu_venda": 8.50,
+            "estoc_minim": 20.0,
+            "estoc_optim": 100.0,
+            "quantitat_fisica": 150.0,
+            "quantitat_virtual_reservada": 10.0,
+            "actiu": True,
+        },
     )
-    admin_session.add(st)
-    await admin_session.flush()
+    await SovereignStorageGateway.desar_entitat_json(
+        admin_session,
+        empresa_id,
+        "vehicles",
+        veh_id,
+        {
+            "id": str(veh_id),
+            "matricula": "5566-BBB",
+            "marca": "Renault",
+            "model": "Master",
+            "tipus": "FURGONETA",
+            "estat": "OPERATIU",
+            "odometre_acumulat": 45000,
+        },
+    )
 
     headers = {"Authorization": f"Bearer {token_jwt}"}
 

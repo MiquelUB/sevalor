@@ -1,13 +1,11 @@
-"""Subagent de Digitalització OCR 'Zero Data Entry' i Reconeixement Documental."""
+"""Subagent de Digitalització OCR 'Zero Data Entry' i Reconeixement Documental (Disc Sobirà de l'Empresa)."""
 
 import re
 import uuid
 from typing import Any, List, Optional, Tuple
 
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.models import Proveidor
 from app.services.subagents.base import BaseSubagent
 from app.services.subagents.schemas import SCHEMAS_OCR_VISION
 
@@ -15,14 +13,23 @@ from app.services.subagents.schemas import SCHEMAS_OCR_VISION
 class SubagentOcrVision(BaseSubagent):
     id = "subagent_ocr_vision"
     nom = "Subagent de Digitalització OCR Zero Data Entry"
-    descripcio = "Especialista en extracció de dades d'albarans, fitxes tècniques de vehicles i tiquets de benzina."
-    allowed_roles = ["OPERARI", "CAP_DE_MAGATZEM", "CAP_DE_COLLA", "SECRETARIA", "ENGINYER", "BOSS"]
+    descripcio = (
+        "Especialista en extracció de dades d'albarans, fitxes tècniques de vehicles i tiquets de benzina."
+    )
+    allowed_roles = [
+        "OPERARI",
+        "CAP_DE_MAGATZEM",
+        "CAP_DE_COLLA",
+        "SECRETARIA",
+        "ENGINYER",
+        "BOSS",
+    ]
     tools_schema = SCHEMAS_OCR_VISION
     system_prompt = (
         "Ets el digitalitzador OCR de SEVALOR Suite. "
         "La teva missió és extreure dades estructurades de documents (albarans de proveïdor, "
-        "tiquets de benzina, targetes d'ITV) per eliminar l'entrada manual de dades. "
-        "Retorna sempre JSON estructurat i precís."
+        "tiquets de benzina, targetes d'ITV) contrastant amb les fitxes del disc dur dedicat de l'empresa "
+        "per eliminar l'entrada manual de dades. Retorna sempre JSON estructurat i precís."
     )
 
     def can_handle(self, query: str, rol: str) -> bool:
@@ -59,80 +66,111 @@ class SubagentOcrVision(BaseSubagent):
         text_ocr = args.get("text_ocr", "")
         if tool_name == "extract_albara_lines":
             return await self.tool_extract_albara_lines(db, empresa_id, text_ocr)
-        elif tool_name == "extract_vehicle_tech_card":
+        if tool_name == "extract_vehicle_tech_card":
             return await self.tool_extract_vehicle_tech_card(db, empresa_id, text_ocr)
-        elif tool_name == "extract_fuel_receipt":
+        if tool_name == "extract_fuel_receipt":
             return await self.tool_extract_fuel_receipt(db, empresa_id, text_ocr)
         return {"error": f"Eina no suportada pel subagent OCR: {tool_name}"}
 
     async def tool_extract_albara_lines(
         self, db: AsyncSession, empresa_id: uuid.UUID, text_ocr: str
     ) -> dict:
-        # Detectar NIF
-        nif_match = re.search(r"\b[A-Z0-9]{8,9}\b", text_ocr)
+        nif_match = re.search(r"\b[A-Z0-9]{8,9}\b", text_ocr or "")
         nif_detectat = nif_match.group(0) if nif_match else None
 
         proveidor_nom = "Desconegut"
         if nif_detectat:
-            q_p = select(Proveidor).where(
-                Proveidor.empresa_id == empresa_id, Proveidor.nif.ilike(f"%{nif_detectat}%")
+            proveidors = await self.read_sovereign_category(db, empresa_id, "proveidors")
+            nif_low = nif_detectat.lower()
+            prov = next(
+                (p for p in proveidors if nif_low in str(p.get("nif") or "").lower()),
+                None,
             )
-            res_p = await db.execute(q_p)
-            prov = res_p.scalars().first()
-            if prov:
-                proveidor_nom = prov.rao_social
+            if prov and prov.get("rao_social"):
+                proveidor_nom = str(prov["rao_social"])
 
-        # Detectar data
-        data_match = re.search(r"\b\d{2}[/-]\d{2}[/-]\d{4}\b", text_ocr) or re.search(
-            r"\b\d{4}[/-]\d{2}[/-]\d{2}\b", text_ocr
+        data_match = re.search(r"\b\d{2}[/-]\d{2}[/-]\d{4}\b", text_ocr or "") or re.search(
+            r"\b\d{4}[/-]\d{2}[/-]\d{2}\b", text_ocr or ""
         )
         data_doc = data_match.group(0) if data_match else None
+        imports = re.findall(r"\b\d+(?:[.,]\d{1,2})?\s*(?:€|EUR)?\b", text_ocr or "")
 
-        # Detectar imports (ex: 125.50 €)
-        imports = re.findall(r"\b\d+(?:[.,]\d{1,2})?\s*(?:€|EUR)?\b", text_ocr)
-
-        return {
+        res_payload = {
             "tipus_document": "ALBARA_PROVEIDOR",
             "proveidor_nif": nif_detectat,
             "proveidor_nom": proveidor_nom,
             "data_document": data_doc,
             "imports_detectats": imports,
-            "missatge": f"Albarà processat amb èxit ({proveidor_nom}). Formulat llest per a validació a 1-clic.",
+            "estat": "ESBORRANY_OCR",
+            "missatge": (
+                f"Albarà processat amb èxit ({proveidor_nom}). Formulat llest per a validació humana (HITL)."
+            ),
         }
+        if nif_detectat or data_doc or imports:
+            doc_id = f"ocr_alb_{uuid.uuid4().hex[:10]}"
+            await self.save_sovereign_entity(
+                db, empresa_id, "albarans", doc_id, {"id": doc_id, **res_payload}
+            )
+            res_payload["albara_esborrany_id"] = doc_id
+
+        return res_payload
 
     async def tool_extract_vehicle_tech_card(
         self, db: AsyncSession, empresa_id: uuid.UUID, text_ocr: str
     ) -> dict:
-        mat_match = re.search(r"\b[0-9]{4}[ -]?[A-Z]{3}\b", text_ocr.upper())
+        mat_match = re.search(r"\b[0-9]{4}[ -]?[A-Z]{3}\b", (text_ocr or "").upper())
         matricula = mat_match.group(0).replace(" ", "-") if mat_match else None
 
-        vin_match = re.search(r"\b[A-HJ-NPR-Z0-9]{17}\b", text_ocr.upper())
+        vin_match = re.search(r"\b[A-HJ-NPR-Z0-9]{17}\b", (text_ocr or "").upper())
         vin = vin_match.group(0) if vin_match else None
+
+        vehicle_existent = False
+        if matricula:
+            vehs = await self.read_sovereign_category(db, empresa_id, "vehicles")
+            vehicle_existent = any(
+                str(v.get("matricula") or "").upper().replace(" ", "-") == matricula
+                for v in vehs
+            )
 
         return {
             "tipus_document": "TARGETA_ITV_VEHICLE",
             "matricula": matricula,
             "vin_bastidor": vin,
-            "missatge": f"Targeta d'inspecció tècnica processada: Matrícula {matricula or 'Pendent'}, VIN {vin or 'Pendent'}.",
+            "vehicle_ja_registrat_al_disc": vehicle_existent,
+            "missatge": (
+                f"Targeta d'inspecció tècnica processada: Matrícula {matricula or 'Pendent'}, "
+                f"VIN {vin or 'Pendent'}."
+            ),
         }
 
     async def tool_extract_fuel_receipt(
         self, db: AsyncSession, empresa_id: uuid.UUID, text_ocr: str
     ) -> dict:
         litres_match = re.search(
-            r"(\d+(?:[.,]\d+)?)\s*(?:L|litres|litros)", text_ocr, re.IGNORECASE
+            r"(\d+(?:[.,]\d+)?)\s*(?:L|litres|litros)", text_ocr or "", re.IGNORECASE
         )
         litres = float(litres_match.group(1).replace(",", ".")) if litres_match else 0.0
 
-        total_match = re.search(r"TOTAL\s*[:=]?\s*(\d+(?:[.,]\d+)?)\s*€?", text_ocr, re.IGNORECASE)
+        total_match = re.search(
+            r"TOTAL\s*[:=]?\s*(\d+(?:[.,]\d+)?)\s*€?", text_ocr or "", re.IGNORECASE
+        )
         total = float(total_match.group(1).replace(",", ".")) if total_match else 0.0
 
-        return {
+        res_payload = {
             "tipus_document": "TIQUET_COMBUSTIBLE",
             "litres": litres,
             "import_total": total,
+            "estat": "ESBORRANY_OCR",
             "missatge": f"Tiquet de combustible processat: {litres} litres, {total:.2f} €.",
         }
+        if litres > 0 or total > 0:
+            doc_id = f"ocr_tiq_{uuid.uuid4().hex[:10]}"
+            await self.save_sovereign_entity(
+                db, empresa_id, "tiquets_despesa", doc_id, {"id": doc_id, **res_payload}
+            )
+            res_payload["tiquet_esborrany_id"] = doc_id
+
+        return res_payload
 
     async def run_sovereign(
         self,

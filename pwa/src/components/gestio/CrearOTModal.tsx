@@ -23,17 +23,39 @@ import {
   Sparkles,
   Search,
   ExternalLink,
+  AlertCircle,
+  CheckCircle2,
+  Receipt,
+  Warehouse,
 } from "lucide-react";
+import Link from "next/link";
 import { apiFetch, getApiBaseUrl } from "@/lib/api";
 import { geocodificarAdreca } from "@/lib/geocoding";
 
 interface CrearOTModalProps {
   onClose: () => void;
   onSuccess?: () => void;
+  initialClientId?: string;
 }
 
-export function CrearOTModal({ onClose, onSuccess }: CrearOTModalProps) {
+export function CrearOTModal({ onClose, onSuccess, initialClientId }: CrearOTModalProps) {
   const [loading, setLoading] = useState(false);
+  const [pressupostLoading, setPressupostLoading] = useState(false);
+  const [copilotLoading, setCopilotLoading] = useState(false);
+  const [copilotActiu, setCopilotActiu] = useState(false);
+  const [modalFeedback, setModalFeedback] = useState<{
+    type: "ok" | "err";
+    text: string;
+    href?: string;
+  } | null>(null);
+  const [iaDraft, setIaDraft] = useState<{
+    id: string;
+    titol: string;
+    resum_tecnic?: string | null;
+    feines_historiques_similars?: number;
+    linies: { concepte: string; quantitat: number; preu_unitari?: number | null; total?: number | null }[];
+    total_estimat?: number | null;
+  } | null>(null);
   const [clients, setClients] = useState<any[]>([]);
   const [finques, setFinques] = useState<any[]>([]);
   const [operaris, setOperaris] = useState<any[]>([]);
@@ -41,6 +63,8 @@ export function CrearOTModal({ onClose, onSuccess }: CrearOTModalProps) {
   const [planols, setPlanols] = useState<any[]>([]);
   const [articles, setArticles] = useState<any[]>([]);
   const [eines, setEines] = useState<any[]>([]);
+  const [magatzems, setMagatzems] = useState<any[]>([]);
+  const [selectedMagatzemId, setSelectedMagatzemId] = useState<string>("");
   const [prioritat, setPrioritat] = useState<"BAIXA" | "NORMAL" | "ALTA" | "URGENT">("NORMAL");
 
   // Form state
@@ -49,7 +73,7 @@ export function CrearOTModal({ onClose, onSuccess }: CrearOTModalProps) {
     titol: "",
     descripcio: "",
     adreca: "",
-    client_id: "",
+    client_id: initialClientId || "",
     finca_id: "",
     cap_de_colla_id: "",
     vehicle_id: "",
@@ -183,15 +207,35 @@ export function CrearOTModal({ onClose, onSuccess }: CrearOTModalProps) {
       apiFetch<any>("/gestio/planols").catch(() => []),
       apiFetch<any>("/gestio/magatzem/articles").catch(() => []),
       apiFetch<any>("/gestio/magatzem/eines").catch(() => []),
+      apiFetch<any>("/gestio/magatzem/magatzems").catch(() => []),
+      apiFetch<any>("/gestio/configuracio/empresa").catch(() => null),
     ])
-      .then(([clientsData, operarisData, flotaData, planolsData, articlesData, einesData]) => {
-        setClients(Array.isArray(clientsData) ? clientsData : clientsData?.items || []);
-        setOperaris(Array.isArray(operarisData) ? operarisData : operarisData?.operaris || []);
-        setVehicles(Array.isArray(flotaData) ? flotaData : flotaData?.vehicles || []);
-        setPlanols(Array.isArray(planolsData) ? planolsData : []);
-        setArticles(Array.isArray(articlesData) ? articlesData : []);
-        setEines(Array.isArray(einesData) ? einesData : []);
-      })
+      .then(
+        ([
+          clientsData,
+          operarisData,
+          flotaData,
+          planolsData,
+          articlesData,
+          einesData,
+          magatzemsData,
+          empresaCfg,
+        ]) => {
+          setClients(Array.isArray(clientsData) ? clientsData : clientsData?.items || []);
+          setOperaris(Array.isArray(operarisData) ? operarisData : operarisData?.operaris || []);
+          setVehicles(Array.isArray(flotaData) ? flotaData : flotaData?.vehicles || []);
+          setPlanols(Array.isArray(planolsData) ? planolsData : []);
+          setArticles(Array.isArray(articlesData) ? articlesData : []);
+          setEines(Array.isArray(einesData) ? einesData : []);
+          const magList = Array.isArray(magatzemsData)
+            ? magatzemsData
+            : magatzemsData?.magatzems || [];
+          setMagatzems(magList);
+          setCopilotActiu(
+            Boolean(empresaCfg?.feature_copilot_ia === true && empresaCfg?.node_ia_actiu === true)
+          );
+        }
+      )
       .catch(console.error);
   }, []);
 
@@ -244,9 +288,13 @@ export function CrearOTModal({ onClose, onSuccess }: CrearOTModalProps) {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setModalFeedback(null);
     const adrecaNet = formData.adreca.trim();
     if (!adrecaNet) {
-      alert("L'adreça o coordenades GPS de l'obra és obligatòria.");
+      setModalFeedback({
+        type: "err",
+        text: "L'adreça o coordenades GPS de l'obra és obligatòria.",
+      });
       return;
     }
     setLoading(true);
@@ -281,46 +329,159 @@ export function CrearOTModal({ onClose, onSuccess }: CrearOTModalProps) {
         operaris_ids: allOperarisIds.length > 0 ? allOperarisIds : null,
         finca_id: formData.finca_id ? formData.finca_id : null,
         eina_ids: selectedEinaIds.length > 0 ? selectedEinaIds : null,
+        magatzem_id: selectedMagatzemId || null,
+        linies_picking:
+          liniesPicking.length > 0
+            ? liniesPicking.map((linia) => ({
+                article_id: linia.article_id,
+                quantitat_prevista: linia.quantitat,
+                magatzem_id: selectedMagatzemId || null,
+              }))
+            : null,
       };
 
-      // 1. Create OT directly with planol_id, eina_ids and schedule
-      const createdOT = await apiFetch<any>("/gestio/feines", {
+      // Alta atòmica de la tasca amb Fulla de Picking i reserva d'estoc a PG + Disc Sobirà
+      await apiFetch<any>("/gestio/feines", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
 
-      // 2. Create Fulla de Picking if materials assigned
-      if (liniesPicking.length > 0) {
-        const createdPick = await apiFetch<any>("/gestio/magatzem/picking", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            ordre_treball_id: createdOT.id,
-            vehicle_id: createdOT.vehicle_id,
-          }),
-        });
-
-        // 3. Insert Picking Lines
-        for (const linia of liniesPicking) {
-          await apiFetch(`/gestio/magatzem/picking/${createdPick.id}/linies`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              article_id: linia.article_id,
-              quantitat_prevista: linia.quantitat,
-            }),
-          });
-        }
-      }
-
-      alert("Ordre de treball i recursos assignats amb èxit!");
       if (onSuccess) onSuccess();
       onClose();
     } catch (err: any) {
-      alert(`Error: ${err.message}`);
+      setModalFeedback({
+        type: "err",
+        text: err?.message || "No s'ha pogut generar l'ordre de treball.",
+      });
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleGenerarPressupost = async () => {
+    setModalFeedback(null);
+    if (!formData.client_id) {
+      setModalFeedback({
+        type: "err",
+        text: "Selecciona un client abans de generar el pressupost.",
+      });
+      return;
+    }
+
+    const totalCalculat = liniesPicking.reduce((acc, linia) => {
+      const art = articles.find((a) => a.id === linia.article_id);
+      const pvp = art && art.preu_venda != null ? Number(art.preu_venda) : 0;
+      return acc + pvp * linia.quantitat;
+    }, 0);
+
+    setPressupostLoading(true);
+    try {
+      const suffix = Date.now().toString().slice(-4);
+      const numero = `PRE-${formData.codi}-${suffix}`.slice(0, 30);
+      const created = await apiFetch<any>("/gestio/pressupostos", {
+        method: "POST",
+        body: JSON.stringify({
+          client_id: formData.client_id,
+          numero,
+          total: Number(totalCalculat.toFixed(2)),
+        }),
+      });
+      setModalFeedback({
+        type: "ok",
+        text: `Pressupost ${created.numero} generat en estat ${created.estat} (${Number(created.total).toFixed(2)} €).`,
+        href: "/gestio/comptabilitat",
+      });
+    } catch (err: any) {
+      setModalFeedback({
+        type: "err",
+        text: err?.message || "Error en generar el pressupost.",
+      });
+    } finally {
+      setPressupostLoading(false);
+    }
+  };
+
+  const handlePressupostCopilot = async () => {
+    if (!copilotActiu) return;
+    setModalFeedback(null);
+    const basePrompt = [formData.titol.trim(), formData.descripcio.trim()]
+      .filter(Boolean)
+      .join(" — ");
+    if (!basePrompt) {
+      setModalFeedback({
+        type: "err",
+        text: "Escriu un títol o descripció tècnica perquè el Copilot IA redacti la proposta.",
+      });
+      return;
+    }
+
+    setCopilotLoading(true);
+    try {
+      const query = new URLSearchParams({ prompt: basePrompt });
+      if (formData.client_id) {
+        query.set("client_id", formData.client_id);
+      }
+      const res = await apiFetch<any>(`/gestio/pressupostos/generar-ia?${query.toString()}`, {
+        method: "POST",
+      });
+      if (res?.draft) {
+        setIaDraft({
+          id: res.id,
+          titol: res.draft.titol || "Esborrany Copilot",
+          resum_tecnic: res.draft.resum_tecnic,
+          feines_historiques_similars: res.draft.feines_historiques_similars,
+          linies: Array.isArray(res.draft.linies) ? res.draft.linies : [],
+          total_estimat: res.draft.total_estimat ?? null,
+        });
+        setModalFeedback({
+          type: "ok",
+          text: res.missatge || "Esborrany PENDENT_AUDITORIA generat al disc sobirà.",
+        });
+      }
+    } catch (err: any) {
+      setModalFeedback({
+        type: "err",
+        text: err?.message || "El Node IA local no respon (503).",
+      });
+    } finally {
+      setCopilotLoading(false);
+    }
+  };
+
+  const handleConfirmarEsborranyIA = async () => {
+    if (!iaDraft) return;
+    if (!formData.client_id) {
+      setModalFeedback({
+        type: "err",
+        text: "Selecciona un client per consolidar el pressupost oficial.",
+      });
+      return;
+    }
+    setPressupostLoading(true);
+    try {
+      const suffix = Date.now().toString().slice(-4);
+      const numero = `IA-${formData.codi}-${suffix}`.slice(0, 30);
+      const created = await apiFetch<any>("/gestio/pressupostos", {
+        method: "POST",
+        body: JSON.stringify({
+          client_id: formData.client_id,
+          numero,
+          total: Number(iaDraft.total_estimat ?? 0),
+        }),
+      });
+      setModalFeedback({
+        type: "ok",
+        text: `Pressupost ${created.numero} consolidat per a aprovació del client.`,
+        href: "/gestio/comptabilitat",
+      });
+    } catch (err: any) {
+      setModalFeedback({
+        type: "err",
+        text: err?.message || "Error consolidant el pressupost.",
+      });
+    } finally {
+      setPressupostLoading(false);
     }
   };
 
@@ -562,11 +723,31 @@ export function CrearOTModal({ onClose, onSuccess }: CrearOTModalProps) {
 
                 {/* Sub-secció Picking amb Autocompletat i Família */}
                 <div className="bg-surface-container-low p-md rounded-xl border border-outline-variant/40 space-y-md">
-                  <div className="flex items-center gap-2 border-b border-outline-variant/20 pb-2">
-                    <Package className="w-4 h-4 text-primary" />
-                    <h4 className="font-body-strong text-primary text-xs uppercase tracking-wider">
-                      Reserva de Materials & Control d&apos;Inventari
-                    </h4>
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-outline-variant/20 pb-2">
+                    <div className="flex items-center gap-2">
+                      <Package className="w-4 h-4 text-primary" />
+                      <h4 className="font-body-strong text-primary text-xs uppercase tracking-wider">
+                        Reserva de Materials &amp; Control d&apos;Inventari
+                      </h4>
+                    </div>
+                    {magatzems.length > 0 && (
+                      <div className="flex items-center gap-1.5">
+                        <Warehouse className="w-3.5 h-3.5 text-secondary shrink-0" />
+                        <select
+                          aria-label="Magatzem d'origen"
+                          value={selectedMagatzemId}
+                          onChange={(e) => setSelectedMagatzemId(e.target.value)}
+                          className="px-2 py-1 rounded-lg border border-outline-variant bg-surface-container-lowest text-[11px] text-on-surface outline-none focus:border-primary"
+                        >
+                          <option value="">Qualsevol magatzem amb estoc</option>
+                          {magatzems.map((m) => (
+                            <option key={m.id} value={m.id}>
+                              {m.nom}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
                   </div>
 
                   {/* Fila de selectors de materials: Família + Cerca autocompletable */}
@@ -601,7 +782,7 @@ export function CrearOTModal({ onClose, onSuccess }: CrearOTModalProps) {
                         </span>
                         {selectedArticle && (
                           <span className="text-[10px] font-mono font-bold text-secondary">
-                            Disp: {selectedArticle.estoc_real ?? 0} {selectedArticle.unitat_mesura}
+                            Disp: {Number(selectedArticle.estoc_disponible ?? selectedArticle.estoc_real ?? 0)} {selectedArticle.unitat_mesura}
                           </span>
                         )}
                       </label>
@@ -661,12 +842,12 @@ export function CrearOTModal({ onClose, onSuccess }: CrearOTModalProps) {
                                 <div className="text-right shrink-0">
                                   <span
                                     className={`font-mono text-[11px] font-bold ${
-                                      (art.estoc_real ?? 0) <= 0
+                                      Number(art.estoc_disponible ?? art.estoc_real ?? 0) <= 0
                                         ? "text-error"
                                         : "text-secondary"
                                     }`}
                                   >
-                                    {art.estoc_real ?? 0} {art.unitat_mesura}
+                                    {Number(art.estoc_disponible ?? art.estoc_real ?? 0)} {art.unitat_mesura}
                                   </span>
                                 </div>
                               </button>
@@ -682,7 +863,15 @@ export function CrearOTModal({ onClose, onSuccess }: CrearOTModalProps) {
                   </div>
 
                   {/* Fila 2: Detalls de l'article seleccionat i botó d'afegir */}
-                  {selectedArticle && (
+                  {selectedArticle && (() => {
+                    const estocDisp = Number(
+                      selectedArticle.estoc_disponible ?? selectedArticle.estoc_real ?? 0
+                    );
+                    const qtyJaAfegida = liniesPicking
+                      .filter((l) => l.article_id === selectedArticle.id)
+                      .reduce((sum, l) => sum + Number(l.quantitat || 0), 0);
+                    const excedeixEstoc = currentQty + qtyJaAfegida > estocDisp;
+                    return (
                     <div className="pt-2 border-t border-outline-variant/30 flex flex-wrap items-end gap-sm animate-in fade-in duration-100">
                       <div className="flex-1 min-w-[200px] p-2 rounded-lg bg-primary/5 border border-primary/20 flex items-center justify-between">
                         <div className="min-w-0">
@@ -693,8 +882,12 @@ export function CrearOTModal({ onClose, onSuccess }: CrearOTModalProps) {
                             [{selectedArticle.referencia_inventari}] {selectedArticle.nom}
                           </p>
                         </div>
-                        <span className="shrink-0 text-xs font-mono font-bold text-secondary ml-2">
-                          {selectedArticle.estoc_real ?? 0} {selectedArticle.unitat_mesura} disp.
+                        <span
+                          className={`shrink-0 text-xs font-mono font-bold ml-2 ${
+                            excedeixEstoc ? "text-error" : "text-secondary"
+                          }`}
+                        >
+                          {estocDisp} {selectedArticle.unitat_mesura} disp.
                         </span>
                       </div>
 
@@ -705,23 +898,31 @@ export function CrearOTModal({ onClose, onSuccess }: CrearOTModalProps) {
                         <input
                           type="number"
                           min="0.001"
+                          max={estocDisp > qtyJaAfegida ? estocDisp - qtyJaAfegida : undefined}
                           step="any"
                           value={currentQty}
                           onChange={(e) => setCurrentQty(parseFloat(e.target.value) || 0)}
-                          className="w-full p-sm rounded-lg border border-outline-variant bg-surface-container-lowest text-xs font-data-tabular text-center outline-none focus:border-primary font-bold"
+                          className={`w-full p-sm rounded-lg border bg-surface-container-lowest text-xs font-data-tabular text-center outline-none font-bold ${
+                            excedeixEstoc
+                              ? "border-error text-error"
+                              : "border-outline-variant focus:border-primary"
+                          }`}
                         />
                       </div>
 
                       <button
                         type="button"
                         onClick={addLiniaPicking}
-                        disabled={currentQty <= 0}
+                        disabled={currentQty <= 0 || excedeixEstoc}
+                        title={excedeixEstoc ? "Supera l'estoc disponible real" : undefined}
                         className="px-md py-sm rounded-lg bg-primary hover:bg-primary-container disabled:opacity-50 text-on-primary text-xs font-body-strong transition-colors flex items-center gap-1 h-[36px] cursor-pointer"
                       >
-                        <Plus className="w-4 h-4" /> Afegir a la Fulla
+                        <Plus className="w-4 h-4" />
+                        <span>{excedeixEstoc ? "Estoc insuficient" : "Afegir a la Fulla"}</span>
                       </button>
                     </div>
-                  )}
+                    );
+                  })()}
 
                   {/* Taula de materials afegits a la fulla de picking */}
                   {liniesPicking.length > 0 ? (
@@ -1090,7 +1291,6 @@ export function CrearOTModal({ onClose, onSuccess }: CrearOTModalProps) {
                     <span className="text-[10px] font-mono text-primary font-bold">Líder d&apos;intervenció</span>
                   </label>
                   <select
-                    required
                     value={formData.cap_de_colla_id}
                     onChange={(e) => {
                       const newCap = e.target.value;
@@ -1099,7 +1299,7 @@ export function CrearOTModal({ onClose, onSuccess }: CrearOTModalProps) {
                     }}
                     className="w-full p-sm bg-surface-container-low rounded-lg border border-outline-variant focus:border-primary outline-none text-sm"
                   >
-                    <option value="">Seleccionar Cap de Colla...</option>
+                    <option value="">Pendent d&apos;assignar</option>
                     {operaris.map((op) => (
                       <option key={op.id} value={op.id}>
                         {op.nom} {op.cognoms} — {op.rol}
@@ -1265,6 +1465,72 @@ export function CrearOTModal({ onClose, onSuccess }: CrearOTModalProps) {
                   </div>
                 </div>
 
+                {modalFeedback && (
+                  <div
+                    className={`p-sm rounded-lg text-xs border flex flex-col gap-1 ${
+                      modalFeedback.type === "ok"
+                        ? "bg-emerald-950/50 border-emerald-400/50 text-emerald-100"
+                        : "bg-rose-950/60 border-rose-400/60 text-rose-100"
+                    }`}
+                  >
+                    <div className="flex items-start gap-1.5">
+                      {modalFeedback.type === "ok" ? (
+                        <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-300 mt-0.5" />
+                      ) : (
+                        <AlertCircle className="w-4 h-4 shrink-0 text-rose-300 mt-0.5" />
+                      )}
+                      <span>{modalFeedback.text}</span>
+                    </div>
+                    {modalFeedback.href && (
+                      <Link
+                        href={modalFeedback.href}
+                        className="text-[11px] font-bold underline text-secondary-fixed self-end"
+                      >
+                        Veure a Comptabilitat →
+                      </Link>
+                    )}
+                  </div>
+                )}
+
+                {iaDraft && (
+                  <div className="p-sm rounded-lg bg-white/10 border border-white/20 space-y-xs text-xs">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-bold text-secondary-fixed">
+                        Esborrany HITL (PENDENT_AUDITORIA)
+                      </span>
+                      {iaDraft.total_estimat !== null && iaDraft.total_estimat !== undefined && (
+                        <span className="font-mono font-bold text-white">
+                          {Number(iaDraft.total_estimat).toFixed(2)} €
+                        </span>
+                      )}
+                    </div>
+                    {iaDraft.resum_tecnic && (
+                      <p className="text-[11px] text-white/90 leading-relaxed">
+                        {iaDraft.resum_tecnic}
+                      </p>
+                    )}
+                    <ul className="space-y-1 text-[11px] text-white/85">
+                      {iaDraft.linies.slice(0, 4).map((l, i) => (
+                        <li key={i} className="flex justify-between gap-2">
+                          <span className="truncate">{l.concepte}</span>
+                          <span className="font-mono shrink-0">
+                            {l.preu_unitari != null ? `${Number(l.preu_unitari).toFixed(2)} €` : "Sense preu"}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                    <button
+                      type="button"
+                      disabled={pressupostLoading}
+                      onClick={handleConfirmarEsborranyIA}
+                      className="w-full py-1.5 rounded-md bg-secondary-container text-on-secondary-container font-bold text-[11px] hover:opacity-90 cursor-pointer disabled:opacity-50"
+                    >
+                      Consolidar Pressupost Oficial
+                    </button>
+                  </div>
+                )}
+
+                {/* Botó Triple: Generar Tasca / Generar Pressupost / Pressupost Intel·ligent (Copilot) */}
                 <div className="pt-sm flex flex-col gap-sm">
                   <button
                     type="submit"
@@ -1274,39 +1540,55 @@ export function CrearOTModal({ onClose, onSuccess }: CrearOTModalProps) {
                   >
                     <Save className="w-4 h-4" />
                     <span>
-                      {loading ? "Validant..." : "Validar Ordre de Treball"}
+                      {loading ? "Generant tasca..." : "Generar Tasca"}
                     </span>
                   </button>
 
-                  <div className="grid grid-cols-2 gap-sm">
+                  <button
+                    type="button"
+                    disabled={pressupostLoading || loading}
+                    onClick={handleGenerarPressupost}
+                    className="w-full py-sm bg-white/15 hover:bg-white/25 text-white text-xs font-body-strong rounded-lg transition-colors flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
+                  >
+                    <Receipt className="w-3.5 h-3.5" />
+                    <span>{pressupostLoading ? "Generant..." : "Generar Pressupost"}</span>
+                  </button>
+
+                  {copilotActiu ? (
                     <button
                       type="button"
-                      onClick={onClose}
-                      className="py-sm bg-primary-container hover:bg-primary-container/80 text-white text-xs font-body-strong rounded-lg transition-colors"
-                    >
-                      Cancel·lar
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        alert(
-                          "El Copilot IA ha pre-calculat l'estimació de materials i hores segons l'històric de la finca."
-                        )
-                      }
-                      className="py-sm bg-white/10 hover:bg-white/20 text-secondary-fixed text-xs font-body-strong rounded-lg transition-colors flex items-center justify-center gap-1"
+                      disabled={copilotLoading || loading}
+                      onClick={handlePressupostCopilot}
+                      className="w-full py-sm bg-white/10 hover:bg-white/20 text-secondary-fixed text-xs font-body-strong rounded-lg border border-white/15 transition-colors flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
                     >
                       <Sparkles className="w-3.5 h-3.5" />
-                      <span>Copilot IA</span>
+                      <span>
+                        {copilotLoading
+                          ? "Consultant Node IA..."
+                          : "Pressupost Intel·ligent (Copilot)"}
+                      </span>
                     </button>
-                  </div>
+                  ) : (
+                    <div className="w-full py-xs px-sm bg-black/20 text-white/60 text-[11px] rounded-lg text-center border border-white/10">
+                      Copilot IA: Node IA Local desactivat
+                    </div>
+                  )}
+
+                  <button
+                    type="button"
+                    onClick={onClose}
+                    className="py-sm bg-primary-container hover:bg-primary-container/80 text-white text-xs font-body-strong rounded-lg transition-colors cursor-pointer"
+                  >
+                    Cancel·lar
+                  </button>
                 </div>
               </div>
             </div>
           </div>
         </form>
 
-        {/* Peu de la Modal: Barra fixa permanent amb botó per validar l'ordre de treball */}
-        <div className="px-xl py-md bg-surface-container-lowest border-t border-surface-container-high flex items-center justify-between shrink-0">
+        {/* Peu de la Modal: Barra fixa permanent amb accions del Botó Triple */}
+        <div className="px-xl py-md bg-surface-container-lowest border-t border-surface-container-high flex flex-wrap items-center justify-between gap-2 shrink-0">
           <div className="text-xs text-on-surface-variant flex items-center gap-2">
             <span className="font-mono text-primary font-bold">{formData.codi}</span>
             <span>•</span>
@@ -1314,7 +1596,7 @@ export function CrearOTModal({ onClose, onSuccess }: CrearOTModalProps) {
               {formData.adreca.trim() ? formData.adreca : "Adreça d'obra pendent"}
             </span>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2 flex-wrap">
             <button
               type="button"
               onClick={onClose}
@@ -1324,13 +1606,33 @@ export function CrearOTModal({ onClose, onSuccess }: CrearOTModalProps) {
               Cancel·lar
             </button>
             <button
+              type="button"
+              disabled={pressupostLoading || loading}
+              onClick={handleGenerarPressupost}
+              className="px-4 py-2 rounded-lg border border-outline-variant bg-surface-container-low hover:bg-surface-container text-primary font-body-strong text-xs flex items-center gap-1.5 cursor-pointer disabled:opacity-50 transition-all"
+            >
+              <Receipt className="w-3.5 h-3.5 text-secondary" />
+              <span>Generar Pressupost</span>
+            </button>
+            {copilotActiu && (
+              <button
+                type="button"
+                disabled={copilotLoading || loading}
+                onClick={handlePressupostCopilot}
+                className="px-4 py-2 rounded-lg bg-secondary-container text-on-secondary-container font-body-strong text-xs flex items-center gap-1.5 cursor-pointer disabled:opacity-50 hover:opacity-90 transition-all"
+              >
+                <Sparkles className="w-3.5 h-3.5" />
+                <span>{copilotLoading ? "IA..." : "Pressupost Intel·ligent"}</span>
+              </button>
+            )}
+            <button
               type="submit"
               form="form-crear-ot"
               disabled={loading}
               className="px-6 py-2.5 rounded-lg bg-primary hover:bg-primary/90 text-on-primary font-body-strong text-xs shadow-md flex items-center gap-2 cursor-pointer disabled:opacity-60 transition-all"
             >
               <Save className="w-4 h-4" />
-              <span>{loading ? "Validant..." : "Validar Ordre de Treball"}</span>
+              <span>{loading ? "Generant..." : "Generar Tasca"}</span>
             </button>
           </div>
         </div>

@@ -16,7 +16,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.network_utils import build_node_ia_headers, resolve_effective_node_url
-from app.models.models import ConsultaXatCopilot, Empresa, OrdreTreball, Usuari
+from app.models.models import ConsultaXatCopilot, Empresa, Usuari
+from app.services.sovereign_storage import SovereignStorageGateway
 from app.services.subagents.base import BaseSubagent
 from app.services.subagents.subagent_auditoria_marge import SubagentAuditoriaMarge
 from app.services.subagents.subagent_client_telegram import SubagentClientTelegram
@@ -224,6 +225,12 @@ class CopilotDispatcher:
                     "max_tokens": 450,
                 }
                 resp = await client.post(endpoint, json=payload, headers=headers)
+                if resp.status_code >= 500:
+                    raise httpx.HTTPStatusError(
+                        f"Node IA Local HTTP {resp.status_code}",
+                        request=resp.request,
+                        response=resp,
+                    )
                 if resp.status_code != 200:
                     logger.warning(f"LM Studio status {resp.status_code} a ronda {round_idx}: {resp.text}")
                     break
@@ -341,18 +348,60 @@ class CopilotDispatcher:
                 detail="Consulta no autoritzada per política de rols de seguretat",
             )
 
-        # ── 2. Dades de Context de Sessió i Empresa ───────────────────────────
+        # ── 2. Porta Estrica Zero-Storage / Túnel Obligatori (Principi V) ──────
         res_emp = await db.execute(select(Empresa).where(Empresa.id == empresa_id))
         empresa = res_emp.scalar_one_or_none()
-        empresa_nom = empresa.nom if empresa else "SEVALOR"
-        vertical_efectiva = (empresa.vertical if empresa else None) or vertical
+        raw_node_url = getattr(empresa, "node_ia_url", None) if empresa else None
+        raw_disc_url = getattr(empresa, "disc_dur_url", None) if empresa else None
+        node_url = raw_node_url.strip() if isinstance(raw_node_url, str) and raw_node_url.strip() else None
+        disc_url = raw_disc_url.strip() if isinstance(raw_disc_url, str) and raw_disc_url.strip() else None
+        feature_on = bool(empresa and getattr(empresa, "feature_copilot_ia", False))
+        node_on = bool(empresa and getattr(empresa, "node_ia_actiu", False))
 
-        # Obtenir nom d'usuari si no ha estat passat
-        if not usuari_nom:
-            res_u = await db.execute(select(Usuari).where(Usuari.id == usuari_id))
-            u_db = res_u.scalar_one_or_none()
-            if u_db:
-                usuari_nom = f"{u_db.nom or ''} {u_db.cognoms or ''}".strip() or u_db.email
+        if not empresa or not feature_on or not node_on or not (node_url or disc_url):
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={
+                    "code": "COPILOT_DESACTIVAT",
+                    "message": "El Copilot IA local està desactivat o sense túnel configurat per a aquesta empresa. Zero fallback a Hetzner.",
+                },
+            )
+
+        # ── 3. Dades de Context des del Disc Dur Sobirà de l'Empresa ──────────
+        config_docs = await SovereignStorageGateway.llegir_entitats_json(
+            db, empresa_id, "configuracio"
+        )
+        emp_cfg = next((c for c in config_docs if str(c.get("id")) == str(empresa_id)), None)
+        empresa_nom = (
+            (emp_cfg or {}).get("nom")
+            or (empresa.nom if empresa and empresa.nom and not str(empresa.nom).startswith("Tenant ") else None)
+            or "SEVALOR"
+        )
+        vertical_efectiva = (
+            (emp_cfg or {}).get("vertical")
+            or (empresa.vertical if empresa else None)
+            or vertical
+        )
+
+        # Obtenir nom d'usuari des del disc dur sobirà (zero PII a Hetzner)
+        if not usuari_nom or "@" in usuari_nom and usuari_nom.endswith("@sovereign.local"):
+            operaris_docs = await SovereignStorageGateway.llegir_entitats_json(
+                db, empresa_id, "operaris"
+            )
+            matched_op = next(
+                (o for o in operaris_docs if str(o.get("id")) == str(usuari_id)),
+                None,
+            )
+            if not matched_op:
+                matched_op = next(
+                    (c for c in config_docs if str(c.get("id")) == str(usuari_id)),
+                    None,
+                )
+            if matched_op:
+                usuari_nom = (
+                    f"{matched_op.get('nom') or ''} {matched_op.get('cognoms') or ''}".strip()
+                    or str(matched_op.get("rol") or rol_usuari)
+                )
             else:
                 usuari_nom = rol_usuari
 
@@ -364,26 +413,22 @@ class CopilotDispatcher:
         dias_setmana = ["Dilluns", "Dimarts", "Dimecres", "Dijous", "Divendres", "Dissabte", "Diumenge"]
         ara_str = f"{ara.strftime('%Y-%m-%d %H:%M')} ({dias_setmana[ara.weekday()]})"
 
-        # Context addicional si hi ha OT activa a la pantalla
+        # Context addicional des del disc dur sobirà (06_ordres_treball/actives_buffer)
         context_extra_str = ""
         if context_id and context_id.strip():
-            try:
-                ot_uuid = uuid.UUID(context_id.strip())
-                res_ot = await db.execute(
-                    select(OrdreTreball).where(
-                        OrdreTreball.id == ot_uuid, OrdreTreball.empresa_id == empresa_id
-                    )
+            ctx_clean = context_id.strip()
+            ots_docs = await SovereignStorageGateway.llegir_entitats_json(
+                db, empresa_id, "ots_actives"
+            )
+            ot_obj = next((o for o in ots_docs if str(o.get("id")) == ctx_clean), None)
+            if ot_obj:
+                context_extra_str = (
+                    f"\nCONTEXT DE LA FEINA ACTIVA: L'usuari es troba a l'ordre {ot_obj.get('codi', ctx_clean)} "
+                    f"('{ot_obj.get('titol', '')}'), estat: {ot_obj.get('estat', 'N/D')}, "
+                    f"adreça: {ot_obj.get('adreca') or 'Sense adreça'}."
                 )
-                ot_obj = res_ot.scalar_one_or_none()
-                if ot_obj:
-                    context_extra_str = (
-                        f"\nCONTEXT DE LA FEINA ACTIVA: L'usuari es troba a l'ordre {ot_obj.codi} "
-                        f"('{ot_obj.titol}'), estat: {ot_obj.estat}, adreça: {ot_obj.adreca or 'Sense adreça'}."
-                    )
-            except Exception:
-                pass
 
-        # ── 3. Routing Ponderat Top-2 Subagents ────────────────────────────────
+        # ── 4. Routing Ponderat Top-2 Subagents ────────────────────────────────
         scored = self.score_subagents(pregunta, rol_usuari)
         primary_subagent = scored[0][0]
         secondary_subagent = scored[1][0] if len(scored) > 1 and scored[1][1] > 0.0 else None
@@ -392,13 +437,14 @@ class CopilotDispatcher:
             primary_subagent, secondary_subagent, rol_usuari
         )
 
-        # ── 4. Injecció Dinàmica de Context al System Prompt ───────────────────
+        # ── 5. Injecció Dinàmica de Context i System Prompt Sobirà ─────────────
         anti_hallucination = (
             "INSTRUCCIÓ OBLIGATÒRIA ZERO-HALLUCINATION: Basa les respostes STRICTAMENT en les dades "
-            "obtingudes a través de les eines de consulta disponibles (ordres de treball, horaris d'equip, "
-            "estoc de magatzem, vehicles o clients). Si la pregunta de l'usuari fa referència a informació operativa, "
-            "crida SEMPRE l'eina pertinent abans de contestar. No inventis mai matrícules, codis ni xifres. "
-            "Si l'eina no troba registres, informa amablement que no s'ha trobat informació a la base de dades."
+            "obtingudes a través de les eines de consulta disponibles al disc dur de l'empresa "
+            "(ordres de treball, horaris d'equip, estoc de magatzem, vehicles o clients). Si la pregunta "
+            "fa referència a informació operativa, crida SEMPRE l'eina pertinent abans de contestar. "
+            "No inventis mai matrícules, codis ni xifres. Si l'eina no troba registres, informa amablement "
+            "que no s'ha trobat informació al disc dur de l'empresa."
         )
 
         system_content = (
@@ -409,30 +455,27 @@ class CopilotDispatcher:
             f"{context_extra_str}\n"
             f"{anti_hallucination}\n"
         )
-        if empresa and empresa.agent_prompt_system:
-            system_content += f"DIRECTRIUS DE L'EMPRESA: {empresa.agent_prompt_system}\n"
-
-        # ── 5. Intent d'Inferència amb Ordinador Local de l'Empresa ─────────────
-        # NORMA CONSTITUCIONAL: Zero fallback a Hetzner. La IA només corre al node dedicat de l'empresa.
-        node_url = (
-            empresa.node_ia_url.strip()
-            if (empresa and empresa.node_ia_url and empresa.node_ia_url.strip())
-            else None
+        disk_prompt = await SovereignStorageGateway.llegir_text_fitxer(
+            db, empresa_id, "copilot_prompt", "system_prompt.txt"
         )
-        es_actiu = bool(
-            empresa
-            and getattr(empresa, "feature_copilot_ia", True)
-            and empresa.node_ia_actiu
-            and node_url
+        effective_company_prompt = (
+            (agent_prompt_system or "").strip()
+            or (disk_prompt or "").strip()
+            or (empresa.agent_prompt_system or "").strip()
         )
+        if effective_company_prompt:
+            system_content += f"DIRECTRIUS DE L'EMPRESA: {effective_company_prompt}\n"
 
+        # ── 6. Inferència Obligatòria amb Ordinador Local de l'Empresa ──────────
+        # NORMA CONSTITUCIONAL: Zero fallback a Hetzner. Si el túnel HTTP no respon -> 503.
+        es_actiu = True
         resposta_ia: Optional[str] = None
         tool_name: Optional[str] = None
         tool_args: Optional[dict] = None
         tool_result: Optional[dict] = None
         selected_subagent: BaseSubagent = primary_subagent
 
-        if es_actiu and node_url:
+        if node_url and node_url.startswith(("http://", "https://")):
             effective_url = resolve_effective_node_url(node_url) or node_url
             base_url = effective_url.rstrip("/")
             endpoint = f"{base_url}/chat/completions" if base_url.endswith("/v1") else f"{base_url}/v1/chat/completions"
@@ -463,11 +506,34 @@ class CopilotDispatcher:
                     historial=historial,
                     vault_token=getattr(empresa, "vault_token", None),
                 )
-            except httpx.TimeoutException:
-                logger.warning(f"Timeout (15s) connectant a LM Studio a {endpoint}. Fallback sobirà activat.")
-                es_timeout = True
-            except Exception as e:
-                logger.warning(f"Error connectant a LM Studio a {endpoint}: {e}")
+            except HTTPException:
+                raise
+            except (httpx.TimeoutException, httpx.RequestError, httpx.HTTPStatusError) as exc:
+                logger.warning("Túnel Copilot/LM Studio fora de línia a %s: %s", endpoint, exc)
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail={
+                        "code": "NODE_IA_OFFLINE",
+                        "message": "El node d'IA local de l'empresa no respon (túnel offline o timeout). Zero fallback a Hetzner.",
+                    },
+                )
+            except Exception as exc:
+                logger.warning("Error inesperat connectant amb LM Studio a %s: %s", endpoint, exc)
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail={
+                        "code": "NODE_IA_OFFLINE",
+                        "message": "No s'ha pogut completar la inferència al node local de l'empresa.",
+                    },
+                )
+        elif disc_url and disc_url.startswith(("http://", "https://")):
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={
+                    "code": "NODE_IA_OFFLINE",
+                    "message": "L'empresa utilitza disc remot HTTP sense URL de túnel LM Studio configurada (node_ia_url).",
+                },
+            )
 
         # ── 6. Resolució Final i Grounding Fallback ─────────────────────────────
         enllacos: List[dict] = []
@@ -549,7 +615,27 @@ class CopilotDispatcher:
 
         elapsed_ms = int((time.perf_counter() - t_start) * 1000)
 
-        # ── 7. Persistència de l'Auditoria a PostgreSQL (Zero Mock) ───────────
+        # ── 7. Persistència al Disc Sobirà (copilot_feedback) i Auditoria ───────
+        try:
+            await SovereignStorageGateway.desar_entitat_json(
+                db=db,
+                empresa_id=empresa_id,
+                categoria="copilot_feedback",
+                item_id=f"chat_{uuid.uuid4().hex[:12]}",
+                dades={
+                    "data": datetime.now(timezone.utc).isoformat(),
+                    "usuari_id": str(usuari_id) if usuari_id else None,
+                    "rol": rol_usuari,
+                    "subagent_utilitzat": selected_subagent.id,
+                    "tool_utilitzada": tool_name,
+                    "pregunta": pregunta,
+                    "resposta": resposta,
+                    "context_id": context_id,
+                },
+            )
+        except Exception as exc:
+            logger.warning("No s'ha pogut desar conversa copilot al disc de l'empresa: %s", exc)
+
         try:
             val_usuari_id = None
             if usuari_id:

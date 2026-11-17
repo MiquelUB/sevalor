@@ -41,20 +41,21 @@ export default function NouContractePage() {
 
   useEffect(() => {
     if (formData.client_id) {
-      // Fetch finques for this client
       const fetchFinques = async () => {
         try {
-          const res = await fetch(`${getApiBaseUrl()}/gestio/clients/${formData.client_id}`, {
+          const res = await fetch(`${getApiBaseUrl()}/gestio/clients/${formData.client_id}/finques`, {
             headers: getAuthHeader(),
           });
           if (res.ok) {
             const data = await res.json();
-            // Assumint que el detall del client retorna "adreces" o "finques"
-            if (data.adreces) {
-              setFinques(data.adreces);
-            }
+            setFinques(Array.isArray(data) ? data : (data.finques || data.adreces || []));
+          } else {
+            setFinques([]);
           }
-        } catch (e) { console.error(e) }
+        } catch (e) {
+          console.error(e);
+          setFinques([]);
+        }
       };
       fetchFinques();
     } else {
@@ -72,7 +73,7 @@ export default function NouContractePage() {
         import_anual: Number(formData.import_anual)
       };
       
-      const res = await fetch(getApiBaseUrl() + "/gestio/contractes", {
+      const res = await fetch(getApiBaseUrl() + "/gestio/contractes/", {
         method: "POST",
         headers: {
           ...getAuthHeader(),
@@ -112,7 +113,7 @@ export default function NouContractePage() {
       <div className="flex items-center justify-between border-b border-slate-200 dark:border-slate-800 pb-4">
         <div>
           <h1 className="text-2xl font-bold text-slate-900 dark:text-white flex items-center gap-2">
-            <Briefcase className="w-6 h-6 text-primary-600" />
+            <Briefcase className="w-6 h-6 text-primary" />
             Nou Contracte
           </h1>
           <p className="text-sm text-slate-500 mt-1">Donar d'alta un nou acord de manteniment preventiu</p>
@@ -131,8 +132,8 @@ export default function NouContractePage() {
               <select
                 required
                 value={formData.client_id}
-                onChange={e => setFormData({...formData, client_id: e.target.value})}
-                className="w-full bg-slate-50 border border-slate-300 text-slate-900 text-sm rounded-lg focus:ring-primary-500 focus:border-primary-500 block p-2.5 dark:bg-slate-800 dark:border-slate-600 dark:text-white"
+                onChange={e => setFormData({ ...formData, client_id: e.target.value, finques_ids: [] })}
+                className="w-full bg-slate-50 border border-slate-300 text-slate-900 text-sm rounded-lg focus:ring-primary focus:border-primary block p-2.5 dark:bg-slate-800 dark:border-slate-600 dark:text-white"
               >
                 <option value="" disabled>Selecciona un client...</option>
                 {clients.map(c => (
@@ -232,11 +233,15 @@ export default function NouContractePage() {
                       type="checkbox"
                       checked={formData.finques_ids.includes(f.id)}
                       onChange={() => toggleFinca(f.id)}
-                      className="mt-0.5 w-4 h-4 text-primary-600 rounded focus:ring-primary-500 dark:focus:ring-primary-600 dark:bg-slate-700 dark:border-slate-600"
+                      className="mt-0.5 w-4 h-4 text-primary rounded focus:ring-primary dark:bg-slate-700 dark:border-slate-600"
                     />
                     <div className="flex flex-col">
-                      <span className="text-sm font-medium text-slate-900 dark:text-white leading-tight">{f.nom_via} {f.numero}</span>
-                      <span className="text-xs text-slate-500">{f.municipi} ({f.provincia})</span>
+                      <span className="text-sm font-medium text-slate-900 dark:text-white leading-tight">
+                        {f.nom || f.nom_via || "Finca"}
+                      </span>
+                      <span className="text-xs text-slate-500">
+                        {f.adreca || `${f.municipi || ""} ${f.referencia_cadastral || ""}`.trim() || "Sense adreça"}
+                      </span>
                     </div>
                   </label>
                 ))}
@@ -253,7 +258,7 @@ export default function NouContractePage() {
               rows={3}
               value={formData.observacions}
               onChange={e => setFormData({...formData, observacions: e.target.value})}
-              className="w-full bg-slate-50 border border-slate-300 text-slate-900 text-sm rounded-lg focus:ring-primary-500 focus:border-primary-500 block p-2.5 dark:bg-slate-800 dark:border-slate-600 dark:text-white"
+              className="w-full bg-slate-50 border border-slate-300 text-slate-900 text-sm rounded-lg focus:ring-primary focus:border-primary block p-2.5 dark:bg-slate-800 dark:border-slate-600 dark:text-white"
               placeholder="Notes addicionals sobre el contracte..."
             />
           </div>
@@ -264,7 +269,7 @@ export default function NouContractePage() {
           <button
             type="submit"
             disabled={loading}
-            className="bg-primary-600 hover:bg-primary-700 text-white px-6 py-2.5 rounded-lg font-bold flex items-center gap-2 transition-colors disabled:opacity-50"
+            className="bg-primary hover:opacity-90 text-white px-6 py-2.5 rounded-lg font-bold flex items-center gap-2 transition-opacity disabled:opacity-50"
           >
             <Save className="w-5 h-5" />
             {loading ? "Desant..." : "Crear Contracte"}

@@ -17,7 +17,7 @@ import secrets
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, cast
+from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple, cast
 
 import httpx
 from fastapi import HTTPException, status
@@ -26,7 +26,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.core.network_utils import resolve_effective_node_url
+from app.core.network_utils import get_candidate_node_urls, resolve_effective_node_url
 from app.models.models import Empresa
 
 logger = logging.getLogger("sevalor.sovereign_storage")
@@ -98,7 +98,69 @@ def inicialitzar_arbre_carpetes_disc(root_path: str | Path) -> List[str]:
     base = Path(root_path).resolve()
     creades: List[str] = []
     for sub in sorted(set(MAPA_CARPETES_CLIENT.values())):
-        folder = base / sub
+        folder = (base / sub).resolve()
+        if not folder.is_relative_to(base):
+            raise HTTPException(status_code=400, detail="Ruta de subcarpeta fora del disc autoritzat.")
+        folder.mkdir(parents=True, exist_ok=True)
+        creades.append(str(folder))
+    return creades
+
+
+CARPETES_SUPERADMIN: List[str] = [
+    "01_tenants_b2b/fitxes_empreses",
+    "01_tenants_b2b/llicencies_i_contractes",
+    "02_facturacio_saas/factures_b2b_json",
+    "02_facturacio_saas/factures_b2b_pdf",
+    "02_facturacio_saas/factures_b2b_xml",
+    "03_crm_comercial/leads",
+    "03_crm_comercial/oportunitats",
+    "03_crm_comercial/activitats",
+    "04_rascador_prospeccio/tasques",
+    "04_rascador_prospeccio/candidats",
+    "04_rascador_prospeccio/criteris_feedback",
+    "04_rascador_prospeccio/exclusions_rgpd",
+    "05_correu_i_suport/missatges",
+    "05_correu_i_suport/tiquets_suport",
+    "06_telemetria_i_seguretat/auditoria",
+    "06_telemetria_i_seguretat/alertes_seguretat",
+    "06_telemetria_i_seguretat/certificats_baixa",
+    "07_copilot_superadmin/prompt_sistema",
+    "07_copilot_superadmin/memoria_ia",
+    "08_backups_superadmin/backups_locals",
+]
+
+MAPA_CARPETES_SUPERADMIN: Dict[str, str] = {
+    "tenants_fitxes": "01_tenants_b2b/fitxes_empreses",
+    "tenants_llicencies": "01_tenants_b2b/llicencies_i_contractes",
+    "saas_factures_json": "02_facturacio_saas/factures_b2b_json",
+    "saas_factures_pdf": "02_facturacio_saas/factures_b2b_pdf",
+    "saas_factures_xml": "02_facturacio_saas/factures_b2b_xml",
+    "crm_leads": "03_crm_comercial/leads",
+    "crm_oportunitats": "03_crm_comercial/oportunitats",
+    "crm_activitats": "03_crm_comercial/activitats",
+    "rascador_tasques": "04_rascador_prospeccio/tasques",
+    "rascador_candidats": "04_rascador_prospeccio/candidats",
+    "rascador_criteris": "04_rascador_prospeccio/criteris_feedback",
+    "rascador_exclusions": "04_rascador_prospeccio/exclusions_rgpd",
+    "correu_missatges": "05_correu_i_suport/missatges",
+    "suport_tiquets": "05_correu_i_suport/tiquets_suport",
+    "auditoria": "06_telemetria_i_seguretat/auditoria",
+    "alertes_seguretat": "06_telemetria_i_seguretat/alertes_seguretat",
+    "baixes_rgpd": "06_telemetria_i_seguretat/certificats_baixa",
+    "copilot_prompt": "07_copilot_superadmin/prompt_sistema",
+    "copilot_memoria": "07_copilot_superadmin/memoria_ia",
+    "backups": "08_backups_superadmin/backups_locals",
+}
+
+
+def inicialitzar_arbre_carpetes_superadmin(root_path: str | Path) -> List[str]:
+    """Crea físicament les 20 carpetes oficials del Disc Dur dedicat del Superadmin."""
+    base = Path(root_path).resolve()
+    creades: List[str] = []
+    for sub in sorted(set(MAPA_CARPETES_SUPERADMIN.values())):
+        folder = (base / sub).resolve()
+        if not folder.is_relative_to(base):
+            raise HTTPException(status_code=400, detail="Ruta de carpeta Superadmin invàlida.")
         folder.mkdir(parents=True, exist_ok=True)
         creades.append(str(folder))
     return creades
@@ -420,6 +482,84 @@ class SovereignStorageGateway:
             }
 
     @classmethod
+    def _sign_meta(
+        cls,
+        empresa_id: str | uuid.UUID,
+        categoria: str,
+        subcarpeta: str,
+        item_id: str,
+    ) -> str:
+        """Signatura HMAC-SHA256 anti-barreges per verificar pertinença física al tenant."""
+        key = settings.SECRET_KEY.encode("utf-8")
+        msg = f"{str(empresa_id)}|{categoria}|{subcarpeta}|{item_id}".encode("utf-8")
+        return hmac.new(key, msg, hashlib.sha256).hexdigest()
+
+    @classmethod
+    def _filtrar_entitats_verificades(
+        cls,
+        empresa_id: str | uuid.UUID,
+        categoria: str,
+        subcarpeta: str,
+        registres: Any,
+    ) -> List[Dict[str, Any]]:
+        """
+        Escut Anti-Barreges: rebutja qualsevol fitxa JSON sense `_sovereign_meta`,
+        amb `empresa_id` diferent o amb `hmac_tenant` manipulada o absent.
+        """
+        if not isinstance(registres, list):
+            return []
+        emp_str = str(empresa_id)
+        verificades: List[Dict[str, Any]] = []
+        for reg in registres:
+            if not isinstance(reg, dict):
+                continue
+            meta = reg.get("_sovereign_meta")
+            if not isinstance(meta, dict):
+                logger.warning(
+                    "Escut Anti-Barreges: registre sense _sovereign_meta rebutjat (empresa=%s, cat=%s).",
+                    emp_str,
+                    categoria,
+                )
+                continue
+            if str(meta.get("empresa_id", "")) != emp_str:
+                logger.warning(
+                    "Escut Anti-Barreges: possible barreja cross-tenant rebutjada (esperat=%s, trobat=%s, cat=%s).",
+                    emp_str,
+                    meta.get("empresa_id"),
+                    categoria,
+                )
+                continue
+            meta_sub = meta.get("subcarpeta")
+            if meta_sub and meta_sub != subcarpeta:
+                logger.warning(
+                    "Escut Anti-Barreges: subcarpeta discordant rebutjada (esperat=%s, trobat=%s).",
+                    subcarpeta,
+                    meta_sub,
+                )
+                continue
+            sig = meta.get("hmac_tenant")
+            item_id = meta.get("item_id")
+            meta_cat = str(meta.get("categoria") or categoria)
+            if not isinstance(sig, str) or not sig or not isinstance(item_id, str) or not item_id:
+                logger.warning(
+                    "Escut Anti-Barreges: signatura HMAC absent o incompleta rebutjada (empresa=%s, cat=%s).",
+                    emp_str,
+                    categoria,
+                )
+                continue
+            expected_sig = cls._sign_meta(emp_str, meta_cat, subcarpeta, item_id)
+            if not hmac.compare_digest(sig, expected_sig):
+                logger.warning(
+                    "Escut Anti-Barreges: signatura HMAC invàlida rebutjada (empresa=%s, cat=%s, item=%s).",
+                    emp_str,
+                    categoria,
+                    item_id,
+                )
+                continue
+            verificades.append(reg)
+        return verificades
+
+    @classmethod
     async def desar_entitat_json(
         cls,
         db: AsyncSession,
@@ -436,12 +576,15 @@ class SovereignStorageGateway:
         id_net = sanititzar_nom(str(item_id))
         mode, base_target, secret = await cls.resoldre_desti_disc_empresa(db, empresa_id)
 
+        hmac_sig = cls._sign_meta(empresa_id, categoria, subcarpeta, id_net)
         payload_complet = {
             **dades,
             "_sovereign_meta": {
                 "empresa_id": str(empresa_id),
                 "categoria": categoria,
                 "subcarpeta": subcarpeta,
+                "item_id": id_net,
+                "hmac_tenant": hmac_sig,
                 "synced_at": datetime.now(timezone.utc).isoformat(),
             },
         }
@@ -492,7 +635,7 @@ class SovereignStorageGateway:
                 content_type="application/json",
             )
             try:
-                from app.workers.tasks import drenar_cua_transit_task  # type: ignore
+                from app.workers.tasks import drenar_cua_transit_task
 
                 drenar_cua_transit_task.delay(str(empresa_id))
             except Exception:
@@ -506,13 +649,13 @@ class SovereignStorageGateway:
         empresa_id: str | uuid.UUID,
         categoria: str,
     ) -> List[Dict[str, Any]]:
-        """Llegeix totes les fitxes JSON d'una carpeta del disc dur del client."""
+        """Llegeix totes les fitxes JSON verificades (HMAC + tenant) d'una carpeta del disc dur del client."""
         subcarpeta = MAPA_CARPETES_CLIENT.get(categoria, categoria)
         mode, base_target, secret = await cls.resoldre_desti_disc_empresa(db, empresa_id)
 
         if mode == "LOCAL_FS":
             folder = (Path(base_target) / subcarpeta).resolve()
-            if not folder.exists():
+            if not folder.is_relative_to(Path(base_target).resolve()) or not folder.exists():
                 return []
             registres: List[Dict[str, Any]] = []
             for fp in sorted(folder.glob("*.json"), key=os.path.getmtime, reverse=True):
@@ -521,15 +664,22 @@ class SovereignStorageGateway:
                         registres.append(json.load(f))
                 except Exception:
                     continue
-            return registres
+            return cls._filtrar_entitats_verificades(empresa_id, categoria, subcarpeta, registres)
 
         url = f"{base_target}/entitats/{subcarpeta}"
         try:
             async with httpx.AsyncClient(timeout=8.0) as client:
                 resp = await client.get(url, headers={"X-Vault-Token": secret or ""})
+                if resp.status_code in (401, 403):
+                    raise HTTPException(
+                        status_code=resp.status_code,
+                        detail="Token Vault rebutjat per l'agent del disc dur (HTTP 403).",
+                    )
                 if resp.status_code == 200:
                     raw_data = resp.json()
-                    return cast(list[dict[str, Any]], raw_data) if isinstance(raw_data, list) else []
+                    return cls._filtrar_entitats_verificades(
+                        empresa_id, categoria, subcarpeta, raw_data
+                    )
                 return []
         except httpx.RequestError:
             raise HTTPException(
@@ -539,6 +689,42 @@ class SovereignStorageGateway:
                     "message": "El disc dur dedicat de l'empresa no respon.",
                 },
             )
+
+    @classmethod
+    async def llegir_text_fitxer(
+        cls,
+        db: AsyncSession,
+        empresa_id: str | uuid.UUID,
+        categoria: str,
+        nom_fitxer: str,
+    ) -> Optional[str]:
+        """Llegeix de forma segura un fitxer de text (p.ex. system_prompt.txt, protocols .md) del disc dur del client."""
+        subcarpeta = MAPA_CARPETES_CLIENT.get(categoria, categoria)
+        try:
+            nom_net = sanititzar_nom(nom_fitxer)
+        except ValueError:
+            return None
+
+        mode, base_target, secret = await cls.resoldre_desti_disc_empresa(db, empresa_id)
+        if mode == "LOCAL_FS":
+            base_resolved = Path(base_target).resolve()
+            target = (base_resolved / subcarpeta / nom_net).resolve()
+            if not target.is_relative_to(base_resolved) or not target.is_file():
+                return None
+            try:
+                return target.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                return None
+
+        url = f"{base_target}/fitxers/{subcarpeta}/{nom_net}"
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                resp = await client.get(url, headers={"X-Vault-Token": secret or ""})
+                if resp.status_code == 200:
+                    return resp.content.decode("utf-8", errors="replace")
+                return None
+        except httpx.RequestError:
+            return None
 
     @classmethod
     async def pujar_fitxer_binari(
@@ -603,7 +789,7 @@ class SovereignStorageGateway:
                 content_type=content_type,
             )
             try:
-                from app.workers.tasks import drenar_cua_transit_task  # type: ignore
+                from app.workers.tasks import drenar_cua_transit_task
 
                 drenar_cua_transit_task.delay(str(empresa_id))
             except Exception:
@@ -809,7 +995,7 @@ class SovereignStorageGateway:
                     rel_path = rel_path[len(str(empresa_id)) + 1 :]
                 url = f"{base_target}/fitxers/{rel_path}"
 
-                async def _streamer():
+                async def _streamer() -> AsyncGenerator[bytes, None]:
                     async with httpx.AsyncClient(timeout=30.0) as client:
                         async with client.stream(
                             "GET", url, headers={"X-Vault-Token": secret or ""}
@@ -838,25 +1024,32 @@ class SovereignStorageGateway:
         db: AsyncSession,
         empresa: Empresa,
         boss: Optional[Any] = None,
+        *,
+        dades_empresa_reals: Optional[Dict[str, Any]] = None,
+        dades_boss_reals: Optional[Dict[str, Any]] = None,
+        agent_prompt_system: Optional[str] = None,
     ) -> Dict[str, str]:
         """Bolca la fitxa d'identitat camaleònica, la fitxa del Boss i el system_prompt.txt al disc del client."""
         rutes: Dict[str, str] = {}
-        dades_empresa = {
+        reals_emp = dades_empresa_reals or {}
+        dades_empresa: Dict[str, Any] = {
             "id": str(empresa.id),
-            "nom": empresa.nom,
-            "nif": empresa.nif,
-            "adreca": empresa.adreca,
-            "subdomini": empresa.subdomini,
-            "domini_custom": empresa.domini_custom,
-            "vertical": empresa.vertical,
-            "pla_subscripcio": empresa.pla_subscripcio,
-            "primari_hsl": empresa.primari_hsl,
-            "secundari_hsl": empresa.secundari_hsl,
-            "accent_hsl": empresa.accent_hsl,
-            "logotip_path": empresa.logotip_path,
-            "node_ia_url": empresa.node_ia_url,
-            "disc_dur_url": empresa.disc_dur_url,
+            "nom": reals_emp.get("nom", empresa.nom),
+            "nif": reals_emp.get("nif", empresa.nif),
+            "adreca": reals_emp.get("adreca", empresa.adreca),
+            "subdomini": reals_emp.get("subdomini", empresa.subdomini),
+            "domini_custom": reals_emp.get("domini_custom", empresa.domini_custom),
+            "vertical": reals_emp.get("vertical", empresa.vertical),
+            "pla_subscripcio": reals_emp.get("pla_subscripcio", empresa.pla_subscripcio),
+            "primari_hsl": reals_emp.get("primari_hsl", empresa.primari_hsl),
+            "secundari_hsl": reals_emp.get("secundari_hsl", empresa.secundari_hsl),
+            "accent_hsl": reals_emp.get("accent_hsl", empresa.accent_hsl),
+            "logotip_path": reals_emp.get("logotip_path", empresa.logotip_path),
+            "node_ia_url": reals_emp.get("node_ia_url", empresa.node_ia_url),
+            "disc_dur_url": reals_emp.get("disc_dur_url", empresa.disc_dur_url),
         }
+        if "magatzem_families_default" in reals_emp:
+            dades_empresa["magatzem_families_default"] = reals_emp["magatzem_families_default"]
         rutes["empresa_json"] = await cls.desar_entitat_json(
             db=db,
             empresa_id=empresa.id,
@@ -864,21 +1057,24 @@ class SovereignStorageGateway:
             item_id="empresa",
             dades=dades_empresa,
         )
-        if boss is not None:
+        if boss is not None or dades_boss_reals is not None:
+            reals_boss = dades_boss_reals or {}
+            boss_id_str = str(reals_boss.get("id") or (boss.id if boss is not None else uuid.uuid4()))
+            boss_payload: Dict[str, Any] = {
+                "id": boss_id_str,
+                "nom": reals_boss.get("nom", getattr(boss, "nom", "Usuari")),
+                "cognoms": reals_boss.get("cognoms", getattr(boss, "cognoms", "")),
+                "nif": reals_boss.get("nif", getattr(boss, "nif", "")),
+                "email": reals_boss.get("email", getattr(boss, "email", None)),
+                "telefon": reals_boss.get("telefon", getattr(boss, "telefon", None)),
+                "rol": reals_boss.get("rol", getattr(boss, "rol", "BOSS")),
+            }
             rutes["boss_json"] = await cls.desar_entitat_json(
                 db=db,
                 empresa_id=empresa.id,
                 categoria="operaris",
-                item_id=str(boss.id),
-                dades={
-                    "id": str(boss.id),
-                    "nom": boss.nom,
-                    "cognoms": boss.cognoms,
-                    "nif": boss.nif,
-                    "email": boss.email,
-                    "telefon": boss.telefon,
-                    "rol": boss.rol,
-                },
+                item_id=boss_id_str,
+                dades=boss_payload,
             )
             try:
                 await cls.desar_entitat_json(
@@ -886,25 +1082,22 @@ class SovereignStorageGateway:
                     empresa_id=empresa.id,
                     categoria="configuracio",
                     item_id="boss",
-                    dades={
-                        "id": str(boss.id),
-                        "nom": boss.nom,
-                        "cognoms": boss.cognoms,
-                        "nif": boss.nif,
-                        "email": boss.email,
-                        "telefon": boss.telefon,
-                        "rol": boss.rol,
-                    },
+                    dades=boss_payload,
                 )
             except Exception:
                 pass
-        if empresa.agent_prompt_system:
+        prompt_final = (
+            agent_prompt_system
+            if agent_prompt_system is not None
+            else empresa.agent_prompt_system
+        )
+        if prompt_final:
             rutes["system_prompt"] = await cls.pujar_fitxer_binari(
                 db=db,
                 empresa_id=empresa.id,
                 categoria="copilot_prompt",
                 nom_fitxer="system_prompt.txt",
-                content=empresa.agent_prompt_system.encode("utf-8"),
+                content=prompt_final.encode("utf-8"),
                 content_type="text/plain; charset=utf-8",
             )
         return rutes
@@ -968,3 +1161,311 @@ class SovereignStorageGateway:
             content=raw_bytes,
             content_type=content_type,
         )
+
+
+class SuperadminStorageGateway:
+    """Passarel·la exclusiva del propietari SaaS cap al seu disc dur dedicat (/media/akaun/Project_1/Sevalor_Superadmin_docs)."""
+
+    MAX_UPLOAD_BYTES = 50 * 1024 * 1024
+
+    @staticmethod
+    def _resoldre_carpeta_local(base_target: str, subcarpeta: str) -> Path:
+        base_resolved = Path(base_target).resolve()
+        folder = (base_resolved / subcarpeta).resolve()
+        if not folder.is_relative_to(base_resolved) or folder == base_resolved:
+            raise HTTPException(status_code=400, detail="Ruta de carpeta Superadmin invàlida.")
+        return folder
+
+    @staticmethod
+    def _resolve_target() -> Tuple[str, str, Optional[str]]:
+        url = os.getenv("SUPERADMIN_VAULT_URL", "http://host.docker.internal:9002").strip()
+        if not url:
+            url = "http://host.docker.internal:9002"
+        secret = os.getenv("SUPERADMIN_VAULT_SECRET", "").strip()
+        if url.startswith(("http://", "https://")):
+            if not secret:
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail="SUPERADMIN_VAULT_SECRET no configurat per accedir al túnel del Disc Superadmin.",
+                )
+            effective = resolve_effective_node_url(url) or url
+            return ("HTTP_VAULT", effective.rstrip("/"), secret)
+        if os.path.exists("/.dockerenv"):
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Zero-Storage: dins de Docker cal utilitzar un túnel HTTP/HTTPS cap al Disc Superadmin.",
+            )
+        return ("LOCAL_FS", str(Path(url).resolve()), None)
+
+    @classmethod
+    async def _http_request(
+        cls,
+        base_target: str,
+        secret: Optional[str],
+        method: str,
+        rel_url: str,
+        *,
+        timeout: float = 8.0,
+        offline_detail: Any = "El Disc Dur de Superadmin no respon.",
+        **request_kwargs: Any,
+    ) -> httpx.Response:
+        """Executa una petició HTTP autenticada provant les URLs candidates del túnel Superadmin."""
+        candidates = get_candidate_node_urls(base_target) or [base_target.rstrip("/")]
+        last_exc: Optional[Exception] = None
+        req_headers = {"X-Vault-Token": secret or "", **request_kwargs.pop("headers", {})}
+        async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
+            for base in candidates:
+                url = f"{base.rstrip('/')}/{rel_url.lstrip('/')}"
+                try:
+                    resp = await client.request(
+                        method=method,
+                        url=url,
+                        headers=req_headers,
+                        **request_kwargs,
+                    )
+                    if resp.status_code in (401, 403):
+                        raise HTTPException(
+                            status_code=resp.status_code,
+                            detail="Token rebutjat per la passarel·la del Disc Superadmin.",
+                        )
+                    return resp
+                except httpx.RequestError as exc:
+                    last_exc = exc
+                    continue
+
+        logger.warning("Passarel·la Superadmin desconnectada (%s): %s", rel_url, last_exc)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=offline_detail,
+        )
+
+    @classmethod
+    async def inicialitzar_rutes_superadmin(cls, ruta_personalitzada: Optional[str] = None) -> Dict[str, Any]:
+        """Crea les 20 carpetes oficials del Superadmin (en LOCAL_FS fora d'Hetzner o via túnel POST /admin/inicialitzar-ruta)."""
+        if ruta_personalitzada and not ruta_personalitzada.startswith(("http://", "https://")):
+            if os.path.exists("/.dockerenv"):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Zero-Storage: dins de Docker no es permet crear rutes locals de Superadmin sense túnel HTTP.",
+                )
+            creades = inicialitzar_arbre_carpetes_superadmin(ruta_personalitzada)
+            return {
+                "mode": "LOCAL_FS",
+                "vault_root": str(Path(ruta_personalitzada).resolve()),
+                "carpetes_count": len(creades),
+                "carpetes": creades,
+            }
+
+        secret: Optional[str]
+        if ruta_personalitzada and ruta_personalitzada.startswith(("http://", "https://")):
+            secret = os.getenv("SUPERADMIN_VAULT_SECRET", "").strip()
+            if not secret:
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail="SUPERADMIN_VAULT_SECRET no configurat per connectar al túnel del Disc Superadmin.",
+                )
+            mode = "HTTP_VAULT"
+            base_target = (resolve_effective_node_url(ruta_personalitzada) or ruta_personalitzada).rstrip("/")
+        else:
+            mode, base_target, secret = cls._resolve_target()
+
+        if mode == "LOCAL_FS":
+            creades = inicialitzar_arbre_carpetes_superadmin(base_target)
+            return {
+                "mode": "LOCAL_FS",
+                "vault_root": base_target,
+                "carpetes_count": len(creades),
+                "carpetes": creades,
+            }
+
+        resp = await cls._http_request(
+            base_target,
+            secret,
+            "POST",
+            "/admin/inicialitzar-ruta",
+            timeout=8.0,
+            offline_detail="La passarel·la del Disc Dur de Superadmin no respon.",
+        )
+        if resp.status_code >= 400:
+            raise HTTPException(
+                status_code=resp.status_code,
+                detail="Error inicialitzant carpetes al Disc Dur de Superadmin.",
+            )
+        return cast(Dict[str, Any], resp.json())
+
+    @classmethod
+    async def desar_entitat_json(
+        cls,
+        categoria: str,
+        item_id: str | uuid.UUID,
+        dades: Dict[str, Any],
+    ) -> str:
+        """Desa un registre JSON (CRM, Rascador, Facturació SaaS B2B, Fitxes Tenants) al Disc del Superadmin."""
+        subcarpeta = MAPA_CARPETES_SUPERADMIN.get(categoria, categoria)
+        id_net = sanititzar_nom(str(item_id))
+        mode, base_target, secret = cls._resolve_target()
+
+        payload_complet: Dict[str, Any] = {
+            **dades,
+            "_superadmin_meta": {
+                "scope": "SUPERADMIN",
+                "categoria": categoria,
+                "subcarpeta": subcarpeta,
+                "item_id": id_net,
+                "synced_at": datetime.now(timezone.utc).isoformat(),
+            },
+        }
+
+        if mode == "LOCAL_FS":
+            folder = cls._resoldre_carpeta_local(base_target, subcarpeta)
+            folder.mkdir(parents=True, exist_ok=True)
+            file_path = (folder / f"{id_net}.json").resolve()
+            if not file_path.is_relative_to(folder):
+                raise HTTPException(status_code=400, detail="Identificador d'entitat invàlid.")
+            with open(file_path, "w", encoding="utf-8") as f:
+                json.dump(payload_complet, f, ensure_ascii=False, indent=2, default=str)
+            return str(file_path)
+
+        payload_bytes = json.dumps(payload_complet, ensure_ascii=False, indent=2, default=str).encode("utf-8")
+        resp = await cls._http_request(
+            base_target,
+            secret,
+            "PUT",
+            f"/entitats/{subcarpeta}/{id_net}",
+            timeout=5.0,
+            headers={"Content-Type": "application/json"},
+            content=payload_bytes,
+        )
+        if resp.status_code >= 400:
+            raise HTTPException(status_code=resp.status_code, detail="Error escrivint al Disc Superadmin.")
+        return f"superadmin-vault://{subcarpeta}/{id_net}.json"
+
+    @classmethod
+    async def llegir_entitats_json(cls, categoria: str) -> List[Dict[str, Any]]:
+        """Llegeix totes les fitxes JSON d'una carpeta del Disc del Superadmin."""
+        subcarpeta = MAPA_CARPETES_SUPERADMIN.get(categoria, categoria)
+        mode, base_target, secret = cls._resolve_target()
+
+        if mode == "LOCAL_FS":
+            folder = cls._resoldre_carpeta_local(base_target, subcarpeta)
+            if not folder.exists() or not folder.is_dir():
+                return []
+            registres: List[Dict[str, Any]] = []
+            for fp in sorted(folder.glob("*.json"), key=os.path.getmtime, reverse=True):
+                resolved_fp = fp.resolve()
+                if not resolved_fp.is_relative_to(folder) or not resolved_fp.is_file():
+                    continue
+                try:
+                    with open(resolved_fp, "r", encoding="utf-8") as f:
+                        registres.append(json.load(f))
+                except Exception:
+                    continue
+            return registres
+
+        resp = await cls._http_request(
+            base_target,
+            secret,
+            "GET",
+            f"/entitats/{subcarpeta}",
+            timeout=8.0,
+            offline_detail={
+                "code": "NODE_SUPERADMIN_OFFLINE",
+                "message": "El disc dur dedicat del Superadmin no respon.",
+            },
+        )
+        if resp.status_code == 200:
+            raw_data = resp.json()
+            return cast(List[Dict[str, Any]], raw_data) if isinstance(raw_data, list) else []
+        return []
+
+    @classmethod
+    async def eliminar_entitat_json(cls, categoria: str, item_id: str | uuid.UUID) -> bool:
+        """Elimina una fitxa JSON del Disc del Superadmin amb validació estricta de ruta."""
+        subcarpeta = MAPA_CARPETES_SUPERADMIN.get(categoria, categoria)
+        id_net = sanititzar_nom(str(item_id))
+        mode, base_target, secret = cls._resolve_target()
+
+        if mode == "LOCAL_FS":
+            folder = cls._resoldre_carpeta_local(base_target, subcarpeta)
+            file_path = (folder / f"{id_net}.json").resolve()
+            if file_path.is_file() and file_path.is_relative_to(folder):
+                file_path.unlink()
+                return True
+            return False
+
+        resp = await cls._http_request(
+            base_target,
+            secret,
+            "DELETE",
+            f"/entitats/{subcarpeta}/{id_net}",
+            timeout=5.0,
+        )
+        return resp.status_code < 400
+
+    @classmethod
+    async def pujar_fitxer_binari(
+        cls,
+        categoria: str,
+        nom_fitxer: str,
+        content: bytes,
+        content_type: str = "application/octet-stream",
+    ) -> str:
+        """Escriu un fitxer binari (ex. PDF/XML factura SaaS B2B) al Disc del Superadmin."""
+        if len(content) > cls.MAX_UPLOAD_BYTES:
+            raise HTTPException(
+                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                detail="El fitxer supera el límit màxim de 50 MB.",
+            )
+        subcarpeta = MAPA_CARPETES_SUPERADMIN.get(categoria, categoria)
+        nom_net = sanititzar_nom(nom_fitxer)
+        mode, base_target, secret = cls._resolve_target()
+
+        if mode == "LOCAL_FS":
+            folder = cls._resoldre_carpeta_local(base_target, subcarpeta)
+            folder.mkdir(parents=True, exist_ok=True)
+            dest_file = (folder / nom_net).resolve()
+            if not dest_file.is_relative_to(folder):
+                raise HTTPException(status_code=400, detail="Nom de fitxer invàlid.")
+            dest_file.write_bytes(content)
+            return str(dest_file)
+
+        resp = await cls._http_request(
+            base_target,
+            secret,
+            "POST",
+            f"/fitxers/{subcarpeta}",
+            timeout=10.0,
+            files={"fitxer": (nom_net, content, content_type)},
+            data={"nom_desti": nom_net},
+        )
+        if resp.status_code >= 400:
+            raise HTTPException(status_code=resp.status_code, detail="Error pujant fitxer al Disc Superadmin.")
+        return f"superadmin-vault://{subcarpeta}/{nom_net}"
+
+    @classmethod
+    async def obtenir_bytes_fitxer(cls, fitxer_path: str) -> Tuple[bytes, str]:
+        """Recupera els bytes d'un fitxer emmagatzemat al Disc del Superadmin."""
+        if not fitxer_path:
+            raise HTTPException(status_code=404, detail="Ruta de fitxer Superadmin buida.")
+        mode, base_target, secret = cls._resolve_target()
+
+        clean = fitxer_path.replace("superadmin-vault://", "").replace("file://", "").strip()
+        if mode == "LOCAL_FS":
+            base_resolved = Path(base_target).resolve()
+            cand = Path(clean)
+            target = cand.resolve() if cand.is_absolute() else (base_resolved / clean.lstrip("/")).resolve()
+            if not target.is_relative_to(base_resolved) or target == base_resolved or not target.is_file():
+                raise HTTPException(status_code=404, detail="Fitxer no trobat al Disc del Superadmin.")
+            return target.read_bytes(), target.name
+
+        rel_path = clean.lstrip("/")
+        resp = await cls._http_request(
+            base_target,
+            secret,
+            "GET",
+            f"/fitxers/{rel_path}",
+            timeout=15.0,
+        )
+        if resp.status_code == 200:
+            return resp.content, os.path.basename(rel_path)
+        raise HTTPException(status_code=404, detail="Fitxer no trobat al Disc del Superadmin.")

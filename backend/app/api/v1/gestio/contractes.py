@@ -1,3 +1,5 @@
+import hashlib
+import logging
 import uuid
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, List, Optional
@@ -8,6 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db_with_tenant_context
+from app.core.security import require_financial_access
 from app.models.contractes import (
     ContracteManteniment,
     ContractesMantenimentFinques,
@@ -15,8 +18,71 @@ from app.models.contractes import (
 )
 from app.models.models import Client, FacturaCapcalera, FacturaLinia, Finca
 from app.services.economics_service import calculate_mrr
+from app.services.sovereign_storage import SovereignStorageGateway
 
-router = APIRouter(prefix="/gestio/contractes", tags=["Contractes Manteniment"])
+logger = logging.getLogger("sevalor.contractes")
+
+# Spec 01 Principi VI (economics_boss_only): ENGINYER i OPERARI no poden accedir a Contractes ni MRR
+router = APIRouter(
+    prefix="/gestio/contractes",
+    tags=["Contractes Manteniment"],
+    dependencies=[Depends(require_financial_access)],
+)
+
+PERIODICITAT_DIVISORS = {
+    "MENSUAL": 12.0,
+    "TRIMESTRAL": 4.0,
+    "SEMESTRAL": 2.0,
+    "ANUAL": 1.0,
+}
+
+
+def _resolve_emp_uuid(request: Request, claims: dict[str, Any]) -> uuid.UUID:
+    empresa_id = (
+        getattr(request.state, "empresa_id", None)
+        or claims.get("empresa_id")
+        or request.headers.get("X-Empresa-ID")
+    )
+    if not empresa_id or str(empresa_id) in ("undefined", "null", "None"):
+        raise HTTPException(status_code=401, detail="No identificat")
+    try:
+        return uuid.UUID(str(empresa_id))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Identificador d'empresa invàlid") from exc
+
+
+async def _sincronitzar_contracte_disc(
+    db: AsyncSession,
+    empresa_id: uuid.UUID,
+    contracte: ContracteManteniment,
+    finques_ids: Optional[List[uuid.UUID]] = None,
+) -> None:
+    """Sincronitza el contracte amb 01_clients/contractes_manteniment al disc sobirà."""
+    try:
+        ruta = await SovereignStorageGateway.desar_entitat_json(
+            db=db,
+            empresa_id=empresa_id,
+            categoria="contractes",
+            item_id=str(contracte.id),
+            dades={
+                "id": str(contracte.id),
+                "client_id": str(contracte.client_id),
+                "numero_contracte": contracte.numero_contracte,
+                "data_inici": contracte.data_inici.isoformat(),
+                "data_fi": contracte.data_fi.isoformat() if contracte.data_fi else None,
+                "import_anual": float(contracte.import_anual or 0.0),
+                "periodicitat": contracte.periodicitat,
+                "estat": contracte.estat,
+                "observacions": contracte.observacions,
+                "motiu_baixa": contracte.motiu_baixa,
+                "finques_ids": [str(f) for f in (finques_ids or [])],
+                "synced_at": datetime.now(timezone.utc).isoformat(),
+            },
+        )
+        if not str(ruta).startswith("transit://"):
+            await SovereignStorageGateway.drenar_cua_transit_empresa(db, empresa_id)
+    except Exception as exc:
+        logger.warning("No s'ha pogut sincronitzar el contracte %s al disc sobirà: %s", contracte.id, exc)
 
 
 class RenovarRequest(BaseModel):
@@ -55,6 +121,8 @@ class ContracteMantenimentCreate(BaseModel):
 class ContracteMantenimentResponse(ContracteMantenimentCreate):
     id: uuid.UUID
     empresa_id: uuid.UUID
+    client_nom: Optional[str] = None
+    motiu_baixa: Optional[str] = None
     created_at: datetime
     updated_at: datetime
     model_config = {"from_attributes": True}
@@ -68,18 +136,17 @@ class ContracteAmbFinquesResponse(ContracteMantenimentResponse):
 async def crear_contracte(
     request: Request,
     contracte: ContracteMantenimentCreate,
+    claims: dict[str, Any] = Depends(require_financial_access),
     db: AsyncSession = Depends(get_db_with_tenant_context),
 ) -> Any:
-    empresa_id = getattr(request.state, "empresa_id", None) or request.headers.get("X-Empresa-ID")
-    if not empresa_id or empresa_id == "undefined":
-        raise HTTPException(status_code=401, detail="No identificat")
-    empresa_uuid = uuid.UUID(empresa_id)
+    empresa_uuid = _resolve_emp_uuid(request, claims)
 
     # Validar que client pertany a l'empresa
     client_res = await db.execute(
         select(Client).where(Client.id == contracte.client_id, Client.empresa_id == empresa_uuid)
     )
-    if not client_res.scalars().first():
+    client_obj = client_res.scalars().first()
+    if not client_obj:
         raise HTTPException(status_code=404, detail="Client no trobat")
 
     # Validar que totes les finques pertanyen a l'empresa i al client
@@ -97,7 +164,6 @@ async def crear_contracte(
                 status_code=400, detail="Alguna finca no és vàlida o no pertany al client"
             )
 
-    # Crear contracte
     nou_contracte = ContracteManteniment(
         empresa_id=empresa_uuid,
         client_id=contracte.client_id,
@@ -110,9 +176,8 @@ async def crear_contracte(
         observacions=contracte.observacions,
     )
     db.add(nou_contracte)
-    await db.flush()  # Per obtenir l'ID
+    await db.flush()
 
-    # Crear relacions amb finques
     for finca_id in contracte.finques_ids:
         rel = ContractesMantenimentFinques(
             empresa_id=empresa_uuid, contracte_id=nou_contracte.id, finca_id=finca_id
@@ -120,55 +185,57 @@ async def crear_contracte(
         db.add(rel)
 
     await db.commit()
+    await _sincronitzar_contracte_disc(db, empresa_uuid, nou_contracte, contracte.finques_ids)
 
-    # Utilitzem dict per satisfer el model ContracteAmbFinquesResponse
     base_resp = ContracteMantenimentResponse.model_validate(nou_contracte)
     resp_dict = base_resp.model_dump()
+    resp_dict["client_nom"] = client_obj.rao_social
     resp_dict["finques"] = contracte.finques_ids
     return ContracteAmbFinquesResponse(**resp_dict)
 
 
 @router.get("/", response_model=List[ContracteMantenimentResponse])
 async def llistar_contractes(
-    request: Request, db: AsyncSession = Depends(get_db_with_tenant_context)
+    request: Request,
+    claims: dict[str, Any] = Depends(require_financial_access),
+    db: AsyncSession = Depends(get_db_with_tenant_context),
 ) -> Any:
-    empresa_id = getattr(request.state, "empresa_id", None) or request.headers.get("X-Empresa-ID")
-    if not empresa_id or empresa_id == "undefined":
-        raise HTTPException(status_code=401, detail="No identificat")
-    empresa_uuid = uuid.UUID(empresa_id)
+    empresa_uuid = _resolve_emp_uuid(request, claims)
 
     stmt = (
-        select(ContracteManteniment)
+        select(ContracteManteniment, Client.rao_social)
+        .outerjoin(Client, ContracteManteniment.client_id == Client.id)
         .where(ContracteManteniment.empresa_id == empresa_uuid)
         .order_by(ContracteManteniment.created_at.desc())
     )
     result = await db.execute(stmt)
-    contractes = result.scalars().all()
-    return contractes
+    out = []
+    for ctr, cli_nom in result.all():
+        d = ContracteMantenimentResponse.model_validate(ctr).model_dump()
+        d["client_nom"] = cli_nom
+        out.append(ContracteMantenimentResponse(**d))
+    return out
 
 
+@router.get("/mrr", response_model=MrrResponse)
 @router.get("/kpis/mrr", response_model=MrrResponse)
 async def obtenir_mrr(
-    request: Request, db: AsyncSession = Depends(get_db_with_tenant_context)
+    request: Request,
+    claims: dict[str, Any] = Depends(require_financial_access),
+    db: AsyncSession = Depends(get_db_with_tenant_context),
 ) -> Any:
-    empresa_id = getattr(request.state, "empresa_id", None) or request.headers.get("X-Empresa-ID")
-    if not empresa_id or empresa_id == "undefined":
-        raise HTTPException(status_code=401, detail="No identificat")
-
-    empresa_uuid = uuid.UUID(empresa_id)
+    empresa_uuid = _resolve_emp_uuid(request, claims)
     mrr = await calculate_mrr(db, empresa_uuid)
     return MrrResponse(mrr=mrr)
 
 
 @router.get("/alertes/venciments", response_model=List[ContracteAlerta])
 async def llistar_alertes(
-    request: Request, db: AsyncSession = Depends(get_db_with_tenant_context)
+    request: Request,
+    claims: dict[str, Any] = Depends(require_financial_access),
+    db: AsyncSession = Depends(get_db_with_tenant_context),
 ) -> Any:
-    empresa_id = getattr(request.state, "empresa_id", None) or request.headers.get("X-Empresa-ID")
-    if not empresa_id or empresa_id == "undefined":
-        raise HTTPException(status_code=401, detail="No identificat")
-
-    empresa_uuid = uuid.UUID(empresa_id)
+    empresa_uuid = _resolve_emp_uuid(request, claims)
 
     stmt = (
         select(RevisionsContracte, ContracteManteniment)
@@ -213,13 +280,10 @@ async def renovar_contracte(
     contracte_id: uuid.UUID,
     req: RenovarRequest,
     request: Request,
+    claims: dict[str, Any] = Depends(require_financial_access),
     db: AsyncSession = Depends(get_db_with_tenant_context),
 ) -> Any:
-    empresa_id = getattr(request.state, "empresa_id", None) or request.headers.get("X-Empresa-ID")
-    if not empresa_id or empresa_id == "undefined":
-        raise HTTPException(status_code=401, detail="No identificat")
-
-    empresa_uuid = uuid.UUID(empresa_id)
+    empresa_uuid = _resolve_emp_uuid(request, claims)
 
     stmt = select(ContracteManteniment).where(
         ContracteManteniment.id == contracte_id, ContracteManteniment.empresa_id == empresa_uuid
@@ -248,6 +312,7 @@ async def renovar_contracte(
 
     db.add(contracte)
     await db.commit()
+    await _sincronitzar_contracte_disc(db, empresa_uuid, contracte)
 
     return {"status": "ok", "missatge": "Contracte renovat amb èxit"}
 
@@ -257,13 +322,10 @@ async def baixa_contracte(
     contracte_id: uuid.UUID,
     req: BaixaRequest,
     request: Request,
+    claims: dict[str, Any] = Depends(require_financial_access),
     db: AsyncSession = Depends(get_db_with_tenant_context),
 ) -> Any:
-    empresa_id = getattr(request.state, "empresa_id", None) or request.headers.get("X-Empresa-ID")
-    if not empresa_id or empresa_id == "undefined":
-        raise HTTPException(status_code=401, detail="No identificat")
-
-    empresa_uuid = uuid.UUID(empresa_id)
+    empresa_uuid = _resolve_emp_uuid(request, claims)
 
     stmt = select(ContracteManteniment).where(
         ContracteManteniment.id == contracte_id, ContracteManteniment.empresa_id == empresa_uuid
@@ -279,6 +341,7 @@ async def baixa_contracte(
 
     stmt_rev = select(RevisionsContracte).where(
         RevisionsContracte.contracte_id == contracte.id,
+        RevisionsContracte.empresa_id == empresa_uuid,
         RevisionsContracte.estat.in_(["PENDENT", "PROGRAMADA"]),
     )
     res_rev = await db.execute(stmt_rev)
@@ -288,6 +351,7 @@ async def baixa_contracte(
 
     db.add(contracte)
     await db.commit()
+    await _sincronitzar_contracte_disc(db, empresa_uuid, contracte)
 
     return {"status": "ok", "missatge": "Contracte donat de baixa"}
 
@@ -296,13 +360,10 @@ async def baixa_contracte(
 async def generar_prefactura(
     contracte_id: uuid.UUID,
     request: Request,
+    claims: dict[str, Any] = Depends(require_financial_access),
     db: AsyncSession = Depends(get_db_with_tenant_context),
 ) -> Any:
-    empresa_id = getattr(request.state, "empresa_id", None) or request.headers.get("X-Empresa-ID")
-    if not empresa_id or empresa_id == "undefined":
-        raise HTTPException(status_code=401, detail="No identificat")
-
-    empresa_uuid = uuid.UUID(empresa_id)
+    empresa_uuid = _resolve_emp_uuid(request, claims)
 
     stmt = select(ContracteManteniment).where(
         ContracteManteniment.id == contracte_id, ContracteManteniment.empresa_id == empresa_uuid
@@ -316,16 +377,43 @@ async def generar_prefactura(
     if contracte.estat != "ACTIU":
         raise HTTPException(status_code=400, detail="Només es poden facturar contractes actius")
 
+    divisor = PERIODICITAT_DIVISORS.get(str(contracte.periodicitat or "ANUAL").upper(), 1.0)
+    quota_base = round(float(contracte.import_anual or 0.0) / divisor, 2)
+    quota_iva = round(quota_base * 0.21, 2)
+    liquid_exigible = round(quota_base + quota_iva, 2)
+
+    ultima_row = (
+        await db.execute(
+            select(FacturaCapcalera)
+            .where(
+                FacturaCapcalera.empresa_id == empresa_uuid,
+                FacturaCapcalera.serie == "PRE",
+            )
+            .order_by(FacturaCapcalera.numero_factura.desc())
+            .limit(1)
+            .with_for_update()
+        )
+    ).scalars().first()
+    seq_num = int(ultima_row.numero_factura) + 1 if ultima_row else 1
+    hash_anterior = ultima_row.hash_sha256 if ultima_row else "GENESIS"
+    avui = datetime.now(timezone.utc).date()
+    fingerprint = hashlib.sha256(
+        f"{empresa_uuid}|{contracte.id}|PRE|{seq_num}|{quota_base:.2f}|{avui.isoformat()}|{hash_anterior}".encode(
+            "utf-8"
+        )
+    ).hexdigest()
+
     factura = FacturaCapcalera(
         empresa_id=empresa_uuid,
         client_id=contracte.client_id,
         serie="PRE",
-        numero_factura=9999,
-        hash_sha256="draft_hash",
-        data_emissio=datetime.now(timezone.utc).date(),
-        base_imposable=contracte.import_anual,
-        quota_iva=float(contracte.import_anual) * 0.21,
-        liquid_exigible=float(contracte.import_anual) * 1.21,
+        numero_factura=seq_num,
+        hash_sha256=fingerprint,
+        hash_anterior=hash_anterior,
+        data_emissio=avui,
+        base_imposable=quota_base,
+        quota_iva=quota_iva,
+        liquid_exigible=liquid_exigible,
         estat_enviament="PENDENT",
         estat_cobrament="PENDENT",
     )
@@ -335,40 +423,72 @@ async def generar_prefactura(
     linia = FacturaLinia(
         empresa_id=empresa_uuid,
         factura_id=factura.id,
-        concepte=f"Quotes Manteniment Contracte {contracte.numero_contracte}",
+        concepte=f"Quota {contracte.periodicitat} Manteniment Contracte {contracte.numero_contracte}",
         quantitat=1,
-        preu_venda_unitari=contracte.import_anual,
-        subtotal=contracte.import_anual,
+        preu_venda_unitari=quota_base,
+        subtotal=quota_base,
         tipus_iva=21.0,
     )
     db.add(linia)
     await db.commit()
 
-    return {"status": "ok", "factura_id": str(factura.id), "missatge": "Pre-factura generada"}
+    try:
+        ruta = await SovereignStorageGateway.desar_entitat_json(
+            db=db,
+            empresa_id=empresa_uuid,
+            categoria="pressupostos",
+            item_id=f"prefactura_{factura.id}",
+            dades={
+                "factura_id": str(factura.id),
+                "contracte_id": str(contracte.id),
+                "numero_contracte": contracte.numero_contracte,
+                "serie": "PRE",
+                "numero_factura": seq_num,
+                "periodicitat": contracte.periodicitat,
+                "base_imposable": quota_base,
+                "quota_iva": quota_iva,
+                "liquid_exigible": liquid_exigible,
+                "hash_sha256": fingerprint,
+                "data_emissio": avui.isoformat(),
+            },
+        )
+        if not str(ruta).startswith("transit://"):
+            await SovereignStorageGateway.drenar_cua_transit_empresa(db, empresa_uuid)
+    except Exception as exc:
+        logger.warning("No s'ha pogut sincronitzar pre-factura %s al disc sobirà: %s", factura.id, exc)
+
+    return {
+        "status": "ok",
+        "factura_id": str(factura.id),
+        "serie": "PRE",
+        "numero_factura": seq_num,
+        "base_imposable": quota_base,
+        "missatge": "Pre-factura generada",
+    }
 
 
 @router.get("/{contracte_id}", response_model=ContracteAmbFinquesResponse)
 async def detall_contracte(
     request: Request,
     contracte_id: uuid.UUID,
+    claims: dict[str, Any] = Depends(require_financial_access),
     db: AsyncSession = Depends(get_db_with_tenant_context),
 ) -> Any:
-    empresa_id = getattr(request.state, "empresa_id", None) or request.headers.get("X-Empresa-ID")
-    if not empresa_id or empresa_id == "undefined":
-        raise HTTPException(status_code=401, detail="No identificat")
-    empresa_uuid = uuid.UUID(empresa_id)
+    empresa_uuid = _resolve_emp_uuid(request, claims)
 
-    stmt = select(ContracteManteniment).where(
-        ContracteManteniment.id == contracte_id, ContracteManteniment.empresa_id == empresa_uuid
+    stmt = (
+        select(ContracteManteniment, Client.rao_social)
+        .outerjoin(Client, ContracteManteniment.client_id == Client.id)
+        .where(ContracteManteniment.id == contracte_id, ContracteManteniment.empresa_id == empresa_uuid)
     )
-    result = await db.execute(stmt)
-    contracte = result.scalars().first()
-
-    if not contracte:
+    row = (await db.execute(stmt)).first()
+    if not row:
         raise HTTPException(status_code=404, detail="Contracte no trobat")
+    contracte, cli_nom = row
 
     finques_stmt = select(ContractesMantenimentFinques).where(
-        ContractesMantenimentFinques.contracte_id == contracte_id
+        ContractesMantenimentFinques.empresa_id == empresa_uuid,
+        ContractesMantenimentFinques.contracte_id == contracte_id,
     )
     finques_res = await db.execute(finques_stmt)
     finques_db = finques_res.scalars().all()
@@ -376,5 +496,6 @@ async def detall_contracte(
 
     base_resp = ContracteMantenimentResponse.model_validate(contracte)
     resp_dict = base_resp.model_dump()
+    resp_dict["client_nom"] = cli_nom
     resp_dict["finques"] = finques_ids
     return ContracteAmbFinquesResponse(**resp_dict)

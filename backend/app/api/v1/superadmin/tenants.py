@@ -17,7 +17,7 @@ from typing import Any, Dict, List, Optional
 import bcrypt
 import httpx
 import jwt
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Request, status
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import func, or_, select
@@ -26,7 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.core.db import get_db_with_tenant_context
 from app.core.network_utils import build_node_ia_headers, get_candidate_node_urls
-from app.core.security import require_roles
+from app.core.security import blind_email, blind_nif, blind_telefon, require_roles
 from app.models.models import (
     Client,
     Empresa,
@@ -41,6 +41,7 @@ from app.models.models import (
 from app.services.easypanel_service import EasypanelService
 from app.services.sovereign_storage import (
     SovereignStorageGateway,
+    SuperadminStorageGateway,
     inicialitzar_arbre_carpetes_disc,
 )
 
@@ -244,6 +245,141 @@ class VerificarDnsRequest(BaseModel):
 
 class UpdateIpAllowlistRequest(BaseModel):
     ip_allowlist: List[str] = Field(..., min_length=1)
+
+
+class InicialitzarDiscSuperadminRequest(BaseModel):
+    ruta_personalitzada: Optional[str] = Field(None, max_length=500)
+
+
+async def _inicialitzar_carpetes_tunel_empresa(
+    tunel_url: str,
+    vault_token: str,
+    *,
+    exigir_ia_proxy: bool = False,
+    node_ia_url_extra: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Verifica el túnel HTTP/local d'empresa, valida /v1/models si cal Copilot i crea les 38 carpetes."""
+    clean_url = tunel_url.strip()
+    if not clean_url.startswith(("http://", "https://")):
+        creades = inicialitzar_arbre_carpetes_disc(clean_url)
+        return {
+            "ok": True,
+            "url_efectiva": clean_url,
+            "ia_proxy_ok": False,
+            "carpetes_creades": len(creades),
+        }
+
+    candidates = get_candidate_node_urls(clean_url) or [clean_url.rstrip("/")]
+    first_http_motiu: Optional[str] = None
+    first_http_msg: Optional[str] = None
+    last_motiu = "CONNEXIO_FALLIDA"
+    last_msg = "No s'ha pogut connectar amb el túnel del disc dur de l'empresa."
+
+    for base in candidates:
+        try:
+            check_res = await SovereignStorageGateway.verificar_roundtrip_http_vault(base, vault_token)
+            if not check_res.get("ok"):
+                motiu_cur = str(check_res.get("motiu") or "HTTP_ERROR")
+                msg_cur = str(check_res.get("missatge") or last_msg)
+                if not first_http_motiu:
+                    first_http_motiu = motiu_cur
+                    first_http_msg = msg_cur
+                last_motiu = motiu_cur
+                last_msg = msg_cur
+                if motiu_cur in ("TOKEN_INVALID", "ENDPOINT_NO_TROBAT"):
+                    break
+                continue
+
+            async with httpx.AsyncClient(timeout=8.0, follow_redirects=False) as client:
+                init_resp = await client.post(
+                    f"{base}/admin/inicialitzar-ruta",
+                    headers={"X-Vault-Token": vault_token},
+                )
+                if init_resp.status_code >= 400:
+                    raise HTTPException(
+                        status_code=status.HTTP_502_BAD_GATEWAY,
+                        detail=f"El túnel ha rebutjat la creació d'estructura de carpetes (HTTP {init_resp.status_code}).",
+                    )
+                init_json = init_resp.json() if init_resp.content else {}
+
+            ia_proxy_ok = bool(check_res.get("ia_proxy_ok", False))
+            if exigir_ia_proxy and not ia_proxy_ok and node_ia_url_extra:
+                ia_bases = get_candidate_node_urls(node_ia_url_extra) or [node_ia_url_extra.rstrip("/")]
+                probe_headers = build_node_ia_headers(vault_token=vault_token)
+                async with httpx.AsyncClient(timeout=4.0, follow_redirects=False) as client:
+                    for ia_base in ia_bases:
+                        test_urls = (
+                            [f"{ia_base}/models"]
+                            if ia_base.endswith("/v1")
+                            else [f"{ia_base}/v1/models", f"{ia_base}/models"]
+                        )
+                        for url_probe in test_urls:
+                            try:
+                                r_ia = await client.get(url_probe, headers=probe_headers)
+                                if r_ia.status_code == 200:
+                                    ia_proxy_ok = True
+                                    break
+                            except httpx.RequestError:
+                                continue
+                        if ia_proxy_ok:
+                            break
+
+            if exigir_ia_proxy and not ia_proxy_ok:
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail="El túnel del disc dur respon, però el proxy del Copilot IA local (/v1/models) no respon.",
+                )
+
+            return {
+                "ok": True,
+                "url_efectiva": base,
+                "ia_proxy_ok": ia_proxy_ok,
+                "carpetes_creades": int(
+                    init_json.get("carpetes_count") or init_json.get("total_carpetes") or 38
+                ),
+            }
+        except HTTPException:
+            raise
+        except httpx.RequestError as exc:
+            last_motiu = "CONNEXIO_REBUTJADA"
+            last_msg = f"Error de connexió amb el túnel {base}: {exc}"
+            continue
+
+    final_motiu = first_http_motiu or last_motiu
+    final_msg = first_http_msg or last_msg
+    raise HTTPException(
+        status_code=status.HTTP_502_BAD_GATEWAY,
+        detail=f"El túnel funcional de disc dur ha fallat ({final_motiu}): {final_msg}",
+    )
+
+
+async def _carregar_mapes_superadmin_tenants() -> tuple[Dict[str, Dict[str, Any]], Dict[str, Dict[str, Any]]]:
+    """Carrega fitxes B2B i llicències/tarifes des del Disc Sobirà de Superadmin sense trencar si està offline."""
+    fitxes_map: Dict[str, Dict[str, Any]] = {}
+    llicencies_map: Dict[str, Dict[str, Any]] = {}
+    try:
+        fitxes = await SuperadminStorageGateway.llegir_entitats_json("tenants_fitxes")
+        for f in fitxes:
+            key = str(f.get("id") or f.get("empresa_id") or "")
+            if key:
+                fitxes_map[key] = f
+    except HTTPException as exc:
+        logger.warning("No s'han pogut llegir fitxes B2B del Disc Superadmin: %s", exc.detail)
+    except Exception as exc:
+        logger.warning("Error llegint fitxes B2B del Disc Superadmin: %s", exc)
+
+    try:
+        llics = await SuperadminStorageGateway.llegir_entitats_json("tenants_llicencies")
+        for ll in llics:
+            key = str(ll.get("empresa_id") or ll.get("id") or "")
+            if key:
+                llicencies_map[key] = ll
+    except HTTPException as exc:
+        logger.warning("No s'han pogut llegir llicències del Disc Superadmin: %s", exc.detail)
+    except Exception as exc:
+        logger.warning("Error llegint llicències del Disc Superadmin: %s", exc)
+
+    return fitxes_map, llicencies_map
 
 
 def crear_directoris_sobirans(empresa_id: str) -> List[str]:
@@ -726,6 +862,16 @@ async def verificar_disc_dur(
     }
 
 
+@router.post("/disc-superadmin/inicialitzar", response_model=Dict[str, Any])
+async def inicialitzar_disc_superadmin(
+    payload: Optional[InicialitzarDiscSuperadminRequest] = Body(default=None),
+    claims: Dict[str, Any] = Depends(require_roles(["SUPERADMIN"])),
+) -> Dict[str, Any]:
+    """Crea físicament les 20 carpetes oficials del Disc Dur dedicat del Superadmin."""
+    ruta = payload.ruta_personalitzada if payload else None
+    return await SuperadminStorageGateway.inicialitzar_rutes_superadmin(ruta_personalitzada=ruta)
+
+
 @router.get("/auditoria/certificats", response_model=List[Dict[str, Any]])
 async def llistar_certificats_destruccio(
     db: AsyncSession = Depends(get_db_with_tenant_context),
@@ -814,9 +960,13 @@ async def llistar_tenants(
         .group_by(Usuari.empresa_id)
     )
     counts_map = {row[0]: row[1] for row in counts_res.all()}
+    fitxes_map, llicencies_map = await _carregar_mapes_superadmin_tenants()
 
     resultat = []
     for emp in empreses:
+        emp_id_str = str(emp.id)
+        fitxa = fitxes_map.get(emp_id_str, {})
+        llic = llicencies_map.get(emp_id_str, {})
         operaris_actius = counts_map.get(emp.id, 0)
         pla = emp.pla_subscripcio or "STARTER"
         quota_operaris = (
@@ -826,19 +976,21 @@ async def llistar_tenants(
         )
         quota_buffer_mb = int(getattr(emp, "quota_buffer_mb", None) or 500)
         used_bytes = _calcular_buffer_diari_bytes(
-            str(emp.id), int(emp.quota_disc_bytes_utilitzada or 0)
+            emp_id_str, int(emp.quota_disc_bytes_utilitzada or 0)
         )
         disc_utilitzat_mb = round(used_bytes / (1024 * 1024), 2)
         disc_quota_mb = int((emp.quota_disc_bytes_autoritzada or 10737418240) / (1024 * 1024))
 
-        equips_venuts = getattr(emp, "equips_ia_venuts", None) or []
+        equips_venuts = llic.get("equips_ia_venuts", getattr(emp, "equips_ia_venuts", None) or [])
+        nom_real = str(fitxa.get("rao_social") or fitxa.get("nom") or emp.nom)
+        nif_real = str(fitxa.get("nif") or emp.nif)
 
         resultat.append(
             {
-                "id": str(emp.id),
-                "nom": emp.nom,
-                "rao_social": emp.nom,
-                "nif": emp.nif,
+                "id": emp_id_str,
+                "nom": nom_real,
+                "rao_social": nom_real,
+                "nif": nif_real,
                 "slug": emp.subdomini,
                 "subdomini": emp.subdomini,
                 "domini_custom": emp.domini_custom,
@@ -854,11 +1006,17 @@ async def llistar_tenants(
                 "buffer_utilitzat_mb": disc_utilitzat_mb,
                 "disc_quota_mb": disc_quota_mb,
                 "disc_utilitzat_mb": int(disc_utilitzat_mb),
-                "tarifa_llicencia_base": float(getattr(emp, "tarifa_llicencia_base", 0.0) or 0.0),
-                "tarifa_per_operari": float(getattr(emp, "tarifa_per_operari", 0.0) or 0.0),
-                "tarifa_config_ia": float(getattr(emp, "tarifa_config_ia", 0.0) or 0.0),
+                "tarifa_llicencia_base": float(
+                    llic.get("tarifa_llicencia_base", getattr(emp, "tarifa_llicencia_base", 0.0) or 0.0)
+                ),
+                "tarifa_per_operari": float(
+                    llic.get("tarifa_per_operari", getattr(emp, "tarifa_per_operari", 0.0) or 0.0)
+                ),
+                "tarifa_config_ia": float(
+                    llic.get("tarifa_config_ia", getattr(emp, "tarifa_config_ia", 0.0) or 0.0)
+                ),
                 "equips_ia_venuts": equips_venuts,
-                "notes_crm": getattr(emp, "notes_crm", None),
+                "notes_crm": llic.get("notes_crm", fitxa.get("notes_crm", getattr(emp, "notes_crm", None))),
                 "node_ia_actiu": bool(emp.node_ia_actiu),
                 "node_ia_url": emp.node_ia_url,
                 "feature_copilot_ia": bool(emp.feature_copilot_ia),
@@ -947,7 +1105,10 @@ async def crear_nou_tenant(
         raise HTTPException(status_code=422, detail="NIF del BOSS invàlid.")
 
     nif_norm = payload.nif.strip().upper()
-    res_nif = await db.execute(select(Empresa).where(func.upper(Empresa.nif) == nif_norm))
+    nif_blind = blind_nif(nif_norm)
+    res_nif = await db.execute(
+        select(Empresa).where(or_(func.upper(Empresa.nif) == nif_norm, Empresa.nif == nif_blind))
+    )
     if res_nif.scalars().first():
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -955,7 +1116,12 @@ async def crear_nou_tenant(
         )
 
     email_boss_norm = str(payload.boss_email).strip().lower()
-    res_email = await db.execute(select(Usuari).where(func.lower(Usuari.email) == email_boss_norm))
+    email_boss_blind = blind_email(email_boss_norm)
+    res_email = await db.execute(
+        select(Usuari).where(
+            or_(func.lower(Usuari.email) == email_boss_norm, Usuari.email == email_boss_blind)
+        )
+    )
     if res_email.scalars().first():
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -1061,12 +1227,78 @@ async def crear_nou_tenant(
         if payload.boss_telefon and payload.boss_telefon.strip()
         else None
     )
+    tunel_url_final = (disc_dur_url_final or node_ia_url_final or "").strip()
+    estat_inicial_norm = (payload.estat_inicial or "ACTIU").strip().upper()
+    if estat_inicial_norm == "ACTIU" and not tunel_url_final:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                "Per donar d'alta una empresa ACTIU cal configurar i verificar un túnel "
+                "funcional cap al disc dur dedicat de l'empresa (disc_dur_url / node_ia_url)."
+            ),
+        )
 
+    tunel_verificat: Optional[Dict[str, Any]] = None
+    if tunel_url_final:
+        tunel_verificat = await _inicialitzar_carpetes_tunel_empresa(
+            tunel_url_final,
+            vault_token_unic,
+            exigir_ia_proxy=copilot_actiu,
+            node_ia_url_extra=node_ia_url_final if node_ia_url_final != tunel_url_final else None,
+        )
+
+    boss_user_id = uuid.uuid4()
+    rao_social_real = payload.rao_social.strip()
+    boss_nif_real = payload.boss_nif.strip().upper()
+    boss_nom_real = payload.boss_nom.strip()
+    boss_cognoms_real = payload.boss_cognoms.strip()
+
+    # Persistència sobirana del perfil comercial i llicències al Disc Dur del Superadmin (abans del commit SQL)
+    fitxa_superadmin = {
+        "id": str(nou_id),
+        "empresa_id": str(nou_id),
+        "nom": rao_social_real,
+        "rao_social": rao_social_real,
+        "nif": nif_norm,
+        "adreca": adreca_norm,
+        "subdomini": subdomini_norm,
+        "domini_custom": domini_custom_norm,
+        "vertical": vertical_norm,
+        "pla_subscripcio": pla_norm,
+        "estat_pagament": payload.estat_inicial,
+        "boss_usuari_id": str(boss_user_id),
+        "boss_nom": boss_nom_real,
+        "boss_cognoms": boss_cognoms_real,
+        "boss_nif": boss_nif_real,
+        "boss_email": email_boss_norm,
+        "boss_telefon": telefon_boss_norm,
+        "notes_crm": payload.notes_crm,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    llicencia_superadmin = {
+        "empresa_id": str(nou_id),
+        "pla_subscripcio": pla_norm,
+        "quota_operaris": quota_op_inicial,
+        "quota_buffer_mb": payload.quota_buffer_mb,
+        "quota_disc_bytes_autoritzada": quota_bytes,
+        "tarifa_llicencia_base": float(payload.tarifa_llicencia_base or 0.0),
+        "tarifa_per_operari": float(payload.tarifa_per_operari or 0.0),
+        "tarifa_config_ia": float(payload.tarifa_config_ia or 0.0),
+        "equips_ia_venuts": equips_list,
+        "notes_crm": payload.notes_crm,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await SuperadminStorageGateway.desar_entitat_json("tenants_fitxes", str(nou_id), fitxa_superadmin)
+    await SuperadminStorageGateway.desar_entitat_json(
+        "tenants_llicencies", str(nou_id), llicencia_superadmin
+    )
+
+    # Zero-Storage Hetzner: només pseudònims, índexs cecs HMAC i configuració d'enrutament/llicència
     nova_empresa = Empresa(
         id=nou_id,
-        nom=payload.rao_social.strip(),
-        nif=payload.nif.strip().upper(),
-        adreca=adreca_norm,
+        nom=f"Tenant-{subdomini_norm}",
+        nif=nif_blind,
+        adreca=None,
         subdomini=subdomini_norm,
         domini_custom=domini_custom_norm,
         estat_domini=estat_domini,
@@ -1074,15 +1306,15 @@ async def crear_nou_tenant(
         estat_pagament=payload.estat_inicial,
         quota_operaris=quota_op_inicial,
         quota_buffer_mb=payload.quota_buffer_mb,
-        tarifa_llicencia_base=payload.tarifa_llicencia_base or 0.0,
-        tarifa_per_operari=payload.tarifa_per_operari or 0.0,
-        tarifa_config_ia=payload.tarifa_config_ia or 0.0,
-        equips_ia_venuts=equips_list,
-        notes_crm=payload.notes_crm,
+        tarifa_llicencia_base=0.0,
+        tarifa_per_operari=0.0,
+        tarifa_config_ia=0.0,
+        equips_ia_venuts=[],
+        notes_crm=None,
         quota_disc_bytes_autoritzada=quota_bytes,
         vertical=vertical_norm,
         magatzem_families_default=payload.magatzem_families_default,
-        agent_prompt_system=agent_prompt_final,
+        agent_prompt_system=None,
         node_ia_url=node_ia_url_final,
         disc_dur_url=disc_dur_url_final,
         vault_token=vault_token_unic,
@@ -1107,15 +1339,14 @@ async def crear_nou_tenant(
     )
     db.add(nova_empresa)
 
-    boss_user_id = uuid.uuid4()
     nou_boss = Usuari(
         id=boss_user_id,
         empresa_id=nou_id,
-        nif=payload.boss_nif.strip().upper(),
-        nom=payload.boss_nom.strip(),
-        cognoms=payload.boss_cognoms.strip(),
-        email=str(payload.boss_email).strip().lower(),
-        telefon=telefon_boss_norm,
+        nif=blind_nif(boss_nif_real),
+        nom="Usuari",
+        cognoms="",
+        email=email_boss_blind,
+        telefon=blind_telefon(telefon_boss_norm) if telefon_boss_norm else None,
         rol="BOSS",
         estat="ACTIU",
         totp_activat=False,
@@ -1174,15 +1405,46 @@ async def crear_nou_tenant(
 
     vault_sync: Dict[str, Any]
     try:
+        dades_empresa_reals = {
+            "id": str(nou_id),
+            "nom": rao_social_real,
+            "nif": nif_norm,
+            "adreca": adreca_norm,
+            "subdomini": subdomini_norm,
+            "domini_custom": domini_custom_norm,
+            "vertical": vertical_norm,
+            "pla_subscripcio": pla_norm,
+            "primari_hsl": nova_empresa.primari_hsl,
+            "secundari_hsl": nova_empresa.secundari_hsl,
+            "accent_hsl": nova_empresa.accent_hsl,
+            "logotip_path": nova_empresa.logotip_path,
+            "node_ia_url": nova_empresa.node_ia_url,
+            "disc_dur_url": nova_empresa.disc_dur_url,
+            "magatzem_families_default": payload.magatzem_families_default,
+        }
+        dades_boss_reals = {
+            "id": str(boss_user_id),
+            "nom": boss_nom_real,
+            "cognoms": boss_cognoms_real,
+            "nif": boss_nif_real,
+            "email": email_boss_norm,
+            "telefon": telefon_boss_norm,
+            "rol": "BOSS",
+        }
         rutes_init = await SovereignStorageGateway.inicialitzar_dades_onboarding_empresa(
             db=db,
             empresa=nova_empresa,
             boss=nou_boss,
+            dades_empresa_reals=dades_empresa_reals,
+            dades_boss_reals=dades_boss_reals,
+            agent_prompt_system=agent_prompt_final,
         )
         tots_transit = any(str(v).startswith("transit://") for v in rutes_init.values())
         vault_sync = {
             "status": "QUEUED" if tots_transit else "SYNCED",
             "files": rutes_init,
+            "carpetes_creades": tunel_verificat.get("carpetes_creades") if tunel_verificat else None,
+            "ia_proxy_ok": tunel_verificat.get("ia_proxy_ok") if tunel_verificat else None,
             "missatge": (
                 "Agent de disc offline durant l'alta; fitxers inicials encuats a cua de trànsit per sincronització automàtica."
                 if tots_transit
@@ -1204,13 +1466,14 @@ async def crear_nou_tenant(
 
     emp_id_str = str(nou_id)
 
-    try:
-        from app.workers.tasks import crear_directoris_sobirans_task  # type: ignore
+    if not tunel_url_final:
+        try:
+            from app.workers.tasks import crear_directoris_sobirans_task  # type: ignore
 
-        crear_directoris_sobirans_task.delay(emp_id_str)
-        logger.info("Tasca Celery encuada per crear directoris sobirans de %s", emp_id_str)
-    except Exception as e:
-        logger.warning("No s'ha pogut encuar la tasca Celery: %s", e)
+            crear_directoris_sobirans_task.delay(emp_id_str)
+            logger.info("Tasca Celery encuada per crear directoris sobirans de %s", emp_id_str)
+        except Exception as e:
+            logger.warning("No s'ha pogut encuar la tasca Celery: %s", e)
 
     import jwt
 
@@ -1382,12 +1645,19 @@ async def obtenir_tenant(
         for h in historial_rows
     ]
 
+    fitxes_map, llicencies_map = await _carregar_mapes_superadmin_tenants()
+    fitxa = fitxes_map.get(str(emp.id), {})
+    llic = llicencies_map.get(str(emp.id), {})
+    nom_real = str(fitxa.get("rao_social") or fitxa.get("nom") or emp.nom)
+    nif_real = str(fitxa.get("nif") or emp.nif)
+    adreca_real = fitxa.get("adreca", emp.adreca)
+
     return {
         "id": str(emp.id),
-        "nom": emp.nom,
-        "rao_social": emp.nom,
-        "nif": emp.nif,
-        "adreca": emp.adreca,
+        "nom": nom_real,
+        "rao_social": nom_real,
+        "nif": nif_real,
+        "adreca": adreca_real,
         "subdomini": emp.subdomini,
         "domini_custom": emp.domini_custom,
         "vertical": emp.vertical or "SEVALOR",
@@ -1403,11 +1673,17 @@ async def obtenir_tenant(
         "quota_disc_bytes_utilitzada": emp.quota_disc_bytes_utilitzada,
         "disc_quota_mb": disc_quota_mb,
         "disc_utilitzat_mb": int(buffer_utilitzat_mb),
-        "tarifa_llicencia_base": float(getattr(emp, "tarifa_llicencia_base", 0.0) or 0.0),
-        "tarifa_per_operari": float(getattr(emp, "tarifa_per_operari", 0.0) or 0.0),
-        "tarifa_config_ia": float(getattr(emp, "tarifa_config_ia", 0.0) or 0.0),
-        "equips_ia_venuts": getattr(emp, "equips_ia_venuts", None) or [],
-        "notes_crm": getattr(emp, "notes_crm", None),
+        "tarifa_llicencia_base": float(
+            llic.get("tarifa_llicencia_base", getattr(emp, "tarifa_llicencia_base", 0.0) or 0.0)
+        ),
+        "tarifa_per_operari": float(
+            llic.get("tarifa_per_operari", getattr(emp, "tarifa_per_operari", 0.0) or 0.0)
+        ),
+        "tarifa_config_ia": float(
+            llic.get("tarifa_config_ia", getattr(emp, "tarifa_config_ia", 0.0) or 0.0)
+        ),
+        "equips_ia_venuts": llic.get("equips_ia_venuts", getattr(emp, "equips_ia_venuts", None) or []),
+        "notes_crm": llic.get("notes_crm", fitxa.get("notes_crm", getattr(emp, "notes_crm", None))),
         "historial_llicencia": historial_list,
         "feature_copilot_ia": bool(emp.feature_copilot_ia),
         "feature_flota": bool(emp.feature_flota),
@@ -1554,6 +1830,22 @@ async def canviar_quota_tenant(
 
     await db.commit()
 
+    _, llicencies_map = await _carregar_mapes_superadmin_tenants()
+    llic_act = dict(llicencies_map.get(str(emp_uuid), {}))
+    llic_act.update(
+        {
+            "empresa_id": str(emp_uuid),
+            "pla_subscripcio": nou_pla,
+            "quota_operaris": nou_limit,
+            "quota_buffer_mb": empresa.quota_buffer_mb,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+    )
+    try:
+        await SuperadminStorageGateway.desar_entitat_json("tenants_llicencies", str(emp_uuid), llic_act)
+    except HTTPException as exc:
+        logger.warning("No s'ha pogut sincronitzar la quota al Disc Superadmin: %s", exc.detail)
+
     return {
         "status": "OK",
         "empresa_id": empresa_id,
@@ -1608,16 +1900,61 @@ async def actualitzar_crm_tenant(
 
     if payload.quota_buffer_mb is not None:
         empresa.quota_buffer_mb = payload.quota_buffer_mb
-    if payload.tarifa_llicencia_base is not None:
-        empresa.tarifa_llicencia_base = payload.tarifa_llicencia_base
-    if payload.tarifa_per_operari is not None:
-        empresa.tarifa_per_operari = payload.tarifa_per_operari
-    if payload.tarifa_config_ia is not None:
-        empresa.tarifa_config_ia = payload.tarifa_config_ia
-    if payload.equips_ia_venuts is not None:
-        empresa.equips_ia_venuts = [item.model_dump() for item in payload.equips_ia_venuts]
-    if payload.notes_crm is not None:
-        empresa.notes_crm = payload.notes_crm
+
+    fitxes_map, llicencies_map = await _carregar_mapes_superadmin_tenants()
+    fitxa_act = dict(fitxes_map.get(str(emp_uuid), {}))
+    llic_act = dict(llicencies_map.get(str(emp_uuid), {}))
+
+    tarifa_base = (
+        float(payload.tarifa_llicencia_base)
+        if payload.tarifa_llicencia_base is not None
+        else float(llic_act.get("tarifa_llicencia_base", getattr(empresa, "tarifa_llicencia_base", 0.0) or 0.0))
+    )
+    tarifa_op = (
+        float(payload.tarifa_per_operari)
+        if payload.tarifa_per_operari is not None
+        else float(llic_act.get("tarifa_per_operari", getattr(empresa, "tarifa_per_operari", 0.0) or 0.0))
+    )
+    tarifa_ia = (
+        float(payload.tarifa_config_ia)
+        if payload.tarifa_config_ia is not None
+        else float(llic_act.get("tarifa_config_ia", getattr(empresa, "tarifa_config_ia", 0.0) or 0.0))
+    )
+    equips_nous = (
+        [item.model_dump() for item in payload.equips_ia_venuts]
+        if payload.equips_ia_venuts is not None
+        else llic_act.get("equips_ia_venuts", getattr(empresa, "equips_ia_venuts", None) or [])
+    )
+    notes_noves = (
+        payload.notes_crm
+        if payload.notes_crm is not None
+        else llic_act.get("notes_crm", fitxa_act.get("notes_crm", getattr(empresa, "notes_crm", None)))
+    )
+
+    llic_nova = {
+        **llic_act,
+        "empresa_id": str(emp_uuid),
+        "pla_subscripcio": empresa.pla_subscripcio,
+        "quota_operaris": empresa.quota_operaris,
+        "quota_buffer_mb": empresa.quota_buffer_mb,
+        "tarifa_llicencia_base": tarifa_base,
+        "tarifa_per_operari": tarifa_op,
+        "tarifa_config_ia": tarifa_ia,
+        "equips_ia_venuts": equips_nous,
+        "notes_crm": notes_noves,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await SuperadminStorageGateway.desar_entitat_json("tenants_llicencies", str(emp_uuid), llic_nova)
+    if fitxa_act:
+        fitxa_act["notes_crm"] = notes_noves
+        await SuperadminStorageGateway.desar_entitat_json("tenants_fitxes", str(emp_uuid), fitxa_act)
+
+    # Zero-Storage Hetzner: no retenir tarifes ni notes comercials en clar a PostgreSQL
+    empresa.tarifa_llicencia_base = 0.0
+    empresa.tarifa_per_operari = 0.0
+    empresa.tarifa_config_ia = 0.0
+    empresa.equips_ia_venuts = []
+    empresa.notes_crm = None
 
     empresa.updated_at = datetime.now(timezone.utc)
     await db.commit()
@@ -1627,11 +1964,11 @@ async def actualitzar_crm_tenant(
         "empresa_id": empresa_id,
         "quota_operaris": empresa.quota_operaris,
         "quota_buffer_mb": empresa.quota_buffer_mb,
-        "tarifa_llicencia_base": float(empresa.tarifa_llicencia_base or 0.0),
-        "tarifa_per_operari": float(empresa.tarifa_per_operari or 0.0),
-        "tarifa_config_ia": float(empresa.tarifa_config_ia or 0.0),
-        "equips_ia_venuts": empresa.equips_ia_venuts or [],
-        "notes_crm": empresa.notes_crm,
+        "tarifa_llicencia_base": tarifa_base,
+        "tarifa_per_operari": tarifa_op,
+        "tarifa_config_ia": tarifa_ia,
+        "equips_ia_venuts": equips_nous,
+        "notes_crm": notes_noves,
     }
 
 
@@ -1736,6 +2073,9 @@ async def recuperar_dades_empresa_zip(
         for t in tiquets_res.scalars().all()
     ]
 
+    fitxes_map, _ = await _carregar_mapes_superadmin_tenants()
+    fitxa_emp = fitxes_map.get(str(emp.id), {})
+
     zip_buffer = io.BytesIO()
     with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
         zf.writestr(
@@ -1743,8 +2083,8 @@ async def recuperar_dades_empresa_zip(
             json.dumps(
                 {
                     "id": str(emp.id),
-                    "nom": emp.nom,
-                    "nif": emp.nif,
+                    "nom": fitxa_emp.get("rao_social") or fitxa_emp.get("nom") or emp.nom,
+                    "nif": fitxa_emp.get("nif") or emp.nif,
                     "subdomini": emp.subdomini,
                     "domini_custom": emp.domini_custom,
                     "vertical": emp.vertical,
@@ -1890,7 +2230,7 @@ async def inicialitzar_disc_empresa(
     db: AsyncSession = Depends(get_db_with_tenant_context),
     claims: Dict[str, Any] = Depends(require_roles(["SUPERADMIN"])),
 ) -> Dict[str, Any]:
-    """Bolca les fitxes inicials (empresa.json, boss.json, system_prompt.txt) al disc dur i drena cua de trànsit."""
+    """Crea l'estructura de carpetes al túnel/disc del client, bolca fitxes reals i drena cua de trànsit."""
     empresa = await _resolve_empresa(db, empresa_id)
     if not empresa:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Empresa no trobada.")
@@ -1906,8 +2246,61 @@ async def inicialitzar_disc_empresa(
     )
     boss = boss_res.scalars().first()
 
+    fitxes_map, _ = await _carregar_mapes_superadmin_tenants()
+    fitxa = fitxes_map.get(str(empresa.id), {})
+    dades_empresa_reals = (
+        {
+            "nom": fitxa.get("rao_social") or fitxa.get("nom") or empresa.nom,
+            "nif": fitxa.get("nif") or empresa.nif,
+            "adreca": fitxa.get("adreca", empresa.adreca),
+        }
+        if fitxa
+        else None
+    )
+    dades_boss_reals = (
+        {
+            "id": str(boss.id),
+            "nom": fitxa.get("boss_nom", boss.nom),
+            "cognoms": fitxa.get("boss_cognoms", boss.cognoms),
+            "nif": fitxa.get("boss_nif", boss.nif),
+            "email": fitxa.get("boss_email", boss.email),
+            "telefon": fitxa.get("boss_telefon", boss.telefon),
+            "rol": boss.rol,
+        }
+        if (fitxa and boss)
+        else None
+    )
+
+    carpetes_inicialitzades: Optional[int] = None
+    tunel_url = (getattr(empresa, "disc_dur_url", None) or empresa.node_ia_url or "").strip()
+    if tunel_url.startswith(("http://", "https://")):
+        for base in get_candidate_node_urls(tunel_url) or [tunel_url.rstrip("/")]:
+            try:
+                async with httpx.AsyncClient(timeout=8.0, follow_redirects=False) as client:
+                    init_resp = await client.post(
+                        f"{base}/admin/inicialitzar-ruta",
+                        headers={"X-Vault-Token": empresa.vault_token or ""},
+                    )
+                if init_resp.status_code in (401, 403):
+                    raise HTTPException(
+                        status_code=init_resp.status_code,
+                        detail="Token Vault rebutjat pel túnel d'empresa.",
+                    )
+                if init_resp.status_code == 200:
+                    data_init = init_resp.json() if init_resp.content else {}
+                    carpetes_inicialitzades = int(data_init.get("total_carpetes", 38))
+                    break
+            except httpx.RequestError:
+                continue
+    elif tunel_url:
+        carpetes_inicialitzades = len(inicialitzar_arbre_carpetes_disc(tunel_url))
+
     rutes = await SovereignStorageGateway.inicialitzar_dades_onboarding_empresa(
-        db=db, empresa=empresa, boss=boss
+        db=db,
+        empresa=empresa,
+        boss=boss,
+        dades_empresa_reals=dades_empresa_reals,
+        dades_boss_reals=dades_boss_reals,
     )
     drain_stats = await SovereignStorageGateway.drenar_cua_transit_empresa(db, empresa.id)
     tots_transit = any(str(v).startswith("transit://") for v in rutes.values())
@@ -1916,8 +2309,15 @@ async def inicialitzar_disc_empresa(
         "status": "QUEUED" if tots_transit else "SYNCED",
         "empresa_id": str(empresa.id),
         "vault_token": empresa.vault_token,
+        "carpetes_inicialitzades": carpetes_inicialitzades,
         "files": rutes,
         "transit_drain": drain_stats,
+        "drenatge": drain_stats,
+        "missatge": (
+            "Disc offline temporalment: fitxers encuats xifrats (SVENC1) per a drenatge automàtic."
+            if tots_transit
+            else f"Estructura ({carpetes_inicialitzades or 38} carpetes) i fitxes base sincronitzades al disc de l'empresa."
+        ),
     }
 
 
@@ -2064,14 +2464,17 @@ async def regenerar_activacio_boss(
     )
     enllac = f"https://{domini_base}/activacio?token={jwt_token}"
 
+    fitxes_map, _ = await _carregar_mapes_superadmin_tenants()
+    fitxa = fitxes_map.get(str(emp.id), {})
+
     return {
         "status": "OK",
         "boss": {
             "id": str(boss.id),
-            "nom": boss.nom,
-            "cognoms": boss.cognoms,
-            "email": boss.email,
-            "nif": boss.nif,
+            "nom": fitxa.get("boss_nom", boss.nom),
+            "cognoms": fitxa.get("boss_cognoms", boss.cognoms),
+            "email": fitxa.get("boss_email", boss.email),
+            "nif": fitxa.get("boss_nif", boss.nif),
             "totp_activat": bool(boss.totp_activat),
             "te_password": bool(boss.password_hash),
         },
@@ -2112,10 +2515,14 @@ async def establir_password_boss(
     boss.password_hash = hashed
     await db.commit()
 
+    fitxes_map, _ = await _carregar_mapes_superadmin_tenants()
+    fitxa_b = fitxes_map.get(str(emp.id), {})
+    email_vis = str(fitxa_b.get("boss_email") or boss.email or "")
+
     return {
         "status": "OK",
-        "missatge": f"Contrasenya actualitzada correctament per a {boss.email}",
-        "email": boss.email,
+        "missatge": f"Contrasenya actualitzada correctament per a {email_vis}",
+        "email": email_vis,
     }
 
 

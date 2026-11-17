@@ -12,7 +12,7 @@ from app.services.sovereign_storage import SovereignStorageGateway
 @pytest.mark.asyncio
 async def test_cua_transit_auto_purga_quan_agent_torna_online(db_session, tmp_path: Path, monkeypatch):
     """Verifica que si l'Agent HTTP està caigut s'encua el paquet i, en tornar online (200 OK), es buida de Hetzner."""
-    SovereignStorageGateway.TRANSIT_QUEUE_DIR = tmp_path / "transit_queue"
+    monkeypatch.setattr(SovereignStorageGateway, "TRANSIT_QUEUE_DIR", tmp_path / "transit_queue")
     emp_id = uuid.uuid4()
     emp = Empresa(
         id=emp_id,

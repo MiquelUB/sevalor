@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.core.db import get_db, set_tenant_context
 from app.core.redis import get_redis
+from app.core.security import blind_nif, blind_telefon
 from app.models.models import Empresa, Incidencia, Usuari
 from app.services.telegram_service import send_telegram_direct_message
 
@@ -99,11 +100,14 @@ async def _resolve_empresa_uuid(
             if found:
                 return found
     if identificador and os.getenv("TESTING") == "1":
+        ident_clean = identificador.strip()
         res_u = await db.execute(
             select(Usuari.empresa_id).where(
                 or_(
-                    func.upper(Usuari.nif) == identificador.strip().upper(),
-                    Usuari.telefon == identificador.strip(),
+                    func.upper(Usuari.nif) == ident_clean.upper(),
+                    Usuari.nif == blind_nif(ident_clean),
+                    Usuari.telefon == ident_clean,
+                    Usuari.telefon == blind_telefon(ident_clean),
                 )
             )
         )
@@ -165,10 +169,12 @@ async def login_operari(
             if emp_id_found:
                 empresa_uuid = emp_id_found
 
+    nif_clean = login_data.nif.strip().upper()
+    nif_blind = blind_nif(nif_clean)
     if not empresa_uuid and os.getenv("TESTING") == "1":
         # Fallback exclusiu per a l'entorn de testing quan no s'envia X-Empresa-ID
         stmt_nif = select(Usuari.empresa_id).where(
-            func.upper(Usuari.nif) == login_data.nif.upper(),
+            or_(func.upper(Usuari.nif) == nif_clean, Usuari.nif == nif_blind),
             Usuari.rol.in_(["OPERARI", "CAPATAZ", "CAP_DE_COLLA", "ADMIN", "SUPERADMIN"]),
         )
         res_nif = await db.execute(stmt_nif)
@@ -185,7 +191,7 @@ async def login_operari(
     # 1. Buscar l'usuari aplicant el filtre de tenant implícitament i explícitament
     stmt = select(Usuari).where(
         Usuari.empresa_id == empresa_uuid,
-        func.upper(Usuari.nif) == login_data.nif.upper(),
+        or_(func.upper(Usuari.nif) == nif_clean, Usuari.nif == nif_blind),
         Usuari.rol.in_(["OPERARI", "CAPATAZ", "CAP_DE_COLLA", "ADMIN", "SUPERADMIN"]),
     )
 
@@ -305,7 +311,12 @@ async def _find_active_operari(
     stmt = select(Usuari).where(
         Usuari.empresa_id == empresa_uuid,
         Usuari.estat == "ACTIU",
-        or_(Usuari.telefon == ident, func.upper(Usuari.nif) == ident.upper()),
+        or_(
+            Usuari.telefon == ident,
+            Usuari.telefon == blind_telefon(ident),
+            func.upper(Usuari.nif) == ident.upper(),
+            Usuari.nif == blind_nif(ident),
+        ),
     )
     return (await db.execute(stmt)).scalar_one_or_none()
 

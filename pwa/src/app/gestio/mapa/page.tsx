@@ -5,6 +5,7 @@ import { useGestio } from "@/lib/gestio-context";
 import { apiFetch } from "@/lib/api";
 import GestioMap, { Feina, Operari } from "@/components/gestio/Map";
 import { QuadrillesTauler } from "@/components/gestio/QuadrillesTauler";
+import { CrearOTModal } from "@/components/gestio/CrearOTModal";
 
 export default function GestioMapaPage() {
   const { rolActiu } = useGestio();
@@ -15,6 +16,7 @@ export default function GestioMapaPage() {
   const [selectedFeinaId, setSelectedFeinaId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [isEmbed, setIsEmbed] = useState(false);
+  const [showModalOT, setShowModalOT] = useState(false);
   const [initialOperariId, setInitialOperariId] = useState<string | null>(null);
   const [filtreEstat, setFiltreEstat] = useState<"TOTS" | "EN_CURS" | "EN_RUTA" | "PENDENT">("TOTS");
 
@@ -98,17 +100,28 @@ export default function GestioMapaPage() {
         {/* Left Panel: Operaris Actius & Filtres (Stitch w-80) */}
         <div className="w-full lg:w-80 bg-surface-container-low border-r border-outline-variant/40 flex flex-col z-10 shadow-sm shrink-0">
           <div className="p-md border-b border-outline-variant/30 bg-surface-container-lowest">
-            <div className="flex items-center justify-between mb-sm">
+            <div className="flex items-center justify-between gap-2 mb-sm">
               <h1 className="font-section-title text-lg text-primary">
                 Operaris i Mapa GIS
               </h1>
-              <button
-                onClick={fetchData}
-                className="p-1 rounded-lg hover:bg-surface-container-high text-on-surface-variant"
-                title="Actualitzar posicions"
-              >
-                <span className="material-symbols-outlined text-[18px]">refresh</span>
-              </button>
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => setShowModalOT(true)}
+                  className="px-2.5 py-1.5 rounded-lg bg-primary hover:bg-primary/90 text-on-primary text-xs font-body-strong flex items-center gap-1 shadow-sm cursor-pointer transition-colors"
+                >
+                  <span className="material-symbols-outlined text-[15px]">add_task</span>
+                  <span>Nova Feina</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={fetchData}
+                  className="p-1.5 rounded-lg hover:bg-surface-container-high text-on-surface-variant cursor-pointer"
+                  title="Actualitzar posicions"
+                >
+                  <span className="material-symbols-outlined text-[18px]">refresh</span>
+                </button>
+              </div>
             </div>
             {/* Filter Pills */}
             <div className="flex gap-xs overflow-x-auto pb-1">
@@ -265,6 +278,15 @@ export default function GestioMapaPage() {
           onSelectOperari={(id) => setSelectedOperariId(id)}
           onSelectFeina={(id) => setSelectedFeinaId(id)}
           onDropAssignment={handleDropAssignment}
+        />
+      )}
+
+      {showModalOT && (
+        <CrearOTModal
+          onClose={() => setShowModalOT(false)}
+          onSuccess={() => {
+            fetchData();
+          }}
         />
       )}
     </div>

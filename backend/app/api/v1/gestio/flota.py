@@ -2,9 +2,9 @@ import math
 import re
 import uuid
 from datetime import date, datetime, timezone
-from typing import Any, Dict, List, Optional, cast
+from typing import Any, Dict, List, Optional
 
-import filetype  # type: ignore[import-untyped]
+import filetype
 from fastapi import (
     APIRouter,
     Depends,
@@ -16,6 +16,7 @@ from fastapi import (
     UploadFile,
     status,
 )
+from fastapi.responses import Response
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -144,13 +145,13 @@ class VehicleResponse(VehicleCreate):
     dies_restants_contracte: Optional[int] = None
     ocupacio_temps_percent: Optional[float] = None
     desviacio_ritme_percent: Optional[float] = None
-    cost_fix_meritat_eur: float = 0.0
-    cost_penalitzacio_km_eur: float = 0.0
-    despesa_combustible_acumulada_eur: float = 0.0
-    despesa_manteniment_acumulada_eur: float = 0.0
-    manteniment_computable_tco_eur: float = 0.0
-    cost_total_acumulat_eur: float = 0.0
-    cost_per_km_eur: float = 0.0
+    cost_fix_meritat_eur: Optional[float] = 0.0
+    cost_penalitzacio_km_eur: Optional[float] = 0.0
+    despesa_combustible_acumulada_eur: Optional[float] = 0.0
+    despesa_manteniment_acumulada_eur: Optional[float] = 0.0
+    manteniment_computable_tco_eur: Optional[float] = 0.0
+    cost_total_acumulat_eur: Optional[float] = 0.0
+    cost_per_km_eur: Optional[float] = 0.0
     alerta_contracte_venciment: bool = False
 
     model_config = ConfigDict(from_attributes=True)
@@ -247,6 +248,7 @@ def _build_vehicle_response(
     despesa_manteniment_acumulada: float = 0.0,
     conductor_id_fallback: Optional[uuid.UUID] = None,
     ot_activa: Optional[Dict[str, Any]] = None,
+    rol: str = "BOSS",
 ) -> VehicleResponse:
     v_dict = {c.name: getattr(veh, c.name) for c in veh.__table__.columns}
     v_dict["conductor_nom"] = conductor_nom
@@ -420,12 +422,30 @@ def _build_vehicle_response(
     v_dict["cost_per_km_eur"] = cost_per_km
     v_dict["alerta_contracte_venciment"] = alerta_contracte_venciment
 
+    # Veto d'Enginyer (economics_boss_only): ocultar dades econòmiques i TCO al rol ENGINYER
+    if (rol or "").strip().upper() == "ENGINYER":
+        for camp_fin in (
+            "quota_mensual_eur",
+            "tarifa_diaria_eur",
+            "preu_km_exces_eur",
+            "valor_residual_eur",
+            "fianca_eur",
+            "cost_fix_meritat_eur",
+            "cost_penalitzacio_km_eur",
+            "despesa_combustible_acumulada_eur",
+            "despesa_manteniment_acumulada_eur",
+            "manteniment_computable_tco_eur",
+            "cost_total_acumulat_eur",
+            "cost_per_km_eur",
+        ):
+            v_dict[camp_fin] = None
+
     dies_itv = None
     if veh.data_proxima_itv:
         dies_itv = (veh.data_proxima_itv - avui).days
     v_dict["dies_propera_itv"] = dies_itv
 
-    return cast(VehicleResponse, VehicleResponse.model_validate(v_dict))
+    return VehicleResponse.model_validate(v_dict)
 
 
 @router.get("", response_model=List[VehicleResponse])
@@ -436,7 +456,9 @@ async def llistar_flota(
     limit: int = 50,
     offset: int = 0,
     db: AsyncSession = Depends(get_db_with_tenant_context),
-):
+    claims: Dict[str, Any] = Depends(require_roles(["BOSS", "SECRETARIA", "ENGINYER"])),
+) -> List[VehicleResponse]:
+    rol = str(claims.get("rol", "BOSS")).upper()
     empresa_id = request.state.empresa_id
     if not empresa_id or empresa_id == "undefined":
         raise HTTPException(status_code=401, detail="No identificat")
@@ -494,6 +516,7 @@ async def llistar_flota(
                 despesa_manteniment_acumulada=mant_map.get(veh.id, 0.0),
                 conductor_id_fallback=u_id,
                 ot_activa=ots_map.get(veh.id),
+                rol=rol,
             )
         )
 
@@ -502,8 +525,12 @@ async def llistar_flota(
 
 @router.post("", response_model=VehicleResponse, status_code=status.HTTP_201_CREATED)
 async def alta_vehicle(
-    request: Request, vehicle: VehicleCreate, db: AsyncSession = Depends(get_db_with_tenant_context)
-):
+    request: Request,
+    vehicle: VehicleCreate,
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+    claims: Dict[str, Any] = Depends(require_roles(["BOSS", "SECRETARIA", "ENGINYER"])),
+) -> VehicleResponse:
+    rol = str(claims.get("rol", "BOSS")).upper()
     empresa_id = request.state.empresa_id
     if not empresa_id or empresa_id == "undefined":
         raise HTTPException(status_code=401, detail="No identificat")
@@ -538,11 +565,11 @@ async def alta_vehicle(
         odometre_inici_contracte=vehicle.odometre_inici_contracte or 0,
         data_inici_contracte=vehicle.data_inici_contracte,
         data_fi_contracte=vehicle.data_fi_contracte,
-        quota_mensual_eur=vehicle.quota_mensual_eur or 0.0,
-        tarifa_diaria_eur=vehicle.tarifa_diaria_eur or 0.0,
-        preu_km_exces_eur=vehicle.preu_km_exces_eur or 0.0,
-        valor_residual_eur=vehicle.valor_residual_eur,
-        fianca_eur=vehicle.fianca_eur,
+        quota_mensual_eur=0.0 if rol == "ENGINYER" else (vehicle.quota_mensual_eur or 0.0),
+        tarifa_diaria_eur=0.0 if rol == "ENGINYER" else (vehicle.tarifa_diaria_eur or 0.0),
+        preu_km_exces_eur=0.0 if rol == "ENGINYER" else (vehicle.preu_km_exces_eur or 0.0),
+        valor_residual_eur=None if rol == "ENGINYER" else vehicle.valor_residual_eur,
+        fianca_eur=None if rol == "ENGINYER" else vehicle.fianca_eur,
         data_fi_garantia_oficial=vehicle.data_fi_garantia_oficial,
         interval_canvi_oli_km=vehicle.interval_canvi_oli_km or 15000,
         ultim_canvi_oli_km=vehicle.ultim_canvi_oli_km or 0,
@@ -683,9 +710,9 @@ async def alta_vehicle(
         if u:
             c_nom = f"{u.nom or ''} {u.cognoms or ''}".strip() or None
 
-    response = _build_vehicle_response(nou_vehicle, c_nom)
+    response = _build_vehicle_response(nou_vehicle, c_nom, rol=rol)
     await sincronitzar_vehicle_al_disc_empresa(
-        db, nou_vehicle.empresa_id, nou_vehicle, response.model_dump(mode="json")
+        db, nou_vehicle.empresa_id, nou_vehicle, _build_vehicle_response(nou_vehicle, c_nom, rol="BOSS").model_dump(mode="json")
     )
     await db.commit()
     return response
@@ -697,7 +724,9 @@ async def editar_vehicle(
     vehicle_id: uuid.UUID,
     vehicle: VehicleCreate,
     db: AsyncSession = Depends(get_db_with_tenant_context),
-):
+    claims: Dict[str, Any] = Depends(require_roles(["BOSS", "SECRETARIA", "ENGINYER"])),
+) -> VehicleResponse:
+    rol = str(claims.get("rol", "BOSS")).upper()
     empresa_id = request.state.empresa_id
     if not empresa_id or empresa_id == "undefined":
         raise HTTPException(status_code=401, detail="No identificat")
@@ -732,14 +761,15 @@ async def editar_vehicle(
         v_db.odometre_inici_contracte = vehicle.odometre_inici_contracte
     v_db.data_inici_contracte = vehicle.data_inici_contracte
     v_db.data_fi_contracte = vehicle.data_fi_contracte
-    if vehicle.quota_mensual_eur is not None:
-        v_db.quota_mensual_eur = vehicle.quota_mensual_eur
-    if vehicle.tarifa_diaria_eur is not None:
-        v_db.tarifa_diaria_eur = vehicle.tarifa_diaria_eur
-    if vehicle.preu_km_exces_eur is not None:
-        v_db.preu_km_exces_eur = vehicle.preu_km_exces_eur
-    v_db.valor_residual_eur = vehicle.valor_residual_eur
-    v_db.fianca_eur = vehicle.fianca_eur
+    if rol != "ENGINYER":
+        if vehicle.quota_mensual_eur is not None:
+            v_db.quota_mensual_eur = vehicle.quota_mensual_eur
+        if vehicle.tarifa_diaria_eur is not None:
+            v_db.tarifa_diaria_eur = vehicle.tarifa_diaria_eur
+        if vehicle.preu_km_exces_eur is not None:
+            v_db.preu_km_exces_eur = vehicle.preu_km_exces_eur
+        v_db.valor_residual_eur = vehicle.valor_residual_eur
+        v_db.fianca_eur = vehicle.fianca_eur
     v_db.data_fi_garantia_oficial = vehicle.data_fi_garantia_oficial
     if vehicle.interval_canvi_oli_km is not None:
         v_db.interval_canvi_oli_km = vehicle.interval_canvi_oli_km
@@ -809,9 +839,18 @@ async def editar_vehicle(
         despesa_combustible_acumulada=comb_map.get(v_db.id, 0.0),
         despesa_manteniment_acumulada=mant_map.get(v_db.id, 0.0),
         ot_activa=ots_map.get(v_db.id),
+        rol=rol,
     )
+    disc_payload = _build_vehicle_response(
+        v_db,
+        c_nom,
+        despesa_combustible_acumulada=comb_map.get(v_db.id, 0.0),
+        despesa_manteniment_acumulada=mant_map.get(v_db.id, 0.0),
+        ot_activa=ots_map.get(v_db.id),
+        rol="BOSS",
+    ).model_dump(mode="json")
     await sincronitzar_vehicle_al_disc_empresa(
-        db, emp_uuid, v_db, response.model_dump(mode="json")
+        db, emp_uuid, v_db, disc_payload
     )
     await db.commit()
     return response
@@ -829,7 +868,7 @@ async def registrar_itv(
     request: Request,
     payload: RegistrarItvRequest,
     db: AsyncSession = Depends(get_db_with_tenant_context),
-):
+) -> Dict[str, Any]:
     empresa_id = request.state.empresa_id
     if not empresa_id or empresa_id == "undefined":
         raise HTTPException(status_code=401, detail="No identificat")
@@ -902,7 +941,7 @@ async def descartar_anomalia_consum(
     request: Request,
     payload: DescartarAnomaliaRequest,
     db: AsyncSession = Depends(get_db_with_tenant_context),
-):
+) -> Dict[str, Any]:
     empresa_id = request.state.empresa_id
     if not empresa_id or empresa_id == "undefined":
         raise HTTPException(status_code=401, detail="No identificat")
@@ -920,12 +959,25 @@ async def descartar_anomalia_consum(
     nota = f"[Anomalia Consum Descartada {data_avui} - Motiu: {payload.motiu_tipificat}]: {payload.observacions or 'Sense observacions'}"
     prev = v_db.historial_reparacions or ""
     v_db.historial_reparacions = f"{prev}\n{nota}".strip()
+    v_db.anomalia_consum_descartada = True
 
     await sincronitzar_vehicle_al_disc_empresa(
-        db, emp_uuid, v_db, {"historial_reparacions": v_db.historial_reparacions}
+        db,
+        emp_uuid,
+        v_db,
+        {
+            "historial_reparacions": v_db.historial_reparacions,
+            "anomalia_consum_descartada": True,
+        },
     )
     await db.commit()
-    return {"ok": True, "vehicle_id": str(v_db.id), "motiu": payload.motiu_tipificat, "data_resolucio": data_avui}
+    return {
+        "ok": True,
+        "vehicle_id": str(v_db.id),
+        "anomalia_consum_descartada": True,
+        "motiu": payload.motiu_tipificat,
+        "data_resolucio": data_avui,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -952,9 +1004,9 @@ class VehicleProperItem(BaseModel):
     marca: str
     model: str
     estat: str
-    distancia_km: float
-    lat: float
-    lng: float
+    distancia_km: Optional[float] = None
+    lat: Optional[float] = None
+    lng: Optional[float] = None
     ordre_treball_id: Optional[uuid.UUID] = None
     ordre_treball_codi: Optional[str] = None
     ordre_treball_titol: Optional[str] = None
@@ -967,7 +1019,7 @@ async def llistar_vehicles_propers(
     lng: float = Query(..., description="Longitud de l'objectiu"),
     limit: int = Query(10, ge=1, le=50),
     db: AsyncSession = Depends(get_db_with_tenant_context),
-):
+) -> List[VehicleProperItem]:
     """
     Retorna els vehicles de l'empresa ordenats per proximitat geogràfica a les coordenades donades (Haversine).
     Determina la posició del vehicle segons l'OT activa en curs o ubicació registrada.
@@ -1028,9 +1080,9 @@ async def llistar_vehicles_propers(
                 marca=v.marca,
                 model=v.model,
                 estat=v.estat,
-                distancia_km=dist,  # type: ignore
-                lat=v_lat,  # type: ignore
-                lng=v_lng,  # type: ignore
+                distancia_km=dist,
+                lat=v_lat,
+                lng=v_lng,
                 ordre_treball_id=ot_associada.id if ot_associada else None,
                 ordre_treball_codi=ot_associada.codi if ot_associada else None,
                 ordre_treball_titol=ot_associada.titol if ot_associada else None,
@@ -1048,7 +1100,9 @@ async def obtenir_vehicle(
     request: Request,
     vehicle_id: uuid.UUID,
     db: AsyncSession = Depends(get_db_with_tenant_context),
-):
+    claims: Dict[str, Any] = Depends(require_roles(["BOSS", "SECRETARIA", "ENGINYER"])),
+) -> VehicleResponse:
+    rol = str(claims.get("rol", "BOSS")).upper()
     empresa_id = request.state.empresa_id
     if not empresa_id or empresa_id == "undefined":
         raise HTTPException(status_code=401, detail="No identificat")
@@ -1084,6 +1138,7 @@ async def obtenir_vehicle(
         despesa_manteniment_acumulada=mant_map.get(veh.id, 0.0),
         conductor_id_fallback=u_id,
         ot_activa=ots_map.get(veh.id),
+        rol=rol,
     )
 
 
@@ -1094,7 +1149,7 @@ async def pujar_document_flota(
     tipus_document: str = Form(...),
     file: UploadFile = File(...),
     db: AsyncSession = Depends(get_db_with_tenant_context),
-):
+) -> Dict[str, Any]:
     empresa_id = request.state.empresa_id
     if not empresa_id:
         raise HTTPException(status_code=401)
@@ -1199,7 +1254,7 @@ async def pujar_document_flota(
 @router.get("/{vehicle_id}/documents")
 async def llistar_documents_flota(
     request: Request, vehicle_id: uuid.UUID, db: AsyncSession = Depends(get_db_with_tenant_context)
-):
+) -> List[Dict[str, Any]]:
     empresa_id = request.state.empresa_id
     if not empresa_id:
         raise HTTPException(status_code=401)
@@ -1229,7 +1284,7 @@ async def descarregar_document_flota(
     vehicle_id: uuid.UUID,
     doc_id: uuid.UUID,
     db: AsyncSession = Depends(get_db_with_tenant_context),
-):
+) -> Response:
     """Serveix el document del vehicle directament des del disc dur dedicat de l'empresa."""
     empresa_id = request.state.empresa_id
     if not empresa_id:
@@ -1271,7 +1326,7 @@ async def ocr_vehicle_draft(
     files: Optional[List[UploadFile]] = File(None),
     file: Optional[UploadFile] = File(None),
     db: AsyncSession = Depends(get_db_with_tenant_context),
-):
+) -> Dict[str, Any]:
     empresa_id = request.state.empresa_id
     if not empresa_id or empresa_id == "undefined":
         raise HTTPException(status_code=401, detail="No identificat")
@@ -1323,7 +1378,7 @@ async def assignar_vehicle(
     id: uuid.UUID,
     data: AssignarVehicleRequest,
     db: AsyncSession = Depends(get_db_with_tenant_context),
-):
+) -> Dict[str, Any]:
     empresa_id = uuid.UUID(request.state.empresa_id)
 
     # Check vehicle
@@ -1362,7 +1417,7 @@ async def revocar_vehicle(
     id: uuid.UUID,
     data: RevocarVehicleRequest,
     db: AsyncSession = Depends(get_db_with_tenant_context),
-):
+) -> Dict[str, Any]:
     empresa_id = uuid.UUID(request.state.empresa_id)
 
     v = await db.scalar(select(Vehicle).where(Vehicle.id == id, Vehicle.empresa_id == empresa_id))
@@ -1403,7 +1458,9 @@ async def crear_manteniment(
     vehicle_id: uuid.UUID,
     manteniment: MantenimentCreate,
     db: AsyncSession = Depends(get_db_with_tenant_context),
-):
+    claims: Dict[str, Any] = Depends(require_roles(["BOSS", "SECRETARIA", "ENGINYER"])),
+) -> Dict[str, str]:
+    rol = str(claims.get("rol", "BOSS")).upper()
     empresa_id = uuid.UUID(request.state.empresa_id)
 
     v = await db.scalar(
@@ -1412,6 +1469,7 @@ async def crear_manteniment(
     if not v:
         raise HTTPException(status_code=404, detail="Vehicle no trobat")
 
+    cost_segur = None if rol == "ENGINYER" else manteniment.cost_euros
     mant = MantenimentVehicle(
         empresa_id=empresa_id,
         vehicle_id=vehicle_id,
@@ -1421,7 +1479,7 @@ async def crear_manteniment(
         tipus=manteniment.tipus,
         descripcio=manteniment.descripcio,
         taller=manteniment.taller,
-        cost_euros=manteniment.cost_euros,
+        cost_euros=cost_segur,
     )
     db.add(mant)
     await db.flush()
@@ -1438,7 +1496,7 @@ async def crear_manteniment(
             "tipus": manteniment.tipus,
             "descripcio": manteniment.descripcio,
             "taller": manteniment.taller,
-            "cost_euros": manteniment.cost_euros,
+            "cost_euros": cost_segur,
         },
     )
     await sincronitzar_vehicle_al_disc_empresa(db, empresa_id, v)
@@ -1446,10 +1504,14 @@ async def crear_manteniment(
     return {"id": str(mant.id), "missatge": "Manteniment registrat"}
 
 
-@router.get("/{vehicle_id}/manteniments")
+@router.get("/{vehicle_id}/manteniments", response_model=None)
 async def llistar_manteniments(
-    request: Request, vehicle_id: uuid.UUID, db: AsyncSession = Depends(get_db_with_tenant_context)
-):
+    request: Request,
+    vehicle_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+    claims: Dict[str, Any] = Depends(require_roles(["BOSS", "SECRETARIA", "ENGINYER"])),
+) -> List[Dict[str, Any]] | List[MantenimentVehicle]:
+    rol = str(claims.get("rol", "BOSS")).upper()
     empresa_id = uuid.UUID(request.state.empresa_id)
     mants = await db.execute(
         select(MantenimentVehicle)
@@ -1458,11 +1520,27 @@ async def llistar_manteniments(
         )
         .order_by(MantenimentVehicle.data_manteniment.desc())
     )
-    return list(mants.scalars().all())
+    items = list(mants.scalars().all())
+    if rol == "ENGINYER":
+        return [
+            {
+                "id": str(m.id),
+                "empresa_id": str(m.empresa_id),
+                "vehicle_id": str(m.vehicle_id),
+                "data_manteniment": m.data_manteniment.isoformat() if m.data_manteniment else None,
+                "tipus": m.tipus,
+                "descripcio": m.descripcio,
+                "taller": m.taller,
+                "cost_euros": None,
+                "created_at": m.created_at.isoformat() if m.created_at else None,
+            }
+            for m in items
+        ]
+    return items
 
 
 @router.post("/ocr-document")
-async def ocr_document_vehicle(request: Request, file: UploadFile = File(...)):
+async def ocr_document_vehicle(request: Request, file: UploadFile = File(...)) -> Dict[str, Any]:
     empresa_id = request.state.empresa_id
     if not empresa_id or empresa_id == "undefined":
         raise HTTPException(status_code=401, detail="No identificat")

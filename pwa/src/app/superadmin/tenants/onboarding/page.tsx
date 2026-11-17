@@ -89,7 +89,7 @@ function hexToHsl(hex: string): string {
     const max = Math.max(r, g, b);
     const min = Math.min(r, g, b);
     const delta = max - min;
-    let l = (max + min) / 2;
+    const l = (max + min) / 2;
     let s = 0;
     let h = 0;
 
@@ -382,6 +382,12 @@ export default function SuperadminTenantOnboardingPage() {
     try {
       if (!raoSocial.trim() || !nif.trim() || !emailGerent.trim() || !bossNif.trim() || !bossNom.trim() || !bossCognoms.trim()) {
         throw new Error("Cal omplir Raó Social, CIF d'empresa, DNI/NIE del Gerent, Nom, Cognoms i Email.");
+      }
+
+      if (estatInicial === "ACTIU" && !nodeIaUrl.trim() && !discDurUrl.trim()) {
+        throw new Error(
+          "Per donar d'alta una empresa en estat ACTIU cal configurar un túnel funcional cap al seu disc dur dedicat."
+        );
       }
 
       if (featureFlags.copilot_ia) {

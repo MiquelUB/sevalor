@@ -48,6 +48,12 @@ interface Factura {
   estat_enviament: string;
 }
 
+interface ClientOption {
+  id: string;
+  rao_social: string;
+  nif: string;
+}
+
 interface DashboardEconomic {
   facturacio_neta: number;
   cost_directe_obra: number;
@@ -243,18 +249,22 @@ export default function GestioComptabilitatPage() {
   const [margesOt, setMargesOt] = useState<OTCostMarge[]>([]);
   const [despesesAnalitiques, setDespesesAnalitiques] = useState<DespesaComptableItem[]>([]);
   const [desgloseMap, setDesgloseMap] = useState<Record<string, { carb: string; adbl: string }>>({});
+  const [clientsList, setClientsList] = useState<ClientOption[]>([]);
 
   // Estat Norma 43
   const [textC43, setTextC43] = useState("");
   const [movimentsC43, setMovimentsC43] = useState<Norma43Moviment[]>([]);
 
-  // Modal Emissió Factura Veri*factu
+  // Modal Emissió Factura Veri*factu & Rectificativa Sèrie R
   const [modalFactura, setModalFactura] = useState(false);
   const [clientIdInput, setClientIdInput] = useState("");
   const [concepteInput, setConcepteInput] = useState("");
   const [preuInput, setPreuInput] = useState("0");
   const [esIsp, setEsIsp] = useState(false);
   const [retGarantiaPct, setRetGarantiaPct] = useState("0");
+  const [facturaRectificar, setFacturaRectificar] = useState<Factura | null>(null);
+  const [motiuRectificar, setMotiuRectificar] = useState("");
+  const [convertintWipId, setConvertintWipId] = useState<string | null>(null);
 
   const carregarDades = async () => {
     setLoading(true);
@@ -271,9 +281,10 @@ export default function GestioComptabilitatPage() {
         tiqRes,
         margesRes,
         despRes,
+        cliRes,
       ] = await Promise.all([
         apiFetch<DashboardEconomic>(
-          `/gestio/comptabilitat/dashboard-economic?criteri_caixa=${criteriCaixa}`
+          `/gestio/comptabilitat/dashboard-economic?criteri_caixa=${criteriCaixa}&periode=${encodeURIComponent(periode)}`
         ),
         apiFetch<Factura[]>("/gestio/comptabilitat/factures"),
         apiFetch<WIPControl>("/gestio/comptabilitat/wip-control"),
@@ -286,6 +297,7 @@ export default function GestioComptabilitatPage() {
         apiFetch<DespesaComptableItem[]>("/gestio/comptabilitat/despeses-analitiques").catch(
           () => []
         ),
+        apiFetch<ClientOption[]>("/gestio/clients?limit=200").catch(() => []),
       ]);
 
       setDashboard(dashRes);
@@ -298,6 +310,7 @@ export default function GestioComptabilitatPage() {
       setTiquets(tiqRes || []);
       setMargesOt(margesRes || []);
       setDespesesAnalitiques(despRes || []);
+      setClientsList(Array.isArray(cliRes) ? cliRes : []);
     } catch (err: unknown) {
       const message =
         err instanceof Error ? err.message : "Error carregant la suite econòmica";
@@ -361,6 +374,38 @@ export default function GestioComptabilitatPage() {
       await carregarDades();
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Error en emetre factura");
+    }
+  };
+
+  const handleConvertirWipPrefactura = async (ordreTreballId: string) => {
+    setConvertintWipId(ordreTreballId);
+    setError(null);
+    try {
+      await apiFetch(`/gestio/comptabilitat/wip-control/${ordreTreballId}/prefacturar`, {
+        method: "POST",
+      });
+      await carregarDades();
+      setTabActiva("VERIFACTU");
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Error en convertir OT a Pre-factura");
+    } finally {
+      setConvertintWipId(null);
+    }
+  };
+
+  const handleEmetreRectificativa = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!facturaRectificar) return;
+    try {
+      await apiFetch(`/gestio/comptabilitat/factures/${facturaRectificar.id}/rectificar`, {
+        method: "POST",
+        body: JSON.stringify({ motiu: motiuRectificar.trim() }),
+      });
+      setFacturaRectificar(null);
+      setMotiuRectificar("");
+      await carregarDades();
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Error en emetre rectificativa Sèrie R");
     }
   };
 
@@ -678,6 +723,18 @@ export default function GestioComptabilitatPage() {
                           >
                             <FileText className="h-3.5 w-3.5" /> XML
                           </a>
+                          {!f.serie.toUpperCase().startsWith("R") && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setFacturaRectificar(f);
+                                setMotiuRectificar("");
+                              }}
+                              className="inline-flex items-center gap-1 rounded-md border border-amber-300 bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-800 hover:bg-amber-100"
+                            >
+                              Rectificativa R
+                            </button>
+                          )}
                         </td>
                       </tr>
                     ))}
@@ -788,6 +845,7 @@ export default function GestioComptabilitatPage() {
                     <th className="px-3 py-2">Valor PVP</th>
                     <th className="px-3 py-2">Cost Avançat</th>
                     <th className="px-3 py-2">Alerta</th>
+                    <th className="px-3 py-2 text-right">Acció</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
@@ -807,6 +865,18 @@ export default function GestioComptabilitatPage() {
                             Normal
                           </span>
                         )}
+                      </td>
+                      <td className="px-3 py-2 text-right">
+                        <button
+                          type="button"
+                          disabled={convertintWipId === item.ordre_treball_id}
+                          onClick={() => handleConvertirWipPrefactura(item.ordre_treball_id)}
+                          className="rounded-lg bg-primary px-2.5 py-1 text-[11px] font-semibold text-primary-foreground hover:opacity-90 disabled:opacity-50"
+                        >
+                          {convertintWipId === item.ordre_treball_id
+                            ? "Convertint..."
+                            : "Convertir a Pre-factura"}
+                        </button>
                       </td>
                     </tr>
                   ))}
@@ -1208,15 +1278,25 @@ export default function GestioComptabilitatPage() {
             <form onSubmit={handleEmetreFactura} className="space-y-3 text-xs">
               <div>
                 <label className="block font-medium text-slate-700 mb-1">
-                  UUID Client
+                  Client de la Factura
                 </label>
-                <input
+                <select
                   required
                   value={clientIdInput}
                   onChange={(e) => setClientIdInput(e.target.value)}
-                  placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
-                  className="w-full rounded-lg border border-slate-200 px-3 py-2"
-                />
+                  className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-slate-900"
+                >
+                  <option value="">
+                    {clientsList.length === 0
+                      ? "Sense clients donats d'alta al tenant..."
+                      : "Selecciona un client..."}
+                  </option>
+                  {clientsList.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.rao_social} ({c.nif})
+                    </option>
+                  ))}
+                </select>
               </div>
               <div>
                 <label className="block font-medium text-slate-700 mb-1">
@@ -1278,6 +1358,56 @@ export default function GestioComptabilitatPage() {
                   className="rounded-lg bg-primary px-4 py-2 font-semibold text-white"
                 >
                   Emetre i Encadenar SHA-256
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL RECTIFICATIVA SÈRIE R (Spec 007 RF-14) */}
+      {facturaRectificar && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4">
+          <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl">
+            <div className="mb-4 flex items-center justify-between">
+              <h3 className="text-base font-bold text-slate-900">
+                Emetre Rectificativa Sèrie R ({facturaRectificar.serie}-{facturaRectificar.numero_factura})
+              </h3>
+              <button onClick={() => setFacturaRectificar(null)}>
+                <X className="h-5 w-5 text-slate-400" />
+              </button>
+            </div>
+            <form onSubmit={handleEmetreRectificativa} className="space-y-3 text-xs">
+              <p className="text-slate-600">
+                Es generarà una factura rectificativa Sèrie R encadenada a Veri*factu per revertir{" "}
+                <strong>{Number(facturaRectificar.liquid_exigible).toFixed(2)} €</strong>.
+              </p>
+              <div>
+                <label className="block font-medium text-slate-700 mb-1">
+                  Motiu legal de rectificació
+                </label>
+                <input
+                  required
+                  minLength={3}
+                  value={motiuRectificar}
+                  onChange={(e) => setMotiuRectificar(e.target.value)}
+                  placeholder="Ex: Error en base imposable o anul·lació del servei"
+                  className="w-full rounded-lg border border-slate-200 px-3 py-2"
+                />
+              </div>
+              <div className="flex justify-end gap-2 pt-3">
+                <button
+                  type="button"
+                  onClick={() => setFacturaRectificar(null)}
+                  className="rounded-lg border border-slate-200 px-4 py-2 font-medium"
+                >
+                  Cancel·lar
+                </button>
+                <button
+                  type="submit"
+                  className="rounded-lg bg-amber-600 px-4 py-2 font-semibold text-white hover:bg-amber-500"
+                >
+                  Emetre Sèrie R
                 </button>
               </div>
             </form>

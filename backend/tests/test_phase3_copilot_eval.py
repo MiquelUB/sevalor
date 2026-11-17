@@ -12,6 +12,7 @@ Cobreix:
 
 import uuid
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import jwt
 import pytest
@@ -21,16 +22,14 @@ from sqlalchemy import select
 from app.core.config import settings
 from app.main import app
 from app.models.models import (
-    Article,
     Client,
     ConsultaXatCopilot,
     Empresa,
-    EstocMagatzem,
-    Magatzem,
     OrdreTreball,
     Usuari,
     Vehicle,
 )
+from app.services.sovereign_storage import SovereignStorageGateway
 from app.workers.tasks import transcriure_audio_task
 
 
@@ -46,10 +45,10 @@ def generar_token(usuari_id: uuid.UUID, empresa_id: uuid.UUID, rol: str) -> str:
 
 
 @pytest.mark.asyncio
-async def test_f3_01_tool_calling_stock_real(admin_session, boss_token):
+async def test_f3_01_tool_calling_stock_real(admin_session, boss_token, tmp_path: Path):
     """
-    TEST-F3-01: Consulta d'estoc en temps real via Tool Calling.
-    Verifica que l'agent selecciona 'get_real_stock', consulta la BD real,
+    TEST-F3-01: Consulta d'estoc en temps real via Tool Calling al disc sobirà de l'empresa.
+    Verifica que l'agent selecciona 'get_real_stock', consulta el disc dur de l'empresa,
     retorna 327 unitats i guarda el log d'auditoria amb tool_name i tool_result.
     """
     token_jwt, empresa_id_str = boss_token
@@ -57,7 +56,7 @@ async def test_f3_01_tool_calling_stock_real(admin_session, boss_token):
     decoded = jwt.decode(token_jwt, options={"verify_signature": False})
     usuari_id = uuid.UUID(decoded["sub"])
 
-    # 1. Crear entorn de negoci a la BD
+    # 1. Crear entorn de negoci amb disc sobirà
     empresa = Empresa(
         id=empresa_id,
         nom="Instal·lacions Vallès SL",
@@ -66,6 +65,10 @@ async def test_f3_01_tool_calling_stock_real(admin_session, boss_token):
         pla_subscripcio="ENTERPRISE",
         estat_pagament="ACTIU",
         vertical="SEVALOR",
+        disc_dur_url=str(tmp_path),
+        node_ia_url=str(tmp_path),
+        node_ia_actiu=True,
+        feature_copilot_ia=True,
     )
     admin_session.add(empresa)
     await admin_session.flush()
@@ -80,41 +83,29 @@ async def test_f3_01_tool_calling_stock_real(admin_session, boss_token):
         estat="ACTIU",
     )
     admin_session.add(usuari)
-
-    magatzem = Magatzem(
-        id=uuid.uuid4(),
-        empresa_id=empresa_id,
-        nom="Magatzem Central Sabadell",
-        tipus="CENTRAL",
-    )
-    admin_session.add(magatzem)
-
-    article = Article(
-        id=uuid.uuid4(),
-        empresa_id=empresa_id,
-        referencia_inventari="CAB-6MM-NEGRE",
-        nom="Cable 6mm²",
-        familia="ELECTRICITAT",
-        unitat_mesura="METRES",
-        preu_cost=1.85,
-        preu_venda=3.50,
-        estoc_minim=50.0,
-        estoc_optim=500.0,
-    )
-    admin_session.add(article)
     await admin_session.flush()
 
-    # Inserim exactament 327 unitats físiques sense reserves
-    estoc = EstocMagatzem(
-        id=uuid.uuid4(),
-        empresa_id=empresa_id,
-        magatzem_id=magatzem.id,
-        article_id=article.id,
-        quantitat_fisica=327.0,
-        quantitat_virtual_reservada=0.0,
+    art_id = uuid.uuid4()
+    await SovereignStorageGateway.desar_entitat_json(
+        admin_session,
+        empresa_id,
+        "magatzem_articles",
+        art_id,
+        {
+            "id": str(art_id),
+            "referencia_inventari": "CAB-6MM-NEGRE",
+            "nom": "Cable 6mm²",
+            "familia": "ELECTRICITAT",
+            "unitat_mesura": "METRES",
+            "preu_cost": 1.85,
+            "preu_venda": 3.50,
+            "estoc_minim": 50.0,
+            "estoc_optim": 500.0,
+            "quantitat_fisica": 327.0,
+            "quantitat_virtual_reservada": 0.0,
+            "actiu": True,
+        },
     )
-    admin_session.add(estoc)
-    await admin_session.flush()
 
     headers = {
         "Authorization": f"Bearer {token_jwt}",
@@ -151,10 +142,10 @@ async def test_f3_01_tool_calling_stock_real(admin_session, boss_token):
 
 
 @pytest.mark.asyncio
-async def test_f3_02_tool_calling_vehicle_proper(admin_session, boss_token):
+async def test_f3_02_tool_calling_vehicle_proper(admin_session, boss_token, tmp_path: Path):
     """
     TEST-F3-02: Selecció autònoma del vehicle més proper mitjançant fórmula Haversine.
-    Configura 2 vehicles reals a la BD (Vehicle A a 0.4 km, Vehicle B a 25 km).
+    Configura 2 vehicles reals (Vehicle A a 0.4 km, Vehicle B a 25 km) al disc sobirà i BD.
     Verifica que l'agent selecciona 'get_closest_vehicle' i escull el Vehicle A.
     """
     token_jwt, empresa_id_str = boss_token
@@ -170,6 +161,10 @@ async def test_f3_02_tool_calling_vehicle_proper(admin_session, boss_token):
         pla_subscripcio="ENTERPRISE",
         estat_pagament="ACTIU",
         vertical="SEVALOR",
+        disc_dur_url=str(tmp_path),
+        node_ia_url=str(tmp_path),
+        node_ia_actiu=True,
+        feature_copilot_ia=True,
     )
     admin_session.add(empresa)
     await admin_session.flush()
@@ -245,6 +240,38 @@ async def test_f3_02_tool_calling_vehicle_proper(admin_session, boss_token):
     )
     admin_session.add(ot_b)
     await admin_session.flush()
+
+    for v in (vehicle_a, vehicle_b):
+        await SovereignStorageGateway.desar_entitat_json(
+            admin_session,
+            empresa_id,
+            "vehicles",
+            v.id,
+            {
+                "id": str(v.id),
+                "matricula": v.matricula,
+                "marca": v.marca,
+                "model": v.model,
+                "tipus": v.tipus,
+                "estat": v.estat,
+            },
+        )
+    for o in (ot_a, ot_b):
+        await SovereignStorageGateway.desar_entitat_json(
+            admin_session,
+            empresa_id,
+            "ots_actives",
+            o.id,
+            {
+                "id": str(o.id),
+                "codi": o.codi,
+                "client_id": str(o.client_id),
+                "titol": o.titol,
+                "adreca": o.adreca,
+                "estat": o.estat,
+                "vehicle_id": str(o.vehicle_id),
+            },
+        )
 
     headers = {
         "Authorization": f"Bearer {token_jwt}",

@@ -42,7 +42,7 @@ export default function CopilotWidget({ isMobile = false }: { isMobile?: boolean
 
     apiFetch<any>("/auth/me")
       .then((res) => {
-        if (res && res.id && res.feature_copilot_ia !== false) {
+        if (res && res.id && res.feature_copilot_ia === true && res.node_ia_actiu === true) {
           setIsAuthenticated(true);
           setHasCopilotIa(true);
         } else {
@@ -142,51 +142,51 @@ export default function CopilotWidget({ isMobile = false }: { isMobile?: boolean
       {/* Botó Flotant Global */}
       <button
         onClick={() => setObert(true)}
-        className={`fixed p-4 rounded-full bg-indigo-600 text-white shadow-xl hover:bg-indigo-700 transition-all z-50 flex items-center justify-center ${obert ? 'hidden' : ''} ${isMobile ? "bottom-20 right-4" : "bottom-6 right-6"}`}
+        className={`fixed p-4 rounded-full bg-primary text-on-primary shadow-xl hover:bg-primary/90 transition-all z-50 flex items-center justify-center ${obert ? 'hidden' : ''} ${isMobile ? "bottom-20 right-4" : "bottom-6 right-6"}`}
       >
         <Sparkles className="w-6 h-6" />
       </button>
 
       {/* Pop-Up Window */}
       {obert && (
-        <div className={`fixed z-50 bg-white dark:bg-slate-900 flex flex-col overflow-hidden shadow-2xl border-slate-200 dark:border-slate-800 ${isMobile ? "inset-0 w-full h-full pb-[60px]" : "bottom-6 right-6 w-96 h-[550px] border rounded-2xl"}`}>
+        <div className={`fixed z-50 bg-surface-container-lowest dark:bg-slate-900 flex flex-col overflow-hidden shadow-2xl border-outline-variant/40 dark:border-slate-800 ${isMobile ? "inset-0 w-full h-full pb-[60px]" : "bottom-6 right-6 w-96 h-[550px] border rounded-2xl"}`}>
           {/* Header */}
-          <div className="p-3 bg-indigo-600 text-white flex items-center justify-between">
+          <div className="p-3 bg-primary text-on-primary flex items-center justify-between">
             <div className="flex items-center gap-2">
               <Bot className="w-5 h-5" />
               <h4 className="font-bold text-sm">Sevalor Copilot</h4>
             </div>
-            <button onClick={() => setObert(false)} className="hover:bg-indigo-700 p-1 rounded-md transition-colors">
+            <button onClick={() => setObert(false)} className="hover:bg-primary-container p-1 rounded-md transition-colors">
               <X className="w-4 h-4" />
             </button>
           </div>
 
           {/* Chat Messages */}
-          <div className="flex-1 p-4 overflow-y-auto space-y-3 bg-slate-50 dark:bg-slate-900">
+          <div className="flex-1 p-4 overflow-y-auto space-y-3 bg-surface-container-low dark:bg-slate-900">
             {conversaXat.map((m, idx) => (
               <div key={idx} className={`flex flex-col ${m.sender === "user" ? "items-end" : "items-start"}`}>
                 <div
                   className={`max-w-[85%] p-3 rounded-2xl text-xs leading-relaxed ${
                     m.sender === "user"
-                      ? "bg-indigo-600 text-white rounded-br-none"
+                      ? "bg-primary text-on-primary rounded-br-none"
                       : m.error
                       ? "bg-rose-50 border border-rose-300 text-rose-900 rounded-bl-none font-medium"
-                      : "bg-white border border-slate-200 text-slate-800 rounded-bl-none shadow-sm"
+                      : "bg-surface-container-lowest border border-outline-variant/40 text-on-surface rounded-bl-none shadow-sm"
                   }`}
                 >
                   {m.text}
                 </div>
                 {m.actionContext && (
-                  <div className="mt-2 p-2 bg-indigo-50 border border-indigo-200 rounded-xl">
-                    <p className="text-[10px] font-bold text-indigo-800 mb-1">Requereix Confirmació:</p>
-                    <pre className="text-[9px] text-indigo-900 bg-indigo-100 p-1.5 rounded mb-2 overflow-x-auto">
+                  <div className="mt-2 p-2 bg-primary/10 border border-primary/30 rounded-xl">
+                    <p className="text-[10px] font-bold text-primary mb-1">Requereix Confirmació:</p>
+                    <pre className="text-[9px] text-on-surface bg-surface-container p-1.5 rounded mb-2 overflow-x-auto">
                       {JSON.stringify(m.actionContext.payload, null, 2)}
                     </pre>
                     <div className="flex gap-2">
                       <button 
                         onClick={() => confirmarAccio(m.actionContext, idx)}
                         disabled={executantAccio}
-                        className="flex-1 bg-indigo-600 text-white py-1 rounded text-[10px] font-bold hover:bg-indigo-700 disabled:opacity-50"
+                        className="flex-1 bg-primary text-on-primary py-1 rounded text-[10px] font-bold hover:bg-primary/90 disabled:opacity-50"
                       >
                         {executantAccio ? "Processant..." : "Aprovar i Executar"}
                       </button>
@@ -200,7 +200,7 @@ export default function CopilotWidget({ isMobile = false }: { isMobile?: boolean
                       <a
                         key={lIdx}
                         href={link.url}
-                        className="text-[10px] bg-slate-200 text-slate-700 px-2 py-0.5 rounded flex items-center gap-1 hover:bg-slate-300 transition-colors"
+                        className="text-[10px] bg-surface-container text-on-surface px-2 py-0.5 rounded flex items-center gap-1 hover:bg-surface-container-high transition-colors"
                       >
                         <ExternalLink className="w-3 h-3" />
                         {link.titol}
@@ -212,10 +212,10 @@ export default function CopilotWidget({ isMobile = false }: { isMobile?: boolean
             ))}
             {carregant && (
               <div className="flex items-start">
-                <div className="bg-white border border-slate-200 text-slate-800 p-3 rounded-2xl rounded-bl-none shadow-sm text-xs flex items-center gap-2">
-                  <div className="w-2 h-2 bg-indigo-400 rounded-full animate-bounce"></div>
-                  <div className="w-2 h-2 bg-indigo-500 rounded-full animate-bounce delay-75"></div>
-                  <div className="w-2 h-2 bg-indigo-600 rounded-full animate-bounce delay-150"></div>
+                <div className="bg-surface-container-lowest border border-outline-variant/40 text-on-surface p-3 rounded-2xl rounded-bl-none shadow-sm text-xs flex items-center gap-2">
+                  <div className="w-2 h-2 bg-primary/60 rounded-full animate-bounce"></div>
+                  <div className="w-2 h-2 bg-primary/80 rounded-full animate-bounce delay-75"></div>
+                  <div className="w-2 h-2 bg-primary rounded-full animate-bounce delay-150"></div>
                 </div>
               </div>
             )}
@@ -223,17 +223,17 @@ export default function CopilotWidget({ isMobile = false }: { isMobile?: boolean
 
           {/* Chat Input */}
 
-          <div className="p-3 border-t border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-850">
+          <div className="p-3 border-t border-outline-variant/30 dark:border-slate-800 bg-surface-container-lowest dark:bg-slate-850">
             {imatgeB64 && (
               <div className="mb-2 relative inline-block">
-                <img src={imatgeB64} alt="Upload preview" className="h-16 w-16 object-cover rounded-lg border border-slate-200" />
+                <img src={imatgeB64} alt="Upload preview" className="h-16 w-16 object-cover rounded-lg border border-outline-variant" />
                 <button onClick={() => setImatgeB64(null)} className="absolute -top-2 -right-2 bg-rose-500 text-white rounded-full p-0.5">
                   <X className="w-3 h-3" />
                 </button>
               </div>
             )}
             <div className="flex items-center gap-2">
-              <label className="p-2 text-slate-400 hover:text-indigo-600 cursor-pointer bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 rounded-xl transition-colors">
+              <label className="p-2 text-on-surface-variant hover:text-primary cursor-pointer bg-surface-container dark:bg-slate-800 hover:bg-surface-container-high rounded-xl transition-colors">
                 <Camera className="w-5 h-5" />
                 <input type="file" accept="image/*" capture="environment" className="hidden" onChange={handleImageUpload} />
               </label>
@@ -246,12 +246,12 @@ export default function CopilotWidget({ isMobile = false }: { isMobile?: boolean
                 if (e.key === "Enter") enviarMissatgeXat();
               }}
               placeholder="Fes la teva consulta..."
-              className="flex-1 bg-slate-100 dark:bg-slate-800 border border-transparent rounded-xl px-3 py-2 text-xs text-slate-800 dark:text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-indigo-500 focus:bg-white transition-all"
+              className="flex-1 bg-surface-container dark:bg-slate-800 border border-transparent rounded-xl px-3 py-2 text-xs text-on-surface dark:text-slate-100 placeholder:text-on-surface-variant focus:outline-none focus:border-primary focus:bg-surface-container-lowest transition-all"
             />
               <button
                 onClick={() => enviarMissatgeXat()}
                 disabled={carregant || (!missatgeXat.trim() && !imatgeB64)}
-                className="p-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white transition-all shadow"
+                className="p-2 rounded-xl bg-primary hover:bg-primary/90 disabled:opacity-50 text-on-primary transition-all shadow"
               >
                 <Send className="w-4 h-4" />
               </button>

@@ -134,12 +134,14 @@ export default function ContracteDetailPage({ params }: { params: { id: string }
           </h2>
           <div className="grid grid-cols-2 gap-4 text-sm">
             <div>
-              <p className="text-slate-500">Client ID</p>
-              <p className="font-mono text-slate-900 dark:text-white font-medium">{contracte.client_id}</p>
+              <p className="text-slate-500">Client</p>
+              <p className="text-slate-900 dark:text-white font-semibold">
+                {contracte.client_nom || contracte.client_id}
+              </p>
             </div>
             <div>
               <p className="text-slate-500">Import Anual</p>
-              <p className="font-mono text-emerald-600 dark:text-emerald-400 font-bold text-lg">{contracte.import_anual.toFixed(2)} €</p>
+              <p className="font-mono text-emerald-600 dark:text-emerald-400 font-bold text-lg">{Number(contracte.import_anual || 0).toFixed(2)} €</p>
             </div>
             <div>
               <p className="text-slate-500">Data Inici</p>
@@ -187,7 +189,7 @@ export default function ContracteDetailPage({ params }: { params: { id: string }
                     placeholder="0.0 %"
                     className="w-20 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded px-2 text-sm"
                   />
-                  <button onClick={handleRenovar} disabled={renovating} className="flex-1 bg-primary-600 text-white rounded text-sm font-bold py-1.5 hover:bg-primary-700 disabled:opacity-50">
+                  <button onClick={handleRenovar} disabled={renovating} className="flex-1 bg-primary text-white rounded text-sm font-bold py-1.5 hover:opacity-90 disabled:opacity-50">
                     Aplicar IPC
                   </button>
                 </div>

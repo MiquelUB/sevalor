@@ -104,17 +104,27 @@ async def get_dashboard_hud(
     res_teams = await db.execute(stmt_teams)
     teams_on_field = res_teams.scalar() or 0
 
-    # Critical stock
+    # Critical stock (estoc disponible real = físic - reservat)
     stmt_stock = (
         select(Article.id)
-        .outerjoin(EstocMagatzem, Article.id == EstocMagatzem.article_id)
+        .outerjoin(
+            EstocMagatzem,
+            (Article.id == EstocMagatzem.article_id)
+            & (EstocMagatzem.empresa_id == emp_uuid),
+        )
         .where(
             Article.empresa_id == emp_uuid,
             Article.actiu.is_(True),
             Article.estoc_minim > 0,
         )
         .group_by(Article.id, Article.estoc_minim)
-        .having(func.coalesce(func.sum(EstocMagatzem.quantitat_fisica), 0) <= Article.estoc_minim)
+        .having(
+            func.coalesce(
+                func.sum(EstocMagatzem.quantitat_fisica - EstocMagatzem.quantitat_virtual_reservada),
+                0,
+            )
+            <= Article.estoc_minim
+        )
     )
     res_stock = await db.execute(stmt_stock)
     critical_stock = len(res_stock.all())

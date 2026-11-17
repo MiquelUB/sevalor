@@ -13,23 +13,26 @@ import {
   Plus,
   RefreshCw,
   X,
+  Link2,
+  Copy,
+  Check,
 } from "lucide-react";
 import { useGestio } from "@/lib/gestio-context";
 import { apiFetch } from "@/lib/api";
 
 interface Missatge {
   id: string;
-  conversa_id: string;
-  remitent: string;
-  canal: string;
   contingut_text: string;
-  tipus_esdeveniment?: string;
+  remitent_tipus: string;
+  tipus_esdeveniment: string;
   created_at?: string;
 }
 
 interface Conversa {
   id: string;
   client_id: string;
+  client_nom?: string | null;
+  client_te_telegram?: boolean;
   titol: string;
   estat: string;
   es_arxivada: boolean;
@@ -53,11 +56,14 @@ export default function GestioNotificacionsPage() {
   const [nouText, setNouText] = useState("");
   const [enviant, setEnviant] = useState(false);
 
-  // Modal nova conversa
+  // Modal nova conversa i invitació Telegram
   const [modalNova, setModalNova] = useState(false);
   const [clients, setClients] = useState<ClientOption[]>([]);
   const [selectedClientId, setSelectedClientId] = useState("");
   const [nouTitol, setNouTitol] = useState("");
+  const [invitacioEnllac, setInvitacioEnllac] = useState<string | null>(null);
+  const [invitantTelegram, setInvitantTelegram] = useState(false);
+  const [copiatEnllac, setCopiatEnllac] = useState(false);
 
   const carregarConverses = async () => {
     setLoading(true);
@@ -99,7 +105,24 @@ export default function GestioNotificacionsPage() {
 
   const handleSeleccionarConversa = (conv: Conversa) => {
     setConversaActiva(conv);
+    setInvitacioEnllac(null);
     carregarMissatges(conv.id);
+  };
+
+  const handleConvidarTelegram = async () => {
+    if (!conversaActiva) return;
+    setInvitantTelegram(true);
+    try {
+      const res = await apiFetch<{ enllac_profund: string }>(
+        `/gestio/notificacions/converses/${conversaActiva.id}/invitar-telegram`,
+        { method: "POST" }
+      );
+      setInvitacioEnllac(res.enllac_profund);
+    } catch (err: any) {
+      setError(err.message || "Error en generar la invitació de Telegram");
+    } finally {
+      setInvitantTelegram(false);
+    }
   };
 
   const handleEnviarMissatge = async (e: React.FormEvent) => {
@@ -110,9 +133,8 @@ export default function GestioNotificacionsPage() {
       await apiFetch<Missatge>(`/gestio/notificacions/converses/${conversaActiva.id}/missatges`, {
         method: "POST",
         body: JSON.stringify({
-          remitent: "OFICINA",
-          canal: "WEB_PWA",
           contingut_text: nouText.trim(),
+          tipus_esdeveniment: "MISSATGE_MANUAL",
         }),
       });
       setNouText("");
@@ -259,15 +281,52 @@ export default function GestioNotificacionsPage() {
         {conversaActiva ? (
           <div className="flex-1 flex flex-col bg-slate-50 dark:bg-slate-950">
             {/* Capçalera conversa */}
-            <div className="p-3.5 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between">
-              <div>
-                <h2 className="text-xs font-bold text-slate-800 dark:text-slate-100">
-                  {conversaActiva.titol}
-                </h2>
-                <p className="text-[10px] font-mono text-slate-500">
-                  ID: {conversaActiva.id}
-                </p>
+            <div className="p-3.5 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 space-y-2">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <h2 className="text-xs font-bold text-slate-800 dark:text-slate-100">
+                    {conversaActiva.titol}
+                  </h2>
+                  <p className="text-[11px] text-slate-500 flex items-center gap-2">
+                    <span className="font-semibold text-slate-700 dark:text-slate-300">
+                      {conversaActiva.client_nom || "Client"}
+                    </span>
+                    <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
+                      conversaActiva.client_te_telegram
+                        ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300"
+                        : "bg-slate-100 text-slate-500 dark:bg-slate-800"
+                    }`}>
+                      {conversaActiva.client_te_telegram ? "Telegram vinculat" : "Sense Telegram"}
+                    </span>
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleConvidarTelegram}
+                  disabled={invitantTelegram}
+                  className="px-3 py-1.5 rounded-xl bg-primary text-primary-foreground text-xs font-bold flex items-center gap-1.5 hover:opacity-90 disabled:opacity-50"
+                >
+                  <Link2 className="w-3.5 h-3.5" />
+                  <span>{invitantTelegram ? "Generant..." : "Convidar a Telegram"}</span>
+                </button>
               </div>
+              {invitacioEnllac && (
+                <div className="flex items-center justify-between gap-2 px-3 py-2 rounded-xl bg-primary/5 border border-primary/20 text-[11px]">
+                  <span className="font-mono truncate text-primary">{invitacioEnllac}</span>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      await navigator.clipboard?.writeText(invitacioEnllac);
+                      setCopiatEnllac(true);
+                      setTimeout(() => setCopiatEnllac(false), 2000);
+                    }}
+                    className="inline-flex items-center gap-1 font-bold text-primary shrink-0"
+                  >
+                    {copiatEnllac ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                    <span>{copiatEnllac ? "Copiat" : "Copiar"}</span>
+                  </button>
+                </div>
+              )}
             </div>
 
             {/* Zona de missatges */}
@@ -283,7 +342,7 @@ export default function GestioNotificacionsPage() {
                 </div>
               ) : (
                 missatges.map((m) => {
-                  const isOficina = m.remitent === "OFICINA";
+                  const isOficina = m.remitent_tipus === "OFICINA";
                   return (
                     <div
                       key={m.id}
@@ -292,14 +351,14 @@ export default function GestioNotificacionsPage() {
                       <div
                         className={`max-w-md p-3 rounded-2xl text-xs ${
                           isOficina
-                            ? "bg-emerald-600 text-white rounded-br-sm"
+                            ? "bg-primary text-primary-foreground rounded-br-sm"
                             : "bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 border border-slate-200 dark:border-slate-700 rounded-bl-sm"
                         }`}
                       >
                         <p>{m.contingut_text}</p>
                       </div>
                       <span className="text-[9px] text-slate-400 mt-1 font-mono px-1">
-                        {m.remitent} • {m.canal}
+                        {m.remitent_tipus} • {m.tipus_esdeveniment}
                       </span>
                     </div>
                   );

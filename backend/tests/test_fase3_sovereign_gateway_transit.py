@@ -59,7 +59,7 @@ async def test_cua_transit_temporal_i_auto_purga_immediata(db_session, tmp_path:
     """
     transit_dir = tmp_path / "sevalor_transit_queue"
     monkeypatch.setenv("SOVEREIGN_TRANSIT_QUEUE_DIR", str(transit_dir))
-    SovereignStorageGateway.TRANSIT_QUEUE_DIR = transit_dir
+    monkeypatch.setattr(SovereignStorageGateway, "TRANSIT_QUEUE_DIR", transit_dir)
 
     emp_id = uuid.uuid4()
     vault_token = f"svlt_{uuid.uuid4().hex}"

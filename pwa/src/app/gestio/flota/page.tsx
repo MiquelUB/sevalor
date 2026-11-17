@@ -1,5 +1,6 @@
 "use client";
 import { apiFetch, getApiBaseUrl } from "@/lib/api";
+import { useGestio } from "@/lib/gestio-context";
 
 import React, { useState, useEffect } from "react";
 import {
@@ -116,6 +117,8 @@ interface DocumentFlotaItem {
 }
 
 export default function GestioFlotaPage() {
+  const { rolActiu } = useGestio();
+  const teAccesFinancerFlota = rolActiu !== "ENGINYER";
   const [vehicles, setVehicles] = useState<VehicleItem[]>([]);
   const [operaris, setOperaris] = useState<OperariItem[]>([]);
   const [carregant, setCarregant] = useState<boolean>(true);
@@ -517,11 +520,15 @@ export default function GestioFlotaPage() {
           odometre_inici_contracte: Number(nouOdometreInici) || 0,
           data_inici_contracte: novaDataIniciContracte || null,
           data_fi_contracte: novaDataFiContracte || null,
-          quota_mensual_eur: novaQuotaMensual !== "" ? Number(novaQuotaMensual) : 0,
-          tarifa_diaria_eur: novaTarifaDiaria !== "" ? Number(novaTarifaDiaria) : 0,
-          preu_km_exces_eur: nouPreuKmExces !== "" ? Number(nouPreuKmExces) : 0,
-          valor_residual_eur: nouValorResidual !== "" ? Number(nouValorResidual) : null,
-          fianca_eur: novaFianca !== "" ? Number(novaFianca) : null,
+          ...(teAccesFinancerFlota
+            ? {
+                quota_mensual_eur: novaQuotaMensual !== "" ? Number(novaQuotaMensual) : 0,
+                tarifa_diaria_eur: novaTarifaDiaria !== "" ? Number(novaTarifaDiaria) : 0,
+                preu_km_exces_eur: nouPreuKmExces !== "" ? Number(nouPreuKmExces) : 0,
+                valor_residual_eur: nouValorResidual !== "" ? Number(nouValorResidual) : null,
+                fianca_eur: novaFianca !== "" ? Number(novaFianca) : null,
+              }
+            : {}),
           consum_l_100km: nouTipus === "REMOLC" ? null : (nouConsumReal !== "" ? Number(nouConsumReal) : null),
           consum_mitjana_historica: nouTipus === "REMOLC" ? null : (nouConsumMitjana !== "" ? Number(nouConsumMitjana) : null),
           consum_adblue_litres: nouTipus === "DIESEL" && nouConsumAdblue !== "" ? Number(nouConsumAdblue) : 0,
@@ -657,11 +664,15 @@ export default function GestioFlotaPage() {
           odometre_inici_contracte: Number(editOdometreInici) || 0,
           data_inici_contracte: editDataIniciContracte || null,
           data_fi_contracte: editDataFiContracte || null,
-          quota_mensual_eur: editQuotaMensual !== "" ? Number(editQuotaMensual) : 0,
-          tarifa_diaria_eur: editTarifaDiaria !== "" ? Number(editTarifaDiaria) : 0,
-          preu_km_exces_eur: editPreuKmExces !== "" ? Number(editPreuKmExces) : 0,
-          valor_residual_eur: editValorResidual !== "" ? Number(editValorResidual) : null,
-          fianca_eur: editFianca !== "" ? Number(editFianca) : null,
+          ...(teAccesFinancerFlota
+            ? {
+                quota_mensual_eur: editQuotaMensual !== "" ? Number(editQuotaMensual) : 0,
+                tarifa_diaria_eur: editTarifaDiaria !== "" ? Number(editTarifaDiaria) : 0,
+                preu_km_exces_eur: editPreuKmExces !== "" ? Number(editPreuKmExces) : 0,
+                valor_residual_eur: editValorResidual !== "" ? Number(editValorResidual) : null,
+                fianca_eur: editFianca !== "" ? Number(editFianca) : null,
+              }
+            : {}),
           consum_l_100km: editTipus === "REMOLC" ? null : (editConsumL100km !== "" ? Number(editConsumL100km) : null),
           consum_mitjana_historica: editTipus === "REMOLC" ? null : (editConsumMitjana !== "" ? Number(editConsumMitjana) : null),
           consum_adblue_litres: editTipus === "DIESEL" && editConsumAdblue !== "" ? Number(editConsumAdblue) : 0,
@@ -789,7 +800,7 @@ export default function GestioFlotaPage() {
                   if (f && f.length > 0) processFilesOcr(Array.from(f));
                 }}
                 disabled={ocrLoading}
-                className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-mono font-bold bg-indigo-600 text-white hover:bg-indigo-700 shadow-sm cursor-pointer transition-all ${ocrLoading ? 'opacity-50 pointer-events-none' : ''}`}
+                className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-mono font-bold bg-primary text-primary-foreground hover:opacity-90 shadow-sm cursor-pointer transition-all ${ocrLoading ? 'opacity-50 pointer-events-none' : ''}`}
                 title="Clica o arrossega un o diversos documents: Targeta ITV, Pòlissa Assegurança, Reparació (PDF, Markdown .md o Imatges)"
               >
                 {ocrLoading ? <span className="animate-spin text-lg leading-none">⚙</span> : <span className="text-lg leading-none">✨</span>}
@@ -1019,8 +1030,8 @@ export default function GestioFlotaPage() {
                                 {v.km_recorreguts_contracte.toLocaleString()} / {v.renting_limit_km.toLocaleString()} km
                               </p>
                             ) : null}
-                            {(v.cost_total_acumulat_eur || 0) > 0 && (
-                              <p className="text-[9px] text-indigo-600 dark:text-indigo-400 font-mono font-semibold">
+                            {teAccesFinancerFlota && (v.cost_total_acumulat_eur || 0) > 0 && (
+                              <p className="text-[9px] text-primary font-mono font-semibold">
                                 TCO: {v.cost_total_acumulat_eur?.toLocaleString()} € ({v.cost_per_km_eur?.toFixed(2)} €/km)
                               </p>
                             )}
@@ -1045,7 +1056,7 @@ export default function GestioFlotaPage() {
                                     : v.regim_adquisicio === "LLOGUER"
                                     ? "bg-blue-500"
                                     : v.regim_adquisicio === "LEASING"
-                                    ? "bg-indigo-500"
+                                    ? "bg-primary"
                                     : "bg-purple-500"
                                 }`}
                               ></span>
@@ -1061,8 +1072,8 @@ export default function GestioFlotaPage() {
                                   : v.regim_adquisicio}
                               </span>
                             </div>
-                            {(v.cost_total_acumulat_eur || 0) > 0 && (
-                              <span className="text-[9px] text-indigo-600 dark:text-indigo-400 font-mono font-semibold">
+                            {teAccesFinancerFlota && (v.cost_total_acumulat_eur || 0) > 0 && (
+                              <span className="text-[9px] text-primary font-mono font-semibold">
                                 TCO: {v.cost_total_acumulat_eur?.toLocaleString()} €
                               </span>
                             )}
@@ -1469,8 +1480,8 @@ export default function GestioFlotaPage() {
                 onClick={() => modalFileInputRef.current?.click()}
                 className={`p-3.5 rounded-xl border-2 border-dashed transition-all cursor-pointer text-center ${
                   ocrLoading
-                    ? "border-indigo-500 bg-indigo-50/50 dark:bg-indigo-950/20"
-                    : "border-slate-300 dark:border-slate-700 hover:border-indigo-500 hover:bg-slate-50 dark:hover:bg-slate-800/50"
+                    ? "border-primary bg-primary/5"
+                    : "border-slate-300 dark:border-slate-700 hover:border-primary hover:bg-slate-50 dark:hover:bg-slate-800/50"
                 }`}
               >
                 <input
@@ -1481,15 +1492,15 @@ export default function GestioFlotaPage() {
                   accept="image/*,.pdf,application/pdf,.md,.txt,text/markdown,text/plain"
                   onChange={handleOcrUpload}
                 />
-                <div className="flex items-center justify-center gap-2 text-indigo-600 dark:text-indigo-400 font-mono text-xs font-bold">
+                <div className="flex items-center justify-center gap-2 text-primary font-mono text-xs font-bold">
                   {ocrLoading ? (
                     <>
-                      <RefreshCw className="w-4 h-4 animate-spin text-indigo-500" />
+                      <RefreshCw className="w-4 h-4 animate-spin text-primary" />
                       <span>Extreient dades dels documents amb IA...</span>
                     </>
                   ) : (
                     <>
-                      <FileText className="w-4 h-4 text-indigo-500" />
+                      <FileText className="w-4 h-4 text-primary" />
                       <span>Arrossega o clica per afegir documents (ITV, Assegurança, Factura en PDF, Markdown .md o imatges)</span>
                     </>
                   )}
@@ -1704,6 +1715,7 @@ export default function GestioFlotaPage() {
                       />
                     </div>
                   </div>
+                  {teAccesFinancerFlota && (
                   <div className="grid grid-cols-3 gap-3">
                     {["RENTING", "LEASING"].includes(nouRegim) ? (
                       <div className="space-y-1">
@@ -1772,6 +1784,7 @@ export default function GestioFlotaPage() {
                       </div>
                     ) : null}
                   </div>
+                  )}
                 </div>
               )}
 
@@ -2199,19 +2212,19 @@ export default function GestioFlotaPage() {
                   </div>
                 </div>
 
-                {/* Sub-panell de Paràmetres Financers i Contractuals si Rènting/Lísing/Lloguer */}
+                {/* Sub-panell de Paràmetres Contractuals (dates visibles; paràmetres financers només si teAccesFinancerFlota) */}
                 {(editRegim === "RENTING" || editRegim === "LEASING" || editRegim === "LLOGUER") && (
-                  <div className="mt-3 p-3.5 rounded-xl bg-indigo-50/60 dark:bg-indigo-950/20 border border-indigo-200 dark:border-indigo-900/50 space-y-3">
+                  <div className="mt-3 p-3.5 rounded-xl bg-primary/5 border border-primary/20 space-y-3">
                     <div className="flex items-center justify-between">
-                      <span className="text-xs font-bold text-indigo-700 dark:text-indigo-400">
+                      <span className="text-xs font-bold text-primary">
                         {editRegim === "RENTING"
                           ? "Condicions Específiques de Rènting"
                           : editRegim === "LEASING"
                           ? "Condicions de Lísing Financer (Arrendament)"
                           : "Condicions de Contracte de Lloguer"}
                       </span>
-                      <span className="text-[10px] px-2 py-0.5 rounded-full bg-indigo-100 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 font-medium">
-                        Diferenciació Financera Activa
+                      <span className="text-[10px] px-2 py-0.5 rounded-full bg-primary/10 text-primary font-medium">
+                        Paràmetres Contractuals
                       </span>
                     </div>
 
@@ -2249,6 +2262,7 @@ export default function GestioFlotaPage() {
                       </div>
                     </div>
 
+                    {teAccesFinancerFlota && (
                     <div className="grid grid-cols-3 gap-3">
                       {editRegim === "LLOGUER" ? (
                         <div className="space-y-1">
@@ -2319,6 +2333,7 @@ export default function GestioFlotaPage() {
                         </div>
                       ) : null}
                     </div>
+                    )}
                   </div>
                 )}
               </div>

@@ -1,5 +1,8 @@
 """Seguretat, control d'accés basat en rols (RBAC) i dependències d'autorització."""
 
+import hashlib
+import hmac
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Dict, List, Optional
 
@@ -147,4 +150,29 @@ def create_access_token(
         to_encode["exp"] = expire
 
     return str(jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM))
+
+
+def blind_hmac(valor: str, namespace: str = "generic", length: int = 32) -> str:
+    """Calcula un índex cec determinista HMAC-SHA256 amb la clau secreta de la plataforma."""
+    msg = f"{namespace}:{valor}".encode("utf-8")
+    digest = hmac.new(settings.SECRET_KEY.encode("utf-8"), msg, hashlib.sha256).hexdigest()
+    return digest[:length]
+
+
+def blind_nif(nif: str) -> str:
+    """Retorna un pseudònim determinista <= 20 caràcters per a NIF/CIF sense PII a Hetzner."""
+    clean = (nif or "").strip().upper()
+    return f"h_{blind_hmac(clean, namespace='nif', length=16)}"
+
+
+def blind_email(email: str) -> str:
+    """Retorna un identificador cec determinista per a correus sense exposar PII ni domini."""
+    clean = (email or "").strip().lower()
+    return f"u_{blind_hmac(clean, namespace='email', length=32)}@blind.sevalor.app"
+
+
+def blind_telefon(telefon: str) -> str:
+    """Retorna un pseudònim determinista <= 20 caràcters per a telèfons sense PII a Hetzner."""
+    clean = re.sub(r"[\s\-()]+", "", (telefon or "").strip())
+    return f"t_{blind_hmac(clean, namespace='telefon', length=16)}"
 

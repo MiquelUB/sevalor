@@ -19,7 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.db import get_db
-from app.core.security import get_current_user_claims
+from app.core.security import blind_email, get_current_user_claims
 from app.models.models import Empresa, Usuari
 
 logger = logging.getLogger(__name__)
@@ -119,7 +119,13 @@ async def login_oficina(
 
         await db.execute(text("RESET ROLE;"))
         try:
-            stmt = select(Usuari).where(func.lower(Usuari.email) == login_data.email.strip().lower())
+            email_clean = login_data.email.strip().lower()
+            stmt = select(Usuari).where(
+                or_(
+                    func.lower(Usuari.email) == email_clean,
+                    Usuari.email == blind_email(email_clean),
+                )
+            )
             result = await db.execute(stmt)
             usuaris = list(result.scalars().all())
         finally:
@@ -306,6 +312,7 @@ class UserMeResponse(BaseModel):
     email: str | None = None
     is_impersonation: bool = False
     feature_copilot_ia: bool = True
+    node_ia_actiu: bool = False
 
 
 @router.get("/me", response_model=UserMeResponse)
@@ -326,13 +333,18 @@ async def get_me(
 
     emp_id = claims.get("empresa_id") or (str(usuari.empresa_id) if usuari and usuari.empresa_id else None)
     has_copilot = True
+    node_ia_actiu = False
     if emp_id:
         try:
             emp_uuid = uuid.UUID(emp_id)
-            emp_res = await db.execute(select(Empresa.feature_copilot_ia).where(Empresa.id == emp_uuid))
-            f_val = emp_res.scalar()
-            if f_val is not None:
-                has_copilot = bool(f_val)
+            emp_res = await db.execute(
+                select(Empresa.feature_copilot_ia, Empresa.node_ia_actiu).where(Empresa.id == emp_uuid)
+            )
+            emp_row = emp_res.first()
+            if emp_row is not None:
+                if emp_row[0] is not None:
+                    has_copilot = bool(emp_row[0])
+                node_ia_actiu = bool(emp_row[1])
         except Exception:
             pass
 
@@ -345,6 +357,7 @@ async def get_me(
             email=claims.get("email"),
             is_impersonation=is_impersonation,
             feature_copilot_ia=has_copilot,
+            node_ia_actiu=node_ia_actiu,
         )
 
     return UserMeResponse(
@@ -355,6 +368,7 @@ async def get_me(
         email=usuari.email,
         is_impersonation=is_impersonation,
         feature_copilot_ia=has_copilot,
+        node_ia_actiu=node_ia_actiu,
     )
 
 

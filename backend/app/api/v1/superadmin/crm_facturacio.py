@@ -1,5 +1,6 @@
 """Router CRM SaaS, Facturació B2B Veri*factu amb Human-in-the-Loop i Tiquets d'Incidència."""
 
+import io
 import logging
 import os
 import uuid
@@ -8,7 +9,7 @@ from typing import Any, Dict, List, Optional
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from fastapi.responses import FileResponse
+from fastapi.responses import Response
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -23,6 +24,7 @@ from app.models.models import (
     SaasHistorialLlicencia,
     SaasTiquetSuport,
 )
+from app.services.sovereign_storage import SuperadminStorageGateway
 from app.services.verifactu import generar_qr_verifactu, generar_sha256_encadenat
 
 logger = logging.getLogger("superadmin.crm_facturacio")
@@ -227,16 +229,62 @@ def _recalcular_imports(f: SaasFacturaB2B) -> None:
     f.import_total = round(f.base_imposable + f.quota_iva, 2)
 
 
-def _obtenir_ruta_factura_b2b_pdf(factura_id: str) -> str:
-    base_docs = os.getenv("SOVEREIGN_DOCS_PATH", "/docs")
-    target_dir = os.path.join(base_docs, "superadmin", "factures_b2b")
+async def _carregar_mapes_facturacio_superadmin() -> tuple[
+    Dict[str, Dict[str, Any]],
+    Dict[str, Dict[str, Any]],
+    Dict[str, Dict[str, Any]],
+]:
+    """Llegeix fitxes comercials, llicències i factures SaaS des del Disc Sobirà de Superadmin."""
+    fitxes_map: Dict[str, Dict[str, Any]] = {}
+    llicencies_map: Dict[str, Dict[str, Any]] = {}
+    factures_map: Dict[str, Dict[str, Any]] = {}
+    for cat, target_map, id_keys in (
+        ("tenants_fitxes", fitxes_map, ("id", "empresa_id")),
+        ("tenants_llicencies", llicencies_map, ("empresa_id", "id")),
+        ("saas_factures_json", factures_map, ("id",)),
+    ):
+        try:
+            items = await SuperadminStorageGateway.llegir_entitats_json(cat)
+            for item in items:
+                for k in id_keys:
+                    if item.get(k):
+                        target_map[str(item[k])] = item
+                        break
+        except HTTPException as exc:
+            logger.warning("No s'ha pogut llegir '%s' del Disc Superadmin: %s", cat, exc.detail)
+        except Exception as exc:
+            logger.warning("Error llegint '%s' del Disc Superadmin: %s", cat, exc)
+    return fitxes_map, llicencies_map, factures_map
+
+
+async def _desar_superadmin_segur(categoria: str, item_id: str, dades: Dict[str, Any]) -> None:
     try:
-        os.makedirs(target_dir, exist_ok=True)
-        return os.path.join(target_dir, f"factura_saas_{factura_id}.pdf")
-    except OSError:
-        fallback_dir = "/tmp/sevalor_docs/superadmin/factures_b2b"
-        os.makedirs(fallback_dir, exist_ok=True)
-        return os.path.join(fallback_dir, f"factura_saas_{factura_id}.pdf")
+        await SuperadminStorageGateway.desar_entitat_json(categoria, item_id, dades)
+    except HTTPException as exc:
+        logger.warning("No s'ha pogut sincronitzar '%s/%s' al Disc Superadmin: %s", categoria, item_id, exc.detail)
+    except Exception as exc:
+        logger.warning("Error sincronitzant '%s/%s' al Disc Superadmin: %s", categoria, item_id, exc)
+
+
+def _enriquir_factura_amb_disc(
+    serialized: Dict[str, Any],
+    fitxes_map: Dict[str, Dict[str, Any]],
+    factures_map: Dict[str, Dict[str, Any]],
+) -> Dict[str, Any]:
+    fac_disc = factures_map.get(str(serialized.get("id") or ""), {})
+    fitxa = fitxes_map.get(str(serialized.get("empresa_id") or ""), {})
+    nom_real = (
+        fac_disc.get("client_nom_snapshot")
+        or fitxa.get("rao_social")
+        or fitxa.get("nom")
+        or serialized.get("client_nom_snapshot")
+    )
+    nif_real = fac_disc.get("client_nif_snapshot") or fitxa.get("nif") or serialized.get("client_nif_snapshot")
+    return {
+        **serialized,
+        "client_nom_snapshot": nom_real,
+        "client_nif_snapshot": nif_real,
+    }
 
 
 @router.get("/factures", response_model=List[Dict[str, Any]])
@@ -255,7 +303,8 @@ async def llistar_factures_b2b(
 
     res = await db.execute(stmt)
     factures = res.scalars().all()
-    return [_serialitzar_factura_b2b(f) for f in factures]
+    fitxes_map, _, factures_map = await _carregar_mapes_facturacio_superadmin()
+    return [_enriquir_factura_amb_disc(_serialitzar_factura_b2b(f), fitxes_map, factures_map) for f in factures]
 
 
 @router.post("/prefactures", status_code=status.HTTP_201_CREATED, response_model=Dict[str, Any])
@@ -281,12 +330,18 @@ async def crear_prefactura_b2b(
     else:
         num_ops = int(getattr(emp, "quota_operaris", None) or 5)
 
+    fitxes_map, llicencies_map, _ = await _carregar_mapes_facturacio_superadmin()
+    fitxa = fitxes_map.get(str(emp.id), {})
+    llic = llicencies_map.get(str(emp.id), {})
+
     if payload.preu_unitari_operari is not None:
         preu_op = payload.preu_unitari_operari
     elif payload.preu_per_operari is not None:
         preu_op = payload.preu_per_operari
     else:
-        preu_op = float(getattr(emp, "tarifa_per_operari", 0.0) or 0.0)
+        preu_op = float(
+            llic.get("tarifa_per_operari", getattr(emp, "tarifa_per_operari", 0.0) or 0.0)
+        )
 
     equips_dump = (
         [item.normalized_dict() for item in payload.equips_ia_detall]
@@ -302,6 +357,9 @@ async def crear_prefactura_b2b(
         if payload.iva_percent is not None
         else (payload.tipus_iva_percent if payload.tipus_iva_percent is not None else 21.0)
     )
+
+    client_nom_real = str(fitxa.get("rao_social") or fitxa.get("nom") or emp.nom)
+    client_nif_real = str(fitxa.get("nif") or emp.nif)
 
     nova_prefactura = SaasFacturaB2B(
         empresa_id=emp.id,
@@ -326,7 +384,13 @@ async def crear_prefactura_b2b(
     db.add(nova_prefactura)
     await db.commit()
 
-    return _serialitzar_factura_b2b(nova_prefactura)
+    serialized = {
+        **_serialitzar_factura_b2b(nova_prefactura),
+        "client_nom_snapshot": client_nom_real,
+        "client_nif_snapshot": client_nif_real,
+    }
+    await _desar_superadmin_segur("saas_factures_json", str(nova_prefactura.id), serialized)
+    return serialized
 
 
 @router.put("/prefactures/{prefactura_id}", response_model=Dict[str, Any])
@@ -396,7 +460,9 @@ async def editar_prefactura_b2b(
     _recalcular_imports(pref)
     await db.commit()
 
-    serialized = _serialitzar_factura_b2b(pref)
+    fitxes_map, _, factures_map = await _carregar_mapes_facturacio_superadmin()
+    serialized = _enriquir_factura_amb_disc(_serialitzar_factura_b2b(pref), fitxes_map, factures_map)
+    await _desar_superadmin_segur("saas_factures_json", str(pref.id), serialized)
     return {**serialized, "factura": serialized}
 
 
@@ -455,9 +521,22 @@ async def verificar_i_emetre_verifactu_b2b(
     data_avui = date.today()
     data_emissio_str = data_avui.isoformat()
 
+    fitxes_map, _, factures_map = await _carregar_mapes_facturacio_superadmin()
+    fac_disc = factures_map.get(str(pref.id), {})
+    fitxa_emp = fitxes_map.get(str(pref.empresa_id or ""), {})
+    client_nom_real = str(
+        fac_disc.get("client_nom_snapshot")
+        or fitxa_emp.get("rao_social")
+        or fitxa_emp.get("nom")
+        or pref.client_nom_snapshot
+    )
+    client_nif_real = str(
+        fac_disc.get("client_nif_snapshot") or fitxa_emp.get("nif") or pref.client_nif_snapshot
+    )
+
     hash_actual = generar_sha256_encadenat(
         empresa_nif=SEVALOR_EMISSOR_NIF,
-        client_nif=pref.client_nif_snapshot,
+        client_nif=client_nif_real,
         serie=pref.serie,
         numero_factura=nou_num,
         base_imposable=float(pref.base_imposable),
@@ -469,7 +548,7 @@ async def verificar_i_emetre_verifactu_b2b(
 
     qr_content = generar_qr_verifactu(
         nif_emissor=SEVALOR_EMISSOR_NIF,
-        nif_destinatari=pref.client_nif_snapshot,
+        nif_destinatari=client_nif_real,
         serie=pref.serie,
         numero=nou_num,
         hash_sha256=hash_actual,
@@ -477,15 +556,21 @@ async def verificar_i_emetre_verifactu_b2b(
         data_emissio=data_emissio_str,
     )
 
-    pdf_path = _obtenir_ruta_factura_b2b_pdf(str(pref.id))
-    _generar_pdf_b2b_reportlab(
+    pdf_bytes = _generar_pdf_b2b_reportlab_bytes(
         pref=pref,
+        client_nom_real=client_nom_real,
+        client_nif_real=client_nif_real,
         numero_factura=nou_num,
         data_emissio_str=data_emissio_str,
         hash_actual=hash_actual,
         hash_anterior=hash_anterior,
         qr_content=qr_content,
-        ruta_desti=pdf_path,
+    )
+    pdf_path = await SuperadminStorageGateway.pujar_fitxer_binari(
+        "saas_factures_pdf",
+        f"factura_saas_{pref.id}.pdf",
+        pdf_bytes,
+        content_type="application/pdf",
     )
 
     sub = claims.get("sub")
@@ -508,25 +593,32 @@ async def verificar_i_emetre_verifactu_b2b(
 
     await db.commit()
 
-    serialized = _serialitzar_factura_b2b(pref)
+    serialized = {
+        **_serialitzar_factura_b2b(pref),
+        "client_nom_snapshot": client_nom_real,
+        "client_nif_snapshot": client_nif_real,
+    }
+    await _desar_superadmin_segur("saas_factures_json", str(pref.id), serialized)
     return {**serialized, "factura": serialized}
 
 
-def _generar_pdf_b2b_reportlab(
+def _generar_pdf_b2b_reportlab_bytes(
     pref: SaasFacturaB2B,
+    client_nom_real: str,
+    client_nif_real: str,
     numero_factura: int,
     data_emissio_str: str,
     hash_actual: str,
     hash_anterior: Optional[str],
     qr_content: str,
-    ruta_desti: str,
-) -> None:
+) -> bytes:
     from reportlab.graphics.barcode import qr  # type: ignore[import-untyped]
     from reportlab.lib.colors import HexColor  # type: ignore[import-untyped]
     from reportlab.lib.pagesizes import A4  # type: ignore[import-untyped]
     from reportlab.pdfgen import canvas  # type: ignore[import-untyped]
 
-    c = canvas.Canvas(ruta_desti, pagesize=A4)
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=A4)
     c.setFont("Helvetica-Bold", 14)
     c.setFillColor(HexColor("#065f46"))
     c.drawString(30, A4[1] - 50, SEVALOR_EMISSOR_NOM)
@@ -538,7 +630,7 @@ def _generar_pdf_b2b_reportlab(
     c.setFont("Helvetica-Bold", 11)
     c.drawString(30, A4[1] - 105, "CLIENT EMPRESA (TENANT):")
     c.setFont("Helvetica", 10)
-    c.drawString(30, A4[1] - 122, f"{pref.client_nom_snapshot} (NIF: {pref.client_nif_snapshot})")
+    c.drawString(30, A4[1] - 122, f"{client_nom_real} (NIF: {client_nif_real})")
 
     c.setFont("Helvetica-Bold", 12)
     c.drawString(
@@ -622,6 +714,7 @@ def _generar_pdf_b2b_reportlab(
     )
     c.showPage()
     c.save()
+    return buf.getvalue()
 
 
 @router.patch("/factures/{factura_id}/estat-cobrament", response_model=Dict[str, Any])
@@ -676,7 +769,9 @@ async def canviar_estat_cobrament_factura(
             empresa_hibernada = True
 
     await db.commit()
-    out = _serialitzar_factura_b2b(fac)
+    fitxes_map, _, factures_map = await _carregar_mapes_facturacio_superadmin()
+    out = _enriquir_factura_amb_disc(_serialitzar_factura_b2b(fac), fitxes_map, factures_map)
+    await _desar_superadmin_segur("saas_factures_json", str(fac.id), out)
     out["empresa_hibernada"] = empresa_hibernada
     return out
 
@@ -685,8 +780,8 @@ async def canviar_estat_cobrament_factura(
 async def descarregar_pdf_factura_b2b(
     factura_id: str,
     db: AsyncSession = Depends(get_db_with_tenant_context),
-) -> FileResponse:
-    """Descarrega el PDF oficial Veri*factu d'una factura B2B emesa."""
+) -> Response:
+    """Descarrega el PDF oficial Veri*factu d'una factura B2B emesa des del Disc Sobirà de Superadmin."""
     try:
         f_uuid = uuid.UUID(factura_id)
     except ValueError:
@@ -694,15 +789,29 @@ async def descarregar_pdf_factura_b2b(
 
     res = await db.execute(select(SaasFacturaB2B).where(SaasFacturaB2B.id == f_uuid))
     fac = res.scalars().first()
-    if not fac or not fac.pdf_path or not os.path.exists(fac.pdf_path):
+    if not fac or not fac.pdf_path:
         raise HTTPException(status_code=404, detail="Fitxer PDF de la factura no trobat.")
 
     num_str = f"{fac.numero_factura:05d}" if fac.numero_factura else str(fac.id)[:8]
-    return FileResponse(
-        fac.pdf_path,
-        media_type="application/pdf",
-        filename=f"Factura_{fac.serie}_{num_str}.pdf",
-    )
+    filename_dl = f"Factura_{fac.serie}_{num_str}.pdf"
+    if fac.pdf_path.startswith("superadmin-vault://") or os.path.exists(fac.pdf_path):
+        try:
+            pdf_bytes, _ = await SuperadminStorageGateway.obtenir_bytes_fitxer(fac.pdf_path)
+            return Response(
+                content=pdf_bytes,
+                media_type="application/pdf",
+                headers={"Content-Disposition": f'attachment; filename="{filename_dl}"'},
+            )
+        except HTTPException:
+            if os.path.exists(fac.pdf_path):
+                with open(fac.pdf_path, "rb") as fh:
+                    return Response(
+                        content=fh.read(),
+                        media_type="application/pdf",
+                        headers={"Content-Disposition": f'attachment; filename="{filename_dl}"'},
+                    )
+            raise
+    raise HTTPException(status_code=404, detail="Fitxer PDF de la factura no trobat.")
 
 
 async def _comprovar_pc_local_empresa(node_ia_url: Optional[str]) -> bool:
@@ -805,7 +914,16 @@ async def crear_tiquet_suport(
     db.add(nou_tiquet)
     await db.commit()
 
-    return _serialitzar_tiquet(nou_tiquet)
+    fitxes_map, _, _ = await _carregar_mapes_facturacio_superadmin()
+    fitxa_t = fitxes_map.get(str(emp.id), {})
+    serialized_tiq = {
+        **_serialitzar_tiquet(nou_tiquet),
+        "empresa_nom_snapshot": str(
+            fitxa_t.get("rao_social") or fitxa_t.get("nom") or nou_tiquet.empresa_nom_snapshot
+        ),
+    }
+    await _desar_superadmin_segur("suport_tiquets", str(nou_tiquet.id), serialized_tiq)
+    return serialized_tiq
 
 
 @router.patch("/tiquets/{tiquet_id}", response_model=Dict[str, Any])
@@ -835,4 +953,6 @@ async def actualitzar_tiquet_suport(
         tiquet.severitat = payload.severitat or payload.prioritat or tiquet.severitat
 
     await db.commit()
-    return _serialitzar_tiquet(tiquet)
+    out_t = _serialitzar_tiquet(tiquet)
+    await _desar_superadmin_segur("suport_tiquets", str(tiquet.id), out_t)
+    return out_t

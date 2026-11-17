@@ -1,30 +1,43 @@
-"""Subagent de Peritatge Tècnic de Camp, Avaries i Garanties."""
+"""Subagent de Peritatge Tècnic de Camp, Avaries i Garanties (Disc Sobirà de l'Empresa)."""
 
 import uuid
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.models import EinaCustodia, MemorandumTecnicCopilot, OrdreTreball
 from app.services.subagents.base import BaseSubagent
 from app.services.subagents.schemas import SCHEMAS_PERITATGE_CAMP
 
 TERMINI_GARANTIA_MA_OBRA_DIES = 90
 
 
+def _parse_date(val: Any) -> Optional[date]:
+    if isinstance(val, date) and not isinstance(val, datetime):
+        return val
+    if isinstance(val, datetime):
+        return val.date()
+    if not isinstance(val, str) or not val.strip():
+        return None
+    try:
+        return date.fromisoformat(val.strip()[:10])
+    except ValueError:
+        return None
+
+
 class SubagentPeritatgeCamp(BaseSubagent):
     id = "subagent_peritatge_camp"
     nom = "Subagent Perit Tècnic de Camp"
-    descripcio = "Especialista en peritatge d'avaries, garanties vigents de fabricació/mà d'obra i redacció de memoràndums tècnics."
+    descripcio = (
+        "Especialista en peritatge d'avaries, garanties vigents de fabricació/mà d'obra i redacció de memoràndums tècnics."
+    )
     allowed_roles = ["OPERARI", "CAP_DE_COLLA", "ENGINYER", "BOSS"]
     tools_schema = SCHEMAS_PERITATGE_CAMP
     system_prompt = (
         "Ets el Perit Tècnic de Camp de SEVALOR. "
         "Dictamina sobre el terreny la causa d'avaries, audita si estan en període de garantia oficial "
-        "(<90 dies mà d'obra, 2 anys fabricant) i prepara memoràndums tècnics per a validació de l'enginyer. "
-        "Respon sempre en català amb rigor professional i tècnic."
+        "(<90 dies mà d'obra, 2 anys fabricant) i prepara memoràndums tècnics al disc dur dedicat de l'empresa "
+        "per a validació de l'enginyer. Respon sempre en català amb rigor professional i sense preus inventats."
     )
 
     def can_handle(self, query: str, rol: str) -> bool:
@@ -64,7 +77,7 @@ class SubagentPeritatgeCamp(BaseSubagent):
                 client_id=args.get("client_id"),
                 numero_serie=args.get("numero_serie"),
             )
-        elif tool_name == "generar_memorandum_tecnic":
+        if tool_name == "generar_memorandum_tecnic":
             return await self.tool_generar_memorandum_tecnic(
                 db,
                 empresa_id,
@@ -81,29 +94,27 @@ class SubagentPeritatgeCamp(BaseSubagent):
         client_id: Optional[str] = None,
         numero_serie: Optional[str] = None,
     ) -> dict:
-        f_uuid = uuid.UUID(finca_id) if finca_id else None
-        c_uuid = uuid.UUID(client_id) if client_id else None
         avui = date.today()
         fa_un_any = avui - timedelta(days=365)
-        alertes = []
+        alertes: List[Dict[str, Any]] = []
 
-        if f_uuid or c_uuid:
-            query = (
-                select(OrdreTreball)
-                .where(
-                    OrdreTreball.empresa_id == empresa_id,
-                    OrdreTreball.data_planificacio >= fa_un_any,
-                )
-                .order_by(OrdreTreball.data_planificacio.desc())
-            )
-            if f_uuid:
-                query = query.where(OrdreTreball.finca_id == f_uuid)
-            if c_uuid:
-                query = query.where(OrdreTreball.client_id == c_uuid)
-            ots = (await db.execute(query)).scalars().all()
-            if ots:
-                darrera = ots[0]
-                dies = (avui - darrera.data_planificacio).days
+        if finca_id or client_id:
+            ots_act = await self.read_sovereign_category(db, empresa_id, "ots_actives")
+            ots_hist = await self.read_sovereign_category(db, empresa_id, "ots_historic")
+            candidates: List[Dict[str, Any]] = []
+            for o in [*ots_act, *ots_hist]:
+                if finca_id and str(o.get("finca_id") or "") != finca_id.strip():
+                    continue
+                if client_id and str(o.get("client_id") or "") != client_id.strip():
+                    continue
+                d_plan = _parse_date(o.get("data_planificacio") or o.get("created_at"))
+                if d_plan and d_plan >= fa_un_any:
+                    candidates.append({**o, "_d_plan": d_plan})
+
+            candidates.sort(key=lambda x: x["_d_plan"], reverse=True)
+            if candidates:
+                darrera = candidates[0]
+                dies = (avui - darrera["_d_plan"]).days
                 if dies <= TERMINI_GARANTIA_MA_OBRA_DIES:
                     alertes.append(
                         {
@@ -111,31 +122,37 @@ class SubagentPeritatgeCamp(BaseSubagent):
                             "activa": True,
                             "cost_euros": 0.0,
                             "dies_passats": dies,
-                            "missatge": f"Garantia interna de mà d'obra vigent (<90 dies: {dies} dies). Cost 0 € per al client.",
+                            "missatge": (
+                                f"Garantia interna de mà d'obra vigent (<90 dies: {dies} dies). "
+                                "Cost 0 € per al client."
+                            ),
                         }
                     )
 
         if numero_serie:
-            res_eina = await db.execute(
-                select(EinaCustodia).where(
-                    EinaCustodia.empresa_id == empresa_id,
-                    EinaCustodia.numero_serie == numero_serie,
-                )
+            sn_clean = numero_serie.strip().lower()
+            eines = await self.read_sovereign_category(db, empresa_id, "magatzem_eines")
+            eina = next(
+                (e for e in eines if str(e.get("numero_serie") or "").strip().lower() == sn_clean),
+                None,
             )
-            eina = res_eina.scalar_one_or_none()
             if eina:
-                data_compra = eina.created_at.date()
-                data_fi = data_compra + timedelta(days=730)
-                dies_restants = (data_fi - avui).days
-                if dies_restants >= 0:
-                    alertes.append(
-                        {
-                            "tipus": "GARANTIA_FABRICANT",
-                            "activa": True,
-                            "dies_restants": dies_restants,
-                            "missatge": f"Garantia oficial del fabricant vigent fins al {data_fi.isoformat()} ({dies_restants} dies restants).",
-                        }
-                    )
+                data_compra = _parse_date(eina.get("data_compra") or eina.get("created_at"))
+                if data_compra:
+                    data_fi = data_compra + timedelta(days=730)
+                    dies_restants = (data_fi - avui).days
+                    if dies_restants >= 0:
+                        alertes.append(
+                            {
+                                "tipus": "GARANTIA_FABRICANT",
+                                "activa": True,
+                                "dies_restants": dies_restants,
+                                "missatge": (
+                                    f"Garantia oficial del fabricant vigent fins al {data_fi.isoformat()} "
+                                    f"({dies_restants} dies restants)."
+                                ),
+                            }
+                        )
 
         return {"trobat": len(alertes) > 0, "garanties": alertes}
 
@@ -146,8 +163,7 @@ class SubagentPeritatgeCamp(BaseSubagent):
         descripcio: str,
         ot_id_str: Optional[str] = None,
     ) -> dict:
-        ot_id = uuid.UUID(ot_id_str) if ot_id_str else None
-        text_lower = descripcio.lower()
+        text_lower = (descripcio or "").lower()
 
         es_extra = any(
             p in text_lower for p in ["arrel", "roca", "pedra", "extern", "preexistent", "pressio"]
@@ -157,53 +173,71 @@ class SubagentPeritatgeCamp(BaseSubagent):
             for p in ["pala", "error", "oblidat", "descompte", "trencat per nosaltres"]
         )
 
-        if es_extra:
-            dictamen = "EXTRA_FACTURABLE"
-            motiu = "Dany per causes externes (arrels o terreny rocós). Es proposa com a extra facturable."
-            temps = 45
-            materials = [
-                {"article": "Material reparació dany extern", "quantitat": 1, "unitat": "UT"}
-            ]
-            cost = 85.50
-        elif es_error:
+        # Cercar materials reals al catàleg del disc dur de l'empresa sense preus hardcodejats
+        articles_disc = await self.read_sovereign_category(db, empresa_id, "magatzem_articles")
+        materials: List[Dict[str, Any]] = []
+        cost_calculat = 0.0
+        for art in articles_disc:
+            nom_art = str(art.get("nom") or "").strip()
+            if nom_art and any(tok in text_lower for tok in nom_art.lower().split() if len(tok) >= 4):
+                pvp = float(art.get("preu_venda") or 0.0)
+                materials.append(
+                    {
+                        "article": nom_art,
+                        "quantitat": 1,
+                        "unitat": art.get("unitat_mesura") or "UT",
+                        "preu_unitari": pvp if pvp > 0 else None,
+                    }
+                )
+                cost_calculat += pvp
+
+        if es_error:
             dictamen = "COST_NO_IMPUTABLE"
             motiu = "Incidència durant l'execució atribuïble a la quadrilla. Cost no imputable al client."
-            temps = 30
-            materials = [
-                {"article": "Material de substitució interna", "quantitat": 1, "unitat": "UT"}
-            ]
-            cost = 0.00
+            cost_estimat: Optional[float] = 0.0
+        elif es_extra:
+            dictamen = "EXTRA_FACTURABLE"
+            motiu = "Dany per causes externes (arrels o terreny rocós). Es proposa com a extra facturable."
+            cost_estimat = round(cost_calculat, 2) if cost_calculat > 0 else None
         else:
             dictamen = "EXTRA_FACTURABLE"
-            motiu = "Imprevist no previst al pressupost inicial; requereix feines addicionals."
-            temps = 30
-            materials = [{"article": "Material reparació bàsica", "quantitat": 1, "unitat": "UT"}]
-            cost = 45.00
+            motiu = "Imprevist no previst al pressupost inicial; requereix validació tècnica i econòmica."
+            cost_estimat = round(cost_calculat, 2) if cost_calculat > 0 else None
 
-        memo = MemorandumTecnicCopilot(
-            empresa_id=empresa_id,
-            ordre_treball_id=ot_id,
-            transcripcio_audio=descripcio,
-            dictamen_pericial=dictamen,
-            motiu_dictamen=motiu,
-            estimacio_temps_extra_minuts=temps,
-            estimacio_materials_extra=materials,
-            cost_estimat_total=cost,
-            validat_per_enginyer=False,
-            estat="PROPOSTA",
+        memo_id = str(uuid.uuid4())
+        memo_payload: Dict[str, Any] = {
+            "id": memo_id,
+            "ordre_treball_id": ot_id_str,
+            "transcripcio_audio": descripcio,
+            "dictamen_pericial": dictamen,
+            "motiu_dictamen": motiu,
+            "estimacio_materials_extra": materials,
+            "cost_estimat_total": cost_estimat,
+            "validat_per_enginyer": False,
+            "estat": "PROPOSTA",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        await self.save_sovereign_entity(
+            db, empresa_id, "copilot_memorandums", memo_id, memo_payload
         )
-        db.add(memo)
-        await db.commit()
 
+        cost_txt = (
+            f"{cost_estimat:.2f}€ (segons catàleg)"
+            if cost_estimat is not None
+            else "pendent de valoració econòmica per l'enginyer"
+        )
         return {
             "trobat": True,
-            "memo_id": str(memo.id),
+            "memo_id": memo_id,
             "dictamen": dictamen,
             "motiu": motiu,
-            "cost_estimat": cost,
-            "temps_extra_minuts": temps,
+            "materials_detectats": materials,
+            "cost_estimat": cost_estimat,
             "estat": "PROPOSTA",
-            "missatge": f"S'ha generat la proposta de memoràndum {dictamen} ({cost:.2f}€). Pendent de validació de l'enginyer (HITL).",
+            "missatge": (
+                f"S'ha desat la proposta de memoràndum {dictamen} al disc dur de l'empresa "
+                f"(cost {cost_txt}). Pendent de validació humana de l'enginyer (HITL)."
+            ),
         }
 
     async def run_sovereign(
@@ -217,29 +251,33 @@ class SubagentPeritatgeCamp(BaseSubagent):
     ) -> Tuple[str, Optional[str], Optional[dict], Optional[dict], List[dict]]:
         enllacos: List[dict] = [{"titol": "Auditoria de Garanties", "url": "/gestio/copilot"}]
 
-        tool_name: Optional[str] = None
-        tool_args: Optional[Dict[str, Any]] = None
-        tool_res: Optional[dict] = None
-
-        # Si demana generar memoràndum
         if any(
             w in pregunta.lower()
             for w in ["memorandum", "memoràndum", "redacta dictamen", "generar dictamen"]
         ):
             tool_name = "generar_memorandum_tecnic"
-            tool_args = {"descripcio_avaria": pregunta}
+            tool_args: dict[str, Any] = {"descripcio_avaria": pregunta}
             tool_res = await self.tool_generar_memorandum_tecnic(db, empresa_id, pregunta)
             return tool_res.get("missatge", ""), tool_name, tool_args, tool_res, enllacos
 
-        # Per defecte: auditar garanties
+        # Comprovar si hi ha un número de sèrie o client/finca a la consulta o incidències registrades
+        eines = await self.read_sovereign_category(db, empresa_id, "magatzem_eines")
+        sn_trobat: Optional[str] = None
+        q_low = pregunta.lower()
+        for e in eines:
+            sn = str(e.get("numero_serie") or "").strip()
+            if sn and sn.lower() in q_low:
+                sn_trobat = sn
+                break
+
         tool_name = "get_warranty_status"
-        tool_args = {"numero_serie": None}
-        tool_res = await self.tool_get_warranty_status(db, empresa_id)
+        tool_args = {"numero_serie": sn_trobat}
+        tool_res = await self.tool_get_warranty_status(db, empresa_id, numero_serie=sn_trobat)
 
         if tool_res.get("trobat"):
             msg_g = "; ".join([g["missatge"] for g in tool_res["garanties"]])
             resposta = f"Estat de garanties: {msg_g}"
         else:
-            resposta = "No hi ha alertes de garantia actives per als elements consultats a la base de dades."
+            resposta = "No hi ha alertes de garantia actives per als elements consultats al disc dur de l'empresa."
 
         return resposta, tool_name, tool_args, tool_res, enllacos

@@ -167,7 +167,9 @@ export default function OperariTiquetsPage() {
         try {
           const u = JSON.parse(localStorage.getItem("sevalor_user") || "{}");
           if (u?.empresa_id) empresaId = u.empresa_id;
-        } catch {}
+        } catch {
+          /* localStorage parse fallback */
+        }
 
         const localId = crypto.randomUUID();
         await localDB.tiquets.add({

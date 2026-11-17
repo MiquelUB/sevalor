@@ -1,35 +1,51 @@
 import uuid
+from pathlib import Path
 
 import jwt
 import pytest
 from httpx import ASGITransport, AsyncClient
 
 from app.main import app
-from app.models.models import Empresa, FaqCorporativaRag, Usuari
+from app.models.models import Empresa, Usuari
+from app.services.sovereign_storage import SovereignStorageGateway
 
 
 @pytest.mark.asyncio
-async def test_copilot_xat(admin_session, headers, boss_token):
+async def test_copilot_xat(admin_session, headers, boss_token, tmp_path: Path):
     token_jwt, empresa_id = boss_token
     boss_nif = "B" + str(uuid.uuid4())[:8].upper()
+    emp_uuid = uuid.UUID(empresa_id)
 
     decoded = jwt.decode(token_jwt, options={"verify_signature": False})
 
     admin_session.add(Empresa(
-        id=uuid.UUID(empresa_id), nom='Test Copilot', nif=boss_nif, subdomini='copi-' + str(uuid.uuid4())[:5], pla_subscripcio='STARTER', estat_pagament='ACTIU', feature_copilot_ia=True
+        id=emp_uuid,
+        nom="Test Copilot",
+        nif=boss_nif,
+        subdomini="copi-" + str(uuid.uuid4())[:5],
+        pla_subscripcio="STARTER",
+        estat_pagament="ACTIU",
+        disc_dur_url=str(tmp_path),
+        node_ia_url=str(tmp_path),
+        node_ia_actiu=True,
+        feature_copilot_ia=True,
     ))
-    admin_session.add(Usuari(id=uuid.UUID(decoded["sub"]), empresa_id=uuid.UUID(empresa_id), nom="Boss", cognoms="Boss", nif="BOSS1", rol="BOSS", estat="ACTIU"))
-
-    # Afegir un FAQ Real al RAG
-    admin_session.add(FaqCorporativaRag(
-        empresa_id=uuid.UUID(empresa_id),
-        pregunta="Manual d'Instal·lació de Quadres Elèctrics",
-        resposta="Protocol: Verificar sempre el diferencial de 30mA abans d'iniciar el cablejat del quadre. Rebt-2024.",
-        paraules_clau="electricitat, quadre, rebt",
-        actiu=True
-    ))
-
+    admin_session.add(Usuari(id=uuid.UUID(decoded["sub"]), empresa_id=emp_uuid, nom="Boss", cognoms="Boss", nif="BOSS1", rol="BOSS", estat="ACTIU"))
     await admin_session.flush()
+
+    await SovereignStorageGateway.desar_entitat_json(
+        admin_session,
+        emp_uuid,
+        "protocols_interns",
+        "faq_rebt",
+        {
+            "id": "faq_rebt",
+            "pregunta": "Manual d'Instal·lació de Quadres Elèctrics",
+            "resposta": "Protocol: Verificar sempre el diferencial de 30mA abans d'iniciar el cablejat del quadre. Rebt-2024.",
+            "paraules_clau": "electricitat, quadre, rebt",
+            "actiu": True,
+        },
+    )
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
         # Pregunta 1: RAG

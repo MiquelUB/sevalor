@@ -33,10 +33,11 @@ import {
   KeyRound,
   Copy,
   Mail,
+  DollarSign,
 } from "lucide-react";
 
 // Tipus de pestanyes
-type PestanyaConfig = "marca" | "personal" | "jornada" | "telegram" | "node_ia";
+type PestanyaConfig = "marca" | "personal" | "jornada" | "telegram" | "node_ia" | "barema";
 
 interface UsuariAdmin {
   id: string;
@@ -88,6 +89,7 @@ export default function ConfiguracioPage() {
   const [pestanyaActiva, setPestanyaActiva] = useState<PestanyaConfig>("jornada");
 
   // Estat d'Empresa & Marca Camaleònica (carregat del backend - Zero Mock)
+  const [empresaId, setEmpresaId] = useState<string | null>(null);
   const [nomEmpresa, setNomEmpresa] = useState("");
   const [nifEmpresa, setNifEmpresa] = useState("");
   const [adrecaEmpresa, setAdrecaEmpresa] = useState("");
@@ -103,6 +105,7 @@ export default function ConfiguracioPage() {
   useEffect(() => {
     apiFetch("/gestio/configuracio/empresa")
       .then((data: any) => {
+        if (data.id) setEmpresaId(data.id);
         if (data.nom) setNomEmpresa(data.nom);
         if (data.nif) setNifEmpresa(data.nif);
         if (data.adreca) setAdrecaEmpresa(data.adreca);
@@ -159,12 +162,58 @@ export default function ConfiguracioPage() {
 
   // Slots de Jornada Laboral (carregats del backend)
   const [slots, setSlots] = useState<SlotJornadaItem[]>([]);
+  const [modalNouSlot, setModalNouSlot] = useState(false);
+  const [slotNom, setSlotNom] = useState("");
+  const [slotModalitat, setSlotModalitat] = useState<"JORNADA_CONTINUADA" | "JORNADA_PARTIDA" | "TORN_ESPECIAL">("JORNADA_CONTINUADA");
+  const [slotEntrada, setSlotEntrada] = useState("08:00");
+  const [slotSortida, setSlotSortida] = useState("16:00");
+  const [slotIniciDinar, setSlotIniciDinar] = useState("13:00");
+  const [slotFiDinar, setSlotFiDinar] = useState("14:00");
+  const [slotHores, setSlotHores] = useState("40");
+  const [slotIntensivaEstiu, setSlotIntensivaEstiu] = useState(false);
+  const [slotDataIniciEstiu, setSlotDataIniciEstiu] = useState("");
+  const [slotDataFiEstiu, setSlotDataFiEstiu] = useState("");
+  const [slotEntradaEstiu, setSlotEntradaEstiu] = useState("07:00");
+  const [slotSortidaEstiu, setSlotSortidaEstiu] = useState("15:00");
+  const [creantSlot, setCreantSlot] = useState(false);
 
-  useEffect(() => {
+  const carregarSlots = () => {
     apiFetch<SlotJornadaItem[]>("/gestio/configuracio/slots")
       .then(setSlots)
-      .catch(() => setSlots([])); // Fallback buit
+      .catch(() => setSlots([]));
+  };
+
+  useEffect(() => {
+    carregarSlots();
   }, []);
+
+  // Barema de Preus i Tarifes (Spec 01 FR-017)
+  const [preuHoraStd, setPreuHoraStd] = useState("45");
+  const [tarifaUrgencia, setTarifaUrgencia] = useState("65");
+  const [suplementDespl, setSuplementDespl] = useState("25");
+  const [margeMatPct, setMargeMatPct] = useState("25");
+  const [partidesBarema, setPartidesBarema] = useState<
+    Array<{ codi: string; descripcio: string; unitat: string; preu_eur: number }>
+  >([]);
+  const [novaPartidaCodi, setNovaPartidaCodi] = useState("");
+  const [novaPartidaDesc, setNovaPartidaDesc] = useState("");
+  const [novaPartidaUnitat, setNovaPartidaUnitat] = useState("u");
+  const [novaPartidaPreu, setNovaPartidaPreu] = useState("");
+  const [desantBarema, setDesantBarema] = useState(false);
+
+  useEffect(() => {
+    if (esEnginyer) return;
+    apiFetch<any>("/gestio/configuracio/barema")
+      .then((data) => {
+        if (!data) return;
+        if (data.preu_hora_standard_eur != null) setPreuHoraStd(String(data.preu_hora_standard_eur));
+        if (data.tarifa_urgencia_eur != null) setTarifaUrgencia(String(data.tarifa_urgencia_eur));
+        if (data.suplement_desplacament_eur != null) setSuplementDespl(String(data.suplement_desplacament_eur));
+        if (data.marge_materials_defecte_pct != null) setMargeMatPct(String(data.marge_materials_defecte_pct));
+        if (Array.isArray(data.partides)) setPartidesBarema(data.partides);
+      })
+      .catch(() => {});
+  }, [esEnginyer]);
 
   // Telegram Bot
   const [telegramToken, setTelegramToken] = useState("");
@@ -234,38 +283,59 @@ export default function ConfiguracioPage() {
     calcularContrastEnViu(nouHsl);
   };
 
-  // IA ADN de marca
-  const handleAnalitzarAdn = () => {
+  // IA ADN de marca (Backend real POST /gestio/configuracio/marca/adn)
+  const handleAnalitzarAdn = async () => {
     if (!adnPrompt.trim()) return;
+    if (adnPrompt.trim().length < 10) {
+      mostrarFeedback("ERROR", "Cal descriure l'ADN de marca amb almenys 10 caràcters.");
+      return;
+    }
     setIaAnalitzant(true);
-    setTimeout(() => {
-      setIaAnalitzant(false);
-      setPaletaPropostaIa({
-        primari_hsl: "142 76% 25%", // Verd maragda profund
-        secundari_hsl: "38 92% 50%", // Ambre
-        accent_hsl: "160 84% 39%", // Menta viva
-        descripcio: "Paleta Bio-Agro suggerida pel Copilot IA basada en l'ADN de cultiu sostenible i reg per goteig.",
+    try {
+      const res = await apiFetch<{ paleta_proposta?: any }>("/gestio/configuracio/marca/adn", {
+        method: "POST",
+        body: JSON.stringify({ adn_text: adnPrompt.trim() }),
       });
+      if (res?.paleta_proposta) {
+        setPaletaPropostaIa(res.paleta_proposta);
+      }
       mostrarFeedback("EXIT", "Proposta de paleta generada pel Copilot IA. Requereix aprovació del Boss (HITL).");
-    }, 1200);
+    } catch (err: any) {
+      mostrarFeedback("ERROR", err?.message || "No s'ha pogut analitzar l'ADN de marca al backend.");
+    } finally {
+      setIaAnalitzant(false);
+    }
   };
 
-  const handleAprovarPaletaIa = () => {
+  const handleAprovarPaletaIa = async () => {
     if (!paletaPropostaIa) return;
     if (!esBoss) {
       mostrarFeedback("ERROR", "VETO: Només el Boss pot aprovar la paleta de marca corporativa (HITL).");
       return;
     }
-    setPrimariHsl(paletaPropostaIa.primari_hsl);
-    setSecundariHsl(paletaPropostaIa.secundari_hsl);
-    setAccentHsl(paletaPropostaIa.accent_hsl);
-    setPaletaPropostaIa(null);
-    calcularContrastEnViu(paletaPropostaIa.primari_hsl);
-    mostrarFeedback("EXIT", "Paleta d'ADN aprovada i aplicada a les variables de la suite.");
+    try {
+      await apiFetch("/gestio/configuracio/marca/adn/aprovar", {
+        method: "POST",
+        body: JSON.stringify({
+          aprovat_per_boss: true,
+          primari_hsl: paletaPropostaIa.primari_hsl,
+          secundari_hsl: paletaPropostaIa.secundari_hsl,
+          accent_hsl: paletaPropostaIa.accent_hsl,
+        }),
+      });
+      setPrimariHsl(paletaPropostaIa.primari_hsl);
+      setSecundariHsl(paletaPropostaIa.secundari_hsl);
+      setAccentHsl(paletaPropostaIa.accent_hsl);
+      setPaletaPropostaIa(null);
+      calcularContrastEnViu(paletaPropostaIa.primari_hsl);
+      mostrarFeedback("EXIT", "Paleta d'ADN aprovada i persistida a les variables de la suite.");
+    } catch (err: any) {
+      mostrarFeedback("ERROR", err?.message || "No s'ha pogut aprovar la paleta d'ADN.");
+    }
   };
 
-  // Gestió de Logotip & Magic Bytes
-  const handlePujarLogo = (e: React.ChangeEvent<HTMLInputElement>) => {
+  // Gestió de Logotip & Magic Bytes (Backend real POST /gestio/configuracio/logotip)
+  const handlePujarLogo = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (esEnginyer) {
       mostrarFeedback("ERROR", "Veto d'Enginyer (HTTP 403): Modificació de logotip no autoritzada.");
       return;
@@ -278,17 +348,27 @@ export default function ConfiguracioPage() {
       return;
     }
 
-    if (!["image/png", "image/jpeg"].includes(fitxer.type)) {
-      mostrarFeedback("ERROR", "HTTP 415: Només s'admeten imatges PNG o JPG autèntiques (Magic Bytes).");
+    if (!["image/png", "image/jpeg", "image/webp"].includes(fitxer.type)) {
+      mostrarFeedback("ERROR", "HTTP 415: Només s'admeten imatges PNG, JPG o WEBP autèntiques (Magic Bytes).");
       return;
     }
 
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      setLogotipCarregat(event.target?.result as string);
-      mostrarFeedback("EXIT", "Logotip carregat i processat per a Hetzner Falkenstein (Dashboard, PWA i Caixetins).");
-    };
-    reader.readAsDataURL(fitxer);
+    try {
+      const formData = new FormData();
+      formData.append("fitxer", fitxer);
+      await apiFetch("/gestio/configuracio/logotip", {
+        method: "POST",
+        body: formData,
+      });
+      if (empresaId) {
+        setLogotipCarregat(`/api/v1/public/tenant/${empresaId}/logo?t=${Date.now()}`);
+      } else {
+        setLogotipCarregat(URL.createObjectURL(fitxer));
+      }
+      mostrarFeedback("EXIT", "Logotip pujat i validat al disc sobirà (Magic Bytes verificats).");
+    } catch (err: any) {
+      mostrarFeedback("ERROR", err?.message || "Error al pujar el logotip corporatiu.");
+    }
   };
 
   // Funció per copiar al portapapers amb fallback segur
@@ -464,14 +544,78 @@ export default function ConfiguracioPage() {
   const handleProvarTelegram = async () => {
     setTelegramTestant(true);
     try {
-      await apiFetch("/gestio/configuracio/telegram/provar", { method: "POST" });
-      setTelegramEstat("OPERATIU");
-      mostrarFeedback("EXIT", "Connexió getMe satisfactòria amb el Bot de Telegram (HTTP 200).");
+      const res = await apiFetch<{ estat: string; missatge?: string; bot_username?: string }>(
+        "/gestio/configuracio/telegram/provar",
+        { method: "POST" }
+      );
+      if (res?.estat === "OPERATIU") {
+        setTelegramEstat("OPERATIU");
+        mostrarFeedback("EXIT", res.missatge || "Connexió getMe satisfactòria amb el Bot de Telegram.");
+      } else {
+        setTelegramEstat(res?.estat === "NO_CONFIGURAT" ? "NO_CONFIGURAT" : "ERROR_CONNEXIO");
+        mostrarFeedback("ERROR", res?.missatge || "No s'ha pogut verificar la connexió del Bot de Telegram.");
+      }
     } catch {
       setTelegramEstat("ERROR_CONNEXIO");
       mostrarFeedback("ERROR", "No s'ha pogut connectar amb el Bot de Telegram.");
     } finally {
       setTelegramTestant(false);
+    }
+  };
+
+  const handleCrearSlot = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!slotNom.trim()) return;
+    setCreantSlot(true);
+    try {
+      await apiFetch("/gestio/configuracio/slots", {
+        method: "POST",
+        body: JSON.stringify({
+          nom: slotNom.trim(),
+          modalitat: slotModalitat,
+          hora_entrada_teorica: slotEntrada,
+          hora_sortida_teorica: slotSortida,
+          hora_inici_dinar: slotModalitat === "JORNADA_PARTIDA" ? slotIniciDinar : null,
+          hora_fi_dinar: slotModalitat === "JORNADA_PARTIDA" ? slotFiDinar : null,
+          hores_convenio_setmanals: Number(slotHores) || 40,
+          es_intensiva_estiu: slotIntensivaEstiu,
+          data_inici_estiu: slotIntensivaEstiu && slotDataIniciEstiu ? slotDataIniciEstiu : null,
+          data_fi_estiu: slotIntensivaEstiu && slotDataFiEstiu ? slotDataFiEstiu : null,
+          hora_entrada_estiu: slotIntensivaEstiu ? slotEntradaEstiu : null,
+          hora_sortida_estiu: slotIntensivaEstiu ? slotSortidaEstiu : null,
+        }),
+      });
+      setModalNouSlot(false);
+      setSlotNom("");
+      carregarSlots();
+      mostrarFeedback("EXIT", "Slot de jornada laboral creat i desat correctament.");
+    } catch (err: any) {
+      mostrarFeedback("ERROR", err?.message || "No s'ha pogut crear l'slot de jornada.");
+    } finally {
+      setCreantSlot(false);
+    }
+  };
+
+  const handleDesarBarema = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (esEnginyer) return;
+    setDesantBarema(true);
+    try {
+      await apiFetch("/gestio/configuracio/barema", {
+        method: "PUT",
+        body: JSON.stringify({
+          preu_hora_standard_eur: Number(preuHoraStd) || 0,
+          tarifa_urgencia_eur: Number(tarifaUrgencia) || 0,
+          suplement_desplacament_eur: Number(suplementDespl) || 0,
+          marge_materials_defecte_pct: Number(margeMatPct) || 0,
+          partides: partidesBarema,
+        }),
+      });
+      mostrarFeedback("EXIT", "Barema de preus i tarifes corporatives desat al disc sobirà.");
+    } catch (err: any) {
+      mostrarFeedback("ERROR", err?.message || "No s'ha pogut desar el barema de preus.");
+    } finally {
+      setDesantBarema(false);
     }
   };
 
@@ -746,6 +890,20 @@ export default function ConfiguracioPage() {
               }`}
             />
           </button>
+
+          {!esEnginyer && (
+            <button
+              onClick={() => setPestanyaActiva("barema")}
+              className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-all ${
+                pestanyaActiva === "barema"
+                  ? "bg-primary text-primary-foreground shadow-md"
+                  : "text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"
+              }`}
+            >
+              <DollarSign className="w-3.5 h-3.5" />
+              <span>6. Barema de Preus</span>
+            </button>
+          )}
         </div>
       </div>
 
@@ -755,9 +913,9 @@ export default function ConfiguracioPage() {
       {pestanyaActiva === "marca" && (
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           {/* Banner de Governança Superadmin per a la Marca Camaleó */}
-          <div className="lg:col-span-3 p-4 rounded-2xl bg-indigo-50 dark:bg-indigo-950/40 border border-indigo-200 dark:border-indigo-800 flex items-start gap-3">
-            <Building className="w-5 h-5 text-indigo-600 dark:text-indigo-400 shrink-0 mt-0.5" />
-            <div className="text-xs text-indigo-900 dark:text-indigo-200">
+          <div className="lg:col-span-3 p-4 rounded-2xl bg-primary/5 border border-primary/20 flex items-start gap-3">
+            <Building className="w-5 h-5 text-primary shrink-0 mt-0.5" />
+            <div className="text-xs text-slate-700 dark:text-slate-200">
               <strong className="font-bold">Governança Centralitzada de Marca (Superadmin — Constitució §2.VIII):</strong> La configuració d'alta d'imatge corporativa, logotips oficials i tokens de color Camaleó per al teu tenant és gestionada per l'administrador de la plataforma a través de Superadmin. Aquí pots consultar la paleta HSL activa i simular el contrast d'accessibilitat.
             </div>
           </div>
@@ -1237,6 +1395,16 @@ export default function ConfiguracioPage() {
                 Configuració d'horaris vinculants per a l'auto-tancament de la jornada a les 8 hores (Spec 008). Suport per a Jornada Intensiva d'Estiu.
               </p>
             </div>
+            {!esEnginyer && (
+              <button
+                type="button"
+                onClick={() => setModalNouSlot(true)}
+                className="flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold bg-primary hover:opacity-90 text-primary-foreground shadow-sm"
+              >
+                <Plus className="w-4 h-4" />
+                <span>+ Nou Slot de Jornada</span>
+              </button>
+            )}
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -1377,11 +1545,14 @@ export default function ConfiguracioPage() {
                   try {
                     await apiFetch("/gestio/configuracio/telegram", {
                       method: "PUT",
-                      body: JSON.stringify({ token: telegramToken, secret: telegramSecret }),
+                      body: JSON.stringify({
+                        telegram_bot_token: telegramToken,
+                        telegram_webhook_secret: telegramSecret,
+                      }),
                     });
                     mostrarFeedback("EXIT", "Credencials de Telegram desades amb èxit.");
-                  } catch {
-                    mostrarFeedback("ERROR", "No s'han pogut desar les credencials.");
+                  } catch (err: any) {
+                    mostrarFeedback("ERROR", err?.message || "No s'han pogut desar les credencials.");
                   }
                 }}
                 className="px-4 py-2 rounded-xl text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white transition-colors disabled:opacity-50 shadow-sm"
@@ -1897,6 +2068,308 @@ export default function ConfiguracioPage() {
             >
               Completat
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* 6. BAREMA DE PREUS ESTÀNDARD (Spec 01 FR-017) */}
+      {pestanyaActiva === "barema" && !esEnginyer && (
+        <form
+          onSubmit={handleDesarBarema}
+          className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-6 shadow-sm space-y-6"
+        >
+          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+            <div>
+              <h2 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                <DollarSign className="w-4 h-4 text-primary" />
+                Barema de Preus i Tarifes Tècniques (Spec 01 FR-017)
+              </h2>
+              <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                Tarifes de referència per a pressupostos del Copilot i facturació ràpida d&apos;ordres de treball.
+              </p>
+            </div>
+            <button
+              type="submit"
+              disabled={desantBarema}
+              className="px-4 py-2 rounded-xl text-xs font-bold bg-primary text-primary-foreground hover:opacity-90 disabled:opacity-50 shadow-sm"
+            >
+              {desantBarema ? "Desant..." : "Desar Barema de Preus"}
+            </button>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-4 text-xs">
+            <div>
+              <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">
+                Preu Hora Estàndard (€/h)
+              </label>
+              <input
+                type="number"
+                step="0.5"
+                min={0}
+                value={preuHoraStd}
+                onChange={(e) => setPreuHoraStd(e.target.value)}
+                className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800"
+              />
+            </div>
+            <div>
+              <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">
+                Tarifa Urgència (€/h)
+              </label>
+              <input
+                type="number"
+                step="0.5"
+                min={0}
+                value={tarifaUrgencia}
+                onChange={(e) => setTarifaUrgencia(e.target.value)}
+                className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800"
+              />
+            </div>
+            <div>
+              <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">
+                Suplement Desplaçament (€)
+              </label>
+              <input
+                type="number"
+                step="0.5"
+                min={0}
+                value={suplementDespl}
+                onChange={(e) => setSuplementDespl(e.target.value)}
+                className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800"
+              />
+            </div>
+            <div>
+              <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">
+                Marge Materials Defecte (%)
+              </label>
+              <input
+                type="number"
+                step="0.5"
+                min={0}
+                value={margeMatPct}
+                onChange={(e) => setMargeMatPct(e.target.value)}
+                className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800"
+              />
+            </div>
+          </div>
+
+          <div className="space-y-3 border-t border-slate-200 dark:border-slate-800 pt-4 text-xs">
+            <h3 className="font-bold text-slate-800 dark:text-slate-200">
+              Partides Tipificades del Barema ({partidesBarema.length})
+            </h3>
+            <div className="grid grid-cols-1 md:grid-cols-5 gap-2">
+              <input
+                type="text"
+                placeholder="Codi (ex: P-REG-01)"
+                value={novaPartidaCodi}
+                onChange={(e) => setNovaPartidaCodi(e.target.value)}
+                className="px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800"
+              />
+              <input
+                type="text"
+                placeholder="Descripció tècnica de la partida"
+                value={novaPartidaDesc}
+                onChange={(e) => setNovaPartidaDesc(e.target.value)}
+                className="md:col-span-2 px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800"
+              />
+              <input
+                type="number"
+                step="0.01"
+                min={0}
+                placeholder="Preu €"
+                value={novaPartidaPreu}
+                onChange={(e) => setNovaPartidaPreu(e.target.value)}
+                className="px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800"
+              />
+              <button
+                type="button"
+                onClick={() => {
+                  if (!novaPartidaCodi.trim() || !novaPartidaDesc.trim() || novaPartidaPreu === "") return;
+                  setPartidesBarema((prev) => [
+                    ...prev,
+                    {
+                      codi: novaPartidaCodi.trim().toUpperCase(),
+                      descripcio: novaPartidaDesc.trim(),
+                      unitat: novaPartidaUnitat.trim() || "u",
+                      preu_eur: Number(novaPartidaPreu) || 0,
+                    },
+                  ]);
+                  setNovaPartidaCodi("");
+                  setNovaPartidaDesc("");
+                  setNovaPartidaPreu("");
+                }}
+                className="px-3 py-2 rounded-lg bg-slate-800 text-white font-bold hover:bg-slate-700"
+              >
+                + Afegir Partida
+              </button>
+            </div>
+
+            {partidesBarema.length > 0 && (
+              <div className="divide-y divide-slate-200 dark:divide-slate-800 rounded-xl border border-slate-200 dark:border-slate-800">
+                {partidesBarema.map((p, idx) => (
+                  <div key={`${p.codi}-${idx}`} className="flex items-center justify-between px-3 py-2">
+                    <div>
+                      <span className="font-mono font-bold text-primary mr-2">{p.codi}</span>
+                      <span>{p.descripcio}</span>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <span className="font-mono font-bold">
+                        {Number(p.preu_eur).toFixed(2)} € / {p.unitat}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setPartidesBarema((prev) => prev.filter((_, i) => i !== idx))}
+                        className="text-rose-500 hover:text-rose-600"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </form>
+      )}
+
+      {/* MODAL NOU SLOT DE JORNADA (POST /gestio/configuracio/slots) */}
+      {modalNouSlot && (
+        <div className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-4 text-xs">
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-bold text-slate-900 dark:text-white">
+                Nou Slot de Jornada Laboral
+              </h3>
+              <button onClick={() => setModalNouSlot(false)} className="text-slate-400 hover:text-slate-600">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <form onSubmit={handleCrearSlot} className="space-y-3">
+              <div>
+                <label className="block font-bold mb-1">Nom de l&apos;Slot *</label>
+                <input
+                  required
+                  value={slotNom}
+                  onChange={(e) => setSlotNom(e.target.value)}
+                  placeholder="Ex: Torn Matí Intensiu"
+                  className="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800"
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-bold mb-1">Modalitat</label>
+                  <select
+                    value={slotModalitat}
+                    onChange={(e) => setSlotModalitat(e.target.value as any)}
+                    className="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800"
+                  >
+                    <option value="JORNADA_CONTINUADA">Jornada Continuada</option>
+                    <option value="JORNADA_PARTIDA">Jornada Partida</option>
+                    <option value="TORN_ESPECIAL">Torn Especial</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block font-bold mb-1">Hores Setmanals</label>
+                  <input
+                    type="number"
+                    step="0.5"
+                    min={1}
+                    value={slotHores}
+                    onChange={(e) => setSlotHores(e.target.value)}
+                    className="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800"
+                  />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-bold mb-1">Entrada Teòrica</label>
+                  <input
+                    type="time"
+                    value={slotEntrada}
+                    onChange={(e) => setSlotEntrada(e.target.value)}
+                    className="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800"
+                  />
+                </div>
+                <div>
+                  <label className="block font-bold mb-1">Sortida Teòrica</label>
+                  <input
+                    type="time"
+                    value={slotSortida}
+                    onChange={(e) => setSlotSortida(e.target.value)}
+                    className="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800"
+                  />
+                </div>
+              </div>
+              {slotModalitat === "JORNADA_PARTIDA" && (
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block font-bold mb-1">Inici Dinar</label>
+                    <input
+                      type="time"
+                      value={slotIniciDinar}
+                      onChange={(e) => setSlotIniciDinar(e.target.value)}
+                      className="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800"
+                    />
+                  </div>
+                  <div>
+                    <label className="block font-bold mb-1">Fi Dinar</label>
+                    <input
+                      type="time"
+                      value={slotFiDinar}
+                      onChange={(e) => setSlotFiDinar(e.target.value)}
+                      className="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800"
+                    />
+                  </div>
+                </div>
+              )}
+              <label className="flex items-center gap-2 pt-1">
+                <input
+                  type="checkbox"
+                  checked={slotIntensivaEstiu}
+                  onChange={(e) => setSlotIntensivaEstiu(e.target.checked)}
+                />
+                <span>Activar Jornada Intensiva d&apos;Estiu</span>
+              </label>
+              {slotIntensivaEstiu && (
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block font-bold mb-1">Inici Estiu</label>
+                    <input
+                      type="date"
+                      required
+                      value={slotDataIniciEstiu}
+                      onChange={(e) => setSlotDataIniciEstiu(e.target.value)}
+                      className="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800"
+                    />
+                  </div>
+                  <div>
+                    <label className="block font-bold mb-1">Fi Estiu</label>
+                    <input
+                      type="date"
+                      required
+                      value={slotDataFiEstiu}
+                      onChange={(e) => setSlotDataFiEstiu(e.target.value)}
+                      className="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800"
+                    />
+                  </div>
+                </div>
+              )}
+              <div className="flex justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setModalNouSlot(false)}
+                  className="px-3 py-1.5 rounded-lg border border-slate-300 font-bold"
+                >
+                  Cancel·lar
+                </button>
+                <button
+                  type="submit"
+                  disabled={creantSlot}
+                  className="px-4 py-1.5 rounded-lg bg-primary text-primary-foreground font-bold disabled:opacity-50"
+                >
+                  {creantSlot ? "Desant..." : "Crear Slot"}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

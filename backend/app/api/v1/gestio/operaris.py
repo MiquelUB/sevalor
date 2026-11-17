@@ -2,11 +2,12 @@ import secrets
 import string
 import uuid
 from datetime import date, datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence
 
 import bcrypt
 import filetype
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
+from fastapi.responses import Response
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -22,6 +23,7 @@ from app.models.models import (
     OrdreTreball,
     OrdreTreballOperari,
     RegistreJornadaLaboral,
+    TiquetCombustible,
     Usuari,
     Vehicle,
 )
@@ -146,7 +148,7 @@ class OperariResponse(BaseModel):
     especialitat: Optional[str] = "SISTEMES_REG"
     estat_operatiu: Optional[str] = "DISPONIBLE"
     estat: str = "ACTIU"
-    cost_hora_eur: float = 22.50
+    cost_hora_eur: Optional[float] = 22.50
     carnet_conduir: str = "B"
     carnet_caducitat: Optional[date] = None
     prl_certificat_vigencia: Optional[date] = None
@@ -158,7 +160,7 @@ class OperariResponse(BaseModel):
     intents_pin_fallits: int = 0
     cap_de_grup_id: Optional[uuid.UUID] = None
     vehicle_assignat_id: Optional[uuid.UUID] = None
-    vehicle_habitual: Optional[dict] = None
+    vehicle_habitual: Optional[Dict[str, Any]] = None
     total_eines_assignades: int = 0
     latitud: Optional[float] = None
     longitud: Optional[float] = None
@@ -249,11 +251,11 @@ def hash_pin(pin: str) -> str:
     return bcrypt.hashpw(pin.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
 
 
-async def verificar_permisos_boss(request: Request):
+async def verificar_permisos_boss(request: Request) -> str:
     """Comprova que l'usuari té rol BOSS o SECRETARIA."""
     if not request.state.empresa_id:
         raise HTTPException(status_code=401, detail="No identificat")
-    return request.state.empresa_id
+    return str(request.state.empresa_id)
 
 
 def _calcular_alertes_copilot_operari(
@@ -391,10 +393,12 @@ async def _persistir_alertes_operari_disc(
 
 
 async def _build_operari_response(
-    db: AsyncSession, emp_uuid: uuid.UUID, op: Usuari, idx: int = 0
+    db: AsyncSession, emp_uuid: uuid.UUID, op: Usuari, idx: int = 0, rol: str = "BOSS"
 ) -> OperariResponse:
     """Construeix el DTO complet d'Operari amb eines reals, vehicle 1:1, geolocalització i alertes Copilot."""
     op_resp = OperariResponse.model_validate(op)
+    if (rol or "").strip().upper() == "ENGINYER":
+        op_resp.cost_hora_eur = None
     op_resp.te_cap_vigent = bool(getattr(op, "te_cap", False))
     op_resp.certificats_prl = list(getattr(op, "_certificats_prl", []))
     alertes, docs_pendents = _calcular_alertes_copilot_operari(op)
@@ -457,18 +461,16 @@ async def _build_operari_response(
             except (ValueError, TypeError):
                 pass
 
-    if op_resp.latitud is None or op_resp.longitud is None:
-        # Coordenades de base operativa / seu central (Lleida)
-        op_resp.latitud = 41.6176 + ((idx % 7) - 3) * 0.003
-        op_resp.longitud = 0.6200 + ((idx % 7) - 3) * 0.003
-
     return op_resp
 
 
 @router.get("", response_model=List[OperariResponse])
 async def llistar_operaris(
-    request: Request, db: AsyncSession = Depends(get_db_with_tenant_context)
-):
+    request: Request,
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+    claims: Dict[str, Any] = Depends(require_roles(["BOSS", "SECRETARIA", "ENGINYER"])),
+) -> List[OperariResponse]:
+    rol = str(claims.get("rol", "BOSS")).upper()
     empresa_id = await verificar_permisos_boss(request)
     emp_uuid = uuid.UUID(empresa_id)
 
@@ -485,7 +487,7 @@ async def llistar_operaris(
 
     response_list = []
     for idx, op in enumerate(operaris):
-        op_resp = await _build_operari_response(db, emp_uuid, op, idx)
+        op_resp = await _build_operari_response(db, emp_uuid, op, idx, rol=rol)
         response_list.append(op_resp)
 
     return response_list
@@ -495,7 +497,7 @@ async def llistar_operaris(
 async def obtenir_metrics_operaris(
     request: Request,
     db: AsyncSession = Depends(get_db_with_tenant_context),
-):
+) -> MetricsOperarisResponse:
     """Mètriques consolidades de capçalera calculades en temps real (Zero Mock Data)."""
     empresa_id = await verificar_permisos_boss(request)
     emp_uuid = uuid.UUID(empresa_id)
@@ -527,11 +529,29 @@ async def obtenir_metrics_operaris(
     # 3. Valoració mitjana de clients (Zero Mock: 0.0 si no n'hi ha)
     valoracio_mitjana = 0.0
 
-    # 4. Km conduïts aquest mes (odòmetres acumulats dels vehicles de l'empresa)
-    km_stmt = select(func.coalesce(func.sum(Vehicle.odometre_acumulat), 0)).where(
-        Vehicle.empresa_id == emp_uuid
+    # 4. Km conduïts aquest mes (Zero Mock: km imputats en OT del mes corrent o diferencial d'odòmetre en tiquets del mes)
+    inici_mes = datetime(avui.year, avui.month, 1, tzinfo=timezone.utc)
+    km_ot_stmt = select(func.coalesce(func.sum(OrdreTreball.km_imputats), 0)).where(
+        OrdreTreball.empresa_id == emp_uuid,
+        OrdreTreball.updated_at >= inici_mes,
+        OrdreTreball.km_imputats > 0,
     )
-    km_conduits = int((await db.execute(km_stmt)).scalar() or 0)
+    km_conduits = int((await db.execute(km_ot_stmt)).scalar() or 0)
+    if km_conduits == 0:
+        tiquets_stmt = (
+            select(
+                TiquetCombustible.vehicle_id,
+                func.max(TiquetCombustible.odometre_registrat)
+                - func.min(TiquetCombustible.odometre_registrat),
+            )
+            .where(
+                TiquetCombustible.empresa_id == emp_uuid,
+                TiquetCombustible.data_tiquet >= inici_mes,
+            )
+            .group_by(TiquetCombustible.vehicle_id)
+        )
+        tiquets_rows = (await db.execute(tiquets_stmt)).all()
+        km_conduits = int(sum(max(0, int(diff or 0)) for _, diff in tiquets_rows))
 
     # 5. Total eines en custòdia assignades a operaris
     eines_stmt = select(func.count(EinaCustodia.id)).where(
@@ -554,8 +574,8 @@ async def alta_operari(
     request: Request,
     operari: OperariCreate,
     db: AsyncSession = Depends(get_db_with_tenant_context),
-    claims: dict = Depends(require_roles(["BOSS", "SECRETARIA"])),
-):
+    claims: Dict[str, Any] = Depends(require_roles(["BOSS", "SECRETARIA"])),
+) -> OperariResponse:
     empresa_id = await verificar_permisos_boss(request)
     emp_uuid = uuid.UUID(empresa_id)
 
@@ -649,8 +669,10 @@ async def obtenir_operari(
     request: Request,
     operari_id: uuid.UUID,
     db: AsyncSession = Depends(get_db_with_tenant_context),
-):
+    claims: Dict[str, Any] = Depends(require_roles(["BOSS", "SECRETARIA", "ENGINYER"])),
+) -> OperariResponse:
     """Retorna el detall complet d'un operari amb el seu vehicle habitual (Zero Mock)."""
+    rol = str(claims.get("rol", "BOSS")).upper()
     empresa_id = await verificar_permisos_boss(request)
     emp_uuid = uuid.UUID(empresa_id)
 
@@ -664,7 +686,7 @@ async def obtenir_operari(
     if not usuari:
         raise HTTPException(status_code=404, detail="Operari no trobat")
 
-    return await _build_operari_response(db, emp_uuid, usuari)
+    return await _build_operari_response(db, emp_uuid, usuari, rol=rol)
 
 
 @router.put("/{operari_id}", response_model=OperariResponse)
@@ -673,8 +695,8 @@ async def actualitzar_operari(
     operari_id: uuid.UUID,
     payload: OperariUpdate,
     db: AsyncSession = Depends(get_db_with_tenant_context),
-    claims: dict = Depends(require_roles(["BOSS", "SECRETARIA"])),
-):
+    claims: Dict[str, Any] = Depends(require_roles(["BOSS", "SECRETARIA"])),
+) -> OperariResponse:
     """Actualitza les dades d'un operari (només BOSS i SECRETARIA; Veto d'Enginyer HTTP 403)."""
     empresa_id = await verificar_permisos_boss(request)
     emp_uuid = uuid.UUID(empresa_id)
@@ -766,8 +788,8 @@ async def tramitar_baixa_operari(
     request: Request,
     operari_id: uuid.UUID,
     db: AsyncSession = Depends(get_db_with_tenant_context),
-    claims: dict = Depends(require_roles(["BOSS", "SECRETARIA"])),
-):
+    claims: Dict[str, Any] = Depends(require_roles(["BOSS", "SECRETARIA"])),
+) -> Dict[str, str]:
     """Tramita la baixa laboral d'un operari (només BOSS i SECRETARIA)."""
     empresa_id = await verificar_permisos_boss(request)
     emp_uuid = uuid.UUID(empresa_id)
@@ -798,8 +820,8 @@ async def reset_pin_operari(
     request: Request,
     operari_id: uuid.UUID,
     db: AsyncSession = Depends(get_db_with_tenant_context),
-    claims: dict = Depends(require_roles(["BOSS", "SECRETARIA"])),
-):
+    claims: Dict[str, Any] = Depends(require_roles(["BOSS", "SECRETARIA"])),
+) -> Dict[str, Any]:
     empresa_id = await verificar_permisos_boss(request)
 
     stmt = select(Usuari).where(Usuari.id == operari_id, Usuari.empresa_id == uuid.UUID(empresa_id))
@@ -998,8 +1020,8 @@ async def ocr_operari_draft(
     files: Optional[List[UploadFile]] = File(None),
     file: Optional[UploadFile] = File(None),
     db: AsyncSession = Depends(get_db_with_tenant_context),
-    claims: dict = Depends(require_roles(["BOSS", "SECRETARIA"])),
-):
+    claims: Dict[str, Any] = Depends(require_roles(["BOSS", "SECRETARIA"])),
+) -> Dict[str, Any]:
     """Alta Màgica OCR Multi-Document d'Operari (Spec 008).
     Llegeix .md, .pdf, .jpg, .png, .txt, .doc, .docx, guarda sempre al disc dur del client,
     retorna les alertes del Copilot (caducitats o <= 30 dies) i avisa de manca de documents sense bloquejar l'alta.
@@ -1028,8 +1050,8 @@ async def alta_dni_ocr(
     files: Optional[List[UploadFile]] = File(None),
     file: Optional[UploadFile] = File(None),
     db: AsyncSession = Depends(get_db_with_tenant_context),
-    claims: dict = Depends(require_roles(["BOSS", "SECRETARIA"])),
-):
+    claims: Dict[str, Any] = Depends(require_roles(["BOSS", "SECRETARIA"])),
+) -> Dict[str, Any]:
     """Endpoint d'extracció OCR de DNI / documentació d'operari (compatible amb `file` i `files`)."""
     empresa_id = await verificar_permisos_boss(request)
     all_files: List[UploadFile] = []
@@ -1052,8 +1074,8 @@ async def pujar_documents_operari(
     file: Optional[UploadFile] = File(None),
     tipus_document: Optional[str] = Form(None),
     db: AsyncSession = Depends(get_db_with_tenant_context),
-    claims: dict = Depends(require_roles(["BOSS", "SECRETARIA"])),
-):
+    claims: Dict[str, Any] = Depends(require_roles(["BOSS", "SECRETARIA"])),
+) -> Dict[str, Any]:
     """Puja i processa documents de RRHH (.md, .pdf, .jpg, .png, .txt, .doc, .docx) d'un operari existent,
     guardant-los sempre al disc dur del client i actualitzant les dates de carnet/PRL i alertes Copilot.
     """
@@ -1125,7 +1147,7 @@ async def llistar_documents_operari(
     request: Request,
     operari_id: uuid.UUID,
     db: AsyncSession = Depends(get_db_with_tenant_context),
-):
+) -> Dict[str, Any]:
     """Llista tots els documents de RRHH guardats al disc dur del client per a un operari."""
     empresa_id = await verificar_permisos_boss(request)
     emp_uuid = uuid.UUID(empresa_id)
@@ -1164,7 +1186,7 @@ async def descarregar_document_operari(
     operari_id: uuid.UUID,
     doc_id: str,
     db: AsyncSession = Depends(get_db_with_tenant_context),
-):
+) -> Response:
     """Serveix un document de RRHH de l'operari directament des del disc dur del client."""
     empresa_id = await verificar_permisos_boss(request)
     emp_uuid = uuid.UUID(empresa_id)
@@ -1202,8 +1224,8 @@ async def fitxar_operari_gestio(
     operari_id: uuid.UUID,
     payload: JornadaInici,
     db: AsyncSession = Depends(get_db_with_tenant_context),
-    claims: dict = Depends(require_roles(["BOSS", "SECRETARIA"])),
-):
+    claims: Dict[str, Any] = Depends(require_roles(["BOSS", "SECRETARIA"])),
+) -> Dict[str, Any]:
     empresa_id = await verificar_permisos_boss(request)
 
     stmt = select(RegistreJornadaLaboral).where(
@@ -1262,13 +1284,13 @@ async def fitxar_operari_gestio(
         return {"estat": "EN_CURS", "jornada_id": nova_jornada.id}
 
 
-@router.get("/{operari_id}/control-horari")
+@router.get("/{operari_id}/control-horari", response_model=None)
 async def get_control_horari(
     request: Request,
     operari_id: uuid.UUID,
     db: AsyncSession = Depends(get_db_with_tenant_context),
-    claims: dict = Depends(veto_enginyer_finances),
-):
+    claims: Dict[str, Any] = Depends(veto_enginyer_finances),
+) -> Sequence[RegistreJornadaLaboral]:
     empresa_id = await verificar_permisos_boss(request)
     stmt = (
         select(RegistreJornadaLaboral)
@@ -1288,8 +1310,8 @@ async def get_shifts_operari(
     request: Request,
     operari_id: uuid.UUID,
     db: AsyncSession = Depends(get_db_with_tenant_context),
-    claims: dict = Depends(veto_enginyer_finances),
-):
+    claims: Dict[str, Any] = Depends(veto_enginyer_finances),
+) -> Sequence[RegistreJornadaLaboral]:
     """Llistat oficial de jornades segons RDL 8/2019 (Veto d'Enginyer HTTP 403)."""
     empresa_id = await verificar_permisos_boss(request)
     stmt = (
@@ -1313,8 +1335,8 @@ async def regularitzar_shift_operari(
     operari_id: uuid.UUID,
     payload: RegularitzarShiftRequest,
     db: AsyncSession = Depends(get_db_with_tenant_context),
-    claims: dict = Depends(require_roles(["BOSS", "SECRETARIA"])),
-):
+    claims: Dict[str, Any] = Depends(require_roles(["BOSS", "SECRETARIA"])),
+) -> Dict[str, Any]:
     """Regularització oficial de jornada segons RDL 8/2019 amb traça d'auditoria immutable."""
     empresa_id = await verificar_permisos_boss(request)
     emp_uuid = uuid.UUID(empresa_id)
@@ -1399,7 +1421,7 @@ async def get_eines_operari(
     request: Request,
     operari_id: uuid.UUID,
     db: AsyncSession = Depends(get_db_with_tenant_context),
-):
+) -> Sequence[EinaCustodia]:
     """Eines reals en custòdia assignades a l'operari (Zero Mock Data)."""
     empresa_id = await verificar_permisos_boss(request)
     stmt = (
@@ -1419,7 +1441,7 @@ async def get_incidencies_operari(
     request: Request,
     operari_id: uuid.UUID,
     db: AsyncSession = Depends(get_db_with_tenant_context),
-):
+) -> Sequence[Incidencia]:
     """Incidències reals reportades per l'operari des de camp (Zero Mock Data)."""
     empresa_id = await verificar_permisos_boss(request)
     stmt = (
@@ -1439,7 +1461,7 @@ async def get_feines_operari(
     request: Request,
     operari_id: uuid.UUID,
     db: AsyncSession = Depends(get_db_with_tenant_context),
-):
+) -> Sequence[OrdreTreball]:
     """Ordres de treball reals assignades a l'operari com a Cap de Colla o equip."""
     empresa_id = await verificar_permisos_boss(request)
     stmt = (

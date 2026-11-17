@@ -1301,6 +1301,9 @@ class LiniaPicking(Base):
     article_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("articles.id", ondelete="CASCADE"), nullable=False
     )
+    magatzem_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("magatzems.id", ondelete="SET NULL"), nullable=True
+    )
     quantitat_prevista: Mapped[float] = mapped_column(
         Numeric(12, 3), default=0.0, server_default=text("0")
     )

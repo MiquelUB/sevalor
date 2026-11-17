@@ -64,7 +64,7 @@ interface OperariItem {
   cap_de_grup_nom: string | null;
   vehicle_assignat_id?: string | null;
   vehicle_habitual: VehicleHabitual | null;
-  cost_hora_eur: number;
+  cost_hora_eur?: number | null;
   carnet_conduir: string;
   carnet_caducitat: string | null;
   prl_certificat_vigencia: string | null;
@@ -294,7 +294,7 @@ export default function GestioOperarisPage() {
         cap_de_grup_nom: op.cap_de_grup_nom || null,
         vehicle_assignat_id: op.vehicle_assignat_id || op.vehicle_habitual?.id || null,
         vehicle_habitual: op.vehicle_habitual || null,
-        cost_hora_eur: Number(op.cost_hora_eur) || 22.50,
+        cost_hora_eur: op.cost_hora_eur != null ? Number(op.cost_hora_eur) : null,
         carnet_conduir: op.carnet_conduir || "B",
         carnet_caducitat: op.carnet_caducitat || null,
         prl_certificat_vigencia: op.prl_certificat_vigencia || null,
@@ -742,7 +742,7 @@ export default function GestioOperarisPage() {
         <div className="p-3.5 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm">
           <div className="flex items-center justify-between text-slate-500 dark:text-slate-400 mb-1">
             <span className="text-[11px] font-mono uppercase font-bold">Km Conduïts (Mes)</span>
-            <Car className="w-4 h-4 text-indigo-500" />
+            <Car className="w-4 h-4 text-primary" />
           </div>
           <p className="text-xl font-bold font-mono text-slate-900 dark:text-white">
             {metrics.km_conduits_mes} <span className="text-xs font-normal text-slate-500">km</span>
@@ -817,7 +817,7 @@ export default function GestioOperarisPage() {
                 <th className="px-4 py-3 font-bold">Especialitat</th>
                 <th className="px-4 py-3 font-bold">Estat Operatiu</th>
                 <th className="px-4 py-3 font-bold">Vehicle Habitual</th>
-                <th className="px-4 py-3 font-bold">Cost/Hora (Obra)</th>
+                {rolActiu !== "ENGINYER" && <th className="px-4 py-3 font-bold">Cost/Hora (Obra)</th>}
                 <th className="px-4 py-3 font-bold">Eines / PIN</th>
                 <th className="px-4 py-3 font-bold text-right">Accions</th>
               </tr>
@@ -825,7 +825,7 @@ export default function GestioOperarisPage() {
             <tbody className="divide-y divide-slate-100 dark:divide-slate-800/60 font-mono text-xs">
               {operarisFiltrats.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="px-4 py-12 text-center text-slate-500 dark:text-slate-400">
+                  <td colSpan={rolActiu !== "ENGINYER" ? 8 : 7} className="px-4 py-12 text-center text-slate-500 dark:text-slate-400">
                     <div className="flex flex-col items-center justify-center gap-2">
                       <Users className="w-8 h-8 text-slate-300 dark:text-slate-700" />
                       <p className="font-medium text-sm">No hi ha operaris registrats a la plantilla</p>
@@ -913,11 +913,12 @@ export default function GestioOperarisPage() {
                       )}
                     </td>
 
-                    {/* Cost Hora */}
+                    {/* Cost Hora (Veto d'Enginyer) */}
+                    {rolActiu !== "ENGINYER" && (
                     <td className="px-4 py-3 font-mono">
                       <div className="flex items-center gap-1">
                         <span className="font-bold text-slate-900 dark:text-white">
-                          {op.cost_hora_eur.toFixed(2)} €/h
+                          {op.cost_hora_eur != null ? `${op.cost_hora_eur.toFixed(2)} €/h` : "—"}
                         </span>
                         {potEditarOperari && (
                           <button
@@ -933,6 +934,7 @@ export default function GestioOperarisPage() {
                         )}
                       </div>
                     </td>
+                    )}
 
                     {/* Eines & PIN */}
                     <td className="px-4 py-3">
@@ -1137,7 +1139,7 @@ export default function GestioOperarisPage() {
                       </button>
                       <button
                         onClick={() => setModalResetPinObert(true)}
-                        className="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-bold flex items-center gap-1.5 shadow-sm transition-colors"
+                        className="px-3 py-1.5 rounded-lg bg-primary hover:opacity-90 text-primary-foreground font-bold flex items-center gap-1.5 shadow-sm transition-colors"
                       >
                         <KeyRound className="w-3.5 h-3.5" />
                         <span>Restablir PIN d'Accés</span>
@@ -1298,7 +1300,7 @@ export default function GestioOperarisPage() {
                   {operariSeleccionat.vehicle_habitual ? (
                     <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 space-y-1">
                       <p className="font-bold text-slate-900 dark:text-white flex items-center gap-1.5">
-                        <Car className="w-4 h-4 text-indigo-500" />
+                        <Car className="w-4 h-4 text-primary" />
                         <span>{operariSeleccionat.vehicle_habitual.matricula}</span>
                       </p>
                       <p className="text-slate-500">{operariSeleccionat.vehicle_habitual.model}</p>
@@ -1385,7 +1387,7 @@ export default function GestioOperarisPage() {
                           )}
                           {inc.audio_path && (
                             <div className="flex items-center gap-2 pt-1 text-[11px] text-slate-500">
-                              <Mic className="w-3.5 h-3.5 text-indigo-500" />
+                              <Mic className="w-3.5 h-3.5 text-primary" />
                               <span>Nota d'àudio enregistrada</span>
                             </div>
                           )}
@@ -1588,6 +1590,7 @@ export default function GestioOperarisPage() {
               </div>
 
               <div className="grid grid-cols-2 gap-3">
+                {rolActiu !== "ENGINYER" && (
                 <div>
                   <label className="text-[10px] text-slate-400">Cost/Hora de referència (€/h)</label>
                   <input
@@ -1598,6 +1601,7 @@ export default function GestioOperarisPage() {
                     className="w-full px-3 py-1.5 rounded-lg bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs mt-1"
                   />
                 </div>
+                )}
                 <div>
                   <label className="text-[10px] text-slate-400">Carnet de Conduir</label>
                   <select
@@ -1831,6 +1835,7 @@ export default function GestioOperarisPage() {
                     <option value="BAIXA">BAIXA</option>
                   </select>
                 </div>
+                {potEditarOperari && (
                 <div>
                   <label className="text-[10px] text-slate-400">Cost/Hora Imputació d'Obra (€/h)</label>
                   <input
@@ -1842,6 +1847,7 @@ export default function GestioOperarisPage() {
                     className="w-full px-3 py-1.5 rounded-lg bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs mt-1"
                   />
                 </div>
+                )}
               </div>
 
               <div className="grid grid-cols-3 gap-3">
@@ -2007,7 +2013,7 @@ export default function GestioOperarisPage() {
         <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="w-full max-w-sm bg-white dark:bg-slate-900 rounded-2xl shadow-xl border border-slate-200 dark:border-slate-800 p-5 font-mono text-xs space-y-3">
             <h3 className="font-bold text-slate-900 dark:text-white flex items-center gap-2">
-              <KeyRound className="w-4 h-4 text-indigo-500" />
+              <KeyRound className="w-4 h-4 text-primary" />
               <span>Restabliment de PIN PWA</span>
             </h3>
             <p className="text-slate-500">
@@ -2022,7 +2028,7 @@ export default function GestioOperarisPage() {
               </button>
               <button
                 onClick={handleResetPin}
-                className="px-4 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-bold"
+                className="px-4 py-1.5 rounded-lg bg-primary hover:opacity-90 text-primary-foreground font-bold"
               >
                 Emetre Nou PIN
               </button>

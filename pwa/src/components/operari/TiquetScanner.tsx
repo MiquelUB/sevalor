@@ -77,7 +77,9 @@ export default function TiquetScanner({ onSaved }: { onSaved?: () => void }) {
         try {
           const u = JSON.parse(localStorage.getItem("sevalor_user") || "{}");
           if (u?.empresa_id) empresaId = u.empresa_id;
-        } catch {}
+        } catch {
+          /* localStorage parse fallback */
+        }
         const id = crypto.randomUUID();
         await localDB.tiquets.add({
           id,

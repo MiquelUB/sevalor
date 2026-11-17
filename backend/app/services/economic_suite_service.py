@@ -2,7 +2,7 @@ import hashlib
 import uuid
 from datetime import date, datetime, timedelta, timezone
 from decimal import ROUND_HALF_UP, Decimal
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import HTTPException, status
 from sqlalchemy import func, select
@@ -59,7 +59,7 @@ class EconomicSuiteService:
         usuari_id: Optional[uuid.UUID],
         codi: str,
         descripcio: str,
-        dades_event: Optional[dict] = None,
+        dades_event: Optional[Dict[str, Any]] = None,
     ) -> RegistreEsdevenimentsSIF:
         raw = f"{empresa_id}|{usuari_id}|{codi}|{descripcio}|{datetime.now(timezone.utc).isoformat()}"
         sello = hashlib.sha256(raw.encode("utf-8")).hexdigest()
@@ -1088,10 +1088,24 @@ class EconomicSuiteService:
         empresa_id: uuid.UUID,
         criteri_caixa: bool = False,
         avui: Optional[date] = None,
+        periode: Optional[str] = None,
     ) -> DashboardEconomicResponseDTO:
         avui = avui or date.today()
+        periode_norm = (periode or "").strip().upper()
+        data_inici_periode: Optional[date] = None
+        mesos_periode = 1
+        if periode_norm == "MES_ACTUAL":
+            data_inici_periode = avui.replace(day=1)
+            mesos_periode = 1
+        elif periode_norm == "TRIMESTRE_ACTUAL":
+            mes_inici_trim = ((avui.month - 1) // 3) * 3 + 1
+            data_inici_periode = date(avui.year, mes_inici_trim, 1)
+            mesos_periode = max(1, (avui.month - mes_inici_trim) + 1)
+        elif periode_norm in ("YTD", "EXERCICI_FISCAL"):
+            data_inici_periode = date(avui.year, 1, 1)
+            mesos_periode = max(1, avui.month)
 
-        factures = (
+        factures_totes = (
             (
                 await db.execute(
                     select(FacturaCapcalera).where(
@@ -1103,11 +1117,31 @@ class EconomicSuiteService:
             .scalars()
             .all()
         )
+        if data_inici_periode is not None:
+            dt_inici = datetime.combine(
+                data_inici_periode, datetime.min.time(), tzinfo=timezone.utc
+            )
+            factures = [
+                f
+                for f in factures_totes
+                if (
+                    f.data_emissio
+                    if isinstance(f.data_emissio, datetime)
+                    else datetime.combine(f.data_emissio, datetime.min.time(), tzinfo=timezone.utc)
+                )
+                >= dt_inici
+            ]
+        else:
+            factures = list(factures_totes)
 
         if criteri_caixa:
             factures_computables = [f for f in factures if f.estat_cobrament == "COBRADA"]
+            factures_computables_totes = [
+                f for f in factures_totes if f.estat_cobrament == "COBRADA"
+            ]
         else:
             factures_computables = list(factures)
+            factures_computables_totes = list(factures_totes)
 
         facturacio_neta = q2(
             sum((Decimal(str(f.base_imposable or 0)) for f in factures_computables), Decimal("0.00"))
@@ -1116,11 +1150,14 @@ class EconomicSuiteService:
             sum((Decimal(str(f.quota_iva or 0)) for f in factures), Decimal("0.00"))
         )
 
-        linies = (
-            (await db.execute(select(FacturaLinia).where(FacturaLinia.empresa_id == empresa_id)))
-            .scalars()
-            .all()
-        )
+        stmt_lin = select(FacturaLinia).where(FacturaLinia.empresa_id == empresa_id)
+        if data_inici_periode is not None:
+            fact_ids = [f.id for f in factures]
+            if fact_ids:
+                stmt_lin = stmt_lin.where(FacturaLinia.factura_id.in_(fact_ids))
+            else:
+                stmt_lin = stmt_lin.where(FacturaLinia.factura_id.is_(None))
+        linies = (await db.execute(stmt_lin)).scalars().all()
         cost_materials_i_merma = q2(
             sum(
                 (
@@ -1132,11 +1169,10 @@ class EconomicSuiteService:
             )
         )
 
-        tiquets = (
-            (await db.execute(select(TiquetDespesa).where(TiquetDespesa.empresa_id == empresa_id)))
-            .scalars()
-            .all()
-        )
+        stmt_tiq = select(TiquetDespesa).where(TiquetDespesa.empresa_id == empresa_id)
+        if data_inici_periode is not None:
+            stmt_tiq = stmt_tiq.where(TiquetDespesa.data_tiquet >= data_inici_periode)
+        tiquets = (await db.execute(stmt_tiq)).scalars().all()
         cost_tiquets = q2(sum((Decimal(str(t.import_total or 0)) for t in tiquets), Decimal("0.00")))
         iva_tiquets_deduible = q2(
             sum(
@@ -1154,6 +1190,7 @@ class EconomicSuiteService:
             .scalars()
             .all()
         )
+        factor_mesos = Decimal(str(mesos_periode))
         cost_nomines_total = q2(
             sum(
                 (
@@ -1162,6 +1199,7 @@ class EconomicSuiteService:
                 ),
                 Decimal("0.00"),
             )
+            * factor_mesos
         )
         cost_ma_obra_directa = q2(cost_nomines_total * Decimal("0.70"))
 
@@ -1182,6 +1220,7 @@ class EconomicSuiteService:
                 ),
                 Decimal("0.00"),
             )
+            * factor_mesos
         )
         cost_flota_eur_km = (
             q2(cost_flota_total / Decimal(total_km_mes)) if total_km_mes > 0 else Decimal("0.00")
@@ -1208,7 +1247,7 @@ class EconomicSuiteService:
             .all()
         )
         despeses_fixes_eur = q2(
-            sum((Decimal(str(df.import_base or 0)) for df in fixes), Decimal("0.00"))
+            (sum((Decimal(str(df.import_base or 0)) for df in fixes), Decimal("0.00")) * factor_mesos)
             + (cost_nomines_total * Decimal("0.30"))
             + cost_flota_total
         )
@@ -1267,15 +1306,10 @@ class EconomicSuiteService:
                     capital_immobilitzat += q2(Decimal(str(a.estoc_optim or 0)) * p_mitja)
 
         # Factures proveïdors i Guardacaixa IVA
-        factures_prov = (
-            (
-                await db.execute(
-                    select(FacturaProveidor).where(FacturaProveidor.empresa_id == empresa_id)
-                )
-            )
-            .scalars()
-            .all()
-        )
+        stmt_fp = select(FacturaProveidor).where(FacturaProveidor.empresa_id == empresa_id)
+        if data_inici_periode is not None:
+            stmt_fp = stmt_fp.where(FacturaProveidor.data_factura >= data_inici_periode)
+        factures_prov = (await db.execute(stmt_fp)).scalars().all()
         iva_prov_deduible = q2(
             sum(
                 (
@@ -1308,7 +1342,7 @@ class EconomicSuiteService:
         cobraments_60d = Decimal("0.00")
         cobraments_90d = Decimal("0.00")
 
-        for f in factures:
+        for f in factures_totes:
             data_em = f.data_emissio.date() if isinstance(f.data_emissio, datetime) else f.data_emissio
             data_venc = f.data_venciment or data_em
             if f.estat_cobrament == "COBRADA" and f.data_cobrament_real:
@@ -1386,7 +1420,7 @@ class EconomicSuiteService:
                 sum(
                     (
                         Decimal(str(f.base_imposable or 0))
-                        for f in factures_computables
+                        for f in factures_computables_totes
                         if (
                             f.data_emissio.date()
                             if isinstance(f.data_emissio, datetime)

@@ -19,8 +19,10 @@ import GestioMap, { Feina, Operari } from "@/components/gestio/Map";
 import { QuadrillesTauler } from "@/components/gestio/QuadrillesTauler";
 import { IncidenciesDrawer } from "@/components/gestio/IncidenciesDrawer";
 import { Fulla360OTDrawer } from "@/components/gestio/Fulla360OTDrawer";
+import { useGestio } from "@/lib/gestio-context";
 
 export default function GestioDashboardPage() {
+  const { rolActiu } = useGestio();
   const [vistaActiva, setVistaActiva] = useState<"FEINA" | "RESULTATS">("FEINA");
 
   useEffect(() => {
@@ -454,13 +456,25 @@ export default function GestioDashboardPage() {
                                       <p className="text-sm font-body-strong text-on-surface">
                                         Responsable: {feina.cap_de_colla_nom || "Pendent d'assignar"}
                                       </p>
-                                      <p className="text-xs font-mono font-bold text-secondary mt-1">
-                                        Hores facturables: {horesFeina.toFixed(2)} h (
-                                        {(horesFeina * Number(feina.preu_venda_hora_aplicat || 45)).toFixed(2)} €)
-                                        {feina.trams_temps && feina.trams_temps.length > 0
-                                          ? ` • ${feina.trams_temps.length} trams`
-                                          : ""}
-                                      </p>
+                                      {rolActiu !== "ENGINYER" ? (
+                                        <p className="text-xs font-mono font-bold text-secondary mt-1">
+                                          Hores facturables: {horesFeina.toFixed(2)} h
+                                          {feina.preu_venda_hora_aplicat !== null &&
+                                          feina.preu_venda_hora_aplicat !== undefined
+                                            ? ` (${(horesFeina * Number(feina.preu_venda_hora_aplicat)).toFixed(2)} €)`
+                                            : ""}
+                                          {feina.trams_temps && feina.trams_temps.length > 0
+                                            ? ` • ${feina.trams_temps.length} trams`
+                                            : ""}
+                                        </p>
+                                      ) : (
+                                        <p className="text-xs font-mono font-bold text-on-surface-variant mt-1">
+                                          Hores registrades: {horesFeina.toFixed(2)} h
+                                          {feina.trams_temps && feina.trams_temps.length > 0
+                                            ? ` • ${feina.trams_temps.length} trams`
+                                            : ""}
+                                        </p>
+                                      )}
                                     </div>
                                     <div className="flex gap-sm mt-md">
                                       <Link
@@ -1244,13 +1258,25 @@ export default function GestioDashboardPage() {
                                       <p className="text-sm font-body-strong text-on-surface">
                                         Responsable: {feina.cap_de_colla_nom || "Pendent d'assignar"}
                                       </p>
-                                      <p className="text-xs font-mono font-bold text-secondary mt-1">
-                                        Hores facturables: {horesFeina.toFixed(2)} h (
-                                        {(horesFeina * Number(feina.preu_venda_hora_aplicat || 45)).toFixed(2)} €)
-                                        {feina.trams_temps && feina.trams_temps.length > 0
-                                          ? ` • ${feina.trams_temps.length} trams`
-                                          : ""}
-                                      </p>
+                                      {rolActiu !== "ENGINYER" ? (
+                                        <p className="text-xs font-mono font-bold text-secondary mt-1">
+                                          Hores facturables: {horesFeina.toFixed(2)} h
+                                          {feina.preu_venda_hora_aplicat !== null &&
+                                          feina.preu_venda_hora_aplicat !== undefined
+                                            ? ` (${(horesFeina * Number(feina.preu_venda_hora_aplicat)).toFixed(2)} €)`
+                                            : ""}
+                                          {feina.trams_temps && feina.trams_temps.length > 0
+                                            ? ` • ${feina.trams_temps.length} trams`
+                                            : ""}
+                                        </p>
+                                      ) : (
+                                        <p className="text-xs font-mono font-bold text-on-surface-variant mt-1">
+                                          Hores registrades: {horesFeina.toFixed(2)} h
+                                          {feina.trams_temps && feina.trams_temps.length > 0
+                                            ? ` • ${feina.trams_temps.length} trams`
+                                            : ""}
+                                        </p>
+                                      )}
                                     </div>
                                     <div className="flex gap-sm mt-md">
                                       <Link

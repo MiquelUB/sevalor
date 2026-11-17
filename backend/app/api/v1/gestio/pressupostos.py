@@ -1,7 +1,9 @@
 """Endpoints per a la gestió de Pressupostos i integració transaccional amb Telegram (Spec 009 / Phase 4)."""
 
+import logging
+import re
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -11,8 +13,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db_with_tenant_context
 from app.core.security import get_current_user_claims, require_roles
-from app.models.models import Client, Pressupost
+from app.models.models import Client, Empresa, Pressupost
+from app.services.sovereign_storage import SovereignStorageGateway
 from app.services.telegram_service import telegram_service
+
+logger = logging.getLogger("sevalor.pressupostos")
 
 router = APIRouter(
     prefix="/gestio/pressupostos",
@@ -75,13 +80,39 @@ async def llistar_pressupostos(
     return res.scalars().all()
 
 
+async def _sync_pressupost_disc(
+    db: AsyncSession, empresa_id: uuid.UUID, pressupost: Pressupost
+) -> None:
+    """Sincronitza el pressupost a 04_factures/prefactures_i_pressupostos al disc de l'empresa."""
+    try:
+        ruta = await SovereignStorageGateway.desar_entitat_json(
+            db=db,
+            empresa_id=empresa_id,
+            categoria="pressupostos",
+            item_id=str(pressupost.id),
+            dades={
+                "id": str(pressupost.id),
+                "client_id": str(pressupost.client_id),
+                "numero": pressupost.numero,
+                "total": float(pressupost.total or 0.0),
+                "estat": pressupost.estat,
+                "created_at": pressupost.created_at.isoformat() if pressupost.created_at else None,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            },
+        )
+        if not str(ruta).startswith("transit://"):
+            await SovereignStorageGateway.drenar_cua_transit_empresa(db, empresa_id)
+    except Exception as exc:
+        logger.warning("No s'ha pogut sincronitzar el pressupost %s al disc: %s", pressupost.id, exc)
+
+
 @router.post("", response_model=PressupostResponse, status_code=status.HTTP_201_CREATED)
 async def crear_pressupost(
     dades: PressupostCreate,
     db: AsyncSession = Depends(get_db_with_tenant_context),
     claims: Dict[str, Any] = Depends(get_current_user_claims),
 ):
-    """Crea un nou pressupost en estat PENDENT."""
+    """Crea un nou pressupost en estat PENDENT i el sincronitza al disc dur de l'empresa."""
     empresa_id_str = claims.get("empresa_id")
     if not empresa_id_str:
         raise HTTPException(status_code=400, detail="Falta el tenant al token.")
@@ -106,6 +137,7 @@ async def crear_pressupost(
     )
     db.add(nou_pressupost)
     await db.commit()
+    await _sync_pressupost_disc(db, empresa_id, nou_pressupost)
     return nou_pressupost
 
 
@@ -193,6 +225,7 @@ async def aprovar_pressupost(
 
     pressupost.estat = "APROVAT"
     await db.commit()
+    await _sync_pressupost_disc(db, empresa_id, pressupost)
     return pressupost
 
 
@@ -223,29 +256,157 @@ async def rebutjar_pressupost(
 
     pressupost.estat = "REBUTJAT"
     await db.commit()
+    await _sync_pressupost_disc(db, empresa_id, pressupost)
     return pressupost
 
 
 @router.post("/generar-ia")
 async def generar_pressupost_ia(
     prompt: str = Query(..., description="Descripció del pressupost per a la IA"),
+    client_id: Optional[uuid.UUID] = Query(None, description="Client opcional"),
+    db: AsyncSession = Depends(get_db_with_tenant_context),
     claims: Dict[str, Any] = Depends(get_current_user_claims),
 ):
-    """Genera una proposta de pressupost utilitzant IA (Copilot)."""
-    # Simulate LLM call returning structured JSON budget lines.
-    return {
-        "status": "PENDENT_AUDITORIA",
-        "draft": {
-            "titol": "Pressupost generat per IA",
-            "linies": [
+    """Genera un esborrany de pressupost via Node IA Local + Catàleg al Disc de l'Empresa (Zero Fallback / Zero Mock)."""
+    empresa_id_str = claims.get("empresa_id")
+    if not empresa_id_str:
+        raise HTTPException(status_code=400, detail="Falta el tenant al token.")
+    empresa_id = uuid.UUID(empresa_id_str)
+    rol = str(claims.get("rol") or "").upper()
+
+    res_emp = await db.execute(select(Empresa).where(Empresa.id == empresa_id))
+    empresa = res_emp.scalar_one_or_none()
+    node_url = (empresa.node_ia_url or "").strip() if empresa and empresa.node_ia_url else ""
+    disc_url = (
+        getattr(empresa, "disc_dur_url", None) or ""
+    ).strip() if empresa else ""
+
+    if (
+        not empresa
+        or not getattr(empresa, "feature_copilot_ia", False)
+        or not getattr(empresa, "node_ia_actiu", False)
+        or not (node_url or disc_url)
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "COPILOT_DESACTIVAT",
+                "message": "El Copilot IA local està desactivat per a aquesta empresa. Zero fallback a Hetzner.",
+            },
+        )
+
+    articles_disc = await SovereignStorageGateway.llegir_entitats_json(
+        db, empresa_id, "magatzem_articles"
+    )
+    ots_hist = await SovereignStorageGateway.llegir_entitats_json(
+        db, empresa_id, "ots_historic"
+    )
+
+    tokens = [t for t in re.split(r"[\s,;:.!?]+", prompt.lower()) if len(t) >= 3]
+    linies: List[Dict[str, Any]] = []
+    total_calculat = 0.0
+    te_preus_reals = True
+    pot_veure_preus = rol in ("BOSS", "ADMIN", "SECRETARIA")
+
+    for art in articles_disc:
+        nom_art = str(art.get("nom") or "")
+        ref_art = str(art.get("referencia_inventari") or "")
+        blob = f"{nom_art} {ref_art}".lower()
+        if any(tok in blob for tok in tokens):
+            pvp_raw = art.get("preu_venda")
+            pvp = float(pvp_raw) if (pot_veure_preus and pvp_raw is not None and float(pvp_raw) > 0) else None
+            if pvp is None:
+                te_preus_reals = False
+            else:
+                total_calculat += pvp
+            linies.append(
                 {
-                    "concepte": f"Generat des de: {prompt[:30]}",
+                    "concepte": nom_art or ref_art,
                     "quantitat": 1,
-                    "preu_unitari": 100.0,
-                    "total": 100.0,
+                    "preu_unitari": pvp,
+                    "total": pvp,
                 }
-            ],
-            "total_estimat": 100.0,
+            )
+            if len(linies) >= 5:
+                break
+
+    hist_match = [
+        o
+        for o in ots_hist
+        if any(tok in f"{o.get('titol', '')} {o.get('descripcio', '')}".lower() for tok in tokens)
+    ]
+
+    llm_summary: Optional[str] = None
+    if node_url.startswith(("http://", "https://")):
+        from app.api.v1.gestio.copilot import cridar_lm_studio
+
+        context_str = (
+            f"Articles coincidents al catàleg del disc: {len(linies)}. "
+            f"Feines històriques similars: {len(hist_match)}."
+        )
+        llm_summary = await cridar_lm_studio(
+            pregunta=f"Redacta una breu justificació tècnica de pressupost per a: {prompt}",
+            vertical=empresa.vertical or "SEVALOR",
+            context_addicional=context_str,
+            empresa=empresa,
+        )
+        if llm_summary is None:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={
+                    "code": "NODE_IA_OFFLINE",
+                    "message": "El túnel Copilot / Node IA local no respon. Zero fallback a Hetzner.",
+                },
+            )
+    elif disc_url.startswith(("http://", "https://")) and not node_url:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "NODE_IA_OFFLINE",
+                "message": "Falta configurar node_ia_url per al node IA local de l'empresa.",
+            },
+        )
+
+    if not linies:
+        te_preus_reals = False
+        linies.append(
+            {
+                "concepte": prompt.strip()[:120],
+                "quantitat": 1,
+                "preu_unitari": None,
+                "total": None,
+            }
+        )
+
+    draft_id = str(uuid.uuid4())
+    total_estimat = round(total_calculat, 2) if (pot_veure_preus and te_preus_reals and total_calculat > 0) else None
+    draft_payload: Dict[str, Any] = {
+        "titol": f"Esborrany Pressupost Copilot — {prompt.strip()[:60]}",
+        "resum_tecnic": llm_summary,
+        "feines_historiques_similars": len(hist_match),
+        "linies": linies,
+        "total_estimat": total_estimat,
+    }
+
+    await SovereignStorageGateway.desar_entitat_json(
+        db=db,
+        empresa_id=empresa_id,
+        categoria="pressupostos",
+        item_id=f"draft_{draft_id}",
+        dades={
+            "id": draft_id,
+            "client_id": str(client_id) if client_id else None,
+            "estat": "PENDENT_AUDITORIA",
+            "origen": "COPILOT_IA",
+            "prompt": prompt,
+            "draft": draft_payload,
+            "created_at": datetime.now(timezone.utc).isoformat(),
         },
-        "missatge": "Proposta PENDENT_AUDITORIA generada correctament.",
+    )
+
+    return {
+        "id": draft_id,
+        "status": "PENDENT_AUDITORIA",
+        "draft": draft_payload,
+        "missatge": "Proposta PENDENT_AUDITORIA desada al disc de l'empresa per a validació humana (HITL).",
     }

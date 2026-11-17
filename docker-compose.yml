@@ -60,6 +60,8 @@ services:
       - LM_STUDIO_MODEL=${LM_STUDIO_MODEL:-default}
       - SECRET_KEY=${SECRET_KEY:-sevalor-dev-secret-key-32-chars-long-abc}
       - SOVEREIGN_TRANSIT_QUEUE_DIR=/var/sevalor/transit_queue
+      - SUPERADMIN_VAULT_URL=${SUPERADMIN_VAULT_URL:-http://host.docker.internal:9002}
+      - SUPERADMIN_VAULT_SECRET=${SUPERADMIN_VAULT_SECRET:-}
     ports:
       - "127.0.0.1:8001:8000"
     depends_on:
@@ -91,6 +93,8 @@ services:
       - REDIS_URL=redis://:${REDIS_PASSWORD:-}@redis:6379/0
       - SECRET_KEY=${SECRET_KEY:-sevalor-dev-secret-key-32-chars-long-abc}
       - SOVEREIGN_TRANSIT_QUEUE_DIR=/var/sevalor/transit_queue
+      - SUPERADMIN_VAULT_URL=${SUPERADMIN_VAULT_URL:-http://host.docker.internal:9002}
+      - SUPERADMIN_VAULT_SECRET=${SUPERADMIN_VAULT_SECRET:-}
     depends_on:
       db:
         condition: service_healthy
@@ -120,6 +124,8 @@ services:
       - REDIS_URL=redis://:${REDIS_PASSWORD:-}@redis:6379/0
       - SECRET_KEY=${SECRET_KEY:-sevalor-dev-secret-key-32-chars-long-abc}
       - SOVEREIGN_TRANSIT_QUEUE_DIR=/var/sevalor/transit_queue
+      - SUPERADMIN_VAULT_URL=${SUPERADMIN_VAULT_URL:-http://host.docker.internal:9002}
+      - SUPERADMIN_VAULT_SECRET=${SUPERADMIN_VAULT_SECRET:-}
     depends_on:
       db:
         condition: service_healthy

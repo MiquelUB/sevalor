@@ -15,6 +15,7 @@ import {
   Trash2,
   Save,
   FileText,
+  HardDrive,
 } from "lucide-react";
 import { apiFetch } from "@/lib/api";
 
@@ -41,6 +42,18 @@ export default function SuperadminSeguretatPage() {
   const [ips, setIps] = useState<string[]>([]);
   const [novaIp, setNovaIp] = useState<string>("");
   const [savingIps, setSavingIps] = useState<boolean>(false);
+
+  // Inicialització del Disc Dur Sobirà del Superadmin
+  const [initializingSuperadminDisk, setInitializingSuperadminDisk] = useState<boolean>(false);
+  const [superadminDiskResult, setSuperadminDiskResult] = useState<{
+    status?: string;
+    carpetes_count?: number;
+    total_carpetes?: number;
+    vault_root?: string;
+    mode?: string;
+    desti?: string;
+    missatge?: string;
+  } | null>(null);
 
   const fetchStatus = async () => {
     setLoading(true);
@@ -88,6 +101,29 @@ export default function SuperadminSeguretatPage() {
       setError(e.message || "Error actualitzant la IP Allowlist.");
     } finally {
       setSavingIps(false);
+    }
+  };
+
+  const handleInicialitzarDiscSuperadmin = async () => {
+    setInitializingSuperadminDisk(true);
+    setError(null);
+    setSuccessMsg(null);
+    setSuperadminDiskResult(null);
+    try {
+      const res = await apiFetch<any>("/superadmin/tenants/disc-superadmin/inicialitzar", {
+        method: "POST",
+        body: JSON.stringify({}),
+      });
+      setSuperadminDiskResult(res);
+      setSuccessMsg(
+        `Disc Dur del Superadmin inicialitzat correctament (${res.carpetes_count ?? res.total_carpetes ?? 20} carpetes verificades).`
+      );
+    } catch (e: any) {
+      const msg = e.message || "Error inicialitzant el Disc Dur del Superadmin.";
+      setSuperadminDiskResult({ status: "ERROR", missatge: msg });
+      setError(msg);
+    } finally {
+      setInitializingSuperadminDisk(false);
     }
   };
 
@@ -195,6 +231,48 @@ export default function SuperadminSeguretatPage() {
             <Plus className="w-3.5 h-3.5" /> Afegir IP
           </button>
         </div>
+      </div>
+
+      {/* DISC DUR SOBIRÀ DEL SUPERADMIN (20 CARPETES) */}
+      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-6 rounded-2xl shadow-sm space-y-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 className="text-sm font-mono font-bold uppercase tracking-wider text-slate-800 dark:text-slate-200 flex items-center gap-2">
+              <HardDrive className="w-4 h-4 text-emerald-500" />
+              <span>Disc Dur Sobirà de Superadmin (CRM, Facturació SaaS & Rascador)</span>
+            </h2>
+            <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+              Inicialitza físicament l'arbre complet de 20 carpetes sobiranes al teu ordinador via túnel encriptat perquè Hetzner no emmagatzemi dades comercials ni facturació B2B.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={handleInicialitzarDiscSuperadmin}
+            disabled={initializingSuperadminDisk}
+            className="px-4 py-2 rounded-xl bg-slate-900 dark:bg-emerald-600 hover:bg-slate-800 dark:hover:bg-emerald-500 disabled:opacity-50 text-white text-xs font-mono font-bold flex items-center gap-1.5 shadow cursor-pointer"
+          >
+            <HardDrive className={`w-3.5 h-3.5 ${initializingSuperadminDisk ? "animate-spin" : ""}`} />
+            <span>
+              {initializingSuperadminDisk
+                ? "Inicialitzant..."
+                : "Inicialitzar Disc Superadmin (20 Carpetes)"}
+            </span>
+          </button>
+        </div>
+
+        {superadminDiskResult && (
+          <div
+            className={`p-3 rounded-xl border text-xs font-mono ${
+              superadminDiskResult.status === "ERROR"
+                ? "bg-rose-50 dark:bg-rose-950/60 border-rose-300 dark:border-rose-800 text-rose-800 dark:text-rose-200"
+                : "bg-emerald-50 dark:bg-emerald-950/60 border-emerald-300 dark:border-emerald-800 text-emerald-800 dark:text-emerald-200"
+            }`}
+          >
+            <strong>{superadminDiskResult.status || "OK"}:</strong>{" "}
+            {superadminDiskResult.missatge ||
+              `${superadminDiskResult.carpetes_count ?? superadminDiskResult.total_carpetes ?? 20} carpetes creades/verificades (${superadminDiskResult.vault_root || superadminDiskResult.desti || superadminDiskResult.mode || "HTTP_VAULT"}).`}
+          </div>
+        )}
       </div>
 
       {/* QUADRE DE COMANDAMENT ZERO-TRUST */}
@@ -311,10 +389,10 @@ export default function SuperadminSeguretatPage() {
           <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/80 space-y-2">
             <div className="flex items-center gap-2 font-bold text-xs text-slate-900 dark:text-white">
               <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />
-              <span>4. Buffer Diari a Hetzner + Arxiu Mestre al Disc del Client</span>
+              <span>4. Zero-Storage a Hetzner + Discos Sobirans (Empresa i Superadmin)</span>
             </div>
             <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed font-sans">
-              El servidor Hetzner a Alemanya només guarda les feines d'avui per màxima velocitat. L'arxiu històric de plànols pesats viu al disc dur de l'ordinador de cada empresa.
+              El servidor Hetzner només conserva routing mínim i cua efímera xifrada en trànsit (SVENC1). Totes les dades d'empresa i del CRM/facturació B2B del Superadmin viuen als seus discs dedicats.
             </p>
           </div>
         </div>

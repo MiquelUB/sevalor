@@ -1,7 +1,8 @@
 import collections
+import logging
 import uuid
-from datetime import date, datetime
-from typing import Dict, List, Optional
+from datetime import date, datetime, timezone
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -9,7 +10,7 @@ from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db_with_tenant_context
-from app.core.security import require_roles
+from app.core.security import get_current_user_claims, require_roles
 from app.models.models import (
     Article,
     Client,
@@ -25,7 +26,11 @@ from app.models.models import (
     Usuari,
     Vehicle,
 )
+from app.services.flota_service import validar_permis_conduir
 from app.services.geocoding_service import geocodificar_adreca
+from app.services.sovereign_storage import SovereignStorageGateway
+
+logger = logging.getLogger("sevalor.feines")
 
 router = APIRouter(
     prefix="/gestio/feines",
@@ -42,6 +47,7 @@ class LiniaPickingItem(BaseModel):
     quantitat_prevista: float = Field(..., gt=0)
     unitat_mesura: Optional[str] = "UNITAT"
     estoc_disponible: Optional[float] = 0.0
+    magatzem_id: Optional[uuid.UUID] = None
     model_config = ConfigDict(from_attributes=True)
 
 
@@ -83,6 +89,8 @@ class FeinaCreate(BaseModel):
     latitud: Optional[float] = None
     longitud: Optional[float] = None
     eina_ids: Optional[List[uuid.UUID]] = None
+    magatzem_id: Optional[uuid.UUID] = None
+    linies_picking: Optional[List[LiniaPickingItem]] = None
     model_config = ConfigDict(from_attributes=True)
 
     @field_validator("adreca")
@@ -120,7 +128,7 @@ class FeinaResponse(FeinaCreate):
     hora_inici_real: Optional[datetime] = None
     hora_fi_real: Optional[datetime] = None
     hores_imputades_facturables: Optional[float] = 0.0
-    preu_venda_hora_aplicat: Optional[float] = 45.0
+    preu_venda_hora_aplicat: Optional[float] = None
     te_tram_obert: bool = False
     temps_acumulat_segons: int = 0
     trams_temps: List[TramTempsGestioItem] = []
@@ -163,6 +171,200 @@ class FeinaUpdate(BaseModel):
         return v_clean
 
 
+def _aplicar_veto_rol_feina(f_resp: FeinaResponse, claims: Optional[Dict[str, Any]]) -> FeinaResponse:
+    """Emmascara dades tarifàries sensibles per al rol ENGINYER."""
+    rol = str((claims or {}).get("rol") or "").upper()
+    if rol == "ENGINYER":
+        f_resp.preu_venda_hora_aplicat = None
+    return f_resp
+
+
+async def _validar_client_i_permisos(
+    db: AsyncSession,
+    emp_uuid: uuid.UUID,
+    client_id: uuid.UUID,
+    cap_de_colla_id: Optional[uuid.UUID],
+    vehicle_id: Optional[uuid.UUID],
+) -> Client:
+    """Valida pertinença i bloqueig de risc operatiu (423), i permís de conduir FR-012 (422)."""
+    client_obj = (
+        await db.execute(select(Client).where(Client.id == client_id, Client.empresa_id == emp_uuid))
+    ).scalars().first()
+    if not client_obj:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Client no trobat")
+
+    if (client_obj.estat_risc_operatiu or "").upper() == "BLOQUEJAT_RISC":
+        raise HTTPException(
+            status_code=status.HTTP_423_LOCKED,
+            detail="Client bloquejat per risc operatiu (BLOQUEJAT_RISC). No es pot donar d'alta l'Ordre de Treball.",
+        )
+
+    if cap_de_colla_id and vehicle_id:
+        op_db = (
+            await db.execute(
+                select(Usuari).where(Usuari.id == cap_de_colla_id, Usuari.empresa_id == emp_uuid)
+            )
+        ).scalars().first()
+        veh_db = (
+            await db.execute(
+                select(Vehicle).where(Vehicle.id == vehicle_id, Vehicle.empresa_id == emp_uuid)
+            )
+        ).scalars().first()
+        if op_db and veh_db:
+            validar_permis_conduir(veh_db, op_db)
+
+    return client_obj
+
+
+async def _preparar_picking_atomic(
+    db: AsyncSession,
+    emp_uuid: uuid.UUID,
+    linies_picking: List[LiniaPickingItem],
+    default_magatzem_id: Optional[uuid.UUID],
+) -> List[tuple[LiniaPickingItem, float, List[tuple[EstocMagatzem, float]]]]:
+    """Adquireix bloquejos SELECT ... WITH FOR UPDATE i valida estoc abans d'inserir cap OT."""
+    allocations: List[tuple[LiniaPickingItem, float, List[tuple[EstocMagatzem, float]]]] = []
+    pending_by_estoc: Dict[uuid.UUID, float] = {}
+
+    for lp in linies_picking:
+        q_req = float(lp.quantitat_prevista)
+        target_mag_id = lp.magatzem_id or default_magatzem_id
+        stmt_estoc = select(EstocMagatzem).where(
+            EstocMagatzem.article_id == lp.article_id,
+            EstocMagatzem.empresa_id == emp_uuid,
+        )
+        if target_mag_id is not None:
+            stmt_estoc = stmt_estoc.where(EstocMagatzem.magatzem_id == target_mag_id)
+        stmt_estoc = stmt_estoc.order_by(EstocMagatzem.quantitat_fisica.desc()).with_for_update()
+
+        estocs = list((await db.execute(stmt_estoc)).scalars().all())
+        if not estocs:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"Stock insuficient: l'article {lp.article_id} no té estoc registrat"
+                    + (f" al magatzem {target_mag_id}" if target_mag_id else "")
+                ),
+            )
+
+        disp_total = sum(
+            max(
+                0.0,
+                float(e.quantitat_fisica)
+                - float(e.quantitat_virtual_reservada)
+                - pending_by_estoc.get(e.id, 0.0),
+            )
+            for e in estocs
+        )
+        if q_req > disp_total:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"Stock insuficient per reservar l'article {lp.article_id}. "
+                    f"Disponible: {disp_total}, sol·licitat: {q_req}"
+                ),
+            )
+
+        remaining = q_req
+        line_takes: List[tuple[EstocMagatzem, float]] = []
+        for estoc in estocs:
+            if remaining <= 0:
+                break
+            disp = max(
+                0.0,
+                float(estoc.quantitat_fisica)
+                - float(estoc.quantitat_virtual_reservada)
+                - pending_by_estoc.get(estoc.id, 0.0),
+            )
+            if disp <= 0:
+                continue
+            take = min(disp, remaining)
+            pending_by_estoc[estoc.id] = pending_by_estoc.get(estoc.id, 0.0) + take
+            line_takes.append((estoc, take))
+            remaining -= take
+        allocations.append((lp, q_req, line_takes))
+
+    return allocations
+
+
+async def _aplicar_picking_atomic(
+    db: AsyncSession,
+    emp_uuid: uuid.UUID,
+    ordre: OrdreTreball,
+    allocations: List[tuple[LiniaPickingItem, float, List[tuple[EstocMagatzem, float]]]],
+) -> FullaPicking:
+    """Crea la Fulla de Picking i les seves línies un cop validat i bloquejat l'estoc."""
+    fulla = FullaPicking(
+        empresa_id=emp_uuid,
+        ordre_treball_id=ordre.id,
+        vehicle_id=ordre.vehicle_id,
+        estat_picking="PENDENT",
+    )
+    db.add(fulla)
+    await db.flush()
+
+    for lp, q_req, line_takes in allocations:
+        for estoc, take in line_takes:
+            estoc.quantitat_virtual_reservada = float(estoc.quantitat_virtual_reservada) + take
+        resolved_mag_id = line_takes[0][0].magatzem_id if line_takes else lp.magatzem_id
+        db.add(
+            LiniaPicking(
+                empresa_id=emp_uuid,
+                picking_id=fulla.id,
+                article_id=lp.article_id,
+                magatzem_id=resolved_mag_id,
+                quantitat_prevista=q_req,
+                quantitat_carregada_pick_in=0.0,
+                quantitat_retornada_pick_out=0.0,
+                quantitat_mermada=0.0,
+            )
+        )
+
+    return fulla
+
+
+async def _sincronitzar_feina_disc(
+    db: AsyncSession,
+    emp_uuid: uuid.UUID,
+    f_resp: FeinaResponse,
+    raw_estat: Optional[str] = None,
+) -> None:
+    """Sincronitza la OT i el seu picking al disc sobirà de l'empresa sense deixar fitxers a Hetzner."""
+    estat_up = str(raw_estat or f_resp.estat or "").upper()
+    es_tancada = estat_up in {"TANCADA", "COMPLETADA", "FINALITZADA", "FACTURADA", "CANCEL·LADA", "CANCELLADA"}
+    categoria = "ots_historic" if es_tancada else "ots_actives"
+    payload = {
+        **f_resp.model_dump(mode="json"),
+        "synced_at": datetime.now(timezone.utc).isoformat(),
+    }
+    try:
+        ruta = await SovereignStorageGateway.desar_entitat_json(
+            db=db,
+            empresa_id=emp_uuid,
+            categoria=categoria,
+            item_id=str(f_resp.id),
+            dades=payload,
+        )
+        if f_resp.linies_picking:
+            await SovereignStorageGateway.desar_entitat_json(
+                db=db,
+                empresa_id=emp_uuid,
+                categoria="picking",
+                item_id=f"picking_{f_resp.id}",
+                dades={
+                    "ordre_treball_id": str(f_resp.id),
+                    "codi": f_resp.codi,
+                    "estat_ot": f_resp.estat,
+                    "linies_picking": payload.get("linies_picking", []),
+                    "synced_at": payload["synced_at"],
+                },
+            )
+        if not str(ruta).startswith("transit://"):
+            await SovereignStorageGateway.drenar_cua_transit_empresa(db, emp_uuid)
+    except Exception as exc:
+        logger.warning("No s'ha pogut sincronitzar la feina %s al disc sobirà: %s", f_resp.id, exc)
+
+
 @router.get("", response_model=List[FeinaResponse])
 async def llistar_feines(
     request: Request,
@@ -170,6 +372,7 @@ async def llistar_feines(
     limit: int = 50,
     offset: int = 0,
     db: AsyncSession = Depends(get_db_with_tenant_context),
+    claims: Dict[str, Any] = Depends(get_current_user_claims),
 ):
     empresa_id = request.state.empresa_id
     if not empresa_id or empresa_id == "undefined":
@@ -223,6 +426,7 @@ async def llistar_feines(
                     quantitat_prevista=float(lp.quantitat_prevista or 0.0),
                     unitat_mesura=art.unitat_mesura or "UNITAT",
                     estoc_disponible=0.0,
+                    magatzem_id=getattr(lp, "magatzem_id", None),
                 )
             )
 
@@ -332,25 +536,48 @@ async def llistar_feines(
         f_resp.operaris_assignats = assigned_ops
         f_resp.operaris_ids = [op.id for op in assigned_ops]
 
-        feines.append(f_resp)
+        feines.append(_aplicar_veto_rol_feina(f_resp, claims))
 
     return feines
 
 
 @router.post("", response_model=FeinaResponse, status_code=status.HTTP_201_CREATED)
 async def alta_feina(
-    request: Request, feina: FeinaCreate, db: AsyncSession = Depends(get_db_with_tenant_context)
+    request: Request,
+    feina: FeinaCreate,
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+    claims: Dict[str, Any] = Depends(get_current_user_claims),
 ):
     empresa_id = request.state.empresa_id
     if not empresa_id or empresa_id == "undefined":
         raise HTTPException(status_code=401, detail="No identificat")
+    emp_uuid = uuid.UUID(empresa_id)
 
     stmt_codi = select(OrdreTreball).where(
-        OrdreTreball.empresa_id == uuid.UUID(empresa_id), OrdreTreball.codi == feina.codi
+        OrdreTreball.empresa_id == emp_uuid, OrdreTreball.codi == feina.codi
     )
     result_codi = await db.execute(stmt_codi)
     if result_codi.scalars().first():
         raise HTTPException(status_code=400, detail="El codi de feina ja es troba registrat")
+
+    # Validar Client (404 / 423 BLOQUEJAT_RISC) i permís de conduir (FR-012) abans de crear la OT
+    await _validar_client_i_permisos(
+        db=db,
+        emp_uuid=emp_uuid,
+        client_id=feina.client_id,
+        cap_de_colla_id=feina.cap_de_colla_id,
+        vehicle_id=feina.vehicle_id,
+    )
+
+    # Adquirir bloquejos SELECT ... FOR UPDATE i validar disponibilitat d'estoc ABANS de crear l'OT
+    picking_allocations: List[tuple[LiniaPickingItem, float, List[tuple[EstocMagatzem, float]]]] = []
+    if feina.linies_picking:
+        picking_allocations = await _preparar_picking_atomic(
+            db=db,
+            emp_uuid=emp_uuid,
+            linies_picking=feina.linies_picking,
+            default_magatzem_id=feina.magatzem_id,
+        )
 
     # Coordenades: geocodificar adreça de text o respectar coordenades directes
     lat, lng = geocodificar_adreca(feina.adreca, feina.latitud, feina.longitud)
@@ -358,7 +585,7 @@ async def alta_feina(
     if (lat is None or lng is None) and feina.finca_id:
         stmt_finca = select(Finca).where(
             Finca.id == feina.finca_id,
-            Finca.empresa_id == uuid.UUID(empresa_id),
+            Finca.empresa_id == emp_uuid,
         )
         finca_db = (await db.execute(stmt_finca)).scalars().first()
         if finca_db and finca_db.latitud is not None and finca_db.longitud is not None:
@@ -366,7 +593,7 @@ async def alta_feina(
             lng = float(finca_db.longitud)
 
     nova_feina = OrdreTreball(
-        empresa_id=uuid.UUID(empresa_id),
+        empresa_id=emp_uuid,
         codi=feina.codi,
         client_id=feina.client_id,
         finca_id=feina.finca_id,
@@ -386,56 +613,69 @@ async def alta_feina(
         longitud=lng,
     )
 
-    db.add(nova_feina)
-    await db.flush()
+    try:
+        db.add(nova_feina)
+        await db.flush()
 
-    # Sincronitzar estat del vehicle a ASSIGNAT si la feina és activa
-    if nova_feina.vehicle_id and nova_feina.estat in ("PENDENT", "ASSIGNADA", "PROGRAMADA", "EN_CURS", "EN_RUTA", "EN_OBRA"):
-        stmt_v = select(Vehicle).where(
-            Vehicle.id == nova_feina.vehicle_id,
-            Vehicle.empresa_id == uuid.UUID(empresa_id),
-        )
-        veh_obj = (await db.execute(stmt_v)).scalars().first()
-        if veh_obj and veh_obj.estat == "OPERATIU":
-            veh_obj.estat = "ASSIGNAT"
-
-    # Custòdia d'eines seleccionades per a la feina
-    if feina.eina_ids:
-        for eina_id in feina.eina_ids:
-            stmt_eina = select(EinaCustodia).where(
-                EinaCustodia.id == eina_id,
-                EinaCustodia.empresa_id == uuid.UUID(empresa_id),
+        # Sincronitzar estat del vehicle a ASSIGNAT si la feina és activa
+        if nova_feina.vehicle_id and nova_feina.estat in ("PENDENT", "ASSIGNADA", "PROGRAMADA", "EN_CURS", "EN_RUTA", "EN_OBRA"):
+            stmt_v = select(Vehicle).where(
+                Vehicle.id == nova_feina.vehicle_id,
+                Vehicle.empresa_id == emp_uuid,
             )
-            eina_obj = (await db.execute(stmt_eina)).scalars().first()
-            if eina_obj:
-                eina_obj.estat = "CUSTODIADA"
-                eina_obj.ordre_treball_id = nova_feina.id
-                if feina.cap_de_colla_id:
-                    eina_obj.custodiat_per_operari_id = feina.cap_de_colla_id
+            veh_obj = (await db.execute(stmt_v)).scalars().first()
+            if veh_obj and veh_obj.estat == "OPERATIU":
+                veh_obj.estat = "ASSIGNAT"
 
-    # Assignació de Quadrilla / Colla (Cap de Colla Responsable + Operaris de suport sense duplicats)
-    operaris_a_assignar: Dict[uuid.UUID, bool] = {}
-    if feina.cap_de_colla_id:
-        operaris_a_assignar[feina.cap_de_colla_id] = True
-    if feina.operaris_ids:
-        for op_id in feina.operaris_ids:
-            if op_id not in operaris_a_assignar:
-                operaris_a_assignar[op_id] = False
+        # Custòdia d'eines seleccionades per a la feina
+        if feina.eina_ids:
+            for eina_id in feina.eina_ids:
+                stmt_eina = select(EinaCustodia).where(
+                    EinaCustodia.id == eina_id,
+                    EinaCustodia.empresa_id == emp_uuid,
+                )
+                eina_obj = (await db.execute(stmt_eina)).scalars().first()
+                if eina_obj:
+                    eina_obj.estat = "CUSTODIADA"
+                    eina_obj.ordre_treball_id = nova_feina.id
+                    if feina.cap_de_colla_id:
+                        eina_obj.custodiat_per_operari_id = feina.cap_de_colla_id
 
-    for op_id, es_cap in operaris_a_assignar.items():
-        db.add(
-            OrdreTreballOperari(
-                empresa_id=uuid.UUID(empresa_id),
-                ordre_treball_id=nova_feina.id,
-                operari_id=op_id,
-                es_cap_de_colla=es_cap,
+        # Assignació de Quadrilla / Colla (Cap de Colla Responsable + Operaris de suport sense duplicats)
+        operaris_a_assignar: Dict[uuid.UUID, bool] = {}
+        if feina.cap_de_colla_id:
+            operaris_a_assignar[feina.cap_de_colla_id] = True
+        if feina.operaris_ids:
+            for op_id in feina.operaris_ids:
+                if op_id not in operaris_a_assignar:
+                    operaris_a_assignar[op_id] = False
+
+        for op_id, es_cap in operaris_a_assignar.items():
+            db.add(
+                OrdreTreballOperari(
+                    empresa_id=emp_uuid,
+                    ordre_treball_id=nova_feina.id,
+                    operari_id=op_id,
+                    es_cap_de_colla=es_cap,
+                )
             )
-        )
 
-    await db.commit()
-    await db.refresh(nova_feina)
+        if picking_allocations:
+            await _aplicar_picking_atomic(
+                db=db,
+                emp_uuid=emp_uuid,
+                ordre=nova_feina,
+                allocations=picking_allocations,
+            )
 
-    return await build_feina_response(nova_feina, db, uuid.UUID(empresa_id))
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        raise
+
+    f_resp = await build_feina_response(nova_feina, db, emp_uuid)
+    await _sincronitzar_feina_disc(db, emp_uuid, f_resp, nova_feina.estat)
+    return _aplicar_veto_rol_feina(f_resp, claims)
 
 
 @router.get("/mapa")
@@ -548,6 +788,7 @@ async def build_feina_response(
         )
         lin_rows = (await db.execute(lin_stmt)).all()
         for lp, art in lin_rows:
+            lp_mag_id = getattr(lp, "magatzem_id", None)
             estoc_stmt = select(
                 func.coalesce(
                     func.sum(EstocMagatzem.quantitat_fisica - EstocMagatzem.quantitat_virtual_reservada),
@@ -557,6 +798,8 @@ async def build_feina_response(
                 EstocMagatzem.article_id == art.id,
                 EstocMagatzem.empresa_id == empresa_id,
             )
+            if lp_mag_id is not None:
+                estoc_stmt = estoc_stmt.where(EstocMagatzem.magatzem_id == lp_mag_id)
             disp = float((await db.execute(estoc_stmt)).scalar() or 0.0)
             linies_items.append(
                 LiniaPickingItem(
@@ -567,6 +810,7 @@ async def build_feina_response(
                     quantitat_prevista=float(lp.quantitat_prevista or 0.0),
                     unitat_mesura=art.unitat_mesura or "UNITAT",
                     estoc_disponible=max(0.0, disp),
+                    magatzem_id=lp_mag_id,
                 )
             )
     f_resp.linies_picking = linies_items
@@ -634,22 +878,25 @@ async def obtenir_feina(
     feina_id: uuid.UUID,
     request: Request,
     db: AsyncSession = Depends(get_db_with_tenant_context),
+    claims: Dict[str, Any] = Depends(get_current_user_claims),
 ):
     """Obté el detall complet d'una Ordre de Treball per ID amb aïllament RLS."""
     empresa_id = getattr(request.state, "empresa_id", None) or request.headers.get("X-Empresa-ID")
     if not empresa_id or empresa_id in ("undefined", "null", "None"):
         raise HTTPException(status_code=401, detail="No identificat")
+    emp_uuid = uuid.UUID(empresa_id)
 
     stmt = select(OrdreTreball).where(
         OrdreTreball.id == feina_id,
-        OrdreTreball.empresa_id == uuid.UUID(empresa_id),
+        OrdreTreball.empresa_id == emp_uuid,
     )
     result = await db.execute(stmt)
     ordre = result.scalars().first()
     if not ordre:
         raise HTTPException(status_code=404, detail="Ordre de treball no trobada")
 
-    return await build_feina_response(ordre, db, uuid.UUID(empresa_id))
+    f_resp = await build_feina_response(ordre, db, emp_uuid)
+    return _aplicar_veto_rol_feina(f_resp, claims)
 
 
 @router.put("/{feina_id}", response_model=FeinaResponse)
@@ -658,15 +905,17 @@ async def modificar_feina(
     payload: FeinaUpdate,
     request: Request,
     db: AsyncSession = Depends(get_db_with_tenant_context),
+    claims: Dict[str, Any] = Depends(get_current_user_claims),
 ):
     """Actualitza i edita una Ordre de Treball existent amb concurrència optimista."""
     empresa_id = getattr(request.state, "empresa_id", None) or request.headers.get("X-Empresa-ID")
     if not empresa_id or empresa_id in ("undefined", "null", "None"):
         raise HTTPException(status_code=401, detail="No identificat")
+    emp_uuid = uuid.UUID(empresa_id)
 
     stmt = select(OrdreTreball).where(
         OrdreTreball.id == feina_id,
-        OrdreTreball.empresa_id == uuid.UUID(empresa_id),
+        OrdreTreball.empresa_id == emp_uuid,
     )
     result = await db.execute(stmt)
     ordre = result.scalars().first()
@@ -681,6 +930,15 @@ async def modificar_feina(
 
     update_data = payload.model_dump(exclude_unset=True)
     antic_vehicle_id = ordre.vehicle_id
+
+    if "client_id" in update_data and update_data["client_id"]:
+        await _validar_client_i_permisos(
+            db=db,
+            emp_uuid=emp_uuid,
+            client_id=update_data["client_id"],
+            cap_de_colla_id=None,
+            vehicle_id=None,
+        )
 
     if "titol" in update_data and update_data["titol"]:
         ordre.titol = update_data["titol"].strip()
@@ -711,6 +969,21 @@ async def modificar_feina(
             ordre.estat = "ASSIGNADA"
         elif not nou_cap and ordre.estat == "ASSIGNADA":
             ordre.estat = "PENDENT"
+
+    # Validar FR-012 si canvia cap de colla o vehicle assignat
+    if ("cap_de_colla_id" in update_data or "vehicle_id" in update_data) and ordre.cap_de_colla_id and ordre.vehicle_id:
+        op_db = (
+            await db.execute(
+                select(Usuari).where(Usuari.id == ordre.cap_de_colla_id, Usuari.empresa_id == emp_uuid)
+            )
+        ).scalars().first()
+        veh_db = (
+            await db.execute(
+                select(Vehicle).where(Vehicle.id == ordre.vehicle_id, Vehicle.empresa_id == emp_uuid)
+            )
+        ).scalars().first()
+        if op_db and veh_db:
+            validar_permis_conduir(veh_db, op_db)
 
     # Sincronització de Colla / Operaris de suport (sense duplicats)
     if "operaris_ids" in update_data or "cap_de_colla_id" in update_data:
@@ -824,14 +1097,13 @@ async def modificar_feina(
         # 1. Eliminar línies descartades i alliberar reserva d'estoc
         for art_id, old_line in existing_map.items():
             if art_id not in new_article_ids:
-                stmt_estoc = (
-                    select(EstocMagatzem)
-                    .where(
-                        EstocMagatzem.article_id == art_id,
-                        EstocMagatzem.empresa_id == uuid.UUID(empresa_id),
-                    )
-                    .with_for_update()
+                stmt_estoc = select(EstocMagatzem).where(
+                    EstocMagatzem.article_id == art_id,
+                    EstocMagatzem.empresa_id == uuid.UUID(empresa_id),
                 )
+                if getattr(old_line, "magatzem_id", None) is not None:
+                    stmt_estoc = stmt_estoc.where(EstocMagatzem.magatzem_id == old_line.magatzem_id)
+                stmt_estoc = stmt_estoc.with_for_update()
                 estoc = (await db.execute(stmt_estoc)).scalars().first()
                 if estoc:
                     estoc.quantitat_virtual_reservada = max(
@@ -844,6 +1116,7 @@ async def modificar_feina(
         # 2. Afegir o actualitzar línies sol·licitades
         for lp in new_linies_list:
             art_id = lp["article_id"] if isinstance(lp, dict) else lp.article_id
+            lp_mag = lp.get("magatzem_id") if isinstance(lp, dict) else getattr(lp, "magatzem_id", None)
             q_prevista = float(
                 lp["quantitat_prevista"] if isinstance(lp, dict) else lp.quantitat_prevista
             )
@@ -851,14 +1124,14 @@ async def modificar_feina(
                 line = existing_map[art_id]
                 diff = q_prevista - float(line.quantitat_prevista or 0.0)
                 if diff != 0:
-                    stmt_estoc = (
-                        select(EstocMagatzem)
-                        .where(
-                            EstocMagatzem.article_id == art_id,
-                            EstocMagatzem.empresa_id == uuid.UUID(empresa_id),
-                        )
-                        .with_for_update()
+                    target_mag = lp_mag or getattr(line, "magatzem_id", None)
+                    stmt_estoc = select(EstocMagatzem).where(
+                        EstocMagatzem.article_id == art_id,
+                        EstocMagatzem.empresa_id == uuid.UUID(empresa_id),
                     )
+                    if target_mag is not None:
+                        stmt_estoc = stmt_estoc.where(EstocMagatzem.magatzem_id == target_mag)
+                    stmt_estoc = stmt_estoc.with_for_update()
                     estoc = (await db.execute(stmt_estoc)).scalars().first()
                     if estoc:
                         if diff > 0:
@@ -867,28 +1140,29 @@ async def modificar_feina(
                             )
                             if diff > disp:
                                 raise HTTPException(
-                                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                                    status_code=422,
                                     detail=f"Stock insuficient per ampliar reserva de l'article {art_id}. Disponible: {disp}, sol·licitat extra: {diff}",
                                 )
                         estoc.quantitat_virtual_reservada = max(
                             0.0, float(estoc.quantitat_virtual_reservada) + diff
                         )
                     line.quantitat_prevista = q_prevista
+                    if lp_mag is not None:
+                        line.magatzem_id = lp_mag
             else:
-                stmt_estoc = (
-                    select(EstocMagatzem)
-                    .where(
-                        EstocMagatzem.article_id == art_id,
-                        EstocMagatzem.empresa_id == uuid.UUID(empresa_id),
-                    )
-                    .with_for_update()
+                stmt_estoc = select(EstocMagatzem).where(
+                    EstocMagatzem.article_id == art_id,
+                    EstocMagatzem.empresa_id == uuid.UUID(empresa_id),
                 )
+                if lp_mag is not None:
+                    stmt_estoc = stmt_estoc.where(EstocMagatzem.magatzem_id == lp_mag)
+                stmt_estoc = stmt_estoc.order_by(EstocMagatzem.quantitat_fisica.desc()).with_for_update()
                 estoc = (await db.execute(stmt_estoc)).scalars().first()
                 if estoc:
                     disp = float(estoc.quantitat_fisica) - float(estoc.quantitat_virtual_reservada)
                     if q_prevista > disp:
                         raise HTTPException(
-                            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                            status_code=422,
                             detail=f"Stock insuficient per reservar l'article {art_id}. Disponible: {disp}, sol·licitat: {q_prevista}",
                         )
                     estoc.quantitat_virtual_reservada = (
@@ -898,6 +1172,7 @@ async def modificar_feina(
                     empresa_id=uuid.UUID(empresa_id),
                     picking_id=fulla.id,
                     article_id=art_id,
+                    magatzem_id=lp_mag or (estoc.magatzem_id if estoc else None),
                     quantitat_prevista=q_prevista,
                     quantitat_carregada_pick_in=0.0,
                     quantitat_retornada_pick_out=0.0,
@@ -948,9 +1223,10 @@ async def modificar_feina(
 
     ordre.versio = (ordre.versio or 1) + 1
     await db.commit()
-    await db.refresh(ordre)
 
-    return await build_feina_response(ordre, db, uuid.UUID(empresa_id))
+    f_resp = await build_feina_response(ordre, db, emp_uuid)
+    await _sincronitzar_feina_disc(db, emp_uuid, f_resp, ordre.estat)
+    return _aplicar_veto_rol_feina(f_resp, claims)
 
 
 class AgendarFeinaRequest(BaseModel):
@@ -1027,42 +1303,51 @@ intervencions_router = APIRouter(
 async def llistar_intervencions_actives(
     request: Request, db: AsyncSession = Depends(get_db_with_tenant_context)
 ):
-    empresa_id = request.state.empresa_id
+    empresa_id = getattr(request.state, "empresa_id", None) or request.headers.get("X-Empresa-ID")
     if not empresa_id or empresa_id == "undefined":
         raise HTTPException(status_code=401, detail="No identificat")
+    emp_uuid = uuid.UUID(empresa_id)
 
     stmt = (
-        select(OrdreTreball)
+        select(OrdreTreball, Client, Usuari, Finca)
+        .outerjoin(Client, OrdreTreball.client_id == Client.id)
+        .outerjoin(Usuari, OrdreTreball.cap_de_colla_id == Usuari.id)
+        .outerjoin(Finca, OrdreTreball.finca_id == Finca.id)
         .where(
-            OrdreTreball.empresa_id == uuid.UUID(empresa_id),
+            OrdreTreball.empresa_id == emp_uuid,
             OrdreTreball.estat.in_(["PENDENT", "EN_CURS", "BLOQUEJADA", "EN_OBRA", "EN_RUTA"]),
         )
         .order_by(OrdreTreball.created_at.desc())
     )
 
-    res = await db.execute(stmt)
-    ordres = res.scalars().all()
+    rows = (await db.execute(stmt)).all()
 
     items = []
-    for o in ordres:
-        c_lat, c_lng = geocodificar_adreca(o.adreca, o.latitud, o.longitud)
-        lat = c_lat if c_lat is not None else 41.3851
-        lng = c_lng if c_lng is not None else 2.1734
+    for o, client, cap, finca in rows:
+        lat = float(o.latitud) if o.latitud is not None else None
+        lng = float(o.longitud) if o.longitud is not None else None
+        if (lat is None or lng is None) and finca and finca.latitud is not None and finca.longitud is not None:
+            lat = float(finca.latitud)
+            lng = float(finca.longitud)
+        if (lat is None or lng is None) and o.adreca:
+            c_lat, c_lng = geocodificar_adreca(o.adreca)
+            if c_lat is not None and c_lng is not None:
+                lat, lng = c_lat, c_lng
 
         items.append(
             {
                 "id": str(o.id),
                 "codi": o.codi,
-                "client": "Client " + str(o.client_id)[:8],
+                "client": client.rao_social if client else None,
                 "titol": o.titol,
-                "cap_colla": "Capataz",
+                "cap_colla": f"{cap.nom} {cap.cognoms or ''}".strip() if cap else None,
                 "estat": o.estat
                 if o.estat in ["EN_OBRA", "EN_RUTA", "PENDENT", "INCIDENCIA"]
                 else "PENDENT",
-                "coords": [lat, lng],
-                "sector": "Sector Operatiu",
-                "pressio_bar": 3.8,
-                "codi_candat": "N/A",
+                "coords": [lat, lng] if (lat is not None and lng is not None) else None,
+                "sector": finca.nom if finca else None,
+                "pressio_bar": None,
+                "codi_candat": finca.codi_candat_en_memoria if finca else None,
             }
         )
 
@@ -1085,9 +1370,10 @@ async def drop_and_go(
     empresa_id = getattr(request.state, "empresa_id", None) or request.headers.get("X-Empresa-ID")
     if not empresa_id or empresa_id == "undefined":
         raise HTTPException(status_code=401, detail="No identificat")
+    emp_uuid = uuid.UUID(empresa_id)
 
     stmt = select(OrdreTreball).where(
-        OrdreTreball.id == id, OrdreTreball.empresa_id == uuid.UUID(empresa_id)
+        OrdreTreball.id == id, OrdreTreball.empresa_id == emp_uuid
     )
     result = await db.execute(stmt)
     ordre = result.scalars().first()
@@ -1101,6 +1387,20 @@ async def drop_and_go(
         )
 
     if payload.cap_de_colla_id is not None:
+        if ordre.vehicle_id:
+            op_db = (
+                await db.execute(
+                    select(Usuari).where(Usuari.id == payload.cap_de_colla_id, Usuari.empresa_id == emp_uuid)
+                )
+            ).scalars().first()
+            veh_db = (
+                await db.execute(
+                    select(Vehicle).where(Vehicle.id == ordre.vehicle_id, Vehicle.empresa_id == emp_uuid)
+                )
+            ).scalars().first()
+            if op_db and veh_db:
+                validar_permis_conduir(veh_db, op_db)
+
         ordre.cap_de_colla_id = payload.cap_de_colla_id
         if ordre.estat == "PENDENT":
             ordre.estat = "ASSIGNADA"
@@ -1110,7 +1410,7 @@ async def drop_and_go(
             update(OrdreTreballOperari)
             .where(
                 OrdreTreballOperari.ordre_treball_id == ordre.id,
-                OrdreTreballOperari.empresa_id == uuid.UUID(empresa_id),
+                OrdreTreballOperari.empresa_id == emp_uuid,
             )
             .values(es_cap_de_colla=False)
         )
@@ -1119,13 +1419,13 @@ async def drop_and_go(
         # Ensure new cap is present and marked as cap
         stmt_del_new = delete(OrdreTreballOperari).where(
             OrdreTreballOperari.ordre_treball_id == ordre.id,
-            OrdreTreballOperari.empresa_id == uuid.UUID(empresa_id),
+            OrdreTreballOperari.empresa_id == emp_uuid,
             OrdreTreballOperari.operari_id == payload.cap_de_colla_id,
         )
         await db.execute(stmt_del_new)
         db.add(
             OrdreTreballOperari(
-                empresa_id=uuid.UUID(empresa_id),
+                empresa_id=emp_uuid,
                 ordre_treball_id=ordre.id,
                 operari_id=payload.cap_de_colla_id,
                 es_cap_de_colla=True,
@@ -1137,6 +1437,10 @@ async def drop_and_go(
     ordre.versio = ordre.versio + 1
 
     await db.commit()
+
+    f_resp = await build_feina_response(ordre, db, emp_uuid)
+    await _sincronitzar_feina_disc(db, emp_uuid, f_resp, ordre.estat)
+
     return {
         "status": "ok",
         "versio": ordre.versio,
@@ -1168,13 +1472,14 @@ async def tancar_obra(
     empresa_id = getattr(request.state, "empresa_id", None) or request.headers.get("X-Empresa-ID")
     if not empresa_id or empresa_id == "undefined":
         raise HTTPException(status_code=401, detail="No identificat")
+    emp_uuid = uuid.UUID(empresa_id)
     if not payload.conformitat_client:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=422,
             detail="La conformitat del client és obligatòria per tancar l'obra",
         )
     stmt = select(OrdreTreball).where(
-        OrdreTreball.id == id, OrdreTreball.empresa_id == uuid.UUID(empresa_id)
+        OrdreTreball.id == id, OrdreTreball.empresa_id == emp_uuid
     )
     result = await db.execute(stmt)
     ordre = result.scalars().first()
@@ -1193,14 +1498,14 @@ async def tancar_obra(
         stmt_altres = select(OrdreTreball).where(
             OrdreTreball.vehicle_id == ordre.vehicle_id,
             OrdreTreball.id != ordre.id,
-            OrdreTreball.empresa_id == uuid.UUID(empresa_id),
+            OrdreTreball.empresa_id == emp_uuid,
             OrdreTreball.estat.in_(["PENDENT", "ASSIGNADA", "PROGRAMADA", "EN_CURS", "EN_RUTA", "EN_OBRA"]),
         )
         altres = (await db.execute(stmt_altres)).scalars().first()
         if not altres:
             stmt_v = select(Vehicle).where(
                 Vehicle.id == ordre.vehicle_id,
-                Vehicle.empresa_id == uuid.UUID(empresa_id),
+                Vehicle.empresa_id == emp_uuid,
             )
             v_obj = (await db.execute(stmt_v)).scalars().first()
             if v_obj and v_obj.estat == "ASSIGNAT":
@@ -1209,6 +1514,10 @@ async def tancar_obra(
     ordre.versio = (ordre.versio or 1) + 1
 
     await db.commit()
+
+    f_resp = await build_feina_response(ordre, db, emp_uuid)
+    await _sincronitzar_feina_disc(db, emp_uuid, f_resp, ordre.estat)
+
     return {
         "status": "TANCADA",
         "ordre_id": str(ordre.id),

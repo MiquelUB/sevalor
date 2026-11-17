@@ -185,7 +185,7 @@ async def test_auditoria_certificats_endpoint(headers):
 
 
 @pytest.mark.asyncio
-async def test_onboarding_tenant_amb_domini_propi(headers):
+async def test_onboarding_tenant_amb_domini_propi(headers, tmp_path):
     unique_suffix = str(uuid.uuid4())[:8]
     subdomini = f"soler-{unique_suffix}"
     domini_custom = f"sevalor.soler-{unique_suffix}.cat"
@@ -204,7 +204,8 @@ async def test_onboarding_tenant_amb_domini_propi(headers):
         "boss_email": f"pere@{subdomini}.cat",
         "boss_telefon": "+34611223344",
         "agent_prompt_system": "Prompt d'especialista elèctric REBT per a Soler Instal·lacions.",
-        "node_ia_url": "http://192.168.1.200:1234",
+        "node_ia_url": str(tmp_path / subdomini),
+        "disc_dur_url": str(tmp_path / subdomini),
         "feature_flags": {
             "copilot_ia": True,
             "flota_avancada": True,
@@ -437,7 +438,14 @@ async def test_verificar_disc_dur_diagnostics(headers):
 
 
 @pytest.mark.asyncio
-async def test_onboarding_copilot_ia_validation(headers):
+async def test_onboarding_copilot_ia_validation(headers, tmp_path):
+    import socket
+    import threading
+    import time
+
+    import uvicorn
+    from fastapi import FastAPI, Header, HTTPException, Request
+
     unique_suffix = str(uuid.uuid4())[:8]
     # 1. Error quan copilot_ia=True però agent_prompt_system està buit
     payload_bad = {
@@ -461,20 +469,85 @@ async def test_onboarding_copilot_ia_validation(headers):
         )
         assert res_bad.status_code == 422
 
-        # 2. Èxit quan es proporciona prompt i node_ia_url
-        payload_ok = {
-            **payload_bad,
-            "agent_prompt_system": "Prompt d'enginyeria climàtica dedicat amb instruccions tècniques.",
-            "node_ia_url": "http://192.168.1.150:1234",
-            "estat_inicial": "ACTIU",
-        }
-        res_ok = await ac.post(
-            "/api/v1/superadmin/tenants/onboarding", json=payload_ok, headers=headers
-        )
-        assert res_ok.status_code == 201
-        data_ok = res_ok.json()
-        assert data_ok["tenant"]["estat_inicial"] == "ACTIU"
-        assert data_ok["tenant"]["node_ia_url"] == "http://192.168.1.150:1234"
-        assert data_ok["tenant"]["node_ia_actiu"] is True
+        # 2. Èxit quan es proporciona prompt i node_ia_url / túnel HTTP funcional (amb /v1/models actiu)
+        vapp = FastAPI()
+        root_disc = tmp_path / f"vault_{unique_suffix}"
+        root_disc.mkdir(parents=True, exist_ok=True)
+        secret_tok = f"svlt_test_{unique_suffix}"
+
+        @vapp.get("/health")
+        async def _health():
+            return {"status": "OK", "vault_root": str(root_disc), "disc_a_lliure_gb": 40.0}
+
+        @vapp.get("/v1/models")
+        async def _models(x_vault_token: str | None = Header(default=None, alias="X-Vault-Token")):
+            if x_vault_token != secret_tok:
+                raise HTTPException(status_code=403)
+            return {"object": "list", "data": [{"id": "local-llm"}]}
+
+        @vapp.post("/admin/inicialitzar-ruta")
+        async def _init_ruta(x_vault_token: str | None = Header(default=None, alias="X-Vault-Token")):
+            if x_vault_token != secret_tok:
+                raise HTTPException(status_code=403)
+            return {"status": "OK", "carpetes_count": 38}
+
+        @vapp.put("/entitats/{subcarpeta:path}/{item_id}")
+        async def _put_ent(subcarpeta: str, item_id: str, req: Request, x_vault_token: str | None = Header(default=None, alias="X-Vault-Token")):
+            if x_vault_token != secret_tok:
+                raise HTTPException(status_code=403)
+            dest = root_disc / subcarpeta
+            dest.mkdir(parents=True, exist_ok=True)
+            (dest / f"{item_id}.json").write_bytes(await req.body())
+            return {"status": "OK"}
+
+        @vapp.get("/entitats/{subcarpeta:path}")
+        async def _get_ent(subcarpeta: str, x_vault_token: str | None = Header(default=None, alias="X-Vault-Token")):
+            if x_vault_token != secret_tok:
+                raise HTTPException(status_code=403)
+            return []
+
+        @vapp.delete("/entitats/{subcarpeta:path}/{item_id}")
+        async def _del_ent(subcarpeta: str, item_id: str, x_vault_token: str | None = Header(default=None, alias="X-Vault-Token")):
+            if x_vault_token != secret_tok:
+                raise HTTPException(status_code=403)
+            return {"status": "OK"}
+
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.bind(("127.0.0.1", 0))
+            port = int(s.getsockname()[1])
+        srv = uvicorn.Server(uvicorn.Config(vapp, host="127.0.0.1", port=port, log_level="error"))
+        thr = threading.Thread(target=srv.run, daemon=True)
+        thr.start()
+        try:
+            import httpx
+
+            deadline = time.time() + 6.0
+            while time.time() < deadline:
+                try:
+                    if httpx.get(f"http://127.0.0.1:{port}/health", timeout=0.3).status_code == 200:
+                        break
+                except Exception:
+                    time.sleep(0.05)
+
+            tunel_url = f"http://127.0.0.1:{port}"
+            payload_ok = {
+                **payload_bad,
+                "agent_prompt_system": "Prompt d'enginyeria climàtica dedicat amb instruccions tècniques.",
+                "node_ia_url": tunel_url,
+                "disc_dur_url": tunel_url,
+                "vault_token": secret_tok,
+                "estat_inicial": "ACTIU",
+            }
+            res_ok = await ac.post(
+                "/api/v1/superadmin/tenants/onboarding", json=payload_ok, headers=headers
+            )
+            assert res_ok.status_code == 201, res_ok.text
+            data_ok = res_ok.json()
+            assert data_ok["tenant"]["estat_inicial"] == "ACTIU"
+            assert data_ok["tenant"]["node_ia_url"] == tunel_url
+            assert data_ok["tenant"]["node_ia_actiu"] is True
+        finally:
+            srv.should_exit = True
+            thr.join(timeout=2.0)
 
 

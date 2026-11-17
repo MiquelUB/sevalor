@@ -16,29 +16,82 @@ import {
   Layers,
   Trash2,
   FileText,
+  Edit3,
+  ShoppingCart,
+  SlidersHorizontal,
+  Barcode,
 } from "lucide-react";
 import { apiFetch, getAuthToken, getApiBaseUrl, extractTenantId } from "@/lib/api";
 import { useGestio } from "@/lib/gestio-context";
 
+const UNITATS_MESURA_CANONIQUES = [
+  { value: "UNITAT", label: "Unitat (un)" },
+  { value: "METRES_LINEALS", label: "Metres Lineals (m)" },
+  { value: "KG", label: "Quilograms (kg)" },
+  { value: "LITRES", label: "Litres (l)" },
+  { value: "M2", label: "Metres Quadrats (m²)" },
+  { value: "M3", label: "Metres Cúbics (m³)" },
+  { value: "CAIXA", label: "Caixes" },
+] as const;
+
+function normalitzarUnitatMesura(unitat?: string | null): string {
+  const u = (unitat || "UNITAT").toUpperCase();
+  if (u === "METRE") return "METRES_LINEALS";
+  if (u === "QUILO") return "KG";
+  if (u === "LITRE") return "LITRES";
+  return u;
+}
+
 interface Article {
   id: string;
   referencia_inventari: string;
+  codi_barres?: string | null;
   nom: string;
   unitat_mesura: string;
   familia: string;
   estoc_optim: number;
   estoc_minim: number;
-  preu_cost: number;
-  descompte_proveidor: number;
-  marge_guanys: number;
+  preu_cost?: number | null;
+  descompte_proveidor?: number | null;
+  marge_guanys?: number | null;
   preu_venda: number;
   proveidor_id?: string | null;
   proveidor_nom?: string | null;
   actiu?: boolean;
   es_lot_caducable?: boolean;
+  estoc_fisic?: number;
+  estoc_reservat?: number;
+  estoc_disponible?: number;
   estoc_real?: number;
-  pmp_actual?: number;
+  pmp_actual?: number | null;
   estoc_slot_residus?: number;
+}
+
+interface RecompraAlertaItem {
+  id: string;
+  tipus_alerta: string;
+  article_id?: string | null;
+  article_nom?: string | null;
+  article_ref?: string | null;
+  article_codi_barres?: string | null;
+  proveidor_id?: string | null;
+  proveidor_nom?: string | null;
+  missatge: string;
+  estat: string;
+  enviat_automaticament: boolean;
+  created_at?: string | null;
+  dades_comanda_proposta: {
+    unitat_mesura?: string;
+    estoc_disponible?: number;
+    estoc_minim?: number;
+    estoc_optim?: number;
+    quantitat_proposada?: number;
+    quantitat_aprovada?: number;
+    proveidor_email?: string | null;
+    preu_unitari_estimat?: number | null;
+    import_estimat?: number | null;
+    estat_hitl?: string;
+  };
 }
 
 interface MermaItem {
@@ -70,6 +123,7 @@ interface MagatzemItem {
 
 export default function GestioMagatzemPage() {
   const { rolActiu } = useGestio();
+  const esEnginyer = (rolActiu || "").toUpperCase() === "ENGINYER";
   const [vertical, setVertical] = useState<string>("SEVALOR");
   const [customFamilies, setCustomFamilies] = useState<string[]>([]);
   const [articles, setArticles] = useState<Article[]>([]);
@@ -85,8 +139,12 @@ export default function GestioMagatzemPage() {
   const [traspasant, setTraspasant] = useState(false);
   const [checkoutTargetTipus, setCheckoutTargetTipus] = useState<"OPERARI" | "VEHICLE">("OPERARI");
   const [selectedVehicleMagatzemId, setSelectedVehicleMagatzemId] = useState("");
-  const [activeTab, setActiveTab] = useState<"MATERIALS" | "EINES" | "MERMES">("MATERIALS");
+  const [activeTab, setActiveTab] = useState<"MATERIALS" | "EINES" | "MERMES" | "RECOMPRA_STOCK">("MATERIALS");
   const [mermes, setMermes] = useState<MermaItem[]>([]);
+  const [recompraAlertes, setRecompraAlertes] = useState<RecompraAlertaItem[]>([]);
+  const [escanejantRecompra, setEscanejantRecompra] = useState(false);
+  const [resolentAlertaId, setResolentAlertaId] = useState<string | null>(null);
+  const [quantitatsRecompraEdit, setQuantitatsRecompraEdit] = useState<Record<string, number>>({});
   const [ordresTreball, setOrdresTreball] = useState<Array<{ id: string; codi: string; titol: string }>>([]);
   const [mermaArticleId, setMermaArticleId] = useState<string>("");
   const [mermaMagatzemId, setMermaMagatzemId] = useState<string>("");
@@ -95,6 +153,17 @@ export default function GestioMagatzemPage() {
   const [mermaOtId, setMermaOtId] = useState<string>("");
   const [mermaNotes, setMermaNotes] = useState<string>("");
   const [registrantMerma, setRegistrantMerma] = useState<boolean>(false);
+  const [modalAjustEstoc, setModalAjustEstoc] = useState(false);
+  const [ajustArticle, setAjustArticle] = useState<Article | null>(null);
+  const [ajustMagatzemId, setAjustMagatzemId] = useState<string>("");
+  const [ajustTipus, setAjustTipus] = useState<"ENTRADA" | "SORTIDA" | "RESERVA">("ENTRADA");
+  const [ajustQuantitat, setAjustQuantitat] = useState<number>(1);
+  const [ajustUbicacio, setAjustUbicacio] = useState<string>("");
+  const [ajustNotes, setAjustNotes] = useState<string>("");
+  const [ajustantEstoc, setAjustantEstoc] = useState<boolean>(false);
+  const [modalEditarEina, setModalEditarEina] = useState(false);
+  const [einaEditant, setEinaEditant] = useState<any>(null);
+  const [guardantEina, setGuardantEina] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [filtreCerca, setFiltreCerca] = useState("");
@@ -122,6 +191,7 @@ export default function GestioMagatzemPage() {
   const [nouArticle, setNouArticle] = useState({
     tipus_creacio: "MATERIAL", // MATERIAL o EINA
     referencia_inventari: "",
+    codi_barres: "",
     nom: "",
     numero_serie: "",
     model_eina: "",
@@ -130,6 +200,8 @@ export default function GestioMagatzemPage() {
     incidencies: "",
     unitat_mesura: "UNITAT",
     familia: "TUBERIA",
+    estoc_inicial: 0,
+    magatzem_id: "",
     estoc_optim: 10,
     estoc_minim: 2,
     preu_cost: 0,
@@ -142,12 +214,12 @@ export default function GestioMagatzemPage() {
 
   // Efecte per autocalcular el preu de venda
   useEffect(() => {
-    if (nouArticle.tipus_creacio === "MATERIAL") {
+    if (nouArticle.tipus_creacio === "MATERIAL" && !esEnginyer) {
       const costReal = nouArticle.preu_cost * (1 - (nouArticle.descompte_proveidor / 100));
       const preuVendaCalculat = costReal * (1 + (nouArticle.marge_guanys / 100));
       setNouArticle(prev => ({ ...prev, preu_venda: parseFloat(preuVendaCalculat.toFixed(2)) }));
     }
-  }, [nouArticle.preu_cost, nouArticle.descompte_proveidor, nouArticle.marge_guanys, nouArticle.tipus_creacio]);
+  }, [nouArticle.preu_cost, nouArticle.descompte_proveidor, nouArticle.marge_guanys, nouArticle.tipus_creacio, esEnginyer]);
 
   const carregarArticles = async (magId?: string) => {
     setLoading(true);
@@ -161,7 +233,7 @@ export default function GestioMagatzemPage() {
       : "/gestio/magatzem/eines";
 
     try {
-      const [articlesData, einesData, operarisData, configData, proveidorsData, magatzemsData, mermesData, otsData] = await Promise.all([
+      const [articlesData, einesData, operarisData, configData, proveidorsData, magatzemsData, mermesData, otsData, recompraData] = await Promise.all([
         apiFetch<Article[]>(articlesQuery).catch(() => []),
         apiFetch<any[]>(einesQuery).catch(() => []),
         apiFetch<any[]>("/gestio/operaris").catch(() => []),
@@ -169,7 +241,8 @@ export default function GestioMagatzemPage() {
         apiFetch<any[]>("/gestio/proveidors").catch(() => []),
         apiFetch<MagatzemItem[]>("/gestio/magatzem/magatzems").catch(() => []),
         apiFetch<MermaItem[]>("/gestio/magatzem/mermes").catch(() => []),
-        apiFetch<Array<{ id: string; codi: string; titol: string }>>("/gestio/feines").catch(() => [])
+        apiFetch<Array<{ id: string; codi: string; titol: string }>>("/gestio/feines").catch(() => []),
+        apiFetch<RecompraAlertaItem[]>("/gestio/magatzem/recompra").catch(() => [])
       ]);
       setArticles(articlesData || []);
       setEines(einesData || []);
@@ -177,8 +250,13 @@ export default function GestioMagatzemPage() {
       setProveidors(proveidorsData || []);
       setMermes(mermesData || []);
       setOrdresTreball(otsData || []);
+      setRecompraAlertes(recompraData || []);
       if (Array.isArray(magatzemsData) && magatzemsData.length > 0) {
         setMagatzems(magatzemsData);
+        const nauCentral = magatzemsData.find(m => m.tipus === "NAU_CENTRAL") || magatzemsData[0];
+        if (nauCentral) {
+          setNouArticle(prev => prev.magatzem_id ? prev : { ...prev, magatzem_id: nauCentral.id });
+        }
       }
       
       if (configData) {
@@ -373,14 +451,15 @@ export default function GestioMagatzemPage() {
         method: "PUT",
         body: JSON.stringify({
           referencia_inventari: articleEditant.referencia_inventari,
+          codi_barres: articleEditant.codi_barres?.trim() || null,
           nom: articleEditant.nom,
-          unitat_mesura: articleEditant.unitat_mesura,
+          unitat_mesura: normalitzarUnitatMesura(articleEditant.unitat_mesura),
           familia: articleEditant.familia,
           estoc_optim: Number(articleEditant.estoc_optim),
           estoc_minim: Number(articleEditant.estoc_minim),
-          preu_cost: Number(articleEditant.preu_cost),
-          descompte_proveidor: Number(articleEditant.descompte_proveidor),
-          marge_guanys: Number(articleEditant.marge_guanys),
+          preu_cost: esEnginyer ? 0 : Number(articleEditant.preu_cost ?? 0),
+          descompte_proveidor: esEnginyer ? 0 : Number(articleEditant.descompte_proveidor ?? 0),
+          marge_guanys: esEnginyer ? 0 : Number(articleEditant.marge_guanys ?? 0),
           preu_venda: Number(articleEditant.preu_venda),
           es_lot_caducable: articleEditant.es_lot_caducable || false,
           proveidor_id: articleEditant.proveidor_id || null,
@@ -397,8 +476,129 @@ export default function GestioMagatzemPage() {
   };
 
   const obrirFitxa = (art: Article) => {
-    setArticleEditant({ ...art });
+    setArticleEditant({
+      ...art,
+      unitat_mesura: normalitzarUnitatMesura(art.unitat_mesura),
+    });
     setModalEditarArticle(true);
+  };
+
+  const obrirAjustEstoc = (art: Article) => {
+    setAjustArticle(art);
+    const nauCentral = magatzems.find((m) => m.tipus === "NAU_CENTRAL") || magatzems[0];
+    setAjustMagatzemId(
+      selectedMagatzemId !== "TOTS" ? selectedMagatzemId : (nauCentral?.id || "")
+    );
+    setAjustTipus("ENTRADA");
+    setAjustQuantitat(1);
+    setAjustUbicacio("");
+    setAjustNotes("");
+    setModalAjustEstoc(true);
+  };
+
+  const handleExecutarAjustEstoc = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!ajustArticle || !ajustMagatzemId) {
+      setError("Cal seleccionar un magatzem per ajustar l'estoc.");
+      return;
+    }
+    if (ajustQuantitat <= 0) {
+      setError("La quantitat de moviment ha de ser superior a zero.");
+      return;
+    }
+    setAjustantEstoc(true);
+    setError(null);
+    try {
+      await apiFetch(`/gestio/magatzem/magatzems/${ajustMagatzemId}/moviment`, {
+        method: "POST",
+        body: JSON.stringify({
+          article_id: ajustArticle.id,
+          tipus: ajustTipus,
+          quantitat: Number(ajustQuantitat),
+          ubicacio_passadis: ajustUbicacio.trim() || null,
+          notes: ajustNotes.trim() || null,
+        }),
+      });
+      setModalAjustEstoc(false);
+      setAjustArticle(null);
+      await carregarArticles();
+    } catch (err: any) {
+      setError(err.message || "Error en registrar el moviment d'estoc");
+    } finally {
+      setAjustantEstoc(false);
+    }
+  };
+
+  const obrirEditarEina = (eina: any) => {
+    setEinaEditant({
+      ...eina,
+      data_fi_garantia: eina.data_fi_garantia ? String(eina.data_fi_garantia).slice(0, 10) : "",
+    });
+    setModalEditarEina(true);
+  };
+
+  const handleDesarEina = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!einaEditant) return;
+    setGuardantEina(true);
+    setError(null);
+    try {
+      await apiFetch(`/gestio/magatzem/eines/${einaEditant.id}`, {
+        method: "PUT",
+        body: JSON.stringify({
+          referencia_fabricant: einaEditant.referencia_fabricant || null,
+          nom: einaEditant.nom,
+          model: einaEditant.model || null,
+          numero_serie: einaEditant.numero_serie,
+          data_fi_garantia: einaEditant.data_fi_garantia || null,
+          observacions: einaEditant.observacions || null,
+          incidencies: einaEditant.incidencies || null,
+        }),
+      });
+      setModalEditarEina(false);
+      setEinaEditant(null);
+      await carregarArticles();
+    } catch (err: any) {
+      setError(err.message || "Error en actualitzar la fitxa de l'eina");
+    } finally {
+      setGuardantEina(false);
+    }
+  };
+
+  const handleEscanejarRecompra = async () => {
+    setEscanejantRecompra(true);
+    setError(null);
+    try {
+      await apiFetch("/gestio/magatzem/recompra/escanejar", { method: "POST" });
+      await carregarArticles();
+    } catch (err: any) {
+      setError(err.message || "Error escanejant trencaments d'estoc");
+    } finally {
+      setEscanejantRecompra(false);
+    }
+  };
+
+  const handleAccioRecompra = async (alerta: RecompraAlertaItem, accio: "APROVAR" | "DESCARTAR") => {
+    setResolentAlertaId(alerta.id);
+    setError(null);
+    try {
+      const qtyOverride = quantitatsRecompraEdit[alerta.id];
+      await apiFetch(`/gestio/magatzem/recompra/${alerta.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          accio,
+          quantitat_aprovada:
+            accio === "APROVAR" && qtyOverride && qtyOverride > 0
+              ? Number(qtyOverride)
+              : undefined,
+        }),
+      });
+      await carregarArticles();
+    } catch (err: any) {
+      setError(err.message || "Error resolent la proposta HITL de recompra");
+    } finally {
+      setResolentAlertaId(null);
+    }
   };
 
   const handleCheckout = async () => {
@@ -465,24 +665,29 @@ export default function GestioMagatzemPage() {
           method: "POST",
           body: JSON.stringify({
             referencia_inventari: nouArticle.referencia_inventari,
+            codi_barres: nouArticle.codi_barres.trim() || null,
             nom: nouArticle.nom,
-            unitat_mesura: nouArticle.unitat_mesura,
+            unitat_mesura: normalitzarUnitatMesura(nouArticle.unitat_mesura),
             familia: nouArticle.familia,
             es_lot_caducable: nouArticle.es_lot_caducable,
+            estoc_inicial: Number(nouArticle.estoc_inicial || 0),
+            magatzem_id: nouArticle.magatzem_id || null,
             estoc_optim: Number(nouArticle.estoc_optim),
             estoc_minim: Number(nouArticle.estoc_minim),
-            preu_cost: Number(nouArticle.preu_cost),
-            descompte_proveidor: Number(nouArticle.descompte_proveidor),
-            marge_guanys: Number(nouArticle.marge_guanys),
+            preu_cost: esEnginyer ? 0 : Number(nouArticle.preu_cost),
+            descompte_proveidor: esEnginyer ? 0 : Number(nouArticle.descompte_proveidor),
+            marge_guanys: esEnginyer ? 0 : Number(nouArticle.marge_guanys),
             preu_venda: Number(nouArticle.preu_venda),
             proveidor_id: nouArticle.proveidor_id || null,
           }),
         });
       }
       setModalNouArticle(false);
+      const nauCentral = magatzems.find((m) => m.tipus === "NAU_CENTRAL") || magatzems[0];
       setNouArticle({
         tipus_creacio: "MATERIAL",
         referencia_inventari: "",
+        codi_barres: "",
         nom: "",
         numero_serie: "",
         model_eina: "",
@@ -491,6 +696,8 @@ export default function GestioMagatzemPage() {
         incidencies: "",
         unitat_mesura: "UNITAT",
         familia: "TUBERIA",
+        estoc_inicial: 0,
+        magatzem_id: nauCentral?.id || "",
         estoc_optim: 10,
         estoc_minim: 2,
         preu_cost: 0,
@@ -509,9 +716,11 @@ export default function GestioMagatzemPage() {
   };
 
   const articlesFiltrats = articles.filter((a) => {
+    const q = filtreCerca.toLowerCase();
     const coincideixCerca =
-      a.nom.toLowerCase().includes(filtreCerca.toLowerCase()) ||
-      a.referencia_inventari.toLowerCase().includes(filtreCerca.toLowerCase());
+      a.nom.toLowerCase().includes(q) ||
+      a.referencia_inventari.toLowerCase().includes(q) ||
+      (a.codi_barres || "").toLowerCase().includes(q);
     const coincideixFamilia = filtreFamilia === "TOTS" || a.familia === filtreFamilia;
     return coincideixCerca && coincideixFamilia;
   });
@@ -621,8 +830,8 @@ export default function GestioMagatzemPage() {
               type="text"
               value={filtreCerca}
               onChange={(e) => setFiltreCerca(e.target.value)}
-              placeholder="Cercar referència o nom..."
-              className="pl-9 pr-3 py-1.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs font-medium focus:outline-none focus:border-emerald-600 w-48"
+              placeholder="Cercar ref., nom o codi barres..."
+              className="pl-9 pr-3 py-1.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs font-medium focus:outline-none focus:border-primary w-52"
             />
           </div>
 
@@ -667,7 +876,7 @@ export default function GestioMagatzemPage() {
           {hasCopilotIa && (
             <button
               onClick={() => setModalOcr(true)}
-              className="px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold flex items-center gap-1 shadow transition-all"
+              className="px-3 py-1.5 rounded-xl bg-primary/90 hover:bg-primary text-white text-xs font-bold flex items-center gap-1 shadow transition-all"
             >
               <Sparkles className="w-3.5 h-3.5" />
               <span>Entrada Assistida IA</span>
@@ -676,7 +885,7 @@ export default function GestioMagatzemPage() {
 
           <button
             onClick={() => setModalNouArticle(true)}
-            className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold flex items-center gap-1 shadow transition-all"
+            className="px-3 py-1.5 rounded-xl bg-primary hover:opacity-90 text-white text-xs font-bold flex items-center gap-1 shadow transition-all"
           >
             <Plus className="w-3.5 h-3.5" />
             <span>Nou Article</span>
@@ -700,39 +909,21 @@ export default function GestioMagatzemPage() {
       <div className="flex-1 p-4 overflow-y-auto">
         {loading && articles.length === 0 ? (
           <div className="flex-1 flex flex-col items-center justify-center p-12 text-center">
-            <RefreshCw className="w-6 h-6 animate-spin text-emerald-600 mb-2" />
+            <RefreshCw className="w-6 h-6 animate-spin text-primary mb-2" />
             <p className="text-xs text-slate-500">Carregant catàleg de magatzem...</p>
-          </div>
-        ) : articles.length === 0 ? (
-          <div className="flex-1 flex flex-col items-center justify-center p-12 text-center bg-white dark:bg-slate-900 rounded-2xl border border-dashed border-slate-300 dark:border-slate-800 my-auto shadow-sm">
-            <div className="w-14 h-14 rounded-full bg-emerald-50 dark:bg-emerald-950 text-emerald-600 dark:text-emerald-400 flex items-center justify-center mb-3">
-              <Package className="w-7 h-7" />
-            </div>
-            <h3 className="text-base font-bold text-slate-800 dark:text-slate-100">
-              Magatzem central sense articles
-            </h3>
-            <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 max-w-xs">
-              Estat Dia-0: Registra el primer article o eina per començar a gestionar l'estoc i els moviments.
-            </p>
-            <button
-              onClick={() => setModalNouArticle(true)}
-              className="mt-4 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow"
-            >
-              + Donar d'Alta Article
-            </button>
           </div>
         ) : (
           <div className="space-y-4">
-            <div className="flex space-x-2 border-b border-slate-200 dark:border-slate-800 pb-2">
+            <div className="flex flex-wrap gap-2 border-b border-slate-200 dark:border-slate-800 pb-2">
               <button
                 onClick={() => setActiveTab("MATERIALS")}
                 className={`px-4 py-2 rounded-lg text-xs font-bold transition-colors ${
                   activeTab === "MATERIALS"
-                    ? "bg-slate-800 text-white dark:bg-slate-100 dark:text-slate-900"
+                    ? "bg-primary text-white"
                     : "bg-slate-100 text-slate-600 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-400"
                 }`}
               >
-                Catàleg de Materials
+                Catàleg de Materials ({articles.length})
               </button>
               <button
                 onClick={() => setActiveTab("EINES")}
@@ -742,7 +933,7 @@ export default function GestioMagatzemPage() {
                     : "bg-slate-100 text-slate-600 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-400"
                 }`}
               >
-                <Wrench className="w-3.5 h-3.5" /> Inventari d&apos;Eines
+                <Wrench className="w-3.5 h-3.5" /> Inventari d&apos;Eines ({eines.length})
               </button>
               <button
                 onClick={() => setActiveTab("MERMES")}
@@ -754,6 +945,22 @@ export default function GestioMagatzemPage() {
               >
                 <Trash2 className="w-3.5 h-3.5" /> Mermes &amp; Residus ({mermes.length})
               </button>
+              <button
+                onClick={() => setActiveTab("RECOMPRA_STOCK")}
+                className={`px-4 py-2 rounded-lg text-xs font-bold transition-colors flex items-center gap-2 ${
+                  activeTab === "RECOMPRA_STOCK"
+                    ? "bg-primary text-white"
+                    : "bg-slate-100 text-slate-600 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-400"
+                }`}
+              >
+                <ShoppingCart className="w-3.5 h-3.5" />
+                <span>Recompra d&apos;Estoc</span>
+                {recompraAlertes.filter((a) => a.estat === "ACTIVA").length > 0 && (
+                  <span className="px-1.5 py-0.5 rounded-full text-[10px] font-mono font-black bg-amber-400 text-slate-950">
+                    {recompraAlertes.filter((a) => a.estat === "ACTIVA").length}
+                  </span>
+                )}
+              </button>
             </div>
 
             {/* Targetes de Resum */}
@@ -761,7 +968,7 @@ export default function GestioMagatzemPage() {
               <div className="p-4 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm flex items-center justify-between">
                 <div>
                   <p className="text-[10px] font-mono uppercase text-slate-400 font-bold">Total Articles Catàleg</p>
-                  <h3 className="text-xl font-black text-slate-800 dark:text-slate-100 mt-0.5">
+                  <h3 className="text-xl font-black text-slate-800 dark:text-slate-100 mt-0.5 tabular-nums">
                     {articles.length} <span className="text-xs text-slate-400 font-normal">referències</span>
                   </h3>
                 </div>
@@ -773,7 +980,7 @@ export default function GestioMagatzemPage() {
               <div className="p-4 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm flex items-center justify-between">
                 <div>
                   <p className="text-[10px] font-mono uppercase text-slate-400 font-bold">Famílies Actives</p>
-                  <h3 className="text-xl font-black text-emerald-600 dark:text-emerald-400 mt-0.5">
+                  <h3 className="text-xl font-black text-emerald-600 dark:text-emerald-400 mt-0.5 tabular-nums">
                     {new Set(articles.map((a) => a.familia)).size}
                   </h3>
                 </div>
@@ -784,41 +991,69 @@ export default function GestioMagatzemPage() {
 
               <div className="p-4 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm flex items-center justify-between">
                 <div>
-                  <p className="text-[10px] font-mono uppercase text-slate-400 font-bold">Unitats de Mesura</p>
-                  <h3 className="text-xl font-black text-blue-600 dark:text-blue-400 mt-0.5">
-                    {new Set(articles.map((a) => a.unitat_mesura)).size}
+                  <p className="text-[10px] font-mono uppercase text-slate-400 font-bold">Alertes Trencament HITL</p>
+                  <h3 className="text-xl font-black text-amber-600 dark:text-amber-400 mt-0.5 tabular-nums">
+                    {recompraAlertes.filter((a) => a.estat === "ACTIVA").length}
                   </h3>
                 </div>
-                <div className="w-10 h-10 rounded-xl bg-blue-50 dark:bg-blue-950/40 text-blue-600 flex items-center justify-center">
-                  <Wrench className="w-5 h-5" />
+                <div className="w-10 h-10 rounded-xl bg-amber-50 dark:bg-amber-950/40 text-amber-600 flex items-center justify-center">
+                  <ShoppingCart className="w-5 h-5" />
                 </div>
               </div>
             </div>
 
             {/* Taula d'articles */}
-              <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm overflow-hidden">
+              <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm overflow-x-auto">
               {activeTab === "MATERIALS" ? (
+                articles.length === 0 ? (
+                  <div className="flex flex-col items-center justify-center p-12 text-center">
+                    <div className="w-14 h-14 rounded-full bg-primary/10 text-primary flex items-center justify-center mb-3">
+                      <Package className="w-7 h-7" />
+                    </div>
+                    <h3 className="text-base font-bold text-slate-800 dark:text-slate-100">
+                      Magatzem central sense articles
+                    </h3>
+                    <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 max-w-xs">
+                      Estat Dia-0: Registra el primer article o eina per començar a gestionar l&apos;estoc i els moviments.
+                    </p>
+                    <button
+                      onClick={() => setModalNouArticle(true)}
+                      className="mt-4 px-4 py-2 rounded-xl bg-primary hover:opacity-90 text-white text-xs font-bold shadow"
+                    >
+                      + Donar d&apos;Alta Article
+                    </button>
+                  </div>
+                ) : (
                 <table className="w-full text-left text-xs border-collapse">
                   <thead>
                     <tr className="bg-slate-50 dark:bg-slate-800/60 border-b border-slate-200 dark:border-slate-800 font-bold text-slate-600 dark:text-slate-300">
-                      <th className="p-3">Ref. Inventari</th>
+                      <th className="p-3">Ref. / Barres</th>
                       <th className="p-3">Descripció Article</th>
                       <th className="p-3">Proveïdor</th>
                       <th className="p-3">Família</th>
                       <th className="p-3">Unitat</th>
-                      <th className="p-3 text-right">Estoc Real</th>
+                      <th className="p-3 text-right">Estoc Disponible</th>
                       <th className="p-3 text-right">Slot Residus</th>
-                      <th className="p-3 text-right">Estoc Mínim</th>
-                      <th className="p-3 text-right">Estoc Òptim</th>
-                      <th className="p-3 text-right">PMP / Cost</th>
+                      <th className="p-3 text-right">Mín. / Òpt.</th>
+                      {!esEnginyer && <th className="p-3 text-right">PMP / Cost</th>}
                       <th className="p-3 text-right">Preu Venda</th>
+                      <th className="p-3 text-right">Accions</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                    {articlesFiltrats.map((art) => (
+                    {articlesFiltrats.map((art) => {
+                      const estocDisp = Number(art.estoc_disponible ?? art.estoc_real ?? 0);
+                      const estocFis = Number(art.estoc_fisic ?? estocDisp);
+                      const estocRes = Number(art.estoc_reservat ?? 0);
+                      return (
                       <tr key={art.id} onClick={() => obrirFitxa(art)} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/40 transition-colors cursor-pointer">
-                        <td className="p-3 font-mono font-bold text-emerald-700 dark:text-emerald-400">
-                          {art.referencia_inventari}
+                        <td className="p-3 font-mono">
+                          <span className="font-bold text-primary block">{art.referencia_inventari}</span>
+                          {art.codi_barres && (
+                            <span className="inline-flex items-center gap-1 text-[10px] text-slate-500 mt-0.5">
+                              <Barcode className="w-3 h-3" /> {art.codi_barres}
+                            </span>
+                          )}
                         </td>
                         <td className="p-3 font-medium text-slate-900 dark:text-white">
                           {art.nom}
@@ -836,36 +1071,55 @@ export default function GestioMagatzemPage() {
                         <td className="p-3 font-mono text-slate-500">
                           {art.unitat_mesura}
                         </td>
-                        <td className="p-3 text-right font-mono">
+                        <td className="p-3 text-right font-mono tabular-nums">
                           <span
-                            className={`px-2 py-1 rounded-lg font-bold ${
-                              art.estoc_real && art.estoc_real <= art.estoc_minim
+                            className={`px-2 py-1 rounded-lg font-bold inline-block ${
+                              estocDisp <= art.estoc_minim
                                 ? "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400"
                                 : "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300"
                             }`}
                           >
-                            {art.estoc_real ?? 0}
+                            {estocDisp}
                           </span>
+                          {estocRes > 0 && (
+                            <span className="block text-[10px] text-slate-400 mt-0.5">
+                              Físic {estocFis} · Res. {estocRes}
+                            </span>
+                          )}
                         </td>
-                        <td className="p-3 text-right font-mono text-amber-600 dark:text-amber-400">
+                        <td className="p-3 text-right font-mono tabular-nums text-amber-600 dark:text-amber-400">
                           {(art.estoc_slot_residus ?? 0).toFixed(2)}
                         </td>
-                        <td className="p-3 text-right font-mono text-slate-400">
-                          {art.estoc_minim}
+                        <td className="p-3 text-right font-mono tabular-nums text-slate-400">
+                          {art.estoc_minim} / {art.estoc_optim}
                         </td>
-                        <td className="p-3 text-right font-mono text-slate-400">
-                          {art.estoc_optim}
+                        {!esEnginyer && (
+                          <td className="p-3 text-right font-mono tabular-nums text-slate-600 dark:text-slate-300">
+                            {Number(art.pmp_actual && art.pmp_actual > 0 ? art.pmp_actual : (art.preu_cost ?? 0)).toFixed(2)} €
+                          </td>
+                        )}
+                        <td className="p-3 text-right font-mono tabular-nums font-bold text-emerald-600 dark:text-emerald-400">
+                          {Number(art.preu_venda ?? 0).toFixed(2)} €
                         </td>
-                        <td className="p-3 text-right font-mono text-slate-600 dark:text-slate-300">
-                          {(art.pmp_actual && art.pmp_actual > 0 ? art.pmp_actual : art.preu_cost)?.toFixed(2)} €
-                        </td>
-                        <td className="p-3 text-right font-mono font-bold text-emerald-600 dark:text-emerald-400">
-                          {art.preu_venda?.toFixed(2)} €
+                        <td className="p-3 text-right">
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              obrirAjustEstoc(art);
+                            }}
+                            className="px-2.5 py-1 rounded-lg bg-primary/10 hover:bg-primary/20 text-primary text-[11px] font-bold inline-flex items-center gap-1 transition-colors"
+                            title="Registrar entrada, sortida o reserva manual"
+                          >
+                            <SlidersHorizontal className="w-3 h-3" />
+                            <span>Ajustar Estoc</span>
+                          </button>
                         </td>
                       </tr>
-                    ))}
+                    );})}
                   </tbody>
                 </table>
+                )
               ) : activeTab === "EINES" ? (
                 <table className="w-full text-left text-xs border-collapse">
                   <thead>
@@ -875,7 +1129,7 @@ export default function GestioMagatzemPage() {
                       <th className="p-3 font-mono">Nº Sèrie</th>
                       <th className="p-3">Estat</th>
                       <th className="p-3">Fi Garantia</th>
-                      <th className="p-3 text-right">Custòdia (Check-in/out)</th>
+                      <th className="p-3 text-right">Accions i Custòdia</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
@@ -912,26 +1166,152 @@ export default function GestioMagatzemPage() {
                           {eina.data_fi_garantia ? new Date(eina.data_fi_garantia).toLocaleDateString('ca-ES') : "-"}
                         </td>
                         <td className="p-3 text-right">
-                          {eina.estat === "DISPONIBLE" ? (
+                          <div className="inline-flex items-center gap-1.5">
                             <button
-                              onClick={() => { setEinaCheckout(eina); setModalCheckout(true); }}
-                              className="px-3 py-1 rounded-lg bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-400 text-[10px] font-bold hover:bg-blue-200 transition-colors"
+                              type="button"
+                              onClick={() => obrirEditarEina(eina)}
+                              className="px-2.5 py-1 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 text-[10px] font-bold hover:bg-slate-200 dark:hover:bg-slate-700 inline-flex items-center gap-1 transition-colors"
                             >
-                              Check-Out 📤
+                              <Edit3 className="w-3 h-3" /> Editar
                             </button>
-                          ) : (eina.estat === "CUSTODIADA" || eina.estat === "EN_VEHICLE") ? (
-                            <button
-                              onClick={() => handleCheckin(eina.id)}
-                              className="px-3 py-1 rounded-lg bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-400 text-[10px] font-bold hover:bg-emerald-200 transition-colors"
-                            >
-                              Check-In 📥
-                            </button>
-                          ) : null}
+                            {eina.estat === "DISPONIBLE" ? (
+                              <button
+                                onClick={() => { setEinaCheckout(eina); setModalCheckout(true); }}
+                                className="px-3 py-1 rounded-lg bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-400 text-[10px] font-bold hover:bg-blue-200 transition-colors"
+                              >
+                                Check-Out
+                              </button>
+                            ) : (eina.estat === "CUSTODIADA" || eina.estat === "EN_VEHICLE") ? (
+                              <button
+                                onClick={() => handleCheckin(eina.id)}
+                                className="px-3 py-1 rounded-lg bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-400 text-[10px] font-bold hover:bg-emerald-200 transition-colors"
+                              >
+                                Check-In
+                              </button>
+                            ) : null}
+                          </div>
                         </td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
+              ) : activeTab === "RECOMPRA_STOCK" ? (
+                <div className="p-5 space-y-4">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-200 dark:border-slate-800">
+                    <div>
+                      <h3 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                        <ShoppingCart className="w-4 h-4 text-primary" />
+                        Safata HITL de Recompra d&apos;Estoc Mínim (FR-010)
+                      </h3>
+                      <p className="text-xs text-slate-500 mt-0.5">
+                        Esborranys pendents de validació humana. Cap comanda ni correu electrònic s&apos;envia sense aprovació explícita.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleEscanejarRecompra}
+                      disabled={escanejantRecompra}
+                      className="px-3.5 py-2 rounded-xl bg-primary hover:opacity-90 text-white text-xs font-bold flex items-center gap-1.5 shadow disabled:opacity-50"
+                    >
+                      <RefreshCw className={`w-3.5 h-3.5 ${escanejantRecompra ? "animate-spin" : ""}`} />
+                      <span>{escanejantRecompra ? "Escanejant..." : "Escanejar Trencaments d'Estoc"}</span>
+                    </button>
+                  </div>
+
+                  {recompraAlertes.length === 0 ? (
+                    <div className="rounded-xl border border-dashed border-slate-200 dark:border-slate-800 py-10 text-center text-xs text-slate-500">
+                      Cap alerta activa de trencament d&apos;estoc. Tots els articles superen l&apos;estoc mínim configurat.
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      {recompraAlertes.map((alerta) => {
+                        const prop = alerta.dades_comanda_proposta || {};
+                        const qtyProp = Number(prop.quantitat_aprovada ?? prop.quantitat_proposada ?? 0);
+                        const qtyInputVal = quantitatsRecompraEdit[alerta.id] ?? qtyProp;
+                        const isPendent = alerta.estat === "ACTIVA";
+                        return (
+                          <div
+                            key={alerta.id}
+                            className="p-4 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-800/30 flex flex-col lg:flex-row lg:items-center justify-between gap-4"
+                          >
+                            <div className="space-y-1 flex-1 min-w-0">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <span
+                                  className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${
+                                    isPendent
+                                      ? "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300"
+                                      : alerta.estat === "APROVADA"
+                                      ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300"
+                                      : "bg-slate-200 text-slate-600 dark:bg-slate-700 dark:text-slate-300"
+                                  }`}
+                                >
+                                  {isPendent ? "ESBORRANY HITL PENDENT" : alerta.estat}
+                                </span>
+                                <span className="font-mono text-xs font-bold text-primary">
+                                  {alerta.article_ref || "N/A"}
+                                </span>
+                                <span className="text-xs font-bold text-slate-900 dark:text-white truncate">
+                                  {alerta.article_nom}
+                                </span>
+                              </div>
+                              <p className="text-xs text-slate-600 dark:text-slate-300">{alerta.missatge}</p>
+                              <div className="flex flex-wrap gap-4 text-[11px] font-mono text-slate-500 pt-1">
+                                <span>Disponible: <strong className="text-rose-600">{prop.estoc_disponible ?? 0}</strong> / Mínim: <strong>{prop.estoc_minim ?? 0}</strong></span>
+                                <span>Proveïdor: <strong>{alerta.proveidor_nom || "Sense assignar"}</strong></span>
+                                {!esEnginyer && prop.import_estimat != null && (
+                                  <span>Import estimat: <strong className="text-slate-800 dark:text-slate-200">{Number(prop.import_estimat).toFixed(2)} €</strong></span>
+                                )}
+                                <span className="text-emerald-700 dark:text-emerald-400">Sense enviament automàtic</span>
+                              </div>
+                            </div>
+
+                            {isPendent && (
+                              <div className="flex items-center gap-2 shrink-0">
+                                {!esEnginyer ? (
+                                  <>
+                                    <input
+                                      type="number"
+                                      min="1"
+                                      step="any"
+                                      value={qtyInputVal}
+                                      onChange={(e) =>
+                                        setQuantitatsRecompraEdit((prev) => ({
+                                          ...prev,
+                                          [alerta.id]: parseFloat(e.target.value) || 0,
+                                        }))
+                                      }
+                                      className="w-24 px-2.5 py-1.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-mono font-bold text-center"
+                                    />
+                                    <button
+                                      type="button"
+                                      disabled={resolentAlertaId === alerta.id}
+                                      onClick={() => handleAccioRecompra(alerta, "APROVAR")}
+                                      className="px-3 py-1.5 rounded-xl bg-primary hover:opacity-90 text-white text-xs font-bold disabled:opacity-50"
+                                    >
+                                      Aprovar Esborrany
+                                    </button>
+                                    <button
+                                      type="button"
+                                      disabled={resolentAlertaId === alerta.id}
+                                      onClick={() => handleAccioRecompra(alerta, "DESCARTAR")}
+                                      className="px-3 py-1.5 rounded-xl border border-slate-300 dark:border-slate-700 text-slate-600 dark:text-slate-300 text-xs font-bold hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-50"
+                                    >
+                                      Descartar
+                                    </button>
+                                  </>
+                                ) : (
+                                  <span className="text-[11px] font-semibold text-slate-500 bg-slate-100 dark:bg-slate-800 px-3 py-1.5 rounded-xl">
+                                    Aprovació reservada a Direcció / Administració
+                                  </span>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
               ) : (
                 <div className="p-5 space-y-6">
                   <form onSubmit={handleRegistrarMerma} className="grid grid-cols-1 md:grid-cols-6 gap-3 rounded-xl border border-slate-200 dark:border-slate-800 p-4 bg-slate-50/70 dark:bg-slate-800/30">
@@ -1024,8 +1404,8 @@ export default function GestioMagatzemPage() {
                           <th className="p-3">Subcompte</th>
                           <th className="p-3">OT Imputada</th>
                           <th className="p-3 text-right">Quantitat</th>
-                          <th className="p-3 text-right">PMP Aplicat</th>
-                          <th className="p-3 text-right">Cost Imputat</th>
+                          {!esEnginyer && <th className="p-3 text-right">PMP Aplicat</th>}
+                          {!esEnginyer && <th className="p-3 text-right">Cost Imputat</th>}
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
@@ -1039,10 +1419,14 @@ export default function GestioMagatzemPage() {
                             <td className="p-3 font-mono font-semibold text-primary">{m.subcompte_comptable}</td>
                             <td className="p-3 font-mono text-slate-500">{m.ordre_treball_codi || "Nau (General)"}</td>
                             <td className="p-3 text-right font-mono tabular-nums">{Number(m.quantitat).toFixed(2)}</td>
-                            <td className="p-3 text-right font-mono tabular-nums">{Number(m.pmp_aplicat).toFixed(2)} €</td>
-                            <td className="p-3 text-right font-mono font-bold tabular-nums text-rose-600">
-                              {Number(m.cost_total).toFixed(2)} €
-                            </td>
+                            {!esEnginyer && (
+                              <td className="p-3 text-right font-mono tabular-nums">{Number(m.pmp_aplicat).toFixed(2)} €</td>
+                            )}
+                            {!esEnginyer && (
+                              <td className="p-3 text-right font-mono font-bold tabular-nums text-rose-600">
+                                {Number(m.cost_total).toFixed(2)} €
+                              </td>
+                            )}
                           </tr>
                         ))}
                       </tbody>
@@ -1061,7 +1445,7 @@ export default function GestioMagatzemPage() {
           <div className={`w-full ${resultatOcr ? "max-w-5xl max-h-[90vh]" : "max-w-lg"} bg-white dark:bg-slate-900 rounded-3xl shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden flex flex-col`}>
             <div className="p-5 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between shrink-0">
               <h3 className="font-bold text-sm text-slate-800 dark:text-slate-100 flex items-center gap-2">
-                <Sparkles className="w-4 h-4 text-indigo-600" />
+                <Sparkles className="w-4 h-4 text-primary" />
                 Entrada Assistida per IA (OCR Albarà / Factura)
               </h3>
               <button
@@ -1095,7 +1479,7 @@ export default function GestioMagatzemPage() {
                     <button
                       type="submit"
                       disabled={!fitxerOcr || processantOcr}
-                      className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold shadow disabled:opacity-50"
+                      className="px-4 py-2 rounded-xl bg-primary hover:opacity-90 text-white text-xs font-bold shadow disabled:opacity-50"
                     >
                       {processantOcr ? "Processant amb IA..." : "Processar Document"}
                     </button>
@@ -1107,7 +1491,7 @@ export default function GestioMagatzemPage() {
                   <div className="p-4 bg-slate-50 dark:bg-slate-800/60 rounded-2xl border border-slate-200 dark:border-slate-700 space-y-3">
                     <div className="flex flex-col md:flex-row md:items-center justify-between gap-2 pb-2 border-b border-slate-200 dark:border-slate-700/60">
                       <span className="text-xs font-bold text-slate-700 dark:text-slate-200 flex items-center gap-1.5">
-                        <Building className="w-4 h-4 text-indigo-600" />
+                        <Building className="w-4 h-4 text-primary" />
                         Capçalera del Document & Proveïdor
                       </span>
                       <div className="flex items-center gap-2">
@@ -1188,7 +1572,7 @@ export default function GestioMagatzemPage() {
                           onChange={(e) =>
                             setResultatOcr({ ...resultatOcr, numero_document: e.target.value })
                           }
-                          className="w-full px-2.5 py-1.5 rounded-xl border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 text-xs font-mono font-bold text-indigo-700 dark:text-indigo-400"
+                          className="w-full px-2.5 py-1.5 rounded-xl border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 text-xs font-mono font-bold text-primary"
                         />
                       </div>
                       <div>
@@ -1211,7 +1595,7 @@ export default function GestioMagatzemPage() {
                   {/* Capçalera de secció de línies amb botó d'afegir */}
                   <div className="flex items-center justify-between pt-1">
                     <span className="text-xs font-bold text-slate-700 dark:text-slate-300 flex items-center gap-1.5">
-                      <Layers className="w-3.5 h-3.5 text-indigo-600" />
+                      <Layers className="w-3.5 h-3.5 text-primary" />
                       Línies d'Articles Detectades ({resultatOcr.linies?.length || 0})
                     </span>
                     <button
@@ -1230,7 +1614,7 @@ export default function GestioMagatzemPage() {
                           linies: [...(resultatOcr.linies || []), novaLinia],
                         });
                       }}
-                      className="px-3 py-1 rounded-xl bg-indigo-50 hover:bg-indigo-100 dark:bg-indigo-950/50 dark:hover:bg-indigo-900/60 text-indigo-700 dark:text-indigo-300 text-xs font-bold flex items-center gap-1 border border-indigo-200 dark:border-indigo-800 transition-colors"
+                      className="px-3 py-1 rounded-xl bg-primary/10 hover:bg-primary/20 text-primary text-xs font-bold flex items-center gap-1 border border-primary/30 transition-colors"
                     >
                       <Plus className="w-3.5 h-3.5" />
                       <span>Afegir Línia</span>
@@ -1557,23 +1941,39 @@ export default function GestioMagatzemPage() {
                   />
                 </div>
                 {nouArticle.tipus_creacio === "MATERIAL" && (
-                  <div className="col-span-2">
-                    <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-400 mb-1">
-                      Proveïdor Habitual (Comandes / Mínim Estoc)
-                    </label>
-                    <select
-                      value={nouArticle.proveidor_id}
-                      onChange={(e) => setNouArticle({ ...nouArticle, proveidor_id: e.target.value })}
-                      className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-medium"
-                    >
-                      <option value="">Sense proveïdor assignat</option>
-                      {proveidors.map((p) => (
-                        <option key={p.id} value={p.id}>
-                          {p.rao_social} ({p.nif})
-                        </option>
-                      ))}
-                    </select>
-                  </div>
+                  <>
+                    <div className="col-span-2 grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-400 mb-1">
+                          Codi de Barres (EAN / Code128, sense QR)
+                        </label>
+                        <input
+                          type="text"
+                          placeholder="Ex: 8412345000012"
+                          value={nouArticle.codi_barres}
+                          onChange={(e) => setNouArticle({ ...nouArticle, codi_barres: e.target.value })}
+                          className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-mono"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-400 mb-1">
+                          Proveïdor Habitual (Comandes / Mínim Estoc)
+                        </label>
+                        <select
+                          value={nouArticle.proveidor_id}
+                          onChange={(e) => setNouArticle({ ...nouArticle, proveidor_id: e.target.value })}
+                          className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-medium"
+                        >
+                          <option value="">Sense proveïdor assignat</option>
+                          {proveidors.map((p) => (
+                            <option key={p.id} value={p.id}>
+                              {p.rao_social} ({p.nif})
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+                  </>
                 )}
                 {nouArticle.tipus_creacio === "EINA" && (
                   <div>
@@ -1632,54 +2032,108 @@ export default function GestioMagatzemPage() {
               )}
 
               {nouArticle.tipus_creacio === "MATERIAL" && (
-                <div className="grid grid-cols-3 gap-3">
-                  <div>
-                    <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-400 mb-1">
-                      Unitat Mesura *
-                    </label>
-                  <select
-                    value={nouArticle.unitat_mesura}
-                    onChange={(e) => setNouArticle({ ...nouArticle, unitat_mesura: e.target.value })}
-                    className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-semibold"
-                  >
-                    <option value="UNITAT">Unitat (un)</option>
-                    <option value="METRES_LINEALS">Metres Lineals (m)</option>
-                    <option value="KG">Quilograms (kg)</option>
-                    <option value="LITRES">Litres (l)</option>
-                    <option value="M2">Metres Quadrats (m²)</option>
-                    <option value="M3">Metres Cúbics (m³)</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-400 mb-1">
-                    Estoc Mínim
-                  </label>
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.1"
-                    value={nouArticle.estoc_minim}
-                    onChange={(e) => setNouArticle({ ...nouArticle, estoc_minim: Number(e.target.value) })}
-                    className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-mono"
-                  />
-                </div>
-                <div>
-                  <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-400 mb-1">
-                    Estoc Òptim
-                  </label>
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.1"
-                    value={nouArticle.estoc_optim}
-                    onChange={(e) => setNouArticle({ ...nouArticle, estoc_optim: Number(e.target.value) })}
-                    className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-mono"
-                  />
-                </div>
-              </div>
+                <>
+                  <div className="grid grid-cols-3 gap-3">
+                    <div>
+                      <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-400 mb-1">
+                        Unitat Mesura *
+                      </label>
+                      <select
+                        value={nouArticle.unitat_mesura}
+                        onChange={(e) => setNouArticle({ ...nouArticle, unitat_mesura: e.target.value })}
+                        className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-semibold"
+                      >
+                        {UNITATS_MESURA_CANONIQUES.map((u) => (
+                          <option key={u.value} value={u.value}>
+                            {u.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-400 mb-1">
+                        Estoc Mínim
+                      </label>
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.1"
+                        value={nouArticle.estoc_minim}
+                        onChange={(e) => setNouArticle({ ...nouArticle, estoc_minim: Number(e.target.value) })}
+                        className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-mono"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-400 mb-1">
+                        Estoc Òptim
+                      </label>
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.1"
+                        value={nouArticle.estoc_optim}
+                        onChange={(e) => setNouArticle({ ...nouArticle, estoc_optim: Number(e.target.value) })}
+                        className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-mono"
+                      />
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3 p-3 rounded-xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-700">
+                    <div>
+                      <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-400 mb-1">
+                        Estoc Inicial
+                      </label>
+                      <input
+                        type="number"
+                        min="0"
+                        step="any"
+                        value={nouArticle.estoc_inicial}
+                        onChange={(e) => setNouArticle({ ...nouArticle, estoc_inicial: parseFloat(e.target.value) || 0 })}
+                        className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-mono font-bold"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-400 mb-1">
+                        Magatzem Destí Inicial
+                      </label>
+                      <select
+                        value={nouArticle.magatzem_id}
+                        onChange={(e) => setNouArticle({ ...nouArticle, magatzem_id: e.target.value })}
+                        className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-semibold"
+                      >
+                        <option value="">Nau Central per defecte</option>
+                        {magatzems.map((m) => (
+                          <option key={m.id} value={m.id}>
+                            {m.tipus === "NAU_CENTRAL" ? "🏭 " : "🚐 "}
+                            {m.nom}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+                </>
               )}
 
               {nouArticle.tipus_creacio === "MATERIAL" && (
+                esEnginyer ? (
+                  <div className="bg-slate-100 dark:bg-slate-800/60 p-3 rounded-xl border border-slate-200 dark:border-slate-700 flex items-center justify-between gap-4">
+                    <div>
+                      <span className="text-xs font-bold text-slate-700 dark:text-slate-200 block">
+                        Preu Venda (€)
+                      </span>
+                      <span className="text-[11px] text-slate-500">
+                        Els costos interns i marges estan reservats a Direcció / Administració.
+                      </span>
+                    </div>
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      value={nouArticle.preu_venda}
+                      onChange={(e) => setNouArticle({ ...nouArticle, preu_venda: parseFloat(e.target.value) || 0 })}
+                      className="w-32 px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-mono font-bold text-right"
+                    />
+                  </div>
+                ) : (
                 <>
                   <div className="grid grid-cols-3 gap-3">
                     <div>
@@ -1725,6 +2179,7 @@ export default function GestioMagatzemPage() {
                     <span className="text-lg font-black text-emerald-600 font-mono">{nouArticle.preu_venda} €</span>
                   </div>
                 </>
+                )
               )}
 
               <div className="pt-3 border-t border-slate-200 dark:border-slate-800 flex items-center justify-end gap-2">
@@ -1790,35 +2245,49 @@ export default function GestioMagatzemPage() {
                         required
                       />
                     </div>
-                    <div className="col-span-2">
-                      <label className="block text-xs font-bold text-slate-600 dark:text-slate-400 mb-1">
-                        Proveïdor Habitual (Comandes / Mínim Estoc)
-                      </label>
-                      <select
-                        value={articleEditant.proveidor_id || ""}
-                        onChange={(e) => {
-                          const provId = e.target.value || null;
-                          const p = proveidors.find((x) => x.id === provId);
-                          setArticleEditant({
-                            ...articleEditant,
-                            proveidor_id: provId,
-                            proveidor_nom: p ? p.rao_social : null,
-                          });
-                        }}
-                        className="w-full p-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-medium"
-                      >
-                        <option value="">Sense proveïdor assignat</option>
-                        {proveidors.map((p) => (
-                          <option key={p.id} value={p.id}>
-                            {p.rao_social} ({p.nif})
-                          </option>
-                        ))}
-                      </select>
-                      {articleEditant.proveidor_nom && (
-                        <p className="text-[11px] text-emerald-600 dark:text-emerald-400 mt-1 font-medium">
-                          Proveïdor vinculat: <strong>{articleEditant.proveidor_nom}</strong>
-                        </p>
-                      )}
+                    <div className="col-span-2 grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-xs font-bold text-slate-600 dark:text-slate-400 mb-1">
+                          Codi de Barres (EAN / Code128, sense QR)
+                        </label>
+                        <input
+                          type="text"
+                          placeholder="Ex: 8412345000012"
+                          value={articleEditant.codi_barres || ""}
+                          onChange={(e) => setArticleEditant({ ...articleEditant, codi_barres: e.target.value })}
+                          className="w-full p-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-mono"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-bold text-slate-600 dark:text-slate-400 mb-1">
+                          Proveïdor Habitual (Comandes / Mínim Estoc)
+                        </label>
+                        <select
+                          value={articleEditant.proveidor_id || ""}
+                          onChange={(e) => {
+                            const provId = e.target.value || null;
+                            const p = proveidors.find((x) => x.id === provId);
+                            setArticleEditant({
+                              ...articleEditant,
+                              proveidor_id: provId,
+                              proveidor_nom: p ? p.rao_social : null,
+                            });
+                          }}
+                          className="w-full p-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-medium"
+                        >
+                          <option value="">Sense proveïdor assignat</option>
+                          {proveidors.map((p) => (
+                            <option key={p.id} value={p.id}>
+                              {p.rao_social} ({p.nif})
+                            </option>
+                          ))}
+                        </select>
+                        {articleEditant.proveidor_nom && (
+                          <p className="text-[11px] text-emerald-600 dark:text-emerald-400 mt-1 font-medium">
+                            Proveïdor vinculat: <strong>{articleEditant.proveidor_nom}</strong>
+                          </p>
+                        )}
+                      </div>
                     </div>
                     <div>
                       <label className="block text-xs font-bold text-slate-600 dark:text-slate-400 mb-1">
@@ -1875,24 +2344,38 @@ export default function GestioMagatzemPage() {
                     <div>
                       <label className="block text-xs font-bold text-slate-600 dark:text-slate-400 mb-1">Unitat de Mesura</label>
                       <select
-                        value={articleEditant.unitat_mesura}
+                        value={normalitzarUnitatMesura(articleEditant.unitat_mesura)}
                         onChange={(e) => setArticleEditant({ ...articleEditant, unitat_mesura: e.target.value })}
                         className="w-full p-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs"
                       >
-                        <option value="UNITAT">Unitats (u)</option>
-                        <option value="METRE">Metres (m)</option>
-                        <option value="LITRE">Litres (L)</option>
-                        <option value="QUILO">Quilograms (kg)</option>
-                        <option value="CAIXA">Caixes</option>
+                        {UNITATS_MESURA_CANONIQUES.map((u) => (
+                          <option key={u.value} value={u.value}>
+                            {u.label}
+                          </option>
+                        ))}
                       </select>
                     </div>
                   </div>
                 </div>
 
                 {/* Dades Econòmiques i Estoc */}
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div className="p-4 bg-emerald-50/50 dark:bg-emerald-900/10 rounded-2xl border border-emerald-100 dark:border-emerald-900/30 space-y-4">
-                    <h4 className="text-xs font-bold text-emerald-600 dark:text-emerald-500 uppercase tracking-wider mb-2">Control d'Estoc</h4>
+                    <h4 className="text-xs font-bold text-emerald-600 dark:text-emerald-500 uppercase tracking-wider mb-2">Control d&apos;Estoc</h4>
+                    <div className="grid grid-cols-3 gap-2 text-center p-2 rounded-xl bg-white dark:bg-slate-900 border border-emerald-100 dark:border-emerald-900/40 font-mono">
+                      <div>
+                        <span className="block text-[10px] text-slate-400">Físic</span>
+                        <span className="text-xs font-bold">{articleEditant.estoc_fisic ?? articleEditant.estoc_real ?? 0}</span>
+                      </div>
+                      <div>
+                        <span className="block text-[10px] text-slate-400">Reservat</span>
+                        <span className="text-xs font-bold text-amber-600">{articleEditant.estoc_reservat ?? 0}</span>
+                      </div>
+                      <div>
+                        <span className="block text-[10px] text-slate-400">Disponible</span>
+                        <span className="text-xs font-black text-emerald-600">{articleEditant.estoc_disponible ?? articleEditant.estoc_real ?? 0}</span>
+                      </div>
+                    </div>
                     <div className="grid grid-cols-2 gap-3">
                       <div>
                         <label className="block text-xs font-bold text-slate-600 dark:text-slate-400 mb-1">Mínim</label>
@@ -1919,55 +2402,61 @@ export default function GestioMagatzemPage() {
                     </div>
                   </div>
                   
-                  <div className="p-4 bg-indigo-50/50 dark:bg-indigo-900/10 rounded-2xl border border-indigo-100 dark:border-indigo-900/30 space-y-4">
-                    <h4 className="text-xs font-bold text-indigo-600 dark:text-indigo-400 uppercase tracking-wider mb-2">Preus i Costos</h4>
+                  <div className="p-4 bg-primary/5 rounded-2xl border border-primary/20 space-y-4">
+                    <h4 className="text-xs font-bold text-primary uppercase tracking-wider mb-2">
+                      {esEnginyer ? "Tarifa PVP (Accés Tècnic)" : "Preus i Costos"}
+                    </h4>
                     <div className="grid grid-cols-2 gap-3">
-                      <div>
-                        <label className="block text-xs font-bold text-slate-600 dark:text-slate-400 mb-1">Preu Cost (€)</label>
-                        <input
-                          type="number"
-                          step="0.01"
-                          value={articleEditant.preu_cost}
-                          onChange={(e) => {
-                            const pc = Number(e.target.value) || 0;
-                            const costReal = pc * (1 - (articleEditant.descompte_proveidor / 100));
-                            const preuVendaCalculat = costReal * (1 + (articleEditant.marge_guanys / 100));
-                            setArticleEditant({ ...articleEditant, preu_cost: pc, preu_venda: parseFloat(preuVendaCalculat.toFixed(2)) });
-                          }}
-                          className="w-full p-2 rounded-xl border border-indigo-200 dark:border-indigo-800 bg-white dark:bg-slate-900 text-xs"
-                          required
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-400 mb-1">Desc. Proveïdor (%)</label>
-                        <input
-                          type="number"
-                          step="0.01"
-                          value={articleEditant.descompte_proveidor}
-                          onChange={(e) => {
-                            const desc = Number(e.target.value) || 0;
-                            const costReal = articleEditant.preu_cost * (1 - (desc / 100));
-                            const preuVendaCalculat = costReal * (1 + (articleEditant.marge_guanys / 100));
-                            setArticleEditant({ ...articleEditant, descompte_proveidor: desc, preu_venda: parseFloat(preuVendaCalculat.toFixed(2)) });
-                          }}
-                          className="w-full p-2 rounded-xl border border-indigo-200 dark:border-indigo-800 bg-white dark:bg-slate-900 text-xs"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-400 mb-1">Marge Guanys (%)</label>
-                        <input
-                          type="number"
-                          step="0.01"
-                          value={articleEditant.marge_guanys}
-                          onChange={(e) => {
-                            const marge = Number(e.target.value) || 0;
-                            const costReal = articleEditant.preu_cost * (1 - (articleEditant.descompte_proveidor / 100));
-                            const preuVendaCalculat = costReal * (1 + (marge / 100));
-                            setArticleEditant({ ...articleEditant, marge_guanys: marge, preu_venda: parseFloat(preuVendaCalculat.toFixed(2)) });
-                          }}
-                          className="w-full p-2 rounded-xl border border-indigo-200 dark:border-indigo-800 bg-white dark:bg-slate-900 text-xs"
-                        />
-                      </div>
+                      {!esEnginyer && (
+                        <>
+                          <div>
+                            <label className="block text-xs font-bold text-slate-600 dark:text-slate-400 mb-1">Preu Cost (€)</label>
+                            <input
+                              type="number"
+                              step="0.01"
+                              value={articleEditant.preu_cost ?? 0}
+                              onChange={(e) => {
+                                const pc = Number(e.target.value) || 0;
+                                const costReal = pc * (1 - (Number(articleEditant.descompte_proveidor ?? 0) / 100));
+                                const preuVendaCalculat = costReal * (1 + (Number(articleEditant.marge_guanys ?? 0) / 100));
+                                setArticleEditant({ ...articleEditant, preu_cost: pc, preu_venda: parseFloat(preuVendaCalculat.toFixed(2)) });
+                              }}
+                              className="w-full p-2 rounded-xl border border-primary/30 bg-white dark:bg-slate-900 text-xs"
+                              required
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-400 mb-1">Desc. Proveïdor (%)</label>
+                            <input
+                              type="number"
+                              step="0.01"
+                              value={articleEditant.descompte_proveidor ?? 0}
+                              onChange={(e) => {
+                                const desc = Number(e.target.value) || 0;
+                                const costReal = Number(articleEditant.preu_cost ?? 0) * (1 - (desc / 100));
+                                const preuVendaCalculat = costReal * (1 + (Number(articleEditant.marge_guanys ?? 0) / 100));
+                                setArticleEditant({ ...articleEditant, descompte_proveidor: desc, preu_venda: parseFloat(preuVendaCalculat.toFixed(2)) });
+                              }}
+                              className="w-full p-2 rounded-xl border border-primary/30 bg-white dark:bg-slate-900 text-xs"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-400 mb-1">Marge Guanys (%)</label>
+                            <input
+                              type="number"
+                              step="0.01"
+                              value={articleEditant.marge_guanys ?? 0}
+                              onChange={(e) => {
+                                const marge = Number(e.target.value) || 0;
+                                const costReal = Number(articleEditant.preu_cost ?? 0) * (1 - (Number(articleEditant.descompte_proveidor ?? 0) / 100));
+                                const preuVendaCalculat = costReal * (1 + (marge / 100));
+                                setArticleEditant({ ...articleEditant, marge_guanys: marge, preu_venda: parseFloat(preuVendaCalculat.toFixed(2)) });
+                              }}
+                              className="w-full p-2 rounded-xl border border-primary/30 bg-white dark:bg-slate-900 text-xs"
+                            />
+                          </div>
+                        </>
+                      )}
                       <div className="col-span-2">
                         <label className="block text-xs font-bold text-slate-600 dark:text-slate-400 mb-1">Preu Venda (€) (Càlcul P.V.P.)</label>
                         <input
@@ -1975,7 +2464,7 @@ export default function GestioMagatzemPage() {
                           step="0.01"
                           value={articleEditant.preu_venda}
                           onChange={(e) => setArticleEditant({ ...articleEditant, preu_venda: Number(e.target.value) })}
-                          className="w-full p-2 rounded-xl border border-indigo-300 dark:border-indigo-700 bg-indigo-50 dark:bg-indigo-900/40 font-bold text-indigo-700 dark:text-indigo-300 text-xs"
+                          className="w-full p-2 rounded-xl border border-primary/40 bg-primary/10 font-bold text-primary text-xs"
                           required
                         />
                       </div>
@@ -2152,7 +2641,7 @@ export default function GestioMagatzemPage() {
                   <option value="">-- Selecciona un article --</option>
                   {articles.map((art) => (
                     <option key={art.id} value={art.id}>
-                      {art.referencia_inventari} - {art.nom} (Total: {art.estoc_real ?? 0} {art.unitat_mesura})
+                      {art.referencia_inventari} - {art.nom} (Disp.: {art.estoc_disponible ?? art.estoc_real ?? 0} {art.unitat_mesura})
                     </option>
                   ))}
                 </select>
@@ -2238,6 +2727,271 @@ export default function GestioMagatzemPage() {
                       <span>Confirmar Traspàs</span>
                     </>
                   )}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Ajust Manual d'Estoc */}
+      {modalAjustEstoc && ajustArticle && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="w-full max-w-md bg-white dark:bg-slate-900 rounded-3xl shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden">
+            <div className="px-5 py-4 border-b border-slate-200 dark:border-slate-800 flex justify-between items-center bg-slate-50 dark:bg-slate-800/50">
+              <h2 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                <SlidersHorizontal className="w-4 h-4 text-primary" />
+                <span>Ajustar Estoc: {ajustArticle.referencia_inventari}</span>
+              </h2>
+              <button
+                type="button"
+                onClick={() => {
+                  setModalAjustEstoc(false);
+                  setAjustArticle(null);
+                }}
+                className="text-slate-400 hover:text-slate-600"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleExecutarAjustEstoc} className="p-5 space-y-4">
+              <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 text-xs">
+                <p className="font-bold text-slate-900 dark:text-white">{ajustArticle.nom}</p>
+                <p className="font-mono text-[11px] text-slate-500 mt-0.5">
+                  Disponible actual: <strong>{ajustArticle.estoc_disponible ?? ajustArticle.estoc_real ?? 0}</strong> {ajustArticle.unitat_mesura}
+                </p>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-400 mb-1">
+                    Magatzem *
+                  </label>
+                  <select
+                    value={ajustMagatzemId}
+                    onChange={(e) => setAjustMagatzemId(e.target.value)}
+                    required
+                    className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-semibold"
+                  >
+                    <option value="">Selecciona nau o furgoneta...</option>
+                    {magatzems.map((m) => (
+                      <option key={m.id} value={m.id}>
+                        {m.tipus === "NAU_CENTRAL" ? "🏭 " : "🚐 "}
+                        {m.nom}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-400 mb-1">
+                    Tipus Moviment *
+                  </label>
+                  <select
+                    value={ajustTipus}
+                    onChange={(e) => setAjustTipus(e.target.value as "ENTRADA" | "SORTIDA" | "RESERVA")}
+                    className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-semibold"
+                  >
+                    <option value="ENTRADA">ENTRADA (+ Físic)</option>
+                    <option value="SORTIDA">SORTIDA (- Físic)</option>
+                    <option value="RESERVA">RESERVA (+ Reservat)</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-400 mb-1">
+                    Quantitat ({ajustArticle.unitat_mesura}) *
+                  </label>
+                  <input
+                    type="number"
+                    min="0.01"
+                    step="any"
+                    required
+                    value={ajustQuantitat}
+                    onChange={(e) => setAjustQuantitat(parseFloat(e.target.value) || 0)}
+                    className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-mono font-bold"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-400 mb-1">
+                    Ubicació Passadís
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="Ex: P2-R4"
+                    value={ajustUbicacio}
+                    onChange={(e) => setAjustUbicacio(e.target.value)}
+                    className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-mono"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-400 mb-1">
+                  Notes del Moviment
+                </label>
+                <input
+                  type="text"
+                  placeholder="Motiu regularització o inventari..."
+                  value={ajustNotes}
+                  onChange={(e) => setAjustNotes(e.target.value)}
+                  className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs"
+                />
+              </div>
+
+              <div className="flex justify-end gap-2 pt-2 border-t border-slate-100 dark:border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setModalAjustEstoc(false);
+                    setAjustArticle(null);
+                  }}
+                  className="px-4 py-2 rounded-xl border border-slate-300 dark:border-slate-700 text-xs font-medium text-slate-600 dark:text-slate-300"
+                >
+                  Cancel·lar
+                </button>
+                <button
+                  type="submit"
+                  disabled={ajustantEstoc || !ajustMagatzemId || ajustQuantitat <= 0}
+                  className="px-4 py-2 rounded-xl bg-primary hover:opacity-90 text-white text-xs font-bold shadow disabled:opacity-50"
+                >
+                  {ajustantEstoc ? "Desant..." : "Confirmar Moviment"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Editar Eina de Custòdia */}
+      {modalEditarEina && einaEditant && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="w-full max-w-lg bg-white dark:bg-slate-900 rounded-3xl shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden">
+            <div className="px-5 py-4 border-b border-slate-200 dark:border-slate-800 flex justify-between items-center bg-slate-50 dark:bg-slate-800/50">
+              <h2 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                <Wrench className="w-4 h-4 text-primary" />
+                <span>Editar Fitxa d&apos;Eina ({einaEditant.numero_serie})</span>
+              </h2>
+              <button
+                type="button"
+                onClick={() => {
+                  setModalEditarEina(false);
+                  setEinaEditant(null);
+                }}
+                className="text-slate-400 hover:text-slate-600"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleDesarEina} className="p-5 space-y-3">
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-400 mb-1">
+                    Ref. Fabricant
+                  </label>
+                  <input
+                    type="text"
+                    value={einaEditant.referencia_fabricant || ""}
+                    onChange={(e) => setEinaEditant({ ...einaEditant, referencia_fabricant: e.target.value })}
+                    className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-400 mb-1">
+                    Número de Sèrie *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={einaEditant.numero_serie || ""}
+                    onChange={(e) => setEinaEditant({ ...einaEditant, numero_serie: e.target.value })}
+                    className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-mono font-bold"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-400 mb-1">
+                    Nom Màquina / Eina *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={einaEditant.nom || ""}
+                    onChange={(e) => setEinaEditant({ ...einaEditant, nom: e.target.value })}
+                    className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-medium"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-400 mb-1">
+                    Model
+                  </label>
+                  <input
+                    type="text"
+                    value={einaEditant.model || ""}
+                    onChange={(e) => setEinaEditant({ ...einaEditant, model: e.target.value })}
+                    className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-400 mb-1">
+                  Data Fi Garantia
+                </label>
+                <input
+                  type="date"
+                  value={einaEditant.data_fi_garantia || ""}
+                  onChange={(e) => setEinaEditant({ ...einaEditant, data_fi_garantia: e.target.value })}
+                  className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-400 mb-1">
+                  Observacions / Manteniment
+                </label>
+                <textarea
+                  rows={2}
+                  value={einaEditant.observacions || ""}
+                  onChange={(e) => setEinaEditant({ ...einaEditant, observacions: e.target.value })}
+                  className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-400 mb-1">
+                  Incidències
+                </label>
+                <textarea
+                  rows={2}
+                  value={einaEditant.incidencies || ""}
+                  onChange={(e) => setEinaEditant({ ...einaEditant, incidencies: e.target.value })}
+                  className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs"
+                />
+              </div>
+
+              <div className="flex justify-end gap-2 pt-2 border-t border-slate-100 dark:border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setModalEditarEina(false);
+                    setEinaEditant(null);
+                  }}
+                  className="px-4 py-2 rounded-xl border border-slate-300 dark:border-slate-700 text-xs font-medium text-slate-600 dark:text-slate-300"
+                >
+                  Cancel·lar
+                </button>
+                <button
+                  type="submit"
+                  disabled={guardantEina}
+                  className="px-4 py-2 rounded-xl bg-primary hover:opacity-90 text-white text-xs font-bold shadow disabled:opacity-50"
+                >
+                  {guardantEina ? "Desant..." : "Desar Eina"}
                 </button>
               </div>
             </form>

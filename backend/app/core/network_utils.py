@@ -41,11 +41,15 @@ def get_candidate_node_urls(raw_url: Optional[str]) -> List[str]:
     try:
         parsed = urllib.parse.urlparse(base)
         hostname = (parsed.hostname or "").lower()
-        if hostname in ("127.0.0.1", "localhost"):
+        if hostname in ("127.0.0.1", "localhost", "host.docker.internal"):
             gateways = get_docker_host_gateways()
             port_suffix = f":{parsed.port}" if parsed.port else ""
             scheme = parsed.scheme or "http"
             path = parsed.path or ""
+            if hostname == "host.docker.internal" and not os.path.exists("/.dockerenv"):
+                local_cand = f"{scheme}://127.0.0.1{port_suffix}{path}".rstrip("/")
+                if local_cand not in candidates:
+                    candidates.append(local_cand)
             for gw in gateways:
                 gw_base = f"{scheme}://{gw}{port_suffix}{path}".rstrip("/")
                 if gw_base not in candidates:

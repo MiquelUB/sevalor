@@ -23,6 +23,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { Feina } from "@/components/gestio/Map";
+import { useGestio } from "@/lib/gestio-context";
 
 interface Fulla360OTDrawerProps {
   feina: Feina | null;
@@ -39,6 +40,7 @@ export function Fulla360OTDrawer({
   onEdit,
   onFocusMapa,
 }: Fulla360OTDrawerProps) {
+  const { rolActiu } = useGestio();
   if (!isOpen || !feina) return null;
 
   const materials = feina.linies_picking || [];
@@ -147,7 +149,11 @@ export function Fulla360OTDrawer({
           {(() => {
             const trams = feina.trams_temps || [];
             const horesFact = Number(feina.hores_imputades_facturables || 0);
-            const preuH = Number(feina.preu_venda_hora_aplicat || 45);
+            const tePreuHora =
+              rolActiu !== "ENGINYER" &&
+              feina.preu_venda_hora_aplicat !== null &&
+              feina.preu_venda_hora_aplicat !== undefined;
+            const preuH = tePreuHora ? Number(feina.preu_venda_hora_aplicat) : 0;
             const fmtHMS = (seg: number) => {
               const s = Math.max(0, Math.floor(seg));
               const hh = Math.floor(s / 3600);
@@ -176,7 +182,7 @@ export function Fulla360OTDrawer({
                   )}
                 </div>
 
-                <div className="grid grid-cols-2 gap-sm">
+                <div className={`grid gap-sm ${tePreuHora ? "grid-cols-2" : "grid-cols-1"}`}>
                   <div className="p-2.5 rounded-lg bg-surface-container-low dark:bg-slate-800/60 border border-outline-variant/20">
                     <span className="text-[10px] font-label-caps text-on-surface-variant uppercase block">
                       Total Hores Computades
@@ -185,14 +191,16 @@ export function Fulla360OTDrawer({
                       {horesFact.toFixed(2)} h
                     </span>
                   </div>
-                  <div className="p-2.5 rounded-lg bg-secondary-container/15 border border-secondary-container/30">
-                    <span className="text-[10px] font-label-caps text-secondary uppercase block">
-                      Valor Mà d&apos;Obra ({preuH} €/h)
-                    </span>
-                    <span className="text-lg font-mono font-black text-secondary">
-                      {(horesFact * preuH).toFixed(2)} €
-                    </span>
-                  </div>
+                  {tePreuHora && (
+                    <div className="p-2.5 rounded-lg bg-secondary-container/15 border border-secondary-container/30">
+                      <span className="text-[10px] font-label-caps text-secondary uppercase block">
+                        Valor Mà d&apos;Obra ({preuH} €/h)
+                      </span>
+                      <span className="text-lg font-mono font-black text-secondary">
+                        {(horesFact * preuH).toFixed(2)} €
+                      </span>
+                    </div>
+                  )}
                 </div>
 
                 {trams.length > 0 && (

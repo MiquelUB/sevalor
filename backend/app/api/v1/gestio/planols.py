@@ -3,7 +3,7 @@ import os
 import re
 import uuid
 from datetime import datetime
-from typing import List, Optional
+from typing import Any, Dict, List, Optional, Sequence
 
 from fastapi import (
     APIRouter,
@@ -17,12 +17,20 @@ from fastapi import (
     status,
 )
 from pydantic import BaseModel, Field
-from sqlalchemy import or_, select
+from sqlalchemy import delete, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db_with_tenant_context
 from app.core.security import require_roles
-from app.models.models import CapaAnotacio, CapaVectorial, CarpetaPlanol, PlanolBase
+from app.models.models import (
+    CapaAnotacio,
+    CapaVectorial,
+    CarpetaPlanol,
+    ExportacioPdfPlanol,
+    OrdreTreball,
+    PinIncidenciaPlanol,
+    PlanolBase,
+)
 from app.services.sovereign_storage import SovereignStorageGateway
 from app.workers.tasks import generar_informe_planol_pdf
 
@@ -77,7 +85,7 @@ class CapaVectorialCreate(BaseModel):
     gruix_linia: int = 2
     opacitat_percent: int = 100
     visible: bool = True
-    geometries_geojson: dict = Field(default_factory=dict)
+    geometries_geojson: Dict[str, Any] = Field(default_factory=dict)
 
 
 class CapaVectorialResponse(BaseModel):
@@ -90,7 +98,7 @@ class CapaVectorialResponse(BaseModel):
     gruix_linia: int = 2
     opacitat_percent: int = 100
     visible: bool = True
-    geometries_geojson: dict = Field(default_factory=dict)
+    geometries_geojson: Dict[str, Any] = Field(default_factory=dict)
     planol_base_id: Optional[uuid.UUID] = None
     ordre_treball_id: Optional[uuid.UUID] = None
     created_at: Optional[datetime] = None
@@ -110,7 +118,7 @@ async def llistar_planols(
     limit: int = 50,
     offset: int = 0,
     db: AsyncSession = Depends(get_db_with_tenant_context),
-):
+) -> List[PlanolResponse]:
     empresa_id = request.state.empresa_id
     if not empresa_id or empresa_id == "undefined":
         raise HTTPException(status_code=401, detail="No identificat")
@@ -158,7 +166,7 @@ async def llistar_planols(
 @router.post("", response_model=PlanolResponse, status_code=status.HTTP_201_CREATED)
 async def alta_planol(
     request: Request, planol: PlanolCreate, db: AsyncSession = Depends(get_db_with_tenant_context)
-):
+) -> PlanolResponse:
     empresa_id = request.state.empresa_id
     if not empresa_id or empresa_id == "undefined":
         raise HTTPException(status_code=401, detail="No identificat")
@@ -221,7 +229,7 @@ async def pujar_planol_fitxer(
     projeccio: Optional[str] = Form("ETRS89 / UTM 31N"),
     es_georeferenciat: bool = Form(True),
     db: AsyncSession = Depends(get_db_with_tenant_context),
-):
+) -> PlanolResponse:
     """Puja un fitxer de plànol (PDF, DXF, DWG, GeoJSON, etc.) i el vincula a la carpeta."""
     empresa_id = request.state.empresa_id
     if not empresa_id or empresa_id == "undefined":
@@ -323,7 +331,7 @@ async def importar_planols_directori(
     request: Request,
     payload: ImportarDirectoriRequest,
     db: AsyncSession = Depends(get_db_with_tenant_context),
-):
+) -> List[PlanolResponse]:
     """Escaneja la carpeta d'origen al disc i registra automàticament els plànols trobats."""
     empresa_id = request.state.empresa_id
     if not empresa_id or empresa_id == "undefined":
@@ -426,7 +434,7 @@ async def descarregar_fitxer_planol(
     planol_id: uuid.UUID,
     request: Request,
     db: AsyncSession = Depends(get_db_with_tenant_context),
-):
+) -> Response:
     """Serveix el fitxer del plànol per a visualització o descàrrega."""
     empresa_id = request.state.empresa_id
     if not empresa_id or empresa_id == "undefined":
@@ -478,7 +486,7 @@ async def renderitzar_planol_visualitzacio(
     request: Request,
     pagina: int = 0,
     db: AsyncSession = Depends(get_db_with_tenant_context),
-):
+) -> Response:
     """Renderitza el plànol base en format imatge (PNG) en memòria sense deixar fitxers a Hetzner."""
     empresa_id = request.state.empresa_id
     if not empresa_id or empresa_id == "undefined":
@@ -501,7 +509,7 @@ async def renderitzar_planol_visualitzacio(
     if ext == ".pdf":
         import pymupdf
 
-        doc = pymupdf.open(stream=raw_bytes, filetype="pdf")
+        doc = pymupdf.open(stream=raw_bytes, filetype="pdf")  # type: ignore[no-untyped-call]
         if len(doc) == 0:
             raise HTTPException(status_code=400, detail="El document PDF no conté pàgines")
         idx = min(max(0, pagina), len(doc) - 1)
@@ -514,7 +522,7 @@ async def renderitzar_planol_visualitzacio(
             )
         pix = page.get_pixmap(dpi=150)
         return Response(
-            content=pix.tobytes("png"),
+            content=pix.tobytes("png"),  # type: ignore[no-untyped-call]
             media_type="image/png",
             headers={
                 "Cache-Control": "no-store",
@@ -528,7 +536,7 @@ async def renderitzar_planol_visualitzacio(
     if ext in [".tif", ".tiff"]:
         import pymupdf
 
-        doc = pymupdf.open(stream=raw_bytes, filetype="tiff")
+        doc = pymupdf.open(stream=raw_bytes, filetype="tiff")  # type: ignore[no-untyped-call]
         if len(doc) == 0:
             raise HTTPException(status_code=400, detail="El fitxer TIFF no conté imatges")
         page = doc[0]
@@ -536,7 +544,7 @@ async def renderitzar_planol_visualitzacio(
             return Response(content=b"", media_type="image/png", headers={"X-Total-Pages": "1"})
         pix = page.get_pixmap(dpi=150)
         return Response(
-            content=pix.tobytes("png"),
+            content=pix.tobytes("png"),  # type: ignore[no-untyped-call]
             media_type="image/png",
             headers={
                 "Cache-Control": "no-store",
@@ -565,7 +573,7 @@ async def eliminar_planol(
     planol_id: uuid.UUID,
     request: Request,
     db: AsyncSession = Depends(get_db_with_tenant_context),
-):
+) -> None:
     """Elimina un plànol i les seves capes vectorials vinculades."""
     empresa_id = request.state.empresa_id
     if not empresa_id or empresa_id == "undefined":
@@ -607,7 +615,7 @@ async def eliminar_planol(
 @router.get("/carpetes", response_model=List[CarpetaResponse])
 async def llistar_carpetes(
     request: Request, db: AsyncSession = Depends(get_db_with_tenant_context)
-):
+) -> Sequence[CarpetaPlanol]:
     """Llista les carpetes de plànols de l'empresa (Spec 010)."""
     empresa_id = request.state.empresa_id
     if not empresa_id or empresa_id == "undefined":
@@ -624,7 +632,7 @@ async def llistar_carpetes(
 @router.post("/carpetes", response_model=CarpetaResponse, status_code=status.HTTP_201_CREATED)
 async def crear_carpeta(
     request: Request, payload: CarpetaCreate, db: AsyncSession = Depends(get_db_with_tenant_context)
-):
+) -> CarpetaPlanol:
     """Crea una carpeta de plànols (Spec 010)."""
     empresa_id = request.state.empresa_id
     if not empresa_id or empresa_id == "undefined":
@@ -650,21 +658,105 @@ async def eliminar_carpeta(
     carpeta_id: uuid.UUID,
     request: Request,
     db: AsyncSession = Depends(get_db_with_tenant_context),
-):
-    """Elimina una carpeta de plànols i els seus plànols associats."""
+) -> Response:
+    """Elimina una carpeta de plànols, subcarpetes, plànols i capes associades sense HTTP 500."""
     empresa_id = request.state.empresa_id
     if not empresa_id or empresa_id == "undefined":
         raise HTTPException(status_code=401, detail="No identificat")
 
+    emp_uuid = uuid.UUID(empresa_id)
     stmt = select(CarpetaPlanol).where(
         CarpetaPlanol.id == carpeta_id,
-        CarpetaPlanol.empresa_id == uuid.UUID(empresa_id),
+        CarpetaPlanol.empresa_id == emp_uuid,
     )
     carpeta = (await db.execute(stmt)).scalars().first()
     if not carpeta:
         raise HTTPException(status_code=404, detail="Carpeta no trobada")
 
-    await db.delete(carpeta)
+    # Recollir totes les subcarpetes descendents dins el tenant
+    all_carpeta_ids: List[uuid.UUID] = [carpeta.id]
+    frontier: List[uuid.UUID] = [carpeta.id]
+    while frontier:
+        sub_res = await db.execute(
+            select(CarpetaPlanol.id).where(
+                CarpetaPlanol.empresa_id == emp_uuid,
+                CarpetaPlanol.parent_id.in_(frontier),
+            )
+        )
+        children = [cid for cid in sub_res.scalars().all() if cid not in all_carpeta_ids]
+        all_carpeta_ids.extend(children)
+        frontier = children
+
+    # Netejar dependències de plànols i capes en ordre topològic dins la mateixa transacció
+    planol_ids = list(
+        (
+            await db.execute(
+                select(PlanolBase.id).where(
+                    PlanolBase.empresa_id == emp_uuid,
+                    PlanolBase.carpeta_id.in_(all_carpeta_ids),
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+    if planol_ids:
+        capa_ids = list(
+            (
+                await db.execute(
+                    select(CapaVectorial.id).where(
+                        CapaVectorial.empresa_id == emp_uuid,
+                        CapaVectorial.planol_base_id.in_(planol_ids),
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        if capa_ids:
+            await db.execute(
+                delete(PinIncidenciaPlanol).where(
+                    PinIncidenciaPlanol.empresa_id == emp_uuid,
+                    PinIncidenciaPlanol.capa_id.in_(capa_ids),
+                )
+            )
+            await db.execute(
+                delete(CapaVectorial).where(
+                    CapaVectorial.empresa_id == emp_uuid,
+                    CapaVectorial.id.in_(capa_ids),
+                )
+            )
+
+        await db.execute(
+            delete(ExportacioPdfPlanol).where(
+                ExportacioPdfPlanol.empresa_id == emp_uuid,
+                ExportacioPdfPlanol.planol_base_id.in_(planol_ids),
+            )
+        )
+        await db.execute(
+            update(OrdreTreball)
+            .where(
+                OrdreTreball.empresa_id == emp_uuid,
+                OrdreTreball.planol_id.in_(planol_ids),
+            )
+            .values(planol_id=None)
+        )
+        await db.execute(
+            delete(PlanolBase).where(
+                PlanolBase.empresa_id == emp_uuid,
+                PlanolBase.id.in_(planol_ids),
+            )
+        )
+
+    for cid in reversed(all_carpeta_ids):
+        await db.execute(
+            delete(CarpetaPlanol).where(
+                CarpetaPlanol.empresa_id == emp_uuid,
+                CarpetaPlanol.id == cid,
+            )
+        )
+
     await db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
@@ -678,7 +770,7 @@ async def eliminar_carpeta(
 @router.get("/planols/{planol_id}/capes", response_model=List[CapaVectorialResponse])
 async def llistar_capes_planol(
     request: Request, planol_id: uuid.UUID, db: AsyncSession = Depends(get_db_with_tenant_context)
-):
+) -> Sequence[CapaVectorial]:
     """Llista les capes vectorials d'un plànol (Spec 010)."""
     empresa_id = request.state.empresa_id
     if not empresa_id or empresa_id == "undefined":
@@ -708,7 +800,7 @@ async def crear_capa_planol(
     planol_id: uuid.UUID,
     payload: CapaVectorialCreate,
     db: AsyncSession = Depends(get_db_with_tenant_context),
-):
+) -> CapaVectorial:
     """Crea una capa vectorial sobre un plànol (Spec 010)."""
     empresa_id = request.state.empresa_id
     if not empresa_id or empresa_id == "undefined":
@@ -748,7 +840,7 @@ class CapaVectorialUpdate(BaseModel):
     gruix_linia: Optional[int] = None
     opacitat_percent: Optional[int] = None
     visible: Optional[bool] = None
-    geometries_geojson: Optional[dict] = None
+    geometries_geojson: Optional[Dict[str, Any]] = None
 
 
 @router.put("/{planol_id}/capes/{capa_id}", response_model=CapaVectorialResponse)
@@ -759,7 +851,7 @@ async def editar_capa_planol(
     capa_id: uuid.UUID,
     payload: CapaVectorialUpdate,
     db: AsyncSession = Depends(get_db_with_tenant_context),
-):
+) -> CapaVectorial:
     """Edita una capa vectorial d'un plànol (Spec 010). Les capes immutables no es poden editar."""
     empresa_id = request.state.empresa_id
     if not empresa_id or empresa_id == "undefined":
@@ -804,7 +896,7 @@ async def eliminar_capa_planol(
     planol_id: uuid.UUID,
     capa_id: uuid.UUID,
     db: AsyncSession = Depends(get_db_with_tenant_context),
-):
+) -> None:
     """Elimina una capa vectorial (Spec 010). Les immutables no es poden eliminar."""
     empresa_id = request.state.empresa_id
     if not empresa_id or empresa_id == "undefined":
@@ -832,7 +924,7 @@ async def eliminar_capa_planol(
 @router.post("/{planol_id}/exportar-pdf", status_code=status.HTTP_202_ACCEPTED)
 async def exportar_planol_pdf(
     planol_id: uuid.UUID, request: Request, db: AsyncSession = Depends(get_db_with_tenant_context)
-):
+) -> Dict[str, str]:
     empresa_id = request.state.empresa_id
     stmt = select(PlanolBase).where(
         PlanolBase.id == planol_id, PlanolBase.empresa_id == uuid.UUID(empresa_id)
@@ -869,7 +961,7 @@ async def llistar_anotacions(
     request: Request,
     ordre_treball_id: Optional[uuid.UUID] = None,
     db: AsyncSession = Depends(get_db_with_tenant_context),
-):
+) -> Sequence[CapaAnotacio]:
     """Llista les capes d'anotacions."""
     empresa_id = request.state.empresa_id
     if not empresa_id or empresa_id == "undefined":
@@ -890,7 +982,7 @@ async def crear_anotacio(
     request: Request,
     payload: CapaAnotacioCreate,
     db: AsyncSession = Depends(get_db_with_tenant_context),
-):
+) -> CapaAnotacio:
     """Crea una nova capa d'anotació."""
     empresa_id = request.state.empresa_id
     if not empresa_id or empresa_id == "undefined":

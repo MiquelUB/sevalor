@@ -10,6 +10,7 @@ Validen la integritat i coherència transversal de punta a punta entre totes les
 
 import uuid
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import jwt
 import pytest
@@ -23,15 +24,14 @@ from app.models.models import (
     Client,
     Empresa,
     EstocMagatzem,
-    FullaPicking,
     Incidencia,
-    LiniaPicking,
     Magatzem,
     OrdreTreball,
     Pressupost,
     Usuari,
     Vehicle,
 )
+from app.services.sovereign_storage import SovereignStorageGateway
 
 
 def crear_token(usuari_id: uuid.UUID, empresa_id: uuid.UUID, rol: str) -> str:
@@ -272,7 +272,7 @@ async def test_cross_02_rls_transversal(admin_session):
 
 
 @pytest.mark.asyncio
-async def test_cross_03_coherencia_pressupost_telegram_copilot(admin_session, boss_token):
+async def test_cross_03_coherencia_pressupost_telegram_copilot(admin_session, boss_token, tmp_path: Path):
     """
     TEST-CROSS-03: Coherència Pressupost -> Telegram -> Copilot.
     Un pressupost aprovat via Telegram ha de reflectir-se viu al Copilot d'agent.
@@ -288,6 +288,10 @@ async def test_cross_03_coherencia_pressupost_telegram_copilot(admin_session, bo
         pla_subscripcio="ENTERPRISE",
         estat_pagament="ACTIU",
         vertical="SEVALOR",
+        disc_dur_url=str(tmp_path),
+        node_ia_url=str(tmp_path),
+        node_ia_actiu=True,
+        feature_copilot_ia=True,
     )
     admin_session.add(empresa)
     await admin_session.flush()
@@ -329,6 +333,20 @@ async def test_cross_03_coherencia_pressupost_telegram_copilot(admin_session, bo
     admin_session.add(pressupost)
     await admin_session.flush()
 
+    await SovereignStorageGateway.desar_entitat_json(
+        admin_session,
+        empresa_id,
+        "clients",
+        client.id,
+        {
+            "id": str(client.id),
+            "codi": client.codi,
+            "rao_social": client.rao_social,
+            "nif": client.nif,
+            "telegram_chat_id": chat_id,
+        },
+    )
+
     # 1. Aprovar via Telegram Webhook
     payload_tg = {
         "callback_query": {
@@ -358,7 +376,7 @@ async def test_cross_03_coherencia_pressupost_telegram_copilot(admin_session, bo
 
 
 @pytest.mark.asyncio
-async def test_cross_04_consistencia_estoc_magatzem_picking_copilot(admin_session, boss_token):
+async def test_cross_04_consistencia_estoc_magatzem_picking_copilot(admin_session, boss_token, tmp_path: Path):
     """
     TEST-CROSS-04: Consistència d'Estoc viu entre Magatzem, Picking i Copilot.
     Estoc inicial: 500 unitats físiques.
@@ -377,6 +395,10 @@ async def test_cross_04_consistencia_estoc_magatzem_picking_copilot(admin_sessio
         pla_subscripcio="ENTERPRISE",
         estat_pagament="ACTIU",
         vertical="SEVALOR",
+        disc_dur_url=str(tmp_path),
+        node_ia_url=str(tmp_path),
+        node_ia_actiu=True,
+        feature_copilot_ia=True,
     )
     admin_session.add(empresa)
     await admin_session.flush()
@@ -426,6 +448,25 @@ async def test_cross_04_consistencia_estoc_magatzem_picking_copilot(admin_sessio
     )
     admin_session.add(estoc)
     await admin_session.flush()
+
+    await SovereignStorageGateway.desar_entitat_json(
+        admin_session,
+        empresa_id,
+        "magatzem_articles",
+        article.id,
+        {
+            "id": str(article.id),
+            "referencia_inventari": article.referencia_inventari,
+            "nom": article.nom,
+            "familia": article.familia,
+            "unitat_mesura": article.unitat_mesura,
+            "estoc_minim": 20.0,
+            "estoc_optim": 600.0,
+            "quantitat_fisica": 500.0,
+            "quantitat_virtual_reservada": 120.0,
+            "actiu": True,
+        },
+    )
 
     headers = {"Authorization": f"Bearer {token_jwt}", "X-Empresa-ID": str(empresa_id)}
 

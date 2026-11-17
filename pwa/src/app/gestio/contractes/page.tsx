@@ -2,17 +2,20 @@
 
 import React, { useState, useEffect } from "react";
 import Link from "next/link";
-import { Briefcase, AlertCircle, Plus, Calendar, FileText, ChevronRight } from "lucide-react";
-import { getAuthHeader } from "@/lib/auth";
-import { getApiBaseUrl } from "@/lib/api";
+import { useRouter } from "next/navigation";
+import { Briefcase, AlertCircle, Plus, Calendar, FileText, ChevronRight, Lock } from "lucide-react";
+import { apiFetch } from "@/lib/api";
+import { useGestio } from "@/lib/gestio-context";
 
 interface Contracte {
   id: string;
   client_id: string;
+  client_nom?: string | null;
   numero_contracte: string;
   data_inici: string;
   data_fi: string | null;
   import_anual: number;
+  periodicitat?: string;
   estat: string;
 }
 
@@ -26,30 +29,38 @@ interface Alerta {
 }
 
 export default function ContractesPage() {
+  const router = useRouter();
+  const { rolActiu } = useGestio();
+  const esEnginyer = (rolActiu || "").toUpperCase() === "ENGINYER";
   const [contractes, setContractes] = useState<Contracte[]>([]);
   const [alertes, setAlertes] = useState<Alerta[]>([]);
   const [mrr, setMrr] = useState<number>(0);
   const [loading, setLoading] = useState(true);
+  const [rbacError, setRbacError] = useState<string | null>(null);
 
   useEffect(() => {
+    if (esEnginyer) {
+      setRbacError("Accés restringit: els contractes i el MRR estan reservats a Direcció / Administració.");
+      setLoading(false);
+      return;
+    }
     fetchData();
-  }, []);
+  }, [esEnginyer]);
 
   const fetchData = async () => {
     try {
-      const [resC, resA, resM] = await Promise.all([
-        fetch(getApiBaseUrl() + "/gestio/contractes", { headers: getAuthHeader() }),
-        fetch(getApiBaseUrl() + "/gestio/contractes/alertes/venciments", { headers: getAuthHeader() }),
-        fetch(getApiBaseUrl() + "/gestio/contractes/kpis/mrr", { headers: getAuthHeader() })
+      const [cData, aData, mData] = await Promise.all([
+        apiFetch<Contracte[]>("/gestio/contractes/"),
+        apiFetch<Alerta[]>("/gestio/contractes/alertes/venciments").catch(() => []),
+        apiFetch<{ mrr: number }>("/gestio/contractes/mrr").catch(() => ({ mrr: 0 })),
       ]);
-      if (resC.ok) setContractes(await resC.json());
-      if (resA.ok) setAlertes(await resA.json());
-      if (resM.ok) {
-        const d = await resM.json();
-        setMrr(d.mrr);
+      setContractes(cData || []);
+      setAlertes(aData || []);
+      setMrr(mData?.mrr || 0);
+    } catch (e: any) {
+      if (String(e?.message || "").includes("403")) {
+        setRbacError("Accés denegat per política de seguretat (Principi VI).");
       }
-    } catch (e) {
-      console.error(e);
     } finally {
       setLoading(false);
     }
@@ -64,20 +75,31 @@ export default function ContractesPage() {
   };
 
   if (loading) return <div className="p-8 text-slate-500">Carregant contractes...</div>;
+  if (rbacError) {
+    return (
+      <div className="p-8 max-w-xl mx-auto mt-10 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl text-center space-y-3">
+        <div className="w-12 h-12 mx-auto rounded-full bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300 flex items-center justify-center">
+          <Lock className="w-6 h-6" />
+        </div>
+        <h2 className="text-base font-bold text-slate-900 dark:text-white">Mòdul Financer Restringit</h2>
+        <p className="text-xs text-slate-500">{rbacError}</p>
+      </div>
+    );
+  }
 
   return (
     <div className="p-4 md:p-8 max-w-7xl mx-auto space-y-6">
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-slate-900 dark:text-white flex items-center gap-2">
-            <Briefcase className="w-6 h-6 text-primary-600" />
+            <Briefcase className="w-6 h-6 text-primary" />
             Contractes de Manteniment
           </h1>
           <p className="text-sm text-slate-500 mt-1">Gestió del cicle de vida i revisions preventives</p>
         </div>
         <Link
           href="/gestio/contractes/nou"
-          className="bg-primary-600 hover:bg-primary-700 text-white px-4 py-2 rounded-lg font-bold flex items-center gap-2 transition-colors"
+          className="bg-primary hover:opacity-90 text-white px-4 py-2 rounded-lg font-bold flex items-center gap-2 transition-opacity"
         >
           <Plus className="w-4 h-4" />
           Nou Contracte
@@ -88,7 +110,7 @@ export default function ContractesPage() {
         {/* KPI MRR */}
         <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-6 rounded-xl shadow-sm flex flex-col justify-center">
           <p className="text-sm text-slate-500 font-bold uppercase tracking-wider mb-1">MRR (Mensual Recurrent)</p>
-          <p className="text-3xl font-black text-slate-900 dark:text-white">{(mrr).toFixed(2)} €</p>
+          <p className="text-3xl font-black text-slate-900 dark:text-white tabular-nums">{(mrr).toFixed(2)} €</p>
           <p className="text-xs text-slate-400 mt-2">Ingressos recurrents mensuals derivats de contractes actius.</p>
         </div>
 
@@ -136,6 +158,8 @@ export default function ContractesPage() {
           <thead className="bg-slate-50 dark:bg-slate-800/50 border-b border-slate-200 dark:border-slate-800 text-slate-500 font-mono text-xs uppercase tracking-wider">
             <tr>
               <th className="p-4 font-semibold">Núm. Contracte</th>
+              <th className="p-4 font-semibold">Client</th>
+              <th className="p-4 font-semibold">Periodicitat</th>
               <th className="p-4 font-semibold">Data Inici</th>
               <th className="p-4 font-semibold">Data Fi</th>
               <th className="p-4 font-semibold">Import Anual</th>
@@ -145,26 +169,30 @@ export default function ContractesPage() {
           </thead>
           <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
             {contractes.map(c => (
-              <tr key={c.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors group cursor-pointer" onClick={() => window.location.href = `/gestio/contractes/${c.id}`}>
+              <tr key={c.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors group cursor-pointer" onClick={() => router.push(`/gestio/contractes/${c.id}`)}>
                 <td className="p-4 font-bold text-slate-900 dark:text-white">
                   {c.numero_contracte}
                 </td>
+                <td className="p-4 font-medium text-slate-700 dark:text-slate-200">
+                  {c.client_nom || c.client_id}
+                </td>
+                <td className="p-4 text-xs font-mono text-slate-500">{c.periodicitat || "ANUAL"}</td>
                 <td className="p-4 text-slate-600 dark:text-slate-400 font-mono">{c.data_inici}</td>
-                <td className="p-4 text-slate-600 dark:text-slate-400 font-mono">{c.data_fi || '---'}</td>
-                <td className="p-4 font-mono font-medium text-slate-900 dark:text-white">{c.import_anual.toFixed(2)} €</td>
+                <td className="p-4 text-slate-600 dark:text-slate-400 font-mono">{c.data_fi || "---"}</td>
+                <td className="p-4 font-mono tabular-nums font-medium text-slate-900 dark:text-white">{Number(c.import_anual || 0).toFixed(2)} €</td>
                 <td className="p-4">
                   <span className={`inline-flex items-center px-2 py-0.5 rounded text-[11px] font-bold uppercase tracking-wider ${getEstatColor(c.estat)}`}>
                     {c.estat}
                   </span>
                 </td>
                 <td className="p-4 text-right">
-                  <ChevronRight className="w-5 h-5 text-slate-400 group-hover:text-primary-600 inline-block" />
+                  <ChevronRight className="w-5 h-5 text-slate-400 group-hover:text-primary inline-block" />
                 </td>
               </tr>
             ))}
             {contractes.length === 0 && (
               <tr>
-                <td colSpan={6} className="p-8 text-center text-slate-500">
+                <td colSpan={8} className="p-8 text-center text-slate-500">
                   Sense contractes de manteniment registrats.
                 </td>
               </tr>
