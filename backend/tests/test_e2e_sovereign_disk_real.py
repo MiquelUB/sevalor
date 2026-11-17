@@ -21,8 +21,10 @@ import secrets
 import socket
 import subprocess
 import sys
+import threading
 import time
 import uuid
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from typing import Dict
 
@@ -47,10 +49,29 @@ def _find_free_port() -> int:
         return int(s.getsockname()[1])
 
 
+class _DummyLLMHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(b'{"object":"list","data":[{"id":"qwen-local"}]}')
+
+    def log_message(self, format, *args):
+        pass
+
+
+def _start_dummy_llm() -> tuple[HTTPServer, str]:
+    srv = HTTPServer(("127.0.0.1", 0), _DummyLLMHandler)
+    thr = threading.Thread(target=srv.serve_forever, daemon=True)
+    thr.start()
+    return srv, f"http://127.0.0.1:{srv.server_port}"
+
+
 def _start_vault_agent(
     primary_dir: Path,
     secondary_dir: Path,
     vault_token: str,
+    local_llm_url: str | None = None,
 ) -> tuple[subprocess.Popen[bytes], str]:
     port = _find_free_port()
     env = os.environ.copy()
@@ -58,6 +79,8 @@ def _start_vault_agent(
     env["SEVALOR_VAULT_PATH_A"] = str(primary_dir)
     env["SEVALOR_VAULT_PATH_B"] = str(secondary_dir)
     env["SEVALOR_VAULT_SECRET"] = vault_token
+    if local_llm_url:
+        env["SEVALOR_LOCAL_LLM_URL"] = local_llm_url
     env["HOST"] = "127.0.0.1"
     env["PORT"] = str(port)
 
@@ -126,8 +149,11 @@ async def test_e2e_sovereign_disk_multi_tenant_roundtrip_and_transit_drain(
     token_a = f"svlt_{secrets.token_urlsafe(24)}"
     token_b = f"svlt_{secrets.token_urlsafe(24)}"
 
-    proc_a, url_a = _start_vault_agent(primary_a, secondary_a, token_a)
-    proc_b, url_b = _start_vault_agent(primary_b, secondary_b, token_b)
+    dummy_llm_srv, dummy_llm_url = _start_dummy_llm()
+    proc_a = None
+    proc_b = None
+    proc_a, url_a = _start_vault_agent(primary_a, secondary_a, token_a, local_llm_url=dummy_llm_url)
+    proc_b, url_b = _start_vault_agent(primary_b, secondary_b, token_b, local_llm_url=dummy_llm_url)
 
     sa_token = create_access_token(
         {
@@ -379,6 +405,8 @@ async def test_e2e_sovereign_disk_multi_tenant_roundtrip_and_transit_drain(
             env_a["SEVALOR_VAULT_PATH_A"] = str(primary_a)
             env_a["SEVALOR_VAULT_PATH_B"] = str(secondary_a)
             env_a["SEVALOR_VAULT_SECRET"] = token_a
+            if dummy_llm_url:
+                env_a["SEVALOR_LOCAL_LLM_URL"] = dummy_llm_url
             proc_a = subprocess.Popen(
                 [
                     sys.executable,
@@ -442,6 +470,12 @@ async def test_e2e_sovereign_disk_multi_tenant_roundtrip_and_transit_drain(
             assert emp_after_tg.vault_token == token_a
             assert emp_after_tg.telegram_webhook_secret == "tg_secret_custom_empresa_a_2026"
     finally:
+        try:
+            dummy_llm_srv.shutdown()
+            dummy_llm_srv.server_close()
+        except Exception:
+            pass
         if proc_a is not None:
             _stop_vault_agent(proc_a)
-        _stop_vault_agent(proc_b)
+        if proc_b is not None:
+            _stop_vault_agent(proc_b)
