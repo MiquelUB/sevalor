@@ -53,6 +53,52 @@ async function run() {
   assert(!document.cookie.includes(fakeToken), "Cookie must be cleared after clearAuthToken");
   console.log("  ✅ clearAuthToken neteja la cookie correctament");
 
+  // Test error handling when FastAPI returns 503 with structured { detail: { code, message } }
+  const origFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = (async () =>
+      new Response(
+        JSON.stringify({
+          detail: {
+            code: "NODE_IA_OFFLINE",
+            message: "El node d'IA local de l'empresa no respon.",
+          },
+        }),
+        { status: 503, statusText: "Service Unavailable", headers: { "Content-Type": "application/json" } }
+      )) as any;
+
+    let caughtErr: any = null;
+    try {
+      await apiFetch("/gestio/copilot/xat", { method: "POST", body: JSON.stringify({ pregunta: "hola" }) });
+    } catch (e: any) {
+      caughtErr = e;
+    }
+    assert(caughtErr instanceof Error, "503 ha de llançar Error");
+    assert.strictEqual((caughtErr as Error & { code?: string }).code, "NODE_IA_OFFLINE");
+    assert.strictEqual(caughtErr.message, "El node d'IA local de l'empresa no respon.");
+
+    // Test 422 array detail from Pydantic
+    globalThis.fetch = (async () =>
+      new Response(
+        JSON.stringify({
+          detail: [{ loc: ["body", "pregunta"], msg: "Field required", type: "missing" }],
+        }),
+        { status: 422, statusText: "Unprocessable Entity", headers: { "Content-Type": "application/json" } }
+      )) as any;
+
+    let caught422: any = null;
+    try {
+      await apiFetch("/gestio/copilot/xat", { method: "POST", body: "{}" });
+    } catch (e: any) {
+      caught422 = e;
+    }
+    assert(caught422 instanceof Error, "422 ha de llançar Error");
+    assert(caught422.message.includes("Field required"), `422 message unexpected: ${caught422.message}`);
+    console.log("  ✅ apiFetch gestiona errors FastAPI 503 (objecte detail) i 422 (llista detail) sense error .includes()");
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+
   console.log("\n=== TOTS ELS TESTS DE SINCRONITZACIÓ PASSATS ✅ ===");
 }
 

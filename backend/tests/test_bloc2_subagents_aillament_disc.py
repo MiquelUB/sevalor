@@ -701,3 +701,46 @@ async def test_bloc2_503_zero_fallback_i_xat_amb_prompt_i_feedback_disc(
         assert len(feedbacks) >= 1
         assert any("Vàlvula Motor" in (fb.get("pregunta") or "") for fb in feedbacks)
         assert feedbacks[0]["_sovereign_meta"]["hmac_tenant"]
+
+        # Verificar recuperació automàtica de model carregat (/v1/models) + content=None segur
+        orig_get = httpx.AsyncClient.get
+
+        async def _mock_get_models(self: Any, url: Any, **kwargs: Any) -> httpx.Response:
+            if "127.0.0.1:18999/v1/models" in str(url):
+                return httpx.Response(
+                    200,
+                    json={"data": [{"id": "custom-loaded-model"}]},
+                    request=httpx.Request("GET", str(url)),
+                )
+            return await orig_get(self, url, **kwargs)
+
+        seen_models: List[str] = []
+
+        async def _mock_post_fallback(self: Any, url: Any, **kwargs: Any) -> httpx.Response:
+            if "127.0.0.1:18999" not in str(url):
+                return await orig_post(self, url, **kwargs)
+            payload = kwargs.get("json") or {}
+            model = str(payload.get("model") or "")
+            seen_models.append(model)
+            if model != "custom-loaded-model":
+                return httpx.Response(
+                    404,
+                    json={"error": {"message": "Model not found"}},
+                    request=httpx.Request("POST", str(url)),
+                )
+            return httpx.Response(
+                200,
+                json={"choices": [{"message": {"role": "assistant", "content": None, "tool_calls": None}}]},
+                request=httpx.Request("POST", str(url)),
+            )
+
+        monkeypatch.setattr(httpx.AsyncClient, "get", _mock_get_models)
+        monkeypatch.setattr(httpx.AsyncClient, "post", _mock_post_fallback)
+        res_null_content = await ac.post(
+            "/api/v1/gestio/copilot/xat",
+            json={"pregunta": "Quin estoc tenim de Vàlvula Motor?"},
+            headers={"Authorization": f"Bearer {tok_on}", "X-Empresa-ID": str(emp_on)},
+        )
+        assert res_null_content.status_code == 200, res_null_content.text
+        assert "custom-loaded-model" in seen_models
+        assert "42" in res_null_content.json()["resposta"]

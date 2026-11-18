@@ -207,16 +207,17 @@ export default function CopilotIAPage() {
         method: "POST",
         body: JSON.stringify({ pregunta: promptTxt, imatge_b64: imgEnviar, historial }),
       });
-      const requiresConf = Boolean(dades?.metadata?.tool_resultat?.requires_confirmation);
+      const toolRes = dades?.tool_resultat || dades?.metadata?.tool_resultat;
+      const requiresConf = Boolean(toolRes?.requires_confirmation);
       setConversaXat((prev) => [
         ...prev,
         {
           sender: "bot",
-          text: dades?.resposta || (requiresConf ? dades?.metadata?.tool_resultat?.missatge : "Sense resposta."),
+          text: dades?.resposta || (requiresConf ? toolRes?.missatge : "Sense resposta."),
           links: Array.isArray(dades?.enllacos) ? dades.enllacos : [],
           subagent: dades?.subagent_utilitzat || null,
           latencyMs: dades?.temps_inferencia_ms ?? null,
-          actionContext: requiresConf ? dades?.metadata?.tool_resultat : null,
+          actionContext: requiresConf ? toolRes : null,
         },
       ]);
     } catch (err: any) {

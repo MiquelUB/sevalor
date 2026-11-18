@@ -166,8 +166,28 @@ export async function apiFetch<T = any>(
     let errorCode: string | undefined;
     try {
       const errorJson = await response.json();
-      errorCode = errorJson.code;
-      errorDetail = errorJson.detail || errorJson.message || errorDetail;
+      const rawDetail = errorJson?.detail ?? errorJson?.message;
+      if (typeof rawDetail === "string" && rawDetail.trim()) {
+        errorDetail = rawDetail;
+      } else if (Array.isArray(rawDetail)) {
+        const msgs = rawDetail
+          .map((item: any) =>
+            typeof item === "string" ? item : item?.msg || item?.message || JSON.stringify(item)
+          )
+          .filter(Boolean);
+        if (msgs.length > 0) errorDetail = msgs.join("; ");
+      } else if (rawDetail && typeof rawDetail === "object") {
+        if (typeof rawDetail.code === "string") {
+          errorCode = rawDetail.code;
+        }
+        errorDetail =
+          (typeof rawDetail.message === "string" && rawDetail.message) ||
+          (typeof rawDetail.detail === "string" && rawDetail.detail) ||
+          JSON.stringify(rawDetail);
+      }
+      if (typeof errorJson?.code === "string") {
+        errorCode = errorJson.code;
+      }
     } catch {
       const errorText = await response.text().catch(() => "");
       if (errorText) errorDetail = errorText;
@@ -183,10 +203,11 @@ export async function apiFetch<T = any>(
     }
 
     if ([502, 503, 504].includes(response.status)) {
+      const safeDetail = typeof errorDetail === "string" ? errorDetail : String(errorDetail || "");
       const err = new Error(
-        errorDetail.includes("Error 50")
+        safeDetail.includes("Error 50")
           ? "⚠️ Base de dades central no disponible temporalment: Tens cobertura mòbil, però el servidor de dades no respon en aquest instant."
-          : errorDetail
+          : safeDetail
       ) as Error & { code?: string };
       err.code = errorCode || "DB_UNAVAILABLE";
       throw err;

@@ -104,13 +104,14 @@ export default function CopilotWidget({ isMobile = false }: { isMobile?: boolean
   };
 
   const enviarMissatgeXat = async (msgOpcional?: string) => {
-
-    const textFinal = msgOpcional || missatgeXat;
-    if (!textFinal.trim()) return;
+    const textFinal =
+      (msgOpcional ?? missatgeXat).trim() || (imatgeB64 ? "Analitza aquesta imatge tècnica." : "");
+    if (!textFinal) return;
 
     setConversaXat((prev) => [...prev, { sender: "user", text: textFinal }]);
-    setMissatgeXat("");
+    if (!msgOpcional) setMissatgeXat("");
     setCarregant(true);
+    const imgEnviar = imatgeB64;
     setImatgeB64(null);
 
     try {
@@ -124,19 +125,20 @@ export default function CopilotWidget({ isMobile = false }: { isMobile?: boolean
         }));
       const dades: any = await apiFetch(endpoint, {
         method: "POST",
-        body: JSON.stringify({ pregunta: textFinal, imatge_b64: imatgeB64, historial }),
+        body: JSON.stringify({ pregunta: textFinal, imatge_b64: imgEnviar, historial }),
       });
 
-      const requiresConf = dades?.metadata?.tool_resultat?.requires_confirmation;
+      const toolRes = dades?.tool_resultat || dades?.metadata?.tool_resultat;
+      const requiresConf = Boolean(toolRes?.requires_confirmation);
       setConversaXat((prev) => [
         ...prev,
         {
           sender: "bot",
-          text: dades?.resposta || (requiresConf ? dades?.metadata?.tool_resultat?.missatge : ""),
-          links: dades?.enllacos || [],
+          text: dades?.resposta || (requiresConf ? toolRes?.missatge : ""),
+          links: Array.isArray(dades?.enllacos) ? dades.enllacos : [],
           subagent: dades?.subagent_utilitzat || null,
           latencyMs: dades?.temps_inferencia_ms ?? null,
-          actionContext: requiresConf ? dades?.metadata?.tool_resultat : null,
+          actionContext: requiresConf ? toolRes : null,
         },
       ]);
     } catch (err: any) {

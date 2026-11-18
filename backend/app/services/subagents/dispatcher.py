@@ -217,18 +217,41 @@ class CopilotDispatcher:
         final_answer: Optional[str] = None
 
         max_rounds = 3
-        # Timeout constitucional de 15 segons (Spec 03 / Spec 012)
-        async with httpx.AsyncClient(timeout=14.0) as client:
+        active_model = model_name
+        async with httpx.AsyncClient(timeout=httpx.Timeout(25.0, connect=5.0)) as client:
             for round_idx in range(max_rounds):
-                payload = {
-                    "model": model_name,
+                payload: Dict[str, Any] = {
+                    "model": active_model,
                     "messages": current_messages,
-                    "tools": combined_tools if combined_tools else None,
-                    "tool_choice": "auto" if combined_tools else "none",
                     "temperature": 0.2,
                     "max_tokens": 450,
                 }
+                if combined_tools:
+                    payload["tools"] = combined_tools
+                    payload["tool_choice"] = "auto"
+
                 resp = await client.post(endpoint, json=payload, headers=headers)
+                if round_idx == 0 and resp.status_code in (400, 404):
+                    try:
+                        models_url = endpoint.rsplit("/chat/completions", 1)[0] + "/models"
+                        m_resp = await client.get(models_url, headers=headers, timeout=3.0)
+                        if m_resp.status_code == 200:
+                            loaded = [
+                                m.get("id")
+                                for m in m_resp.json().get("data", [])
+                                if isinstance(m, dict) and m.get("id")
+                            ]
+                            if loaded and active_model not in loaded:
+                                active_model = str(loaded[0])
+                                payload["model"] = active_model
+                                resp = await client.post(endpoint, json=payload, headers=headers)
+                    except Exception:
+                        pass
+                    if resp.status_code == 400 and "tools" in payload:
+                        payload.pop("tools", None)
+                        payload.pop("tool_choice", None)
+                        resp = await client.post(endpoint, json=payload, headers=headers)
+
                 if resp.status_code >= 500:
                     raise httpx.HTTPStatusError(
                         f"Node IA Local HTTP {resp.status_code}",
@@ -244,12 +267,12 @@ class CopilotDispatcher:
                 if not choices:
                     break
 
-                msg = choices[0].get("message", {})
-                tool_calls = msg.get("tool_calls", [])
+                msg = choices[0].get("message", {}) or {}
+                tool_calls = msg.get("tool_calls") or []
 
                 if not tool_calls:
                     # El model ha finalitzat la síntesi textual
-                    final_answer = msg.get("content", "").strip()
+                    final_answer = str(msg.get("content") or "").strip()
                     break
 
                 # Afegir missatge de l'assistent amb la crida d'eina
@@ -293,7 +316,7 @@ class CopilotDispatcher:
             # Si s'ha cridat alguna eina però el model no ha sintetitzat en la darrera ronda
             if not final_answer and last_tool_name:
                 payload_synth = {
-                    "model": model_name,
+                    "model": active_model,
                     "messages": current_messages,
                     "temperature": 0.2,
                     "max_tokens": 400,
@@ -303,7 +326,9 @@ class CopilotDispatcher:
                     synth_json = resp_synth.json()
                     synth_choices = synth_json.get("choices", [])
                     if synth_choices:
-                        final_answer = synth_choices[0].get("message", {}).get("content", "").strip()
+                        final_answer = str(
+                            (synth_choices[0].get("message") or {}).get("content") or ""
+                        ).strip()
 
         return final_answer, last_tool_name, last_tool_args, last_tool_result, [], active_subagent
 

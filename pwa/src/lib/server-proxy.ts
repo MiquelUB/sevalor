@@ -123,11 +123,13 @@ export async function proxyToBackend(
   let lastUpstreamResponse: Response | null = null;
   let lastError: unknown = null;
 
+  const timeoutMs = targetPath.includes("/copilot/") ? 45000 : 15000;
+
   for (const baseRoot of candidates) {
     const targetUrl = `${baseRoot}${targetPath}${search}`;
     try {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 15000);
+      const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
       let upstreamRes: Response;
       try {
@@ -160,8 +162,13 @@ export async function proxyToBackend(
         clearTimeout(timeoutId);
       }
 
-      // Si l'upstream respon amb 502, 503 o 504 (ex. Traefik Bad Gateway), provar el següent candidat
-      if ([502, 503, 504].includes(upstreamRes.status)) {
+      // Si l'upstream retorna un 503 JSON de FastAPI (p.ex. NODE_IA_OFFLINE, COPILOT_DESACTIVAT, NODE_EMPRESA_OFFLINE),
+      // ja hem contactat el backend real i no cal reintentar altres candidats.
+      const contentType = (upstreamRes.headers.get("content-type") || "").toLowerCase();
+      const isAppJsonError = upstreamRes.status === 503 && contentType.includes("application/json");
+
+      // Si l'upstream respon amb 502, 503 no-JSON o 504 (ex. Traefik Bad Gateway), provar el següent candidat
+      if ([502, 503, 504].includes(upstreamRes.status) && !isAppJsonError) {
         if (cachedBackendRoot === baseRoot) {
           cachedBackendRoot = null;
         }

@@ -843,13 +843,15 @@ async def cridar_lm_studio_amb_tools(
                     synth_json = resp_synth.json()
                     synth_choices = synth_json.get("choices", [])
                     if synth_choices:
-                        content = synth_choices[0].get("message", {}).get("content", "").strip()
+                        content = str(
+                            (synth_choices[0].get("message") or {}).get("content") or ""
+                        ).strip()
                         if content:
                             return content, fn_name, fn_args, tool_res
 
                 return None, fn_name, fn_args, tool_res
 
-            content = msg.get("content", "").strip()
+            content = str(msg.get("content") or "").strip()
             if content:
                 return content, None, None, None
 
