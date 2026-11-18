@@ -24,6 +24,8 @@ import {
   ShieldCheck,
   Lock,
   AlertTriangle,
+  Play,
+  Square,
 } from "lucide-react";
 import CameraCapture from "@/components/CameraCapture";
 import { apiFetch } from "@/lib/api";
@@ -99,7 +101,6 @@ interface OrdreDetall {
   gps_fi_lat?: number | null;
   gps_fi_lng?: number | null;
   hores_imputades_facturables?: number | null;
-  preu_venda_hora_aplicat?: number | null;
   desviacio_geovalla?: boolean;
   justificacio_geovalla?: string | null;
   te_tram_obert?: boolean;
@@ -239,10 +240,10 @@ export default function LlistaMaquinesPage() {
       });
 
     try {
-      return await intentarPosicio(true, 5000);
+      return await intentarPosicio(true, 8000);
     } catch {
       try {
-        return await intentarPosicio(false, 5000);
+        return await intentarPosicio(false, 6000);
       } catch (err: unknown) {
         const geoErr = err as { code?: number; message?: string };
         const msg =
@@ -317,8 +318,6 @@ export default function LlistaMaquinesPage() {
               gps_fi_lng: data.gps_fi_lng ?? prev.gps_fi_lng,
               hores_imputades_facturables:
                 data.hores_imputades_facturables ?? prev.hores_imputades_facturables,
-              preu_venda_hora_aplicat:
-                data.preu_venda_hora_aplicat ?? prev.preu_venda_hora_aplicat ?? 45,
               desviacio_geovalla: data.desviacio_geovalla ?? prev.desviacio_geovalla,
               justificacio_geovalla: data.justificacio_geovalla ?? prev.justificacio_geovalla,
             }
@@ -326,15 +325,19 @@ export default function LlistaMaquinesPage() {
       );
       setRequereixJustificacioGPS(false);
       setJustificacioGps("");
+      const coordsSuffix =
+        coords.latitud != null && coords.longitud != null
+          ? ` (GPS: ${coords.latitud.toFixed(4)}, ${coords.longitud.toFixed(4)})`
+          : "";
       const avisSuffix = coords.gpsAvis ? ` (${coords.gpsAvis})` : "";
       setGpsFeedback(
         accio === "inici"
-          ? `Temps de feina obert i en curs!${avisSuffix}`
-          : `Tram de temps tancat. Total acumulat a la factura: ${
+          ? `Feina iniciada! Temps real en curs${coordsSuffix}${avisSuffix}`
+          : `Feina finalitzada! Total temps registrat: ${
               data.hores_imputades_facturables != null
                 ? Number(data.hores_imputades_facturables).toFixed(2)
                 : "0.00"
-            } h${avisSuffix}`
+            } h${coordsSuffix}${avisSuffix}`
       );
     } catch (e: unknown) {
       const detail = e instanceof Error ? e.message : "Error registrant el temps de feina";
@@ -437,7 +440,6 @@ export default function LlistaMaquinesPage() {
             gps_fi_lat: data.gps_fi_lat ?? null,
             gps_fi_lng: data.gps_fi_lng ?? null,
             hores_imputades_facturables: data.hores_imputades_facturables ?? null,
-            preu_venda_hora_aplicat: data.preu_venda_hora_aplicat ?? 45,
             desviacio_geovalla: Boolean(data.desviacio_geovalla),
             justificacio_geovalla: data.justificacio_geovalla || null,
             te_tram_obert: Boolean(data.te_tram_obert),
@@ -474,7 +476,6 @@ export default function LlistaMaquinesPage() {
             gps_fi_lat: data.gps_fi_lat ?? null,
             gps_fi_lng: data.gps_fi_lng ?? null,
             hores_imputades_facturables: data.hores_imputades_facturables ?? null,
-            preu_venda_hora_aplicat: data.preu_venda_hora_aplicat ?? 45,
             desviacio_geovalla: Boolean(data.desviacio_geovalla),
             justificacio_geovalla: data.justificacio_geovalla || null,
             te_tram_obert: Boolean(data.te_tram_obert),
@@ -711,88 +712,95 @@ export default function LlistaMaquinesPage() {
                     (ordre.hores_imputades_facturables &&
                       Number(ordre.hores_imputades_facturables) > 0)
                 );
-                const preuHora = ordre.preu_venda_hora_aplicat || 45;
-                const horesFacturables = Number(ordre.hores_imputades_facturables || 0);
+                const horesTreballades = Number(ordre.hores_imputades_facturables || 0);
                 const acumulatSegons = ordre.temps_acumulat_segons || 0;
 
                 return (
                   <div className="pt-2 border-t border-surface-container dark:border-slate-800 space-y-3">
-                    {/* BOTÓ PRINCIPAL OBRIR / TANCAR TEMPS + ESTAT EN VIU */}
+                    {/* BOTONS INDIVIDUALS INICIAR FEINA / FINALITZAR FEINA + GPS */}
                     {!isTancadaDefinitivament && (
-                      <>
-                        {isTramObert ? (
-                          <div className="space-y-3">
-                            {/* Panell Cronòmetre en viu (Acumulat + Sessió Actual) */}
-                            <div className="p-3.5 rounded-xl bg-secondary-container/10 border border-secondary-container/30 space-y-2">
-                              <div className="flex items-center justify-between">
-                                <div className="flex items-center gap-2">
-                                  <span className="w-2.5 h-2.5 rounded-full bg-secondary-container animate-pulse" />
-                                  <span className="text-xs font-extrabold uppercase tracking-wider text-secondary">
-                                    Temps Obert • En Curs
-                                  </span>
-                                </div>
-                                <span className="font-mono text-lg font-black text-primary dark:text-slate-100">
-                                  ⏱️ {tempsTranscorregut}
+                      <div className="space-y-3">
+                        {isTramObert && (
+                          <div className="p-3.5 rounded-xl bg-secondary-container/10 border border-secondary-container/30 space-y-2">
+                            <div className="flex items-center justify-between">
+                              <div className="flex items-center gap-2">
+                                <span className="w-2.5 h-2.5 rounded-full bg-secondary-container animate-pulse" />
+                                <span className="text-xs font-extrabold uppercase tracking-wider text-secondary">
+                                  Feina en Curs
                                 </span>
                               </div>
-                              <div className="flex items-center justify-between text-[11px] text-on-surface-variant dark:text-slate-400 border-t border-secondary-container/20 pt-2">
-                                <span>
-                                  Tram actual:{" "}
-                                  <strong className="font-mono text-slate-800 dark:text-slate-200">
-                                    {tempsSessioActual}
-                                  </strong>
-                                  {acumulatPreviLabel(acumulatSegons)}
-                                </span>
-                                <span className="font-bold text-secondary font-mono">
-                                  ~{horesLiveEstimades.toFixed(2)} h facturables
-                                </span>
-                              </div>
+                              <span className="font-mono text-lg font-black text-primary dark:text-slate-100">
+                                ⏱️ {tempsTranscorregut}
+                              </span>
                             </div>
-
-                            <button
-                              type="button"
-                              data-testid="btn-comencar-feina-gps"
-                              disabled={iniciantFeina}
-                              onClick={() => handleMarcarTempsGps("final")}
-                              className="w-full min-h-[48px] bg-secondary-container hover:brightness-110 text-white font-bold text-xs uppercase tracking-wider rounded-xl flex items-center justify-center gap-2 shadow-sm active:scale-95 transition-all disabled:opacity-50"
-                            >
-                              <CheckCircle2 className="w-4 h-4" />
+                            <div className="flex items-center justify-between text-[11px] text-on-surface-variant dark:text-slate-400 border-t border-secondary-container/20 pt-2">
                               <span>
-                                {iniciantFeina
-                                  ? "Registrant posició GPS..."
-                                  : "Tancar Temps (Pausa / Finalitzar + GPS)"}
+                                Sessió actual:{" "}
+                                <strong className="font-mono text-slate-800 dark:text-slate-200">
+                                  {tempsSessioActual}
+                                </strong>
+                                {acumulatPreviLabel(acumulatSegons)}
                               </span>
-                            </button>
-                          </div>
-                        ) : (
-                          <div className="space-y-2">
-                            <button
-                              type="button"
-                              data-testid="btn-comencar-feina-gps"
-                              disabled={iniciantFeina}
-                              onClick={() => handleMarcarTempsGps("inici")}
-                              className="w-full min-h-[48px] bg-primary hover:brightness-110 text-white font-bold text-xs uppercase tracking-wider rounded-xl flex items-center justify-center gap-2 shadow-sm active:scale-95 transition-all disabled:opacity-50"
-                            >
-                              <MapPin className="w-4 h-4 text-secondary-container" />
-                              <span>
-                                {iniciantFeina
-                                  ? "Registrant posició GPS..."
-                                  : teHistorialPrevi
-                                  ? "Obrir Temps (Continuar Feina + GPS)"
-                                  : "Obrir Temps (Començar Feina + GPS)"}
+                              <span className="font-bold text-secondary font-mono">
+                                ~{horesLiveEstimades.toFixed(2)} h
                               </span>
-                            </button>
-                            <p className="text-[11px] text-center text-on-surface-variant dark:text-slate-400">
-                              {teHistorialPrevi
-                                ? "Pots tornar a obrir el temporitzador quan reprenguis la feina (p. ex. després de dinar)."
-                                : "En obrir el temps, s'enregistrarà l'hora d'inici i la posició GPS."}
-                            </p>
+                            </div>
                           </div>
                         )}
-                      </>
+
+                        <div className="grid grid-cols-2 gap-2.5">
+                          <button
+                            type="button"
+                            data-testid="btn-iniciar-feina-gps"
+                            disabled={iniciantFeina || isTramObert}
+                            onClick={() => handleMarcarTempsGps("inici")}
+                            className="min-h-[52px] px-3 py-2.5 bg-primary hover:brightness-110 text-white font-bold text-xs uppercase tracking-wider rounded-xl flex flex-col items-center justify-center gap-1 shadow-sm active:scale-95 transition-all disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                          >
+                            <div className="flex items-center gap-1.5">
+                              <Play className="w-4 h-4 text-secondary-container fill-current" />
+                              <span>
+                                {iniciantFeina && accioPendentGps === "inici"
+                                  ? "Registrant GPS..."
+                                  : "Iniciar Feina"}
+                              </span>
+                            </div>
+                            <span className="text-[10px] font-medium normal-case tracking-normal opacity-80 flex items-center gap-1">
+                              <MapPin className="w-3 h-3" />
+                              Inici temps + GPS
+                            </span>
+                          </button>
+
+                          <button
+                            type="button"
+                            data-testid="btn-finalitzar-feina-gps"
+                            disabled={iniciantFeina || !isTramObert}
+                            onClick={() => handleMarcarTempsGps("final")}
+                            className="min-h-[52px] px-3 py-2.5 bg-secondary-container hover:brightness-110 text-white font-bold text-xs uppercase tracking-wider rounded-xl flex flex-col items-center justify-center gap-1 shadow-sm active:scale-95 transition-all disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                          >
+                            <div className="flex items-center gap-1.5">
+                              <Square className="w-3.5 h-3.5 fill-current" />
+                              <span>
+                                {iniciantFeina && accioPendentGps === "final"
+                                  ? "Registrant GPS..."
+                                  : "Finalitzar Feina"}
+                              </span>
+                            </div>
+                            <span className="text-[10px] font-medium normal-case tracking-normal opacity-90 flex items-center gap-1">
+                              <MapPin className="w-3 h-3" />
+                              Fi temps + GPS
+                            </span>
+                          </button>
+                        </div>
+
+                        <p className="text-[11px] text-center text-on-surface-variant dark:text-slate-400">
+                          {isTramObert
+                            ? "Prem Finalitzar Feina per aturar el temps real i desar la ubicació GPS."
+                            : "Prem Iniciar Feina per activar el temps real i registrar la posició GPS."}
+                        </p>
+                      </div>
                     )}
 
-                    {/* RESUM D'HORES ACUMULADES PER A FACTURACIÓ I TRAMS */}
+                    {/* RESUM DE TEMPS TREBALLAT (SENSE DADES ECONÒMIQUES) */}
                     {teHistorialPrevi && (
                       <div className="p-3.5 rounded-xl bg-surface-container-low dark:bg-slate-800/80 border border-secondary-container/35 space-y-3">
                         <div className="flex items-center justify-between border-b border-outline-variant/20 dark:border-slate-700/60 pb-2">
@@ -800,7 +808,7 @@ export default function LlistaMaquinesPage() {
                             <CheckCircle2 className="w-4 h-4 text-secondary" />
                             <span className="text-xs font-extrabold uppercase tracking-wider text-primary dark:text-slate-100">
                               {isTramObert
-                                ? "Hores Acumulades Prèvies"
+                                ? "Temps Acumulat Previ"
                                 : "Còmput Total de Treball"}
                             </span>
                           </div>
@@ -809,27 +817,27 @@ export default function LlistaMaquinesPage() {
                           </span>
                         </div>
 
-                        {/* Targeta clau: Còmput a la Factura */}
+                        {/* Targeta Resum Temps Treballat (Sense preus ni tarifes) */}
                         <div className="p-3 rounded-lg bg-secondary-container/15 border border-secondary-container/40 flex items-center justify-between">
                           <div>
                             <span className="text-[10px] font-extrabold uppercase tracking-wider text-secondary block">
-                              Hores computades a la factura
+                              Total temps real treballat
                             </span>
                             <span className="text-xs text-on-surface-variant dark:text-slate-400">
-                              Tarifa mà d&apos;obra: {preuHora} €/h
+                              Registre acumulat amb posició GPS
                             </span>
                           </div>
                           <div className="text-right">
                             <span className="text-xl font-mono font-black text-primary dark:text-slate-100">
-                              {horesFacturables.toFixed(2)} h
+                              {horesTreballades.toFixed(2)} h
                             </span>
                             <span className="block text-xs font-mono font-bold text-secondary">
-                              {(horesFacturables * preuHora).toFixed(2)} €
+                              {formatSegonsHMS(acumulatSegons)}
                             </span>
                           </div>
                         </div>
 
-                        {/* Llista de trams (Obrir / Tancar) */}
+                        {/* Llista de trams (Iniciar / Finalitzar) */}
                         {trams.length > 0 && (
                           <div className="space-y-1.5">
                             <span className="text-[10px] font-bold uppercase tracking-wider text-on-surface-variant block">
@@ -837,15 +845,34 @@ export default function LlistaMaquinesPage() {
                             </span>
                             <div className="space-y-1">
                               {trams.map((tram, idx) => {
-                                const iniciFmt = new Date(tram.hora_inici).toLocaleTimeString(
+                                const dtIni = new Date(tram.hora_inici);
+                                const dtFi = tram.hora_fi ? new Date(tram.hora_fi) : null;
+                                const mateixDia =
+                                  dtFi &&
+                                  dtIni.toDateString() === dtFi.toDateString();
+                                const iniciFmt = dtIni.toLocaleTimeString(
                                   "ca-ES",
                                   { hour: "2-digit", minute: "2-digit" }
                                 );
-                                const fiFmt = tram.hora_fi
-                                  ? new Date(tram.hora_fi).toLocaleTimeString("ca-ES", {
-                                      hour: "2-digit",
-                                      minute: "2-digit",
-                                    })
+                                const iniciComplet = mateixDia
+                                  ? iniciFmt
+                                  : `${dtIni.toLocaleDateString("ca-ES", {
+                                      day: "2-digit",
+                                      month: "2-digit",
+                                    })} ${iniciFmt}`;
+                                const fiFmt = dtFi
+                                  ? mateixDia
+                                    ? dtFi.toLocaleTimeString("ca-ES", {
+                                        hour: "2-digit",
+                                        minute: "2-digit",
+                                      })
+                                    : `${dtFi.toLocaleDateString("ca-ES", {
+                                        day: "2-digit",
+                                        month: "2-digit",
+                                      })} ${dtFi.toLocaleTimeString("ca-ES", {
+                                        hour: "2-digit",
+                                        minute: "2-digit",
+                                      })}`
                                   : "En curs";
                                 const hasGpsInici =
                                   tram.gps_inici_lat != null && tram.gps_inici_lng != null;
@@ -854,27 +881,39 @@ export default function LlistaMaquinesPage() {
                                 return (
                                   <div
                                     key={tram.id}
-                                    className="px-2.5 py-1.5 rounded-lg bg-surface-container-lowest dark:bg-slate-900 border border-outline-variant/15 flex items-center justify-between text-[11px]"
+                                    className="px-2.5 py-2 rounded-lg bg-surface-container-lowest dark:bg-slate-900 border border-outline-variant/15 space-y-1 text-[11px]"
                                   >
-                                    <div className="flex items-center gap-2">
-                                      <span className="font-bold text-primary dark:text-slate-200">
-                                        #{idx + 1}
+                                    <div className="flex items-center justify-between">
+                                      <div className="flex items-center gap-2">
+                                        <span className="font-bold text-primary dark:text-slate-200">
+                                          #{idx + 1}
+                                        </span>
+                                        <span className="font-mono text-slate-700 dark:text-slate-300">
+                                          {iniciComplet} → {fiFmt}
+                                        </span>
+                                      </div>
+                                      <span className="font-mono font-bold text-secondary">
+                                        {tram.hora_fi
+                                          ? formatSegonsHMS(tram.durada_segons)
+                                          : "Actiu"}
                                       </span>
-                                      <span className="font-mono text-slate-700 dark:text-slate-300">
-                                        {iniciFmt} → {fiFmt}
-                                      </span>
-                                      {(hasGpsInici || hasGpsFi) && (
-                                        <MapPin
-                                          className="w-3 h-3 text-secondary shrink-0"
-                                          aria-label="GPS registrat"
-                                        />
-                                      )}
                                     </div>
-                                    <span className="font-mono font-bold text-secondary">
-                                      {tram.hora_fi
-                                        ? formatSegonsHMS(tram.durada_segons)
-                                        : "Actiu"}
-                                    </span>
+                                    {(hasGpsInici || hasGpsFi) && (
+                                      <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[10px] font-mono text-on-surface-variant dark:text-slate-400">
+                                        {hasGpsInici && (
+                                          <span className="inline-flex items-center gap-1">
+                                            <MapPin className="w-3 h-3 text-secondary shrink-0" />
+                                            Inici: {Number(tram.gps_inici_lat).toFixed(4)}, {Number(tram.gps_inici_lng).toFixed(4)}
+                                          </span>
+                                        )}
+                                        {hasGpsFi && (
+                                          <span className="inline-flex items-center gap-1">
+                                            <MapPin className="w-3 h-3 text-primary shrink-0" />
+                                            Final: {Number(tram.gps_fi_lat).toFixed(4)}, {Number(tram.gps_fi_lng).toFixed(4)}
+                                          </span>
+                                        )}
+                                      </div>
+                                    )}
                                   </div>
                                 );
                               })}

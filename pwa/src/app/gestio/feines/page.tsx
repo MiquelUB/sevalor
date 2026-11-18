@@ -361,7 +361,7 @@ function FeinesContent() {
                       <td className="py-3 px-4 whitespace-nowrap font-data-tabular">
                         <div className="flex items-center gap-2 text-[11px] text-on-surface-variant">
                           <span className="inline-flex items-center gap-0.5" title="Hores computades">
-                            <Clock className="w-3 h-3" /> {hores.toFixed(1)}h
+                            <Clock className="w-3 h-3" /> {hores.toFixed(2)}h
                           </span>
                           <span className="inline-flex items-center gap-0.5" title="Línies picking">
                             <Package className="w-3 h-3" /> {pickingCount}
@@ -374,9 +374,18 @@ function FeinesContent() {
                       {potVeurePreus && (
                         <td className="py-3 px-4 text-right font-data-tabular font-bold text-secondary whitespace-nowrap">
                           {f.preu_venda_hora_aplicat !== null &&
-                          f.preu_venda_hora_aplicat !== undefined
-                            ? `${Number(f.preu_venda_hora_aplicat).toFixed(2)} €`
-                            : "—"}
+                          f.preu_venda_hora_aplicat !== undefined ? (
+                            <div>
+                              <span>{Number(f.preu_venda_hora_aplicat).toFixed(2)} €/h</span>
+                              {hores > 0 && (
+                                <span className="block text-[10px] font-mono text-primary">
+                                  {(hores * Number(f.preu_venda_hora_aplicat)).toFixed(2)} €
+                                </span>
+                              )}
+                            </div>
+                          ) : (
+                            "—"
+                          )}
                         </td>
                       )}
                       <td className="py-3 px-4 whitespace-nowrap">

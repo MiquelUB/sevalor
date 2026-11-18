@@ -26,6 +26,10 @@ from app.models.models import (
     Usuari,
     Vehicle,
 )
+from app.services.barema_service import (
+    obtenir_barema_empresa,
+    resoldre_preu_hora_control_panel,
+)
 from app.services.flota_service import validar_permis_conduir
 from app.services.geocoding_service import geocodificar_adreca
 from app.services.sovereign_storage import SovereignStorageGateway
@@ -487,9 +491,18 @@ async def llistar_feines(
         for t in trams_res:
             trams_by_ot[t.ordre_treball_id].append(TramTempsGestioItem.model_validate(t))
 
+    emp_uuid = uuid.UUID(empresa_id)
+    barema_empresa = await obtenir_barema_empresa(db, emp_uuid)
     feines = []
     for ordre, client, operari, planol in rows:
         f_resp = FeinaResponse.model_validate(ordre)
+        f_resp.preu_venda_hora_aplicat = await resoldre_preu_hora_control_panel(
+            db,
+            emp_uuid,
+            ordre,
+            barema_cache=barema_empresa,
+            barema_fetched=True,
+        )
         # Resolució automàtica de coordenades si no estaven persistides
         if (f_resp.latitud is None or f_resp.longitud is None) and ordre.adreca:
             c_lat, c_lng = geocodificar_adreca(ordre.adreca)
@@ -592,6 +605,13 @@ async def alta_feina(
             lat = float(finca_db.latitud)
             lng = float(finca_db.longitud)
 
+    barema_empresa = await obtenir_barema_empresa(db, emp_uuid)
+    preu_hora_inicial = (
+        float(barema_empresa["preu_hora_standard_eur"])
+        if barema_empresa is not None and barema_empresa.get("preu_hora_standard_eur") is not None
+        else 0.0
+    )
+
     nova_feina = OrdreTreball(
         empresa_id=emp_uuid,
         codi=feina.codi,
@@ -611,6 +631,7 @@ async def alta_feina(
         vehicle_id=feina.vehicle_id,
         latitud=lat,
         longitud=lng,
+        preu_venda_hora_aplicat=preu_hora_inicial,
     )
 
     try:
@@ -742,6 +763,30 @@ async def build_feina_response(
 ) -> FeinaResponse:
     """Construeix la resposta completa d'una Ordre de Treball amb plànol, picking i eines."""
     f_resp = FeinaResponse.model_validate(ordre)
+    f_resp.preu_venda_hora_aplicat = await resoldre_preu_hora_control_panel(
+        db, empresa_id, ordre
+    )
+
+    # Trams de temps treballats
+    trams_stmt = (
+        select(OrdreTreballTramTemps)
+        .where(
+            OrdreTreballTramTemps.ordre_treball_id == ordre.id,
+            OrdreTreballTramTemps.empresa_id == empresa_id,
+        )
+        .order_by(OrdreTreballTramTemps.hora_inici.asc())
+    )
+    ot_trams = [
+        TramTempsGestioItem.model_validate(t)
+        for t in (await db.execute(trams_stmt)).scalars().all()
+    ]
+    f_resp.trams_temps = ot_trams
+    f_resp.te_tram_obert = any(t.hora_fi is None for t in ot_trams) or (
+        ordre.estat == "EN_CURS" and ordre.hora_inici_real is not None and ordre.hora_fi_real is None
+    )
+    f_resp.temps_acumulat_segons = sum(t.durada_segons for t in ot_trams if t.hora_fi is not None)
+    if not ot_trams and ordre.hores_imputades_facturables:
+        f_resp.temps_acumulat_segons = int(round(float(ordre.hores_imputades_facturables) * 3600.0))
 
     # Coordenades
     if (f_resp.latitud is None or f_resp.longitud is None) and ordre.adreca:

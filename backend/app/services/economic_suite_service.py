@@ -43,6 +43,11 @@ from app.schemas.comptabilitat import (
     WIPControlResponseDTO,
     WIPItemDTO,
 )
+from app.services.barema_service import (
+    obtenir_barema_empresa,
+    obtenir_cost_hora_operaris_map,
+    resoldre_preu_hora_control_panel,
+)
 
 
 def q2(val: Decimal) -> Decimal:
@@ -300,18 +305,35 @@ class EconomicSuiteService:
         total_cost = Decimal("0.00")
         envellides = 0
 
+        barema_empresa = await obtenir_barema_empresa(db, empresa_id)
+        cap_ids = [ot.cap_de_colla_id for ot in ots if ot.cap_de_colla_id is not None]
+        costs_map = await obtenir_cost_hora_operaris_map(db, empresa_id, cap_ids)
+
         for ot in ots:
             data_ref = ot.data_finalitzacio_camp or ot.data_planificacio or avui
             dies_wip = max(0, (avui - data_ref).days)
             es_envellit = dies_wip > 7
 
             hores = Decimal(str(ot.hores_imputades_facturables or 0))
-            pvp_h = Decimal(str(ot.preu_venda_hora_aplicat or 45))
+            preu_hora_real = await resoldre_preu_hora_control_panel(
+                db,
+                empresa_id,
+                ot,
+                barema_cache=barema_empresa,
+                barema_fetched=True,
+            )
+            pvp_h = Decimal(str(preu_hora_real))
             pvp_mat = Decimal(str(ot.pvp_materials_aplicat or 0))
             cost_mat = Decimal(str(ot.cost_materials_pmp or 0))
 
             valor_pvp = q2((hores * pvp_h) + pvp_mat)
-            cost_avancat = q2((hores * Decimal("22.00")) + cost_mat)
+            if ot.cost_ma_obra_real and float(ot.cost_ma_obra_real) > 0:
+                cost_mo = Decimal(str(ot.cost_ma_obra_real))
+            elif ot.cap_de_colla_id and ot.cap_de_colla_id in costs_map:
+                cost_mo = hores * costs_map[ot.cap_de_colla_id]
+            else:
+                cost_mo = Decimal("0.00")
+            cost_avancat = q2(cost_mo + cost_mat)
 
             total_pvp += valor_pvp
             total_cost += cost_avancat
@@ -757,6 +779,28 @@ class EconomicSuiteService:
         )
         resultat: List[ContracteMRRAuditoriaDTO] = []
 
+        ops_emp = (
+            (
+                await db.execute(
+                    select(Usuari).where(
+                        Usuari.empresa_id == empresa_id,
+                        Usuari.rol.in_(["OPERARI", "CAP_DE_COLLA", "CAPATAZ"]),
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        costs_by_uid = {
+            u.id: Decimal(str(u.cost_hora_eur if u.cost_hora_eur is not None else (u.cost_hora_referencia or 0)))
+            for u in ops_emp
+        }
+        avg_cost_h = (
+            sum(costs_by_uid.values(), Decimal("0.00")) / Decimal(len(costs_by_uid))
+            if costs_by_uid
+            else Decimal("0.00")
+        )
+
         for c in contractes:
             ots = (
                 (
@@ -772,7 +816,15 @@ class EconomicSuiteService:
             )
             cost_ots = Decimal("0.00")
             for ot in ots:
-                cost_ma_obra = Decimal(str(ot.hores_imputades_facturables or 0)) * Decimal("24.00")
+                if ot.cost_ma_obra_real and float(ot.cost_ma_obra_real) > 0:
+                    cost_ma_obra = Decimal(str(ot.cost_ma_obra_real))
+                else:
+                    cost_h = (
+                        costs_by_uid.get(ot.cap_de_colla_id, avg_cost_h)
+                        if ot.cap_de_colla_id
+                        else avg_cost_h
+                    )
+                    cost_ma_obra = Decimal(str(ot.hores_imputades_facturables or 0)) * cost_h
                 cost_km = Decimal(int(ot.km_imputats or 0)) * Decimal("0.32")
                 cost_ots += q2(cost_ma_obra + Decimal(str(ot.cost_materials_pmp or 0)) + cost_km)
 

@@ -11,7 +11,6 @@ interface OrdreResum {
   codi?: string;
   titol?: string;
   hores_imputades_facturables?: number | null;
-  preu_venda_hora_aplicat?: number | null;
 }
 
 export default function TancarFeinaPage() {
@@ -34,7 +33,6 @@ export default function TancarFeinaPage() {
               codi: data.codi,
               titol: data.titol,
               hores_imputades_facturables: data.hores_imputades_facturables,
-              preu_venda_hora_aplicat: data.preu_venda_hora_aplicat,
             });
           }
         }
@@ -87,7 +85,6 @@ export default function TancarFeinaPage() {
     router.push("/operari/feines");
   };
 
-  const preuHora = ordre?.preu_venda_hora_aplicat || 45;
   const hores = Number(ordre?.hores_imputades_facturables || 0);
 
   return (
@@ -117,25 +114,20 @@ export default function TancarFeinaPage() {
         </span>
       </header>
 
-      {/* Targeta Resum Hores a Facturar */}
+      {/* Targeta Resum Temps Treballat */}
       <div className="bg-secondary-container/15 border border-secondary-container/30 rounded-xl p-3.5 flex items-center justify-between shadow-sm">
         <div>
           <span className="text-[10px] font-extrabold uppercase tracking-wider text-secondary block">
-            Hores computades a la factura
+            Temps treballat registrat
           </span>
           <span className="text-xs text-on-surface-variant dark:text-slate-400">
-            Tarifa mà d&apos;obra: {preuHora} €/h
+            Còmput real en camp amb GPS
           </span>
         </div>
         <div className="text-right">
           <span className="text-lg font-mono font-black text-primary dark:text-slate-100 block">
             {hores > 0 ? `${hores.toFixed(2)} h` : "Segons GPS"}
           </span>
-          {hores > 0 && (
-            <span className="text-[11px] font-mono font-bold text-secondary">
-              {(hores * preuHora).toFixed(2)} €
-            </span>
-          )}
         </div>
       </div>
 

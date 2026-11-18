@@ -304,3 +304,171 @@ async def test_suma_hores_existents_legacy_i_visibilitat_dashboard_gestio(admin_
         assert target["te_tram_obert"] is False
         assert len(target["trams_temps"]) == 2
 
+
+@pytest.mark.asyncio
+async def test_tarifa_real_barema_panell_control_i_cost_operari_sense_hardcode(
+    admin_session: AsyncSession, tmp_path
+):
+    """
+    Verifica:
+    1) Operari no rep preu_venda_hora_aplicat a GET /operari/feines/{id} (ni 45€ hardcodejat).
+    2) cost_ma_obra_real utilitza cost_hora_eur real de l'operari (no 24.00€ hardcodejat).
+    3) PUT /gestio/configuracio/barema aplica el preu real del panell de control a /gestio/feines i WIP.
+    4) finalitzar-temps sense tram obert retorna HTTP 400.
+    """
+    emp_id = uuid.uuid4()
+    op_id = uuid.uuid4()
+    boss_id = uuid.uuid4()
+    eng_id = uuid.uuid4()
+    cli_id = uuid.uuid4()
+    ot_id = uuid.uuid4()
+    disc_dir = tmp_path / f"disc_{emp_id.hex[:8]}"
+    disc_dir.mkdir(parents=True, exist_ok=True)
+
+    admin_session.add(
+        Empresa(
+            id=emp_id,
+            nom="Emp Tarifa Real",
+            nif=f"R{emp_id.hex[:8].upper()}",
+            subdomini=f"real-{emp_id.hex[:6]}",
+            disc_dur_url=str(disc_dir),
+        )
+    )
+    await admin_session.flush()
+
+    admin_session.add_all([
+        Usuari(
+            id=op_id,
+            empresa_id=emp_id,
+            nom="Op Real",
+            nif=f"OR{op_id.hex[:5].upper()}",
+            rol="OPERARI",
+            pin_hash="x",
+            cost_hora_eur=30.00,
+        ),
+        Usuari(
+            id=boss_id,
+            empresa_id=emp_id,
+            nom="Boss Real",
+            nif=f"BR{boss_id.hex[:5].upper()}",
+            rol="BOSS",
+            pin_hash="x",
+        ),
+        Usuari(
+            id=eng_id,
+            empresa_id=emp_id,
+            nom="Eng Real",
+            nif=f"ER{eng_id.hex[:5].upper()}",
+            rol="ENGINYER",
+            pin_hash="x",
+        ),
+        Client(
+            id=cli_id,
+            empresa_id=emp_id,
+            codi=f"CR-{cli_id.hex[:4]}",
+            rao_social="Client Tarifa Real SL",
+            nif="B77889900",
+        ),
+    ])
+    await admin_session.flush()
+
+    # OT amb default antic 45.00 a BD abans de configurar el Barema real
+    admin_session.add(
+        OrdreTreball(
+            id=ot_id,
+            empresa_id=emp_id,
+            codi=f"OT-{ot_id.hex[:5]}",
+            client_id=cli_id,
+            cap_de_colla_id=op_id,
+            titol="OT amb tarifa real",
+            adreca="41.3851, 2.1734",
+            estat="PENDENT",
+            preu_venda_hora_aplicat=45.0,
+        )
+    )
+    await admin_session.commit()
+
+    tok_op = _crear_token(op_id, emp_id, "OPERARI")
+    tok_boss = _crear_token(boss_id, emp_id, "BOSS")
+    tok_eng = _crear_token(eng_id, emp_id, "ENGINYER")
+    h_op = {"Authorization": f"Bearer {tok_op}", "X-Empresa-ID": str(emp_id)}
+    h_boss = {"Authorization": f"Bearer {tok_boss}", "X-Empresa-ID": str(emp_id)}
+    h_eng = {"Authorization": f"Bearer {tok_eng}", "X-Empresa-ID": str(emp_id)}
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test/api/v1") as client:
+        # 1. Intentar finalitzar-temps abans d'iniciar -> HTTP 400
+        res_err = await client.put(
+            f"/operari/feines/{ot_id}/finalitzar-temps",
+            json={"lat": 41.3851, "lng": 2.1734},
+            headers=h_op,
+        )
+        assert res_err.status_code == 400
+
+        # 2. Configuració Barema al Panell de Control a 62.50 €/h
+        res_bar = await client.put(
+            "/gestio/configuracio/barema",
+            json={
+                "preu_hora_standard_eur": 62.5,
+                "tarifa_urgencia_eur": 85.0,
+                "suplement_desplacament_eur": 30.0,
+                "marge_materials_defecte_pct": 25.0,
+                "partides": [],
+            },
+            headers=h_boss,
+        )
+        assert res_bar.status_code == 200, res_bar.text
+
+        # 3. Iniciar i Finalitzar temps real amb GPS diferents
+        res_start = await client.put(
+            f"/operari/feines/{ot_id}/comencar",
+            json={"lat": 41.3851, "lng": 2.1734},
+            headers=h_op,
+        )
+        assert res_start.status_code == 200, res_start.text
+        tram_id = uuid.UUID(res_start.json()["trams_temps"][0]["id"])
+        await admin_session.execute(
+            text("UPDATE ordres_treball_trams_temps SET hora_inici = now() - interval '2 hours' WHERE id = :tid"),
+            {"tid": tram_id},
+        )
+        await admin_session.commit()
+
+        res_stop = await client.put(
+            f"/operari/feines/{ot_id}/finalitzar-temps",
+            json={"lat": 41.3852, "lng": 2.1735},
+            headers=h_op,
+        )
+        assert res_stop.status_code == 200, res_stop.text
+        stop_json = res_stop.json()
+        assert "€" not in stop_json["missatge"]
+        assert stop_json["total_facturable_estimat"] == pytest.approx(125.0, abs=3.5)
+        tram_out = stop_json["trams_temps"][0]
+        assert tram_out["gps_inici_lat"] == pytest.approx(41.3851, abs=1e-4)
+        assert tram_out["gps_fi_lat"] == pytest.approx(41.3852, abs=1e-4)
+
+        # 4. Detall operari NO exposa preu_venda_hora_aplicat
+        res_op_det = await client.get(f"/operari/feines/{ot_id}", headers=h_op)
+        assert res_op_det.status_code == 200
+        assert res_op_det.json()["preu_venda_hora_aplicat"] is None
+
+        # 5. Cost mà d'obra real a BD = 2h * 30.00 €/h = ~60.00 € (no 24.00 €/h)
+        ot_db = (
+            await admin_session.execute(select(OrdreTreball).where(OrdreTreball.id == ot_id))
+        ).scalar_one()
+        assert float(ot_db.cost_ma_obra_real) == pytest.approx(60.0, abs=2.0)
+
+        # 6. Panell de control (/gestio/feines) rep la tarifa real 62.50 €/h (Enginyer -> None)
+        res_g_list = await client.get("/gestio/feines", headers=h_boss)
+        assert res_g_list.status_code == 200
+        g_item = next(f for f in res_g_list.json() if f["id"] == str(ot_id))
+        assert g_item["preu_venda_hora_aplicat"] == pytest.approx(62.5, abs=0.01)
+
+        res_g_det = await client.get(f"/gestio/feines/{ot_id}", headers=h_boss)
+        assert res_g_det.status_code == 200
+        assert res_g_det.json()["preu_venda_hora_aplicat"] == pytest.approx(62.5, abs=0.01)
+
+        res_eng_det = await client.get(f"/gestio/feines/{ot_id}", headers=h_eng)
+        assert res_eng_det.status_code == 200
+        assert res_eng_det.json()["preu_venda_hora_aplicat"] is None
+
+

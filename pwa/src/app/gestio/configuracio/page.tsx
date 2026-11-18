@@ -188,10 +188,10 @@ export default function ConfiguracioPage() {
   }, []);
 
   // Barema de Preus i Tarifes (Spec 01 FR-017)
-  const [preuHoraStd, setPreuHoraStd] = useState("45");
-  const [tarifaUrgencia, setTarifaUrgencia] = useState("65");
-  const [suplementDespl, setSuplementDespl] = useState("25");
-  const [margeMatPct, setMargeMatPct] = useState("25");
+  const [preuHoraStd, setPreuHoraStd] = useState("0");
+  const [tarifaUrgencia, setTarifaUrgencia] = useState("0");
+  const [suplementDespl, setSuplementDespl] = useState("0");
+  const [margeMatPct, setMargeMatPct] = useState("0");
   const [partidesBarema, setPartidesBarema] = useState<
     Array<{ codi: string; descripcio: string; unitat: string; preu_eur: number }>
   >([]);

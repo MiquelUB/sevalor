@@ -1137,7 +1137,7 @@ class OrdreTreball(Base):
         Numeric(8, 2), default=0.00, server_default=text("0")
     )
     preu_venda_hora_aplicat: Mapped[float] = mapped_column(
-        Numeric(8, 2), default=45.00, server_default=text("45.00")
+        Numeric(8, 2), default=0.00, server_default=text("0.00")
     )
     cost_materials_pmp: Mapped[float] = mapped_column(
         Numeric(12, 2), default=0.00, server_default=text("0")

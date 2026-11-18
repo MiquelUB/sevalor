@@ -33,6 +33,7 @@ from app.schemas.comptabilitat import (
     TiquetDespesaResponseDTO,
     WIPControlResponseDTO,
 )
+from app.services.barema_service import resoldre_preu_hora_control_panel
 from app.services.economic_suite_service import EconomicSuiteService
 from app.services.magatzem_comptabilitat_service import calcular_cost_i_marge_analitic_ot
 from app.services.outbox_aeat import registrar_enviament_outbox
@@ -391,7 +392,8 @@ async def convertir_wip_a_prefactura(
         raise HTTPException(status_code=400, detail="L'OT no té un client associat.")
 
     hores = Decimal(str(ot.hores_imputades_facturables or 0))
-    pvp_h = Decimal(str(ot.preu_venda_hora_aplicat or 45))
+    preu_hora_real = await resoldre_preu_hora_control_panel(db, empresa_id, ot)
+    pvp_h = Decimal(str(preu_hora_real))
     pvp_mat = Decimal(str(ot.pvp_materials_aplicat or 0))
     pressup = Decimal(str(ot.import_pressupostat_net or 0))
 

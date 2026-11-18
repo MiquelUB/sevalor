@@ -194,7 +194,7 @@ export function Fulla360OTDrawer({
                   {tePreuHora && (
                     <div className="p-2.5 rounded-lg bg-secondary-container/15 border border-secondary-container/30">
                       <span className="text-[10px] font-label-caps text-secondary uppercase block">
-                        Valor Mà d&apos;Obra ({preuH} €/h)
+                        Valor Mà d&apos;Obra ({preuH.toFixed(2)} €/h)
                       </span>
                       <span className="text-lg font-mono font-black text-secondary">
                         {(horesFact * preuH).toFixed(2)} €
@@ -209,33 +209,59 @@ export function Fulla360OTDrawer({
                       Trams de Treball Registrats
                     </span>
                     {trams.map((t, idx) => {
-                      const ini = new Date(t.hora_inici).toLocaleTimeString("ca-ES", {
+                      const dtIni = new Date(t.hora_inici);
+                      const dtFi = t.hora_fi ? new Date(t.hora_fi) : null;
+                      const mateixDia = dtFi && dtIni.toDateString() === dtFi.toDateString();
+                      const iniTime = dtIni.toLocaleTimeString("ca-ES", {
                         hour: "2-digit",
                         minute: "2-digit",
                       });
-                      const fi = t.hora_fi
-                        ? new Date(t.hora_fi).toLocaleTimeString("ca-ES", {
-                            hour: "2-digit",
-                            minute: "2-digit",
-                          })
+                      const ini = mateixDia
+                        ? iniTime
+                        : `${dtIni.toLocaleDateString("ca-ES", { day: "2-digit", month: "2-digit" })} ${iniTime}`;
+                      const fi = dtFi
+                        ? mateixDia
+                          ? dtFi.toLocaleTimeString("ca-ES", {
+                              hour: "2-digit",
+                              minute: "2-digit",
+                            })
+                          : `${dtFi.toLocaleDateString("ca-ES", { day: "2-digit", month: "2-digit" })} ${dtFi.toLocaleTimeString("ca-ES", {
+                              hour: "2-digit",
+                              minute: "2-digit",
+                            })}`
                         : "En curs";
                       return (
                         <div
                           key={t.id}
-                          className="flex items-center justify-between text-xs px-2.5 py-1.5 rounded-lg bg-surface-container-low/70 dark:bg-slate-800/40 border border-outline-variant/15"
+                          className="text-xs px-2.5 py-2 rounded-lg bg-surface-container-low/70 dark:bg-slate-800/40 border border-outline-variant/15 space-y-1"
                         >
-                          <div className="flex items-center gap-2">
-                            <span className="font-bold text-primary">#{idx + 1}</span>
-                            <span className="font-mono text-on-surface dark:text-slate-200">
-                              {ini} → {fi}
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-2">
+                              <span className="font-bold text-primary">#{idx + 1}</span>
+                              <span className="font-mono text-on-surface dark:text-slate-200">
+                                {ini} → {fi}
+                              </span>
+                            </div>
+                            <span className="font-mono font-bold text-secondary">
+                              {t.hora_fi ? fmtHMS(t.durada_segons) : "Actiu"}
                             </span>
-                            {(t.gps_inici_lat != null || t.gps_fi_lat != null) && (
-                              <MapPin className="w-3 h-3 text-secondary" />
-                            )}
                           </div>
-                          <span className="font-mono font-bold text-secondary">
-                            {t.hora_fi ? fmtHMS(t.durada_segons) : "Actiu"}
-                          </span>
+                          {(t.gps_inici_lat != null || t.gps_fi_lat != null) && (
+                            <div className="flex flex-wrap gap-x-3 text-[10px] font-mono text-on-surface-variant">
+                              {t.gps_inici_lat != null && t.gps_inici_lng != null && (
+                                <span className="inline-flex items-center gap-1">
+                                  <MapPin className="w-3 h-3 text-secondary" />
+                                  Inici: {Number(t.gps_inici_lat).toFixed(4)}, {Number(t.gps_inici_lng).toFixed(4)}
+                                </span>
+                              )}
+                              {t.gps_fi_lat != null && t.gps_fi_lng != null && (
+                                <span className="inline-flex items-center gap-1">
+                                  <MapPin className="w-3 h-3 text-primary" />
+                                  Final: {Number(t.gps_fi_lat).toFixed(4)}, {Number(t.gps_fi_lng).toFixed(4)}
+                                </span>
+                              )}
+                            </div>
+                          )}
                         </div>
                       );
                     })}

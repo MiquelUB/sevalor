@@ -2,7 +2,6 @@ import math
 import sys
 import uuid
 from datetime import date, datetime, timezone
-from decimal import Decimal
 from typing import Any, List, Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
@@ -22,6 +21,10 @@ from app.models.models import (
     OrdreTreballOperari,
     OrdreTreballTramTemps,
     Vehicle,
+)
+from app.services.barema_service import (
+    calcular_cost_ma_obra_real,
+    resoldre_preu_hora_control_panel,
 )
 
 router = APIRouter(
@@ -91,7 +94,7 @@ class FeinaOperariDetailResponse(BaseModel):
     gps_fi_lat: Optional[float] = None
     gps_fi_lng: Optional[float] = None
     hores_imputades_facturables: Optional[float] = None
-    preu_venda_hora_aplicat: Optional[float] = 45.0
+    preu_venda_hora_aplicat: Optional[float] = None
     desviacio_geovalla: Optional[bool] = False
     justificacio_geovalla: Optional[str] = None
     foto_evidencia_desviacio: Optional[str] = None
@@ -270,6 +273,7 @@ async def obtenir_detall_feina(
         resp.te_tram_obert = te_tram_obert
         resp.tram_actiu_inici = tram_actiu_inici
         resp.temps_acumulat_segons = temps_acumulat_segons
+        resp.preu_venda_hora_aplicat = None
 
         return resp
     except HTTPException:
@@ -493,7 +497,9 @@ async def _tancar_tram_actiu_i_acumular(
     if total_segons > 0:
         total_hores = round(max(0.01, total_segons / 3600.0), 2)
         feina.hores_imputades_facturables = total_hores
-        feina.cost_ma_obra_real = float(round(Decimal(str(total_hores)) * Decimal("24.00"), 2))
+        feina.cost_ma_obra_real = await calcular_cost_ma_obra_real(
+            db, empresa_uuid, feina, trams, total_hores
+        )
     else:
         total_hores = float(feina.hores_imputades_facturables or 0.0)
         total_segons = int(round(total_hores * 3600.0))
@@ -675,6 +681,29 @@ async def finalitzar_temps_feina(
 
     _validar_geovalla_feina(feina, payload)
 
+    trams_existents = list(
+        (
+            await db.execute(
+                select(OrdreTreballTramTemps).where(
+                    OrdreTreballTramTemps.empresa_id == emp_uuid,
+                    OrdreTreballTramTemps.ordre_treball_id == feina.id,
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    te_tram_actiu = any(t.hora_fi is None for t in trams_existents) or (
+        not trams_existents
+        and feina.hora_inici_real is not None
+        and feina.hora_fi_real is None
+    )
+    if not te_tram_actiu:
+        raise HTTPException(
+            status_code=400,
+            detail="No hi ha cap temps de feina iniciat o obert per finalitzar.",
+        )
+
     now = datetime.now(timezone.utc)
     if feina.hora_inici_real is None:
         feina.hora_inici_real = now
@@ -720,7 +749,7 @@ async def finalitzar_temps_feina(
             detail=f"Error en persistir final de feina i geovalla a la base de dades: {str(e)}",
         )
 
-    preu_hora = float(feina.preu_venda_hora_aplicat or 45.0)
+    preu_hora = await resoldre_preu_hora_control_panel(db, emp_uuid, feina)
     total_facturable = round(total_hores * preu_hora, 2)
 
     return {
@@ -735,11 +764,10 @@ async def finalitzar_temps_feina(
         "gps_fi_lat": float(feina.gps_fi_lat) if feina.gps_fi_lat is not None else None,
         "gps_fi_lng": float(feina.gps_fi_lng) if feina.gps_fi_lng is not None else None,
         "hores_imputades_facturables": total_hores,
-        "preu_venda_hora_aplicat": preu_hora,
         "total_facturable_estimat": total_facturable,
         "desviacio_geovalla": feina.desviacio_geovalla,
         "justificacio_geovalla": feina.justificacio_geovalla,
-        "missatge": f"Tram de temps tancat amb GPS. Total acumulat: {total_hores}h ({total_facturable}€).",
+        "missatge": f"Temps de feina finalitzat amb GPS. Total acumulat: {total_hores}h.",
     }
 
 
@@ -872,8 +900,26 @@ async def finalitzar_feina(
         feina.hores_imputades_facturables = round(payload.hores, 2)
 
     if feina.hores_imputades_facturables:
-        cost_ma_obra = round(Decimal(str(feina.hores_imputades_facturables)) * Decimal("24.00"), 2)
-        feina.cost_ma_obra_real = float(cost_ma_obra)
+        emp_uuid = uuid.UUID(empresa_id)
+        trams_finals = list(
+            (
+                await db.execute(
+                    select(OrdreTreballTramTemps).where(
+                        OrdreTreballTramTemps.empresa_id == emp_uuid,
+                        OrdreTreballTramTemps.ordre_treball_id == feina.id,
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        feina.cost_ma_obra_real = await calcular_cost_ma_obra_real(
+            db,
+            emp_uuid,
+            feina,
+            trams_finals,
+            float(feina.hores_imputades_facturables),
+        )
 
     feina.data_finalitzacio_camp = now.date()
     feina.estat = "COMPLERT"
@@ -898,7 +944,10 @@ async def finalitzar_feina(
                 f"ot_{feina_id}_foto_intermedia.webp",
                 f"ot_{feina_id}_foto_final.webp",
             ],
-            "hores": float(feina.hores_imputades_facturables or (payload.hores if payload else 0.0)),
+            "hores": float(
+                feina.hores_imputades_facturables
+                or (payload.hores if payload and payload.hores is not None else 0.0)
+            ),
             "observacions": payload.observacions if payload else None,
             "signatura_present": bool(payload and payload.signatura_base64),
         },

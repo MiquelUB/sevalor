@@ -15,13 +15,13 @@ from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from pydantic import BaseModel, Field
 from slowapi import Limiter
 from slowapi.util import get_remote_address
-from sqlalchemy import func, select, text
+from sqlalchemy import func, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db, set_tenant_context
 from app.core.network_utils import build_node_ia_headers, resolve_effective_node_url
 from app.core.security import get_current_user_claims
-from app.models.models import Empresa, SlotJornada, Usuari
+from app.models.models import Empresa, OrdreTreball, SlotJornada, Usuari
 from app.services.sovereign_storage import SovereignStorageGateway
 
 router = APIRouter(prefix="/gestio/configuracio", tags=["Configuració & Marca"])
@@ -268,10 +268,10 @@ class BaremaPartidaDTO(BaseModel):
 
 
 class BaremaConfigRequest(BaseModel):
-    preu_hora_standard_eur: float = Field(45.0, ge=0)
-    tarifa_urgencia_eur: float = Field(65.0, ge=0)
-    suplement_desplacament_eur: float = Field(25.0, ge=0)
-    marge_materials_defecte_pct: float = Field(25.0, ge=0)
+    preu_hora_standard_eur: float = Field(0.0, ge=0)
+    tarifa_urgencia_eur: float = Field(0.0, ge=0)
+    suplement_desplacament_eur: float = Field(0.0, ge=0)
+    marge_materials_defecte_pct: float = Field(0.0, ge=0)
     partides: list[BaremaPartidaDTO] = Field(default_factory=list)
 
 
@@ -1431,10 +1431,10 @@ async def provar_connexio_node_ia(
 
 _BAREMA_DEFECTE: Dict[str, Any] = {
     "id": "barema_preus",
-    "preu_hora_standard_eur": 45.0,
-    "tarifa_urgencia_eur": 65.0,
-    "suplement_desplacament_eur": 25.0,
-    "marge_materials_defecte_pct": 25.0,
+    "preu_hora_standard_eur": 0.0,
+    "tarifa_urgencia_eur": 0.0,
+    "suplement_desplacament_eur": 0.0,
+    "marge_materials_defecte_pct": 0.0,
     "partides": [],
 }
 
@@ -1474,6 +1474,7 @@ async def desar_barema_preus(
     empresa_id = str(claims.get("empresa_id") or "")
     if not empresa_id:
         raise HTTPException(status_code=401, detail="Tenant no identificat")
+    emp_uuid = uuid.UUID(empresa_id)
     await set_tenant_context(db, empresa_id)
 
     dades = {
@@ -1491,4 +1492,13 @@ async def desar_barema_preus(
         item_id="barema_preus",
         dades=dades,
     )
+    await db.execute(
+        update(OrdreTreball)
+        .where(
+            OrdreTreball.empresa_id == emp_uuid,
+            OrdreTreball.factura_id.is_(None),
+        )
+        .values(preu_venda_hora_aplicat=payload.preu_hora_standard_eur)
+    )
+    await db.commit()
     return {"status": "OK", "barema": dades}
