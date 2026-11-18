@@ -744,3 +744,136 @@ async def test_bloc2_503_zero_fallback_i_xat_amb_prompt_i_feedback_disc(
         assert res_null_content.status_code == 200, res_null_content.text
         assert "custom-loaded-model" in seen_models
         assert "42" in res_null_content.json()["resposta"]
+
+
+@pytest.mark.asyncio
+async def test_bloc2_fallback_de_node_ia_local_a_tunel_disc_dur_i_prioritat_docker(
+    admin_session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """
+    Verifica:
+    1) Dins Docker (/.dockerenv), si node_ia_url és loopback i disc_dur_url és públic,
+       get_candidate_ia_tunnel_urls prioritza el túnel públic disc_dur_url.
+    2) Si node_ia_url falla per connexió refusada però disc_dur_url respon amb /v1/chat/completions
+       i valida X-Vault-Token, /gestio/copilot/xat resol 200 OK via disc_dur_url.
+    """
+    import os
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    from app.core.network_utils import get_candidate_ia_tunnel_urls
+
+    orig_exists = os.path.exists
+    monkeypatch.setattr(os.path, "exists", lambda p: True if p == "/.dockerenv" else orig_exists(p))
+    cands = get_candidate_ia_tunnel_urls("http://127.0.0.1:1234", "https://node.empresa.example")
+    assert cands[0] == "https://node.empresa.example"
+    monkeypatch.undo()
+
+    vault_secret = "svlt_fallback_secret_987"
+    seen_tokens: List[str] = []
+
+    class _VaultIaHandler(BaseHTTPRequestHandler):
+        def log_message(self, format: str, *args: Any) -> None:
+            return
+
+        def do_GET(self) -> None:
+            if self.headers.get("X-Vault-Token") != vault_secret:
+                self.send_response(403)
+                self.end_headers()
+                return
+            if self.path.startswith("/entitats/"):
+                body = b"[]"
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            elif self.path.startswith("/v1/models"):
+                body = json.dumps({"data": [{"id": "qwen-vault-proxy"}]}).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            else:
+                self.send_response(404)
+                self.end_headers()
+
+        def do_POST(self) -> None:
+            tok = self.headers.get("X-Vault-Token") or ""
+            seen_tokens.append(tok)
+            if tok != vault_secret:
+                self.send_response(403)
+                self.end_headers()
+                return
+            length = int(self.headers.get("Content-Length", "0"))
+            _ = self.rfile.read(length) if length > 0 else b""
+            if self.path == "/v1/chat/completions":
+                body = json.dumps(
+                    {"choices": [{"message": {"role": "assistant", "content": "Resposta via túnel Vault OK"}}]}
+                ).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            else:
+                self.send_response(404)
+                self.end_headers()
+
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), _VaultIaHandler)
+    port = srv.server_address[1]
+    thread = threading.Thread(target=srv.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+        emp_id = uuid.uuid4()
+        boss_id = uuid.uuid4()
+        admin_session.add(
+            Empresa(
+                id=emp_id,
+                nom="Empresa Fallback Tunel SL",
+                nif="B" + uuid.uuid4().hex[:8].upper(),
+                subdomini="fbk-" + uuid.uuid4().hex[:5],
+                pla_subscripcio="ENTERPRISE",
+                estat_pagament="ACTIU",
+                node_ia_url="http://127.0.0.1:59998",
+                disc_dur_url=f"http://127.0.0.1:{port}",
+                vault_token=vault_secret,
+                node_ia_actiu=True,
+                feature_copilot_ia=True,
+            )
+        )
+        admin_session.add(
+            Usuari(
+                id=boss_id,
+                empresa_id=emp_id,
+                nom="Boss",
+                cognoms="Fallback",
+                nif="FBK-" + uuid.uuid4().hex[:4],
+                rol="BOSS",
+                estat="ACTIU",
+            )
+        )
+        await admin_session.commit()
+
+        tok = _token(boss_id, emp_id, "BOSS")
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+            res = await ac.post(
+                "/api/v1/gestio/copilot/xat",
+                json={"pregunta": "Hola, em confirmes si estàs operatiu?"},
+                headers={"Authorization": f"Bearer {tok}", "X-Empresa-ID": str(emp_id)},
+            )
+            assert res.status_code == 200, res.text
+            assert "Resposta via túnel Vault OK" in res.json()["resposta"]
+            assert vault_secret in seen_tokens
+
+            st = await ac.get(
+                "/api/v1/gestio/copilot/ia-status",
+                headers={"Authorization": f"Bearer {tok}", "X-Empresa-ID": str(emp_id)},
+            )
+            assert st.status_code == 200, st.text
+            assert st.json()["estat"] == "ONLINE"
+    finally:
+        srv.shutdown()
+        srv.server_close()

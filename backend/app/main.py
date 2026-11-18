@@ -1,7 +1,14 @@
+import logging
 import os
 import traceback
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
+
+if not logging.getLogger().handlers:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(levelname)s:     [%(name)s] %(message)s",
+    )
 
 from fastapi import APIRouter, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware

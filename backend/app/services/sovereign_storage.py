@@ -666,29 +666,41 @@ class SovereignStorageGateway:
                     continue
             return cls._filtrar_entitats_verificades(empresa_id, categoria, subcarpeta, registres)
 
-        url = f"{base_target}/entitats/{subcarpeta}"
-        try:
-            async with httpx.AsyncClient(timeout=8.0) as client:
-                resp = await client.get(url, headers={"X-Vault-Token": secret or ""})
-                if resp.status_code in (401, 403):
-                    raise HTTPException(
-                        status_code=resp.status_code,
-                        detail="Token Vault rebutjat per l'agent del disc dur (HTTP 403).",
-                    )
-                if resp.status_code == 200:
-                    raw_data = resp.json()
-                    return cls._filtrar_entitats_verificades(
-                        empresa_id, categoria, subcarpeta, raw_data
-                    )
-                return []
-        except httpx.RequestError:
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail={
-                    "code": "NODE_EMPRESA_OFFLINE",
-                    "message": "El disc dur dedicat de l'empresa no respon.",
-                },
-            )
+        candidates = get_candidate_node_urls(base_target) or [base_target.rstrip("/")]
+        last_exc: Optional[Exception] = None
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            for cand_base in candidates:
+                url = f"{cand_base.rstrip('/')}/entitats/{subcarpeta}"
+                try:
+                    resp = await client.get(url, headers={"X-Vault-Token": secret or ""})
+                    if resp.status_code in (401, 403):
+                        raise HTTPException(
+                            status_code=resp.status_code,
+                            detail="Token Vault rebutjat per l'agent del disc dur (HTTP 403).",
+                        )
+                    if resp.status_code == 200:
+                        raw_data = resp.json()
+                        return cls._filtrar_entitats_verificades(
+                            empresa_id, categoria, subcarpeta, raw_data
+                        )
+                    return []
+                except httpx.RequestError as exc:
+                    last_exc = exc
+                    continue
+
+        logger.warning(
+            "Disc dur dedicat HTTP_VAULT offline per empresa=%s (%s): %s",
+            empresa_id,
+            candidates,
+            last_exc,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "NODE_EMPRESA_OFFLINE",
+                "message": "El disc dur dedicat de l'empresa no respon.",
+            },
+        )
 
     @classmethod
     async def llegir_text_fitxer(

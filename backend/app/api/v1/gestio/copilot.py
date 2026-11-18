@@ -17,8 +17,10 @@ from app.core.config import settings
 from app.core.db import get_db_with_tenant_context
 from app.core.network_utils import (
     build_node_ia_headers,
+    get_candidate_ia_tunnel_urls,
     resoldre_url_tunel_ia,
     resolve_effective_node_url,
+    resolve_empresa_vault_token,
 )
 from app.core.security import get_current_user_claims, require_roles
 from app.models.models import (
@@ -1976,49 +1978,59 @@ async def obtenir_estat_ia(
             "latencia_ms": None,
         }
 
-    lm_url = resolve_effective_node_url(raw_tunel) or raw_tunel
-    base_url = lm_url.rstrip("/")
-    models_url = f"{base_url}/models" if base_url.endswith("/v1") else f"{base_url}/v1/models"
+    candidate_urls = (
+        get_candidate_ia_tunnel_urls(
+            getattr(empresa, "node_ia_url", None),
+            getattr(empresa, "disc_dur_url", None),
+        )
+        if empresa
+        else []
+    )
+    if not candidate_urls and raw_tunel:
+        resolved = resolve_effective_node_url(raw_tunel) or raw_tunel
+        candidate_urls = [resolved]
+
     headers = build_node_ia_headers(
         api_key=getattr(settings, "LM_STUDIO_API_KEY", "lm-studio"),
-        vault_token=getattr(empresa, "vault_token", None),
+        vault_token=resolve_empresa_vault_token(empresa),
     )
 
-    try:
-        start_t = datetime.now()
-        async with httpx.AsyncClient(timeout=8.0) as client:
-            resp = await client.get(models_url, headers=headers)
-            elapsed_ms = int((datetime.now() - start_t).total_seconds() * 1000)
-            if resp.status_code == 200:
-                data = resp.json()
-                models = [m.get("id") for m in data.get("data", []) if m.get("id")]
-                model_actiu = (
-                    models[0]
-                    if models
-                    else getattr(settings, "LM_STUDIO_MODEL", "qwen2.5-vl-7b-instruct")
-                )
-                return {
-                    "estat": "ONLINE",
-                    "node_ia_actiu": True,
-                    "url": lm_url,
-                    "model_actiu": model_actiu,
-                    "models_disponibles": models,
-                    "latencia_ms": elapsed_ms,
-                }
-    except Exception as e:
-        return {
-            "estat": "OFFLINE",
-            "node_ia_actiu": True,
-            "url": lm_url,
-            "error": str(e),
-            "latencia_ms": None,
-        }
+    last_error: Optional[str] = None
+    last_url: str = candidate_urls[0] if candidate_urls else str(raw_tunel)
+    async with httpx.AsyncClient(timeout=8.0) as client:
+        for cand in candidate_urls:
+            base_url = cand.rstrip("/")
+            models_url = f"{base_url}/models" if base_url.endswith("/v1") else f"{base_url}/v1/models"
+            last_url = cand
+            try:
+                start_t = datetime.now()
+                resp = await client.get(models_url, headers=headers)
+                elapsed_ms = int((datetime.now() - start_t).total_seconds() * 1000)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    models = [m.get("id") for m in data.get("data", []) if m.get("id")]
+                    model_actiu = (
+                        models[0]
+                        if models
+                        else getattr(settings, "LM_STUDIO_MODEL", "qwen2.5-vl-7b-instruct")
+                    )
+                    return {
+                        "estat": "ONLINE",
+                        "node_ia_actiu": True,
+                        "url": cand,
+                        "model_actiu": model_actiu,
+                        "models_disponibles": models,
+                        "latencia_ms": elapsed_ms,
+                    }
+                last_error = f"HTTP {resp.status_code} a {models_url}"
+            except Exception as e:
+                last_error = str(e)
 
     return {
         "estat": "OFFLINE",
         "node_ia_actiu": True,
-        "url": lm_url,
-        "error": "Resposta no vàlida del node d'IA",
+        "url": last_url,
+        "error": last_error or "Resposta no vàlida del node d'IA",
         "latencia_ms": None,
     }
 

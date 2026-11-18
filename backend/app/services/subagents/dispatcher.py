@@ -17,8 +17,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.core.network_utils import (
     build_node_ia_headers,
-    resoldre_url_tunel_ia,
-    resolve_effective_node_url,
+    get_candidate_ia_tunnel_urls,
+    resolve_empresa_vault_token,
 )
 from app.models.models import ConsultaXatCopilot, Empresa, Usuari
 from app.services.sovereign_storage import SovereignStorageGateway
@@ -218,7 +218,7 @@ class CopilotDispatcher:
 
         max_rounds = 3
         active_model = model_name
-        async with httpx.AsyncClient(timeout=httpx.Timeout(25.0, connect=5.0)) as client:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(35.0, connect=5.0)) as client:
             for round_idx in range(max_rounds):
                 payload: Dict[str, Any] = {
                     "model": active_model,
@@ -388,6 +388,15 @@ class CopilotDispatcher:
         node_on = bool(empresa and getattr(empresa, "node_ia_actiu", False))
 
         if not empresa or not feature_on or not node_on or not (node_url or disc_url):
+            logger.warning(
+                "Copilot 503 COPILOT_DESACTIVAT per empresa=%s (trobat=%s, feature_copilot_ia=%s, node_ia_actiu=%s, has_node_url=%s, has_disc_url=%s)",
+                empresa_id,
+                bool(empresa),
+                feature_on,
+                node_on,
+                bool(node_url),
+                bool(disc_url),
+            )
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail={
@@ -504,56 +513,103 @@ class CopilotDispatcher:
         tool_result: Optional[dict] = None
         selected_subagent: BaseSubagent = primary_subagent
 
-        tunel_lm_url = resoldre_url_tunel_ia(node_url, disc_url)
-        if tunel_lm_url and tunel_lm_url.startswith(("http://", "https://")):
-            effective_url = resolve_effective_node_url(tunel_lm_url) or tunel_lm_url
-            base_url = effective_url.rstrip("/")
-            endpoint = f"{base_url}/chat/completions" if base_url.endswith("/v1") else f"{base_url}/v1/chat/completions"
+        candidate_ia_urls = get_candidate_ia_tunnel_urls(node_url, disc_url)
+        if candidate_ia_urls:
             model_name = getattr(settings, "LM_STUDIO_MODEL", "qwen2.5-vl-7b-instruct")
             api_key = getattr(settings, "LM_STUDIO_API_KEY", "lm-studio")
+            vault_token = resolve_empresa_vault_token(empresa)
 
-            try:
-                (
-                    resposta_ia,
-                    tool_name,
-                    tool_args,
-                    tool_result,
-                    _,
-                    selected_subagent,
-                ) = await self._cridar_lm_studio_multi_round(
-                    endpoint=endpoint,
-                    api_key=api_key,
-                    model_name=model_name,
-                    system_content=system_content,
-                    pregunta=pregunta,
-                    combined_tools=combined_tools,
-                    tool_name_to_subagent=tool_name_to_subagent,
-                    primary_subagent=primary_subagent,
-                    db=db,
-                    empresa_id=empresa_id,
-                    rol_usuari=rol_usuari,
-                    usuari_id=usuari_id,
-                    historial=historial,
-                    vault_token=getattr(empresa, "vault_token", None),
+            last_exc: Optional[Exception] = None
+            last_endpoint: str = candidate_ia_urls[0]
+            succeeded = False
+
+            for cand_url in candidate_ia_urls:
+                base_url = cand_url.rstrip("/")
+                if base_url.endswith("/v1/chat/completions"):
+                    endpoint = base_url
+                elif base_url.endswith("/v1"):
+                    endpoint = f"{base_url}/chat/completions"
+                else:
+                    endpoint = f"{base_url}/v1/chat/completions"
+                last_endpoint = endpoint
+
+                try:
+                    (
+                        resposta_ia,
+                        tool_name,
+                        tool_args,
+                        tool_result,
+                        _,
+                        selected_subagent,
+                    ) = await self._cridar_lm_studio_multi_round(
+                        endpoint=endpoint,
+                        api_key=api_key,
+                        model_name=model_name,
+                        system_content=system_content,
+                        pregunta=pregunta,
+                        combined_tools=combined_tools,
+                        tool_name_to_subagent=tool_name_to_subagent,
+                        primary_subagent=primary_subagent,
+                        db=db,
+                        empresa_id=empresa_id,
+                        rol_usuari=rol_usuari,
+                        usuari_id=usuari_id,
+                        historial=historial,
+                        vault_token=vault_token,
+                    )
+                    succeeded = True
+                    break
+                except HTTPException:
+                    raise
+                except httpx.HTTPStatusError as exc:
+                    body_snippet = ""
+                    try:
+                        body_snippet = (exc.response.text or "")[:200]
+                    except Exception:
+                        pass
+                    logger.warning(
+                        "Túnel Copilot/LM Studio HTTP %s a %s (empresa=%s): %s %s",
+                        exc.response.status_code if exc.response else "?",
+                        endpoint,
+                        empresa_id,
+                        exc,
+                        body_snippet,
+                    )
+                    last_exc = exc
+                    continue
+                except (httpx.TimeoutException, httpx.RequestError) as exc:
+                    logger.warning(
+                        "Túnel Copilot/LM Studio fora de línia a %s (empresa=%s): %s (%s)",
+                        endpoint,
+                        empresa_id,
+                        type(exc).__name__,
+                        exc,
+                    )
+                    last_exc = exc
+                    continue
+                except Exception as exc:
+                    logger.warning(
+                        "Error inesperat connectant amb LM Studio a %s (empresa=%s): %s",
+                        endpoint,
+                        empresa_id,
+                        exc,
+                    )
+                    last_exc = exc
+                    break
+
+            if not succeeded:
+                logger.warning(
+                    "Copilot 503 NODE_IA_OFFLINE per empresa=%s després de provar %d URL(s). Darrer endpoint=%s, error=%s",
+                    empresa_id,
+                    len(candidate_ia_urls),
+                    last_endpoint,
+                    last_exc,
                 )
-            except HTTPException:
-                raise
-            except (httpx.TimeoutException, httpx.RequestError, httpx.HTTPStatusError) as exc:
-                logger.warning("Túnel Copilot/LM Studio fora de línia a %s: %s", endpoint, exc)
                 raise HTTPException(
                     status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                     detail={
                         "code": "NODE_IA_OFFLINE",
                         "message": "El node d'IA local de l'empresa no respon (túnel offline o timeout). Zero fallback a Hetzner.",
-                    },
-                )
-            except Exception as exc:
-                logger.warning("Error inesperat connectant amb LM Studio a %s: %s", endpoint, exc)
-                raise HTTPException(
-                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                    detail={
-                        "code": "NODE_IA_OFFLINE",
-                        "message": "No s'ha pogut completar la inferència al node local de l'empresa.",
                     },
                 )
 
