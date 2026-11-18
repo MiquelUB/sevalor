@@ -18,6 +18,7 @@ import {
   Wrench,
   Filter,
   Receipt,
+  FileText,
 } from "lucide-react";
 import { apiFetch } from "@/lib/api";
 import { useGestio } from "@/lib/gestio-context";
@@ -25,6 +26,7 @@ import { Feina } from "@/components/gestio/Map";
 import { CrearOTModal } from "@/components/gestio/CrearOTModal";
 import { EditarOTModal } from "@/components/gestio/EditarOTModal";
 import { Fulla360OTDrawer } from "@/components/gestio/Fulla360OTDrawer";
+import { PressupostModal } from "@/components/gestio/PressupostModal";
 
 const ESTAT_CHIPS = [
   { id: "TOTES", label: "Totes" },
@@ -88,6 +90,7 @@ function FeinesContent() {
   const [filtreEstat, setFiltreEstat] = useState<EstatFilter>("TOTES");
 
   const [showCrearModal, setShowCrearModal] = useState<boolean>(false);
+  const [showPressupostModal, setShowPressupostModal] = useState<boolean>(false);
   const [editingFeinaId, setEditingFeinaId] = useState<string | null>(null);
   const [drawerFeina, setDrawerFeina] = useState<Feina | null>(null);
   const [prefacturantId, setPrefacturantId] = useState<string | null>(null);
@@ -220,6 +223,15 @@ function FeinesContent() {
             <MapPin className="w-3.5 h-3.5 text-secondary" />
             <span>Mapa GIS</span>
           </Link>
+
+          <button
+            type="button"
+            onClick={() => setShowPressupostModal(true)}
+            className="px-4 py-2.5 rounded-xl bg-surface-container-lowest border border-primary/40 hover:bg-primary/10 text-primary text-xs font-body-strong flex items-center gap-2 shadow-sm transition-colors cursor-pointer"
+          >
+            <FileText className="w-4 h-4" />
+            <span>+ Nou Pressupost</span>
+          </button>
 
           <button
             type="button"
@@ -500,6 +512,15 @@ function FeinesContent() {
           onSuccess={() => {
             carregarFeines();
           }}
+        />
+      )}
+
+      {showPressupostModal && (
+        <PressupostModal
+          onClose={() => setShowPressupostModal(false)}
+          esEnginyer={(rolActiu || "").toUpperCase() === "ENGINYER"}
+          autoOpenSendOnCreate={true}
+          showGoToPressupostosLink={true}
         />
       )}
 

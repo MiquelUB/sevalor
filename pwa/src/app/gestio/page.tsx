@@ -15,6 +15,7 @@ import Link from "next/link";
 import { apiFetch } from "@/lib/api";
 import { CrearOTModal } from "@/components/gestio/CrearOTModal";
 import { EditarOTModal } from "@/components/gestio/EditarOTModal";
+import { PressupostModal } from "@/components/gestio/PressupostModal";
 import GestioMap, { Feina, Operari } from "@/components/gestio/Map";
 import { QuadrillesTauler } from "@/components/gestio/QuadrillesTauler";
 import { IncidenciesDrawer } from "@/components/gestio/IncidenciesDrawer";
@@ -43,6 +44,7 @@ export default function GestioDashboardPage() {
   }, []);
 
   const [showModalOT, setShowModalOT] = useState(false);
+  const [showModalPressupost, setShowModalPressupost] = useState(false);
   const [showModalEditarOT, setShowModalEditarOT] = useState(false);
   const [showIncidenciesDrawer, setShowIncidenciesDrawer] = useState(false);
   const [editingFeinaId, setEditingFeinaId] = useState<string | null>(null);
@@ -286,6 +288,13 @@ export default function GestioDashboardPage() {
               >
                 <span className="material-symbols-outlined text-[18px]">dashboard</span>
                 <span>Tornar al Dashboard</span>
+              </button>
+              <button
+                onClick={() => setShowModalPressupost(true)}
+                className="flex items-center gap-sm bg-surface-container-lowest border border-primary/40 text-primary px-lg py-md rounded-lg shadow-sm hover:bg-primary/10 transition-all cursor-pointer"
+              >
+                <FileText className="w-4 h-4" />
+                <span className="font-body-strong text-sm">Nou Pressupost</span>
               </button>
               <button
                 onClick={() => setShowModalOT(true)}
@@ -829,6 +838,14 @@ export default function GestioDashboardPage() {
               >
                 <span className="material-symbols-outlined text-[18px]">warning</span>
                 <span>Incidències ({hud.open_incidents})</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowModalPressupost(true)}
+                className="px-lg py-sm rounded-lg bg-surface-container-lowest border border-primary/40 hover:bg-primary/10 text-primary text-sm font-body-strong shadow-sm flex items-center gap-xs transition-all cursor-pointer"
+              >
+                <span className="material-symbols-outlined text-[18px]">request_quote</span>
+                <span>Nou Pressupost</span>
               </button>
               <button
                 onClick={() => setShowModalOT(true)}
@@ -1457,6 +1474,15 @@ export default function GestioDashboardPage() {
         <CrearOTModal
           onClose={() => setShowModalOT(false)}
           onSuccess={() => carregarDades()}
+        />
+      )}
+
+      {showModalPressupost && (
+        <PressupostModal
+          onClose={() => setShowModalPressupost(false)}
+          esEnginyer={(rolActiu || "").toUpperCase() === "ENGINYER"}
+          autoOpenSendOnCreate={true}
+          showGoToPressupostosLink={true}
         />
       )}
 

@@ -13,11 +13,13 @@ import {
   FileCheck2,
   FileText,
   Lock,
+  Package,
   Plus,
   QrCode,
   Receipt,
   RefreshCw,
   Scale,
+  Search,
   Send,
   ShieldCheck,
   Trash2,
@@ -79,6 +81,15 @@ interface ClientOption {
   id: string;
   rao_social: string;
   nif: string;
+}
+
+interface ArticleMagatzemOption {
+  id: string;
+  referencia_inventari: string;
+  nom: string;
+  unitat_mesura?: string;
+  preu_venda: number;
+  estoc_disponible?: number;
 }
 
 interface DashboardEconomic {
@@ -290,6 +301,7 @@ function ComptabilitatContent() {
   const [despesesAnalitiques, setDespesesAnalitiques] = useState<DespesaComptableItem[]>([]);
   const [desgloseMap, setDesgloseMap] = useState<Record<string, { carb: string; adbl: string }>>({});
   const [clientsList, setClientsList] = useState<ClientOption[]>([]);
+  const [articlesMagatzem, setArticlesMagatzem] = useState<ArticleMagatzemOption[]>([]);
 
   // Estat Norma 43
   const [textC43, setTextC43] = useState("");
@@ -308,6 +320,8 @@ function ComptabilitatContent() {
 
   // Editor de Pre-factures (ESBORRANY_PREFACTURA)
   const [editingPrefactura, setEditingPrefactura] = useState<Factura | null>(null);
+  const [creatingPrefactura, setCreatingPrefactura] = useState(false);
+  const [prefClientId, setPrefClientId] = useState("");
   const [prefDataEmissio, setPrefDataEmissio] = useState("");
   const [prefDataVenciment, setPrefDataVenciment] = useState("");
   const [prefMetodePagament, setPrefMetodePagament] = useState("TRANSFERENCIA");
@@ -315,9 +329,44 @@ function ComptabilitatContent() {
   const [prefRetIrpfPct, setPrefRetIrpfPct] = useState("0");
   const [prefRetGarantiaPct, setPrefRetGarantiaPct] = useState("0");
   const [prefLinies, setPrefLinies] = useState<FacturaLinia[]>([]);
+  const [cercaMaterialPref, setCercaMaterialPref] = useState("");
+  const [materialPrefDropdownOpen, setMaterialPrefDropdownOpen] = useState(false);
+  const [materialPrefQt, setMaterialPrefQt] = useState("1");
   const [savingPrefactura, setSavingPrefactura] = useState(false);
   const [emittingPrefId, setEmittingPrefId] = useState<string | null>(null);
   const [handledParamPrefId, setHandledParamPrefId] = useState<string | null>(null);
+
+  const obrirNovaPrefactura = () => {
+    const avui = new Date().toISOString().slice(0, 10);
+    setEditingPrefactura(null);
+    setCreatingPrefactura(true);
+    setPrefClientId("");
+    setPrefDataEmissio(avui);
+    setPrefDataVenciment(avui);
+    setPrefMetodePagament("TRANSFERENCIA");
+    setPrefEsIsp(false);
+    setPrefRetIrpfPct("0");
+    setPrefRetGarantiaPct("0");
+    setCercaMaterialPref("");
+    setMaterialPrefQt("1");
+    setMaterialPrefDropdownOpen(false);
+    setPrefLinies([
+      {
+        concepte: "",
+        compte_pgc: "705000",
+        quantitat: 1,
+        preu_venda_unitari: 0,
+        descompte_aplicat_pct: 0,
+        tipus_iva: 21,
+      },
+    ]);
+  };
+
+  const tancarModalPrefactura = () => {
+    setEditingPrefactura(null);
+    setCreatingPrefactura(false);
+    setMaterialPrefDropdownOpen(false);
+  };
 
   const obrirEditorPrefactura = (f: Factura) => {
     const baseImp = Number(f.base_imposable || 0);
@@ -329,7 +378,12 @@ function ComptabilitatContent() {
       baseImp > 0 && Number(f.import_retencio_garantia_4308 || 0) > 0
         ? round2((Number(f.import_retencio_garantia_4308 || 0) / baseImp) * 100)
         : 0;
+    setCreatingPrefactura(false);
     setEditingPrefactura(f);
+    setPrefClientId(f.client_id);
+    setCercaMaterialPref("");
+    setMaterialPrefQt("1");
+    setMaterialPrefDropdownOpen(false);
     setPrefDataEmissio(
       f.data_emissio ? String(f.data_emissio).slice(0, 10) : new Date().toISOString().slice(0, 10)
     );
@@ -396,6 +450,18 @@ function ComptabilitatContent() {
     return { baseTotal, ivaTotal, suplerts: round2(suplerts), retIrpf, retGar, liquid };
   }, [prefLinies, prefEsIsp, prefRetIrpfPct, prefRetGarantiaPct]);
 
+  const articlesPrefFiltrats = useMemo(() => {
+    const q = cercaMaterialPref.trim().toLowerCase();
+    const list = q
+      ? articlesMagatzem.filter(
+          (a) =>
+            (a.nom || "").toLowerCase().includes(q) ||
+            (a.referencia_inventari || "").toLowerCase().includes(q)
+        )
+      : articlesMagatzem;
+    return list.slice(0, 12);
+  }, [articlesMagatzem, cercaMaterialPref]);
+
   const carregarDades = async () => {
     setLoading(true);
     setError(null);
@@ -412,6 +478,7 @@ function ComptabilitatContent() {
         margesRes,
         despRes,
         cliRes,
+        artsRes,
       ] = await Promise.all([
         apiFetch<DashboardEconomic>(
           `/gestio/comptabilitat/dashboard-economic?criteri_caixa=${criteriCaixa}&periode=${encodeURIComponent(periode)}`
@@ -428,6 +495,7 @@ function ComptabilitatContent() {
           () => []
         ),
         apiFetch<ClientOption[]>("/gestio/clients?limit=200").catch(() => []),
+        apiFetch<ArticleMagatzemOption[]>("/gestio/magatzem/articles?limit=200").catch(() => []),
       ]);
 
       setDashboard(dashRes);
@@ -441,6 +509,7 @@ function ComptabilitatContent() {
       setMargesOt(margesRes || []);
       setDespesesAnalitiques(despRes || []);
       setClientsList(Array.isArray(cliRes) ? cliRes : []);
+      setArticlesMagatzem(Array.isArray(artsRes) ? artsRes : []);
     } catch (err: unknown) {
       const message =
         err instanceof Error ? err.message : "Error carregant la suite econòmica";
@@ -566,44 +635,100 @@ function ComptabilitatContent() {
     }
   };
 
+  const afegirMaterialAPrefactura = (art: ArticleMagatzemOption) => {
+    const qt = Math.max(0.01, Number(materialPrefQt || 1));
+    const novaLinia: FacturaLinia = {
+      article_id: art.id,
+      concepte: `[${art.referencia_inventari}] ${art.nom}`,
+      compte_pgc: "700000",
+      quantitat: qt,
+      preu_venda_unitari: Number(art.preu_venda || 0),
+      descompte_aplicat_pct: 0,
+      tipus_iva: prefEsIsp ? 0 : 21,
+    };
+    setPrefLinies((prev) => {
+      if (
+        prev.length === 1 &&
+        !prev[0].concepte.trim() &&
+        Number(prev[0].preu_venda_unitari || 0) === 0
+      ) {
+        return [novaLinia];
+      }
+      return [...prev, novaLinia];
+    });
+    setCercaMaterialPref("");
+    setMaterialPrefQt("1");
+    setMaterialPrefDropdownOpen(false);
+  };
+
   const handleDesarPrefactura = async (emetreDespres: boolean) => {
-    if (!editingPrefactura) return;
-    if (prefLinies.length === 0) {
-      setError("La pre-factura ha de tenir com a mínim una línia.");
+    if (!editingPrefactura && !creatingPrefactura) return;
+    if (creatingPrefactura && !prefClientId) {
+      setError("Selecciona un client per crear la pre-factura.");
+      return;
+    }
+    const liniesNetes = prefLinies.filter((l) => l.concepte.trim().length > 0);
+    if (liniesNetes.length === 0) {
+      setError("La pre-factura ha de tenir com a mínim una línia amb concepte.");
       return;
     }
     setSavingPrefactura(true);
     setError(null);
     setSuccessMsg(null);
     try {
-      const payloadUpdate = {
-        data_emissio: prefDataEmissio || null,
-        data_venciment: prefDataVenciment || null,
-        metode_pagament: prefMetodePagament,
-        es_inversio_subjecte_passiu: prefEsIsp,
-        retencio_irpf_pct: Number(prefRetIrpfPct || 0),
-        retencio_garantia_pct: Number(prefRetGarantiaPct || 0),
-        linies: prefLinies.map((l) => ({
+      const avui = new Date().toISOString().slice(0, 10);
+      const liniesPayload = liniesNetes.map((l) => {
+        const compte = l.compte_pgc || "700000";
+        const esSuplert = compte.startsWith("554");
+        return {
           obra_id: l.obra_id || null,
           centre_de_cost_id: l.centre_de_cost_id || "CC-GENERAL",
           article_id: l.article_id || null,
-          concepte: l.concepte.trim() || "Servei tècnic",
-          compte_pgc: l.compte_pgc || "700000",
+          concepte: l.concepte.trim(),
+          compte_pgc: compte,
           quantitat: Math.max(0.001, Number(l.quantitat || 0)),
           quantitat_merma: Number(l.quantitat_merma || 0),
           preu_venda_unitari: Math.max(0, Number(l.preu_venda_unitari || 0)),
           descompte_aplicat_pct: Math.min(100, Math.max(0, Number(l.descompte_aplicat_pct || 0))),
-          tipus_iva_pct: prefEsIsp ? 0 : Number(l.tipus_iva ?? 21),
-        })),
-      };
-      await apiFetch(`/gestio/comptabilitat/prefactures/${editingPrefactura.id}`, {
-        method: "PUT",
-        body: JSON.stringify(payloadUpdate),
+          tipus_iva_pct: prefEsIsp || esSuplert ? 0 : Number(l.tipus_iva ?? 21),
+        };
       });
 
-      if (emetreDespres) {
+      let targetFacturaId = editingPrefactura?.id || "";
+      if (creatingPrefactura) {
+        const created = await apiFetch<Factura>("/gestio/comptabilitat/prefactures", {
+          method: "POST",
+          body: JSON.stringify({
+            client_id: prefClientId,
+            serie: "PRE",
+            data_emissio: prefDataEmissio || avui,
+            data_venciment: prefDataVenciment || prefDataEmissio || avui,
+            metode_pagament: prefMetodePagament,
+            es_inversio_subjecte_passiu: prefEsIsp,
+            retencio_irpf_pct: Number(prefRetIrpfPct || 0),
+            retencio_garantia_pct: Number(prefRetGarantiaPct || 0),
+            linies: liniesPayload,
+          }),
+        });
+        targetFacturaId = created.id;
+      } else if (editingPrefactura) {
+        await apiFetch(`/gestio/comptabilitat/prefactures/${editingPrefactura.id}`, {
+          method: "PUT",
+          body: JSON.stringify({
+            data_emissio: prefDataEmissio || null,
+            data_venciment: prefDataVenciment || null,
+            metode_pagament: prefMetodePagament,
+            es_inversio_subjecte_passiu: prefEsIsp,
+            retencio_irpf_pct: Number(prefRetIrpfPct || 0),
+            retencio_garantia_pct: Number(prefRetGarantiaPct || 0),
+            linies: liniesPayload,
+          }),
+        });
+      }
+
+      if (emetreDespres && targetFacturaId) {
         const emesa = await apiFetch<Factura>(
-          `/gestio/comptabilitat/prefactures/${editingPrefactura.id}/emetre`,
+          `/gestio/comptabilitat/prefactures/${targetFacturaId}/emetre`,
           {
             method: "POST",
             body: JSON.stringify({
@@ -614,16 +739,20 @@ function ComptabilitatContent() {
             }),
           }
         );
-        setEditingPrefactura(null);
+        tancarModalPrefactura();
         await carregarDades();
         setTabActiva("VERIFACTU");
         setSuccessMsg(
           `Factura definitiva ${emesa.serie}-${emesa.numero_factura} emesa i encadenada a Veri*factu.`
         );
       } else {
-        setEditingPrefactura(null);
+        tancarModalPrefactura();
         await carregarDades();
-        setSuccessMsg("Canvis de la pre-factura desats correctament.");
+        setSuccessMsg(
+          creatingPrefactura
+            ? "Nova pre-factura en esborrany creada correctament."
+            : "Canvis de la pre-factura desats correctament."
+        );
       }
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Error en desar la pre-factura");
@@ -1138,17 +1267,27 @@ function ComptabilitatContent() {
           </div>
 
           <div className="rounded-xl border border-slate-200 bg-white overflow-hidden">
-            <div className="border-b border-slate-100 px-5 py-3 flex items-center justify-between">
+            <div className="border-b border-slate-100 px-5 py-3 flex flex-wrap items-center justify-between gap-2">
               <h2 className="text-sm font-semibold text-slate-900">
                 Prefactures en Esborrany ({prefacturesEsborrany.length})
               </h2>
-              <button
-                type="button"
-                onClick={() => setTabActiva("WIP_CONTROL")}
-                className="text-xs font-semibold text-primary hover:underline"
-              >
-                + Veure feines acabades pendents de prefacturar
-              </button>
+              <div className="flex items-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => setTabActiva("WIP_CONTROL")}
+                  className="text-xs font-semibold text-primary hover:underline cursor-pointer"
+                >
+                  + Veure feines acabades pendents de prefacturar
+                </button>
+                <button
+                  type="button"
+                  onClick={obrirNovaPrefactura}
+                  className="inline-flex items-center gap-1 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-white hover:opacity-90 cursor-pointer"
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                  Nova Pre-factura
+                </button>
+              </div>
             </div>
 
             {prefacturesEsborrany.length === 0 ? (
@@ -1833,20 +1972,23 @@ function ComptabilitatContent() {
         </div>
       )}
 
-      {/* MODAL EDITOR DE PRE-FACTURA (EDITAR ABANS D'EMETRE A VERI*FACTU) */}
-      {editingPrefactura && (
+      {/* MODAL EDITOR / CREADOR DE PRE-FACTURA (EDITAR ABANS D'EMETRE A VERI*FACTU) */}
+      {(editingPrefactura || creatingPrefactura) && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4 overflow-y-auto">
-          <div className="w-full max-w-4xl rounded-2xl bg-white p-6 shadow-2xl space-y-5 my-8">
+          <div className="w-full max-w-5xl rounded-2xl bg-white p-6 shadow-2xl space-y-5 my-8">
             <div className="flex items-start justify-between border-b border-slate-100 pb-3">
               <div>
                 <span className="inline-block rounded-full bg-amber-100 px-2.5 py-0.5 text-[11px] font-bold text-amber-800">
                   ESBORRANY EDITABLE · HITL
                 </span>
                 <h3 className="text-lg font-bold text-slate-900 mt-1">
-                  Editar Pre-factura {editingPrefactura.serie}-{editingPrefactura.numero_factura}
-                  {editingPrefactura.client_nom ? ` · ${editingPrefactura.client_nom}` : ""}
+                  {creatingPrefactura
+                    ? "Nova Pre-factura Editable (Sèrie PRE)"
+                    : `Editar Pre-factura ${editingPrefactura?.serie}-${editingPrefactura?.numero_factura}${
+                        editingPrefactura?.client_nom ? ` · ${editingPrefactura.client_nom}` : ""
+                      }`}
                 </h3>
-                {editingPrefactura.ordres_treball_codis &&
+                {editingPrefactura?.ordres_treball_codis &&
                   editingPrefactura.ordres_treball_codis.length > 0 && (
                     <p className="text-xs font-mono text-primary mt-0.5">
                       Ordres de Treball vinculades: {editingPrefactura.ordres_treball_codis.join(", ")}
@@ -1855,15 +1997,39 @@ function ComptabilitatContent() {
               </div>
               <button
                 type="button"
-                onClick={() => setEditingPrefactura(null)}
-                className="rounded-lg p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
+                onClick={tancarModalPrefactura}
+                className="rounded-lg p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600 cursor-pointer"
               >
                 <X className="h-5 w-5" />
               </button>
             </div>
 
+            {error && (
+              <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-2.5 text-xs text-rose-800">
+                {error}
+              </div>
+            )}
+
             {/* Capçalera Fiscal */}
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5 text-xs">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-6 text-xs">
+              {creatingPrefactura && (
+                <div className="sm:col-span-2 lg:col-span-2">
+                  <label className="block font-medium text-slate-700 mb-1">Client *</label>
+                  <select
+                    required
+                    value={prefClientId}
+                    onChange={(e) => setPrefClientId(e.target.value)}
+                    className="w-full rounded-lg border border-slate-200 bg-white px-2.5 py-2"
+                  >
+                    <option value="">Selecciona client...</option>
+                    {clientsList.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.rao_social} ({c.nif})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
               <div>
                 <label className="block font-medium text-slate-700 mb-1">Data Emissió</label>
                 <input
@@ -1908,62 +2074,184 @@ function ComptabilitatContent() {
                   className="w-full rounded-lg border border-slate-200 px-2.5 py-2 tabular-nums"
                 />
               </div>
-              <div>
-                <label className="block font-medium text-slate-700 mb-1">
-                  Retenció Garantia 4308 (%)
-                </label>
-                <input
-                  type="number"
-                  step="0.01"
-                  min="0"
-                  max="20"
-                  value={prefRetGarantiaPct}
-                  onChange={(e) => setPrefRetGarantiaPct(e.target.value)}
-                  className="w-full rounded-lg border border-slate-200 px-2.5 py-2 tabular-nums"
-                />
-              </div>
+              {!creatingPrefactura && (
+                <div>
+                  <label className="block font-medium text-slate-700 mb-1">
+                    Retenció Garantia 4308 (%)
+                  </label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    max="20"
+                    value={prefRetGarantiaPct}
+                    onChange={(e) => setPrefRetGarantiaPct(e.target.value)}
+                    className="w-full rounded-lg border border-slate-200 px-2.5 py-2 tabular-nums"
+                  />
+                </div>
+              )}
             </div>
 
-            <label className="inline-flex items-center gap-2 text-xs text-slate-700">
-              <input
-                type="checkbox"
-                checked={prefEsIsp}
-                onChange={(e) => setPrefEsIsp(e.target.checked)}
-              />
-              <span>Inversió del Subjecte Passiu (ISP · 0% IVA Art. 84 LIVA)</span>
-            </label>
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <label className="inline-flex items-center gap-2 text-xs text-slate-700">
+                <input
+                  type="checkbox"
+                  checked={prefEsIsp}
+                  onChange={(e) => setPrefEsIsp(e.target.checked)}
+                />
+                <span>Inversió del Subjecte Passiu (ISP · 0% IVA Art. 84 LIVA)</span>
+              </label>
+
+              {creatingPrefactura && (
+                <div className="flex items-center gap-2 text-xs">
+                  <span className="font-medium text-slate-700">Garantia 4308 (%):</span>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    max="20"
+                    value={prefRetGarantiaPct}
+                    onChange={(e) => setPrefRetGarantiaPct(e.target.value)}
+                    className="w-20 rounded-lg border border-slate-200 px-2 py-1 tabular-nums"
+                  />
+                </div>
+              )}
+            </div>
+
+            {/* Selector Ràpid de Materials del Magatzem + Conceptes de Facturació */}
+            <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-3 space-y-2.5 text-xs">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <h4 className="font-bold uppercase tracking-wider text-slate-600 flex items-center gap-1.5">
+                  <Package className="h-3.5 w-3.5 text-primary" />
+                  Afegir Materials del Magatzem o Conceptes ({prefLinies.length} línies)
+                </h4>
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setPrefLinies((prev) => [
+                        ...prev,
+                        {
+                          concepte: "",
+                          compte_pgc: "705000",
+                          quantitat: 1,
+                          preu_venda_unitari: 0,
+                          descompte_aplicat_pct: 0,
+                          tipus_iva: prefEsIsp ? 0 : 21,
+                        },
+                      ])
+                    }
+                    className="inline-flex items-center gap-1 rounded-lg border border-primary/30 bg-primary/10 px-2.5 py-1.5 font-semibold text-primary hover:bg-primary/20 cursor-pointer"
+                  >
+                    <Plus className="h-3.5 w-3.5" /> Afegir Concepte / Servei
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setPrefLinies((prev) => [
+                        ...prev,
+                        {
+                          concepte: "",
+                          compte_pgc: "700000",
+                          quantitat: 1,
+                          preu_venda_unitari: 0,
+                          descompte_aplicat_pct: 0,
+                          tipus_iva: prefEsIsp ? 0 : 21,
+                        },
+                      ])
+                    }
+                    className="inline-flex items-center gap-1 rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 font-semibold text-slate-700 hover:bg-slate-100 cursor-pointer"
+                  >
+                    <Plus className="h-3.5 w-3.5" /> Afegir Material Lliure
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setPrefLinies((prev) => [
+                        ...prev,
+                        {
+                          concepte: "",
+                          compte_pgc: "554000",
+                          quantitat: 1,
+                          preu_venda_unitari: 0,
+                          descompte_aplicat_pct: 0,
+                          tipus_iva: 0,
+                        },
+                      ])
+                    }
+                    className="inline-flex items-center gap-1 rounded-lg border border-amber-300 bg-amber-50 px-2.5 py-1.5 font-semibold text-amber-800 hover:bg-amber-100 cursor-pointer"
+                  >
+                    <Plus className="h-3.5 w-3.5" /> Afegir Suplert (554)
+                  </button>
+                </div>
+              </div>
+
+              {articlesMagatzem.length > 0 && (
+                <div className="flex flex-col sm:flex-row gap-2">
+                  <div className="relative flex-1">
+                    <Search className="h-3.5 w-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                    <input
+                      type="text"
+                      value={cercaMaterialPref}
+                      onFocus={() => setMaterialPrefDropdownOpen(true)}
+                      onChange={(e) => {
+                        setCercaMaterialPref(e.target.value);
+                        setMaterialPrefDropdownOpen(true);
+                      }}
+                      placeholder="Cercar material del magatzem per referència o nom per afegir-lo a la factura..."
+                      className="w-full pl-8 pr-3 py-2 rounded-lg border border-slate-200 bg-white"
+                    />
+                    {materialPrefDropdownOpen && articlesPrefFiltrats.length > 0 && (
+                      <div className="absolute left-0 right-0 top-full mt-1 z-30 max-h-52 overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-xl divide-y divide-slate-100">
+                        {articlesPrefFiltrats.map((art) => (
+                          <button
+                            key={art.id}
+                            type="button"
+                            onClick={() => afegirMaterialAPrefactura(art)}
+                            className="w-full px-3 py-2 text-left hover:bg-slate-50 flex items-center justify-between gap-2 cursor-pointer"
+                          >
+                            <div className="min-w-0">
+                              <span className="font-mono text-[10px] font-bold text-primary mr-1.5">
+                                [{art.referencia_inventari}]
+                              </span>
+                              <span className="font-medium text-slate-900">{art.nom}</span>
+                              {art.estoc_disponible !== undefined && (
+                                <span className="ml-2 text-[10px] text-slate-500">
+                                  Estoc: {Number(art.estoc_disponible).toFixed(2)}{" "}
+                                  {art.unitat_mesura || "uts"}
+                                </span>
+                              )}
+                            </div>
+                            <span className="font-semibold tabular-nums text-primary shrink-0">
+                              {Number(art.preu_venda || 0).toFixed(2)} €
+                            </span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-[11px] text-slate-500">Qt:</span>
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0.01"
+                      value={materialPrefQt}
+                      onChange={(e) => setMaterialPrefQt(e.target.value)}
+                      className="w-20 rounded-lg border border-slate-200 bg-white px-2.5 py-2 tabular-nums"
+                    />
+                  </div>
+                </div>
+              )}
+            </div>
 
             {/* Taula Editable de Línies */}
             <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <h4 className="text-xs font-bold uppercase tracking-wider text-slate-600">
-                  Línies de Factura ({prefLinies.length})
-                </h4>
-                <button
-                  type="button"
-                  onClick={() =>
-                    setPrefLinies((prev) => [
-                      ...prev,
-                      {
-                        concepte: "",
-                        compte_pgc: "700000",
-                        quantitat: 1,
-                        preu_venda_unitari: 0,
-                        descompte_aplicat_pct: 0,
-                        tipus_iva: prefEsIsp ? 0 : 21,
-                      },
-                    ])
-                  }
-                  className="inline-flex items-center gap-1 rounded-lg border border-primary/30 bg-primary/10 px-2.5 py-1 text-xs font-semibold text-primary hover:bg-primary/20"
-                >
-                  <Plus className="h-3.5 w-3.5" /> Afegir Línia
-                </button>
-              </div>
-
               <div className="overflow-x-auto rounded-xl border border-slate-200">
                 <table className="w-full text-left text-xs">
                   <thead className="bg-slate-50 text-slate-600">
                     <tr>
+                      <th className="px-2 py-2 w-36">Tipus / PGC</th>
                       <th className="px-2.5 py-2 min-w-[220px]">Concepte</th>
                       <th className="px-2 py-2 w-20">Qt.</th>
                       <th className="px-2 py-2 w-24">Preu u. (€)</th>
@@ -1975,6 +2263,7 @@ function ComptabilitatContent() {
                   </thead>
                   <tbody className="divide-y divide-slate-100">
                     {prefLinies.map((lin, idx) => {
+                      const esSuplertLinia = (lin.compte_pgc || "700000").startsWith("554");
                       const sub = round2(
                         Number(lin.quantitat || 0) *
                           Number(lin.preu_venda_unitari || 0) *
@@ -1982,26 +2271,65 @@ function ComptabilitatContent() {
                       );
                       return (
                         <tr key={lin.id || `new-${idx}`}>
-                          <td className="px-2.5 py-2">
-                            <input
-                              type="text"
-                              value={lin.concepte}
-                              onChange={(e) =>
+                          <td className="px-2 py-2">
+                            <select
+                              value={
+                                esSuplertLinia
+                                  ? "554000"
+                                  : lin.compte_pgc === "705000"
+                                    ? "705000"
+                                    : "700000"
+                              }
+                              onChange={(e) => {
+                                const nouCompte = e.target.value;
                                 setPrefLinies((prev) =>
                                   prev.map((item, i) =>
-                                    i === idx ? { ...item, concepte: e.target.value } : item
+                                    i === idx
+                                      ? {
+                                          ...item,
+                                          compte_pgc: nouCompte,
+                                          tipus_iva: nouCompte.startsWith("554")
+                                            ? 0
+                                            : item.tipus_iva || 21,
+                                        }
+                                      : item
                                   )
-                                )
-                              }
-                              placeholder="Descripció del treball o material"
-                              className="w-full rounded border border-slate-200 px-2 py-1"
-                            />
+                                );
+                              }}
+                              className="w-full rounded border border-slate-200 bg-white px-1.5 py-1 text-[11px]"
+                            >
+                              <option value="700000">Material (700)</option>
+                              <option value="705000">Servei / M.O. (705)</option>
+                              <option value="554000">Suplert (554)</option>
+                            </select>
+                          </td>
+                          <td className="px-2.5 py-2">
+                            <div className="flex items-center gap-1.5">
+                              <input
+                                type="text"
+                                value={lin.concepte}
+                                onChange={(e) =>
+                                  setPrefLinies((prev) =>
+                                    prev.map((item, i) =>
+                                      i === idx ? { ...item, concepte: e.target.value } : item
+                                    )
+                                  )
+                                }
+                                placeholder="Descripció del treball, concepte o material"
+                                className="w-full rounded border border-slate-200 px-2 py-1"
+                              />
+                              {lin.article_id && (
+                                <span className="shrink-0 rounded bg-primary/10 px-1.5 py-0.5 text-[9px] font-bold text-primary">
+                                  MAG
+                                </span>
+                              )}
+                            </div>
                           </td>
                           <td className="px-2 py-2">
                             <input
                               type="number"
-                              step="0.01"
-                              min="0.01"
+                              step="any"
+                              min="0.001"
                               value={lin.quantitat}
                               onChange={(e) =>
                                 setPrefLinies((prev) =>
@@ -2018,7 +2346,7 @@ function ComptabilitatContent() {
                           <td className="px-2 py-2">
                             <input
                               type="number"
-                              step="0.01"
+                              step="any"
                               min="0"
                               value={lin.preu_venda_unitari}
                               onChange={(e) =>
@@ -2054,8 +2382,8 @@ function ComptabilitatContent() {
                           </td>
                           <td className="px-2 py-2">
                             <select
-                              disabled={prefEsIsp}
-                              value={prefEsIsp ? 0 : lin.tipus_iva}
+                              disabled={prefEsIsp || esSuplertLinia}
+                              value={prefEsIsp || esSuplertLinia ? 0 : lin.tipus_iva}
                               onChange={(e) =>
                                 setPrefLinies((prev) =>
                                   prev.map((item, i) =>
@@ -2083,7 +2411,7 @@ function ComptabilitatContent() {
                               onClick={() =>
                                 setPrefLinies((prev) => prev.filter((_, i) => i !== idx))
                               }
-                              className="rounded p-1 text-rose-600 hover:bg-rose-50 disabled:opacity-30"
+                              className="rounded p-1 text-rose-600 hover:bg-rose-50 disabled:opacity-30 cursor-pointer"
                               title="Eliminar línia"
                             >
                               <Trash2 className="h-3.5 w-3.5" />
@@ -2112,6 +2440,14 @@ function ComptabilitatContent() {
                     {editorTotals.ivaTotal.toFixed(2)} €
                   </span>
                 </div>
+                {editorTotals.suplerts > 0 && (
+                  <div>
+                    <span className="text-slate-500 block">Suplerts (554)</span>
+                    <span className="font-bold tabular-nums text-amber-700">
+                      {editorTotals.suplerts.toFixed(2)} €
+                    </span>
+                  </div>
+                )}
                 {editorTotals.retIrpf > 0 && (
                   <div>
                     <span className="text-slate-500 block">Retenció IRPF</span>
@@ -2140,8 +2476,8 @@ function ComptabilitatContent() {
             <div className="flex flex-wrap items-center justify-end gap-2 pt-2 border-t border-slate-100">
               <button
                 type="button"
-                onClick={() => setEditingPrefactura(null)}
-                className="rounded-lg border border-slate-200 px-4 py-2 text-xs font-medium text-slate-700"
+                onClick={tancarModalPrefactura}
+                className="rounded-lg border border-slate-200 px-4 py-2 text-xs font-medium text-slate-700 cursor-pointer"
               >
                 Cancel·lar
               </button>
@@ -2149,7 +2485,7 @@ function ComptabilitatContent() {
                 type="button"
                 disabled={savingPrefactura}
                 onClick={() => handleDesarPrefactura(false)}
-                className="rounded-lg border border-primary bg-primary/10 px-4 py-2 text-xs font-semibold text-primary hover:bg-primary/20 disabled:opacity-50"
+                className="rounded-lg border border-primary bg-primary/10 px-4 py-2 text-xs font-semibold text-primary hover:bg-primary/20 disabled:opacity-50 cursor-pointer"
               >
                 {savingPrefactura ? "Desant..." : "Desar Canvis (Esborrany)"}
               </button>
@@ -2157,7 +2493,7 @@ function ComptabilitatContent() {
                 type="button"
                 disabled={savingPrefactura}
                 onClick={() => handleDesarPrefactura(true)}
-                className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-4 py-2 text-xs font-semibold text-white hover:opacity-90 disabled:opacity-50"
+                className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-4 py-2 text-xs font-semibold text-white hover:opacity-90 disabled:opacity-50 cursor-pointer"
               >
                 <Send className="h-3.5 w-3.5" />
                 {savingPrefactura ? "Processant..." : "Desar i Emetre Factura Veri*factu"}

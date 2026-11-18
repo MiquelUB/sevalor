@@ -712,6 +712,41 @@ async def convertir_wip_a_prefactura(
     }
 
 
+@router.post("/prefactures", response_model=FacturaResponse, status_code=status.HTTP_201_CREATED)
+async def crear_prefactura_directa(
+    payload: FacturaEmissioCreateDTO,
+    request: Request,
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+) -> FacturaResponse:
+    """Crea una nova pre-factura editable (Sèrie PRE / HITL) directament des de Facturació amb materials o conceptes."""
+    empresa_id, usuari_id, rol = _get_tenant_and_user(request)
+    cli = (
+        await db.execute(
+            select(Client).where(
+                Client.id == payload.client_id,
+                Client.empresa_id == empresa_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if not cli:
+        raise HTTPException(status_code=404, detail="Client no trobat a l'empresa activa.")
+
+    dto_pre = payload.model_copy(update={"serie": "PRE"})
+    pref = await EconomicSuiteService.crear_prefactura_esborrany(
+        db=db,
+        empresa_id=empresa_id,
+        usuari_id=usuari_id,
+        payload=dto_pre,
+    )
+    await set_tenant_context(
+        db,
+        str(empresa_id),
+        bool(getattr(request.state, "is_superadmin", False)),
+        role=getattr(request.state, "user_role", None) or rol,
+    )
+    return (await _serialitzar_factures(db, empresa_id, [pref]))[0]
+
+
 @router.put("/prefactures/{factura_id}", response_model=FacturaResponse)
 async def editar_prefactura_esborrany(
     factura_id: uuid.UUID,

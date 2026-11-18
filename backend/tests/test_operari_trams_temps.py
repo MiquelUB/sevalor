@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.main import app
 from app.models.models import (
+    Article,
     Client,
     Empresa,
     OrdreTreball,
@@ -986,6 +987,202 @@ async def test_prefacturacio_rols_secretaria_comptabilitat_i_veto_enginyer(
             headers=h_eng,
         )
         assert r_eng_pre.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_prefactura_directa_multiples_linies_materials_i_pressupost(
+    admin_session: AsyncSession,
+):
+    """Verifica creació directa de pre-factura editable, addició de materials + conceptes i pressupost amb aïllament RLS."""
+    emp_a = uuid.uuid4()
+    emp_b = uuid.uuid4()
+    boss_a = uuid.uuid4()
+    boss_b = uuid.uuid4()
+    cli_a = uuid.uuid4()
+    art_a = uuid.uuid4()
+
+    admin_session.add_all(
+        [
+            Empresa(
+                id=emp_a,
+                nom=f"Empresa Pref A {emp_a.hex[:6]}",
+                nif=f"B{emp_a.hex[:8].upper()}",
+                subdomini=f"pref-a-{emp_a.hex[:6]}",
+                pla_subscripcio="PRO",
+                estat_pagament="ACTIU",
+            ),
+            Empresa(
+                id=emp_b,
+                nom=f"Empresa Pref B {emp_b.hex[:6]}",
+                nif=f"B{emp_b.hex[:8].upper()}",
+                subdomini=f"pref-b-{emp_b.hex[:6]}",
+                pla_subscripcio="PRO",
+                estat_pagament="ACTIU",
+            ),
+        ]
+    )
+    await admin_session.flush()
+
+    await admin_session.execute(text(f"SET LOCAL app.current_empresa_id = '{emp_a}';"))
+    await admin_session.execute(text("SET LOCAL app.current_user_role = 'BOSS';"))
+    admin_session.add_all(
+        [
+            Usuari(
+                id=boss_a,
+                empresa_id=emp_a,
+                nif=f"BA-{boss_a.hex[:6]}",
+                nom="Boss A",
+                rol="BOSS",
+                telefon=f"+34630{boss_a.hex[:6]}",
+                email=f"ba-{boss_a.hex[:6]}@test.cat",
+                password_hash="x",
+                estat="ACTIU",
+            ),
+            Client(
+                id=cli_a,
+                empresa_id=emp_a,
+                codi=f"CL-{cli_a.hex[:5]}",
+                rao_social="Client Multi Linies SL",
+                nif=f"B{cli_a.hex[:7].upper()}1",
+                estat_risc_operatiu="NORMAL",
+            ),
+            Article(
+                id=art_a,
+                empresa_id=emp_a,
+                referencia_inventari=f"REF-{art_a.hex[:6]}",
+                nom="Vàlvula de Seguretat 3/4",
+                unitat_mesura="UNITAT",
+                preu_cost=12.0,
+                preu_venda=30.0,
+            ),
+        ]
+    )
+    await admin_session.flush()
+
+    await admin_session.execute(text(f"SET LOCAL app.current_empresa_id = '{emp_b}';"))
+    admin_session.add(
+        Usuari(
+            id=boss_b,
+            empresa_id=emp_b,
+            nif=f"BB-{boss_b.hex[:6]}",
+            nom="Boss B",
+            rol="BOSS",
+            telefon=f"+34631{boss_b.hex[:6]}",
+            email=f"bb-{boss_b.hex[:6]}@test.cat",
+            password_hash="x",
+            estat="ACTIU",
+        )
+    )
+    await admin_session.commit()
+
+    h_a = {"Authorization": f"Bearer {_crear_token(boss_a, emp_a, 'BOSS')}"}
+    h_b = {"Authorization": f"Bearer {_crear_token(boss_b, emp_b, 'BOSS')}"}
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test/api/v1") as client:
+        # 1. Crear prefactura directa amb 1 concepte inicial
+        r_create = await client.post(
+            "/gestio/comptabilitat/prefactures",
+            json={
+                "client_id": str(cli_a),
+                "serie": "PRE",
+                "data_emissio": "2026-11-18",
+                "data_venciment": "2026-11-18",
+                "linies": [
+                    {
+                        "concepte": "Servei tècnic inicial",
+                        "compte_pgc": "705000",
+                        "quantitat": 1,
+                        "preu_venda_unitari": 50.0,
+                        "tipus_iva_pct": 21.0,
+                    }
+                ],
+            },
+            headers=h_a,
+        )
+        assert r_create.status_code == 201, r_create.text
+        pref_data = r_create.json()
+        pref_id = pref_data["id"]
+        assert pref_data["estat_document"] == "ESBORRANY_PREFACTURA"
+        assert pref_data["serie"] == "PRE"
+
+        # 2. Aïllament RLS: Empresa B no pot veure ni editar la prefactura d'Empresa A
+        r_b_get = await client.get(f"/gestio/comptabilitat/factures/{pref_id}", headers=h_b)
+        assert r_b_get.status_code == 404
+
+        # 3. Editar prefactura afegint més línies: Material real del magatzem + concepte extra
+        r_edit = await client.put(
+            f"/gestio/comptabilitat/prefactures/{pref_id}",
+            json={
+                "linies": [
+                    {
+                        "concepte": "Servei tècnic inicial",
+                        "compte_pgc": "705000",
+                        "quantitat": 1,
+                        "preu_venda_unitari": 50.0,
+                        "tipus_iva_pct": 21.0,
+                    },
+                    {
+                        "article_id": str(art_a),
+                        "concepte": "Vàlvula de Seguretat 3/4",
+                        "compte_pgc": "700000",
+                        "quantitat": 2,
+                        "preu_venda_unitari": 30.0,
+                        "tipus_iva_pct": 21.0,
+                    },
+                    {
+                        "concepte": "Desplaçament urgència",
+                        "compte_pgc": "705000",
+                        "quantitat": 1,
+                        "preu_venda_unitari": 40.0,
+                        "tipus_iva_pct": 21.0,
+                    },
+                ]
+            },
+            headers=h_a,
+        )
+        assert r_edit.status_code == 200, r_edit.text
+        edited = r_edit.json()
+        assert len(edited["linies"]) == 3
+        assert any(linia.get("article_id") == str(art_a) for linia in edited["linies"])
+        # Base: 50 + (2*30) + 40 = 150.00 | IVA 21%: 31.50 | Liquid: 181.50
+        assert edited["base_imposable"] == 150.0
+        assert edited["quota_iva"] == 31.5
+        assert edited["liquid_exigible"] == 181.5
+
+        # 4. Crear pressupost detallat des del flux dashboard amb material + concepte
+        r_pres = await client.post(
+            "/gestio/pressupostos",
+            json={
+                "client_id": str(cli_a),
+                "numero": f"PRES-DASH-{emp_a.hex[:4]}",
+                "titol": "Pressupost des del Dashboard",
+                "validesa_dies": 30,
+                "linies": [
+                    {
+                        "article_id": str(art_a),
+                        "concepte": "Vàlvula de Seguretat 3/4",
+                        "quantitat": 2,
+                        "preu_unitari": 30.0,
+                        "descompte_pct": 0.0,
+                        "tipus_iva": 21.0,
+                    },
+                    {
+                        "concepte": "Mà d'obra instal·lació",
+                        "quantitat": 2,
+                        "preu_unitari": 45.0,
+                        "descompte_pct": 0.0,
+                        "tipus_iva": 21.0,
+                    },
+                ],
+            },
+            headers=h_a,
+        )
+        assert r_pres.status_code == 201, r_pres.text
+        pres = r_pres.json()
+        assert len(pres["linies"]) == 2
+        assert pres["base_imposable"] == 150.0
+        assert pres["total"] == 181.5
+
 
 
 
