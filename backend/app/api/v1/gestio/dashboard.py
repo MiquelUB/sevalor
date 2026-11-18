@@ -14,6 +14,7 @@ from app.models.models import (
     Incidencia,
     OrdreTreball,
     OrdreTreballOperari,
+    Proveidor,
     RegistreJornadaLaboral,
     Usuari,
     Vehicle,
@@ -106,18 +107,37 @@ async def get_dashboard_hud(
 
     # Critical stock (estoc disponible real = físic - reservat)
     stmt_stock = (
-        select(Article.id)
+        select(
+            Article.id,
+            Article.referencia_inventari,
+            Article.nom,
+            Article.unitat_mesura,
+            Article.estoc_minim,
+            Proveidor.rao_social.label("proveidor_nom"),
+            func.coalesce(
+                func.sum(EstocMagatzem.quantitat_fisica - EstocMagatzem.quantitat_virtual_reservada),
+                0.0,
+            ).label("estoc_disponible"),
+        )
         .outerjoin(
             EstocMagatzem,
             (Article.id == EstocMagatzem.article_id)
             & (EstocMagatzem.empresa_id == emp_uuid),
         )
+        .outerjoin(Proveidor, Article.proveidor_id == Proveidor.id)
         .where(
             Article.empresa_id == emp_uuid,
             Article.actiu.is_(True),
             Article.estoc_minim > 0,
         )
-        .group_by(Article.id, Article.estoc_minim)
+        .group_by(
+            Article.id,
+            Article.referencia_inventari,
+            Article.nom,
+            Article.unitat_mesura,
+            Article.estoc_minim,
+            Proveidor.rao_social,
+        )
         .having(
             func.coalesce(
                 func.sum(EstocMagatzem.quantitat_fisica - EstocMagatzem.quantitat_virtual_reservada),
@@ -125,9 +145,22 @@ async def get_dashboard_hud(
             )
             <= Article.estoc_minim
         )
+        .order_by(Article.nom.asc())
     )
-    res_stock = await db.execute(stmt_stock)
-    critical_stock = len(res_stock.all())
+    res_stock_rows = (await db.execute(stmt_stock)).all()
+    critical_stock = len(res_stock_rows)
+    critical_stock_items = [
+        {
+            "id": str(r.id),
+            "referencia_inventari": r.referencia_inventari,
+            "nom": r.nom,
+            "unitat_mesura": r.unitat_mesura or "UNITAT",
+            "estoc_minim": float(r.estoc_minim or 0.0),
+            "estoc_disponible": max(0.0, float(r.estoc_disponible or 0.0)),
+            "proveidor_nom": r.proveidor_nom,
+        }
+        for r in res_stock_rows[:10]
+    ]
 
     # Vehicles with alerts
     stmt_veh = select(func.count(Vehicle.id)).where(
@@ -146,6 +179,7 @@ async def get_dashboard_hud(
         "open_incidents": open_incidents,
         "teams_on_field": teams_on_field,
         "critical_stock": critical_stock,
+        "critical_stock_items": critical_stock_items,
         "vehicles_with_alerts": vehicles_with_alerts,
     }
 

@@ -1,6 +1,7 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { Suspense, useEffect, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import {
   Package,
   Search,
@@ -20,9 +21,14 @@ import {
   ShoppingCart,
   SlidersHorizontal,
   Barcode,
+  Mail,
+  Send,
+  ExternalLink,
+  ClipboardCheck,
 } from "lucide-react";
 import { apiFetch, getAuthToken, getApiBaseUrl, extractTenantId } from "@/lib/api";
 import { useGestio } from "@/lib/gestio-context";
+import { BarcodeScanner } from "@/components/operari/BarcodeScanner";
 
 const UNITATS_MESURA_CANONIQUES = [
   { value: "UNITAT", label: "Unitat (un)" },
@@ -48,6 +54,7 @@ interface Article {
   codi_barres?: string | null;
   nom: string;
   unitat_mesura: string;
+  es_material_continu?: boolean;
   familia: string;
   estoc_optim: number;
   estoc_minim: number;
@@ -76,6 +83,10 @@ interface RecompraAlertaItem {
   article_codi_barres?: string | null;
   proveidor_id?: string | null;
   proveidor_nom?: string | null;
+  proveidor_email?: string | null;
+  esborrany_email_assumpte?: string | null;
+  esborrany_email_cos?: string | null;
+  mailto_url?: string | null;
   missatge: string;
   estat: string;
   enviat_automaticament: boolean;
@@ -88,10 +99,67 @@ interface RecompraAlertaItem {
     quantitat_proposada?: number;
     quantitat_aprovada?: number;
     proveidor_email?: string | null;
+    esborrany_email_assumpte?: string | null;
+    esborrany_email_cos?: string | null;
+    mailto_url?: string | null;
     preu_unitari_estimat?: number | null;
     import_estimat?: number | null;
     estat_hitl?: string;
   };
+}
+
+interface RecompraGrupProveidor {
+  grup_key: string;
+  proveidor_id?: string | null;
+  proveidor_nom: string;
+  proveidor_email?: string | null;
+  alerta_ids: string[];
+  total_articles: number;
+  items: Array<{
+    alerta_id: string;
+    article_id?: string | null;
+    referencia?: string | null;
+    codi_barres?: string | null;
+    nom?: string | null;
+    unitat_mesura: string;
+    estoc_disponible: number;
+    estoc_minim: number;
+    quantitat_proposada: number;
+    preu_unitari_estimat?: number | null;
+    import_estimat?: number | null;
+  }>;
+  import_total_estimat?: number | null;
+  esborrany_email_assumpte: string;
+  esborrany_email_cos: string;
+  mailto_url?: string | null;
+}
+
+interface AlbaraPendentItem {
+  id: string;
+  proveidor_id: string;
+  proveidor_nom?: string | null;
+  proveidor_nif?: string | null;
+  numero_albara: string;
+  data_albara?: string | null;
+  estat: string;
+  linies: Array<{
+    referencia: string;
+    nom: string;
+    quantitat: number;
+    preu?: number | null;
+    descompte_percent?: number;
+    tipus: string;
+  }>;
+  created_at?: string | null;
+}
+
+interface SuggerimentMerma {
+  article_id: string;
+  es_material_continu: boolean;
+  merma_suggerida_pct: number;
+  total_mermes_registrades: number;
+  quantitat_total_mermada: number;
+  recomanacio: string;
 }
 
 interface MermaItem {
@@ -121,9 +189,16 @@ interface MagatzemItem {
   actiu: boolean;
 }
 
-export default function GestioMagatzemPage() {
+function MagatzemContent() {
   const { rolActiu } = useGestio();
   const esEnginyer = (rolActiu || "").toUpperCase() === "ENGINYER";
+  const searchParams = useSearchParams();
+  const filtreParam = (searchParams.get("filtre") || "").toLowerCase();
+  const tabParam = (searchParams.get("tab") || "").toUpperCase();
+  const [nomesTrencamentEstoc, setNomesTrencamentEstoc] = useState(
+    filtreParam === "trencament" || filtreParam === "critics"
+  );
+  const [mostrarLectorBarres, setMostrarLectorBarres] = useState(false);
   const [vertical, setVertical] = useState<string>("SEVALOR");
   const [customFamilies, setCustomFamilies] = useState<string[]>([]);
   const [articles, setArticles] = useState<Article[]>([]);
@@ -139,9 +214,35 @@ export default function GestioMagatzemPage() {
   const [traspasant, setTraspasant] = useState(false);
   const [checkoutTargetTipus, setCheckoutTargetTipus] = useState<"OPERARI" | "VEHICLE">("OPERARI");
   const [selectedVehicleMagatzemId, setSelectedVehicleMagatzemId] = useState("");
-  const [activeTab, setActiveTab] = useState<"MATERIALS" | "EINES" | "MERMES" | "RECOMPRA_STOCK">("MATERIALS");
+  const [activeTab, setActiveTab] = useState<"MATERIALS" | "EINES" | "MERMES" | "RECOMPRA_STOCK" | "ALBARANS">(
+    tabParam === "RECOMPRA_STOCK" || tabParam === "ALBARANS" || tabParam === "MERMES" || tabParam === "EINES"
+      ? tabParam
+      : "MATERIALS"
+  );
   const [mermes, setMermes] = useState<MermaItem[]>([]);
   const [recompraAlertes, setRecompraAlertes] = useState<RecompraAlertaItem[]>([]);
+  const [recompraGrups, setRecompraGrups] = useState<RecompraGrupProveidor[]>([]);
+  const [albaransPendents, setAlbaransPendents] = useState<AlbaraPendentItem[]>([]);
+  const [consolidantAlbaraId, setConsolidantAlbaraId] = useState<string | null>(null);
+  const [suggerimentMerma, setSuggerimentMerma] = useState<SuggerimentMerma | null>(null);
+  const [modalEmailRecompra, setModalEmailRecompra] = useState<{
+    alertaIds: string[];
+    titol: string;
+    proveidorId: string;
+    destinatariEmail: string;
+    assumpte: string;
+    cosMissatge: string;
+    mailtoUrl: string;
+    quantitats: Record<string, number>;
+  } | null>(null);
+  const [enviantEmail, setEnviantEmail] = useState(false);
+
+  useEffect(() => {
+    setNomesTrencamentEstoc(filtreParam === "trencament" || filtreParam === "critics");
+    if (tabParam === "RECOMPRA_STOCK" || tabParam === "ALBARANS" || tabParam === "MERMES" || tabParam === "EINES" || tabParam === "MATERIALS") {
+      setActiveTab(tabParam);
+    }
+  }, [filtreParam, tabParam]);
   const [escanejantRecompra, setEscanejantRecompra] = useState(false);
   const [resolentAlertaId, setResolentAlertaId] = useState<string | null>(null);
   const [quantitatsRecompraEdit, setQuantitatsRecompraEdit] = useState<Record<string, number>>({});
@@ -209,6 +310,7 @@ export default function GestioMagatzemPage() {
     marge_guanys: 0,
     preu_venda: 0,
     es_lot_caducable: false,
+    es_material_continu: false,
     proveidor_id: "",
   });
 
@@ -226,14 +328,14 @@ export default function GestioMagatzemPage() {
     setError(null);
     const targetMagId = magId !== undefined ? magId : selectedMagatzemId;
     const articlesQuery = targetMagId && targetMagId !== "TOTS"
-      ? `/gestio/magatzem/articles?magatzem_id=${targetMagId}`
-      : "/gestio/magatzem/articles";
+      ? `/gestio/magatzem/articles?limit=200&magatzem_id=${targetMagId}`
+      : "/gestio/magatzem/articles?limit=200";
     const einesQuery = targetMagId && targetMagId !== "TOTS"
       ? `/gestio/magatzem/eines?magatzem_id=${targetMagId}`
       : "/gestio/magatzem/eines";
 
     try {
-      const [articlesData, einesData, operarisData, configData, proveidorsData, magatzemsData, mermesData, otsData, recompraData] = await Promise.all([
+      const [articlesData, einesData, operarisData, configData, proveidorsData, magatzemsData, mermesData, otsData, recompraData, grupsData, albaransData] = await Promise.all([
         apiFetch<Article[]>(articlesQuery).catch(() => []),
         apiFetch<any[]>(einesQuery).catch(() => []),
         apiFetch<any[]>("/gestio/operaris").catch(() => []),
@@ -242,7 +344,9 @@ export default function GestioMagatzemPage() {
         apiFetch<MagatzemItem[]>("/gestio/magatzem/magatzems").catch(() => []),
         apiFetch<MermaItem[]>("/gestio/magatzem/mermes").catch(() => []),
         apiFetch<Array<{ id: string; codi: string; titol: string }>>("/gestio/feines").catch(() => []),
-        apiFetch<RecompraAlertaItem[]>("/gestio/magatzem/recompra").catch(() => [])
+        apiFetch<RecompraAlertaItem[]>("/gestio/magatzem/recompra").catch(() => []),
+        apiFetch<RecompraGrupProveidor[]>("/gestio/magatzem/recompra/agrupades-proveidor").catch(() => []),
+        apiFetch<AlbaraPendentItem[]>("/gestio/magatzem/albarans").catch(() => [])
       ]);
       setArticles(articlesData || []);
       setEines(einesData || []);
@@ -251,6 +355,8 @@ export default function GestioMagatzemPage() {
       setMermes(mermesData || []);
       setOrdresTreball(otsData || []);
       setRecompraAlertes(recompraData || []);
+      setRecompraGrups(grupsData || []);
+      setAlbaransPendents(albaransData || []);
       if (Array.isArray(magatzemsData) && magatzemsData.length > 0) {
         setMagatzems(magatzemsData);
         const nauCentral = magatzemsData.find(m => m.tipus === "NAU_CENTRAL") || magatzemsData[0];
@@ -353,6 +459,24 @@ export default function GestioMagatzemPage() {
     carregarArticles();
   }, []);
 
+  useEffect(() => {
+    if (!mermaArticleId) {
+      setSuggerimentMerma(null);
+      return;
+    }
+    let cancelat = false;
+    apiFetch<SuggerimentMerma>(`/gestio/magatzem/articles/${mermaArticleId}/suggeriment-merma`)
+      .then((res) => {
+        if (!cancelat) setSuggerimentMerma(res);
+      })
+      .catch(() => {
+        if (!cancelat) setSuggerimentMerma(null);
+      });
+    return () => {
+      cancelat = true;
+    };
+  }, [mermaArticleId]);
+
   
   const handlePujarOcr = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -440,6 +564,64 @@ export default function GestioMagatzemPage() {
     }
   };
 
+  const handleDesarAlbaraPendent = async () => {
+    if (!resultatOcr) return;
+    setProcessantOcr(true);
+    setError(null);
+    try {
+      const provNom = resultatOcr.proveidor?.nom || (typeof resultatOcr.proveidor === "string" ? resultatOcr.proveidor : "Proveïdor General");
+      const provNif = resultatOcr.proveidor?.nif || "B00000000";
+      await apiFetch("/gestio/magatzem/albarans/desar-pendent", {
+        method: "POST",
+        body: JSON.stringify({
+          proveidor: {
+            nif: provNif,
+            nom: provNom,
+            adreca: resultatOcr.proveidor?.adreca || "",
+            telefon: resultatOcr.proveidor?.telefon || "",
+            email: resultatOcr.proveidor?.email || "",
+          },
+          numero_document: resultatOcr.numero_document || `ALB-${Date.now()}`,
+          tipus_document: resultatOcr.tipus_document || "ALBARA",
+          data_document: resultatOcr.data_document || new Date().toISOString().split("T")[0],
+          numero_albarans_vinculats: resultatOcr.numero_albarans_vinculats || [],
+          linies: (resultatOcr.linies || []).map((l: any) => ({
+            referencia: l.referencia,
+            nom: l.nom,
+            quantitat: Number(l.quantitat) || 1,
+            preu: Number(l.preu) || 0,
+            descompte_percent: Number(l.descompte_percent) || 0,
+            tipus: l.tipus || "MATERIAL",
+          })),
+        }),
+      });
+      setModalOcr(false);
+      setResultatOcr(null);
+      setFitxerOcr(null);
+      setActiveTab("ALBARANS");
+      await carregarArticles();
+    } catch (err: any) {
+      setError(err.message || "Error al desar l'albarà pendent d'auditoria");
+    } finally {
+      setProcessantOcr(false);
+    }
+  };
+
+  const handleConsolidarAlbara = async (albaraId: string) => {
+    setConsolidantAlbaraId(albaraId);
+    setError(null);
+    try {
+      await apiFetch(`/gestio/magatzem/albarans/${albaraId}/consolidar`, {
+        method: "POST",
+      });
+      await carregarArticles();
+    } catch (err: any) {
+      setError(err.message || "Error consolidant l'albarà a estoc");
+    } finally {
+      setConsolidantAlbaraId(null);
+    }
+  };
+
 
   const handleDesarEdicio = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -462,6 +644,7 @@ export default function GestioMagatzemPage() {
           marge_guanys: esEnginyer ? 0 : Number(articleEditant.marge_guanys ?? 0),
           preu_venda: Number(articleEditant.preu_venda),
           es_lot_caducable: articleEditant.es_lot_caducable || false,
+          es_material_continu: articleEditant.es_material_continu || false,
           proveidor_id: articleEditant.proveidor_id || null,
         }),
       });
@@ -601,6 +784,123 @@ export default function GestioMagatzemPage() {
     }
   };
 
+  const obrirModalEmailAlerta = (alerta: RecompraAlertaItem) => {
+    const prop = alerta.dades_comanda_proposta || {};
+    const qty = Number(quantitatsRecompraEdit[alerta.id] || prop.quantitat_aprovada || prop.quantitat_proposada || 1);
+    const refTxt = alerta.article_ref || "N/A";
+    const unitatTxt = prop.unitat_mesura || "UNITAT";
+    setModalEmailRecompra({
+      alertaIds: [alerta.id],
+      titol: `Comanda de recompra · ${alerta.article_nom || refTxt}`,
+      proveidorId: alerta.proveidor_id || "",
+      destinatariEmail: alerta.proveidor_email || prop.proveidor_email || "",
+      assumpte:
+        alerta.esborrany_email_assumpte ||
+        prop.esborrany_email_assumpte ||
+        `Comanda de reposició: ${alerta.article_nom || ""} (${refTxt})`,
+      cosMissatge:
+        alerta.esborrany_email_cos ||
+        prop.esborrany_email_cos ||
+        `Bon dia,\n\nSol·licitem pressupost i termini d'entrega per a:\n- ${refTxt} | ${alerta.article_nom || ""}: ${qty} ${unitatTxt}\n\nGràcies.`,
+      mailtoUrl: alerta.mailto_url || prop.mailto_url || "",
+      quantitats: { [alerta.id]: qty },
+    });
+  };
+
+  const obrirModalEmailGrup = (grup: RecompraGrupProveidor) => {
+    const quantitatsInicials: Record<string, number> = {};
+    for (const item of grup.items) {
+      const override = quantitatsRecompraEdit[item.alerta_id];
+      quantitatsInicials[item.alerta_id] = Number(override || item.quantitat_proposada || 1);
+    }
+    setModalEmailRecompra({
+      alertaIds: grup.alerta_ids,
+      titol: `Comanda agrupada (${grup.total_articles} articles) · ${grup.proveidor_nom}`,
+      proveidorId: grup.proveidor_id || "",
+      destinatariEmail: grup.proveidor_email || "",
+      assumpte: grup.esborrany_email_assumpte,
+      cosMissatge: grup.esborrany_email_cos,
+      mailtoUrl: grup.mailto_url || "",
+      quantitats: quantitatsInicials,
+    });
+  };
+
+  const obrirModalEmailArticle = async (art: Article) => {
+    const existent = recompraAlertes.find(
+      (a) => a.article_id === art.id && (a.estat === "ACTIVA" || a.estat === "PENDENT")
+    );
+    if (existent) {
+      obrirModalEmailAlerta(existent);
+      return;
+    }
+    setError(null);
+    try {
+      await apiFetch("/gestio/magatzem/recompra/escanejar", { method: "POST" });
+      const [freshAlertes, freshGrups] = await Promise.all([
+        apiFetch<RecompraAlertaItem[]>("/gestio/magatzem/recompra").catch(() => []),
+        apiFetch<RecompraGrupProveidor[]>("/gestio/magatzem/recompra/agrupades-proveidor").catch(() => []),
+      ]);
+      setRecompraAlertes(freshAlertes || []);
+      setRecompraGrups(freshGrups || []);
+      const trobada = (freshAlertes || []).find(
+        (a) => a.article_id === art.id && (a.estat === "ACTIVA" || a.estat === "PENDENT")
+      );
+      if (trobada) {
+        obrirModalEmailAlerta(trobada);
+      } else {
+        setError("L'article no compleix els requisits de trencament d'estoc per generar alerta.");
+      }
+    } catch (err: any) {
+      setError(err.message || "Error preparant l'esborrany d'email de recompra");
+    }
+  };
+
+  const handleEnviarEmailRecompra = async (canal: "SMTP" | "MAILTO") => {
+    if (!modalEmailRecompra) return;
+    if (!modalEmailRecompra.destinatariEmail.trim()) {
+      setError("Cal indicar una adreça d'email del proveïdor abans d'enviar.");
+      return;
+    }
+    setEnviantEmail(true);
+    setError(null);
+    try {
+      const resposta = await apiFetch<{
+        estat: string;
+        email_enviat: boolean;
+        email_error?: string | null;
+        mailto_url: string;
+      }>("/gestio/magatzem/recompra/enviar-email", {
+        method: "POST",
+        body: JSON.stringify({
+          alerta_ids: modalEmailRecompra.alertaIds,
+          proveidor_id: modalEmailRecompra.proveidorId || null,
+          destinatari_email: modalEmailRecompra.destinatariEmail.trim(),
+          assumpte: modalEmailRecompra.assumpte,
+          cos_missatge: modalEmailRecompra.cosMissatge,
+          quantitats: modalEmailRecompra.quantitats,
+          canal,
+        }),
+      });
+      if (canal === "MAILTO" && resposta?.mailto_url) {
+        window.open(resposta.mailto_url, "_blank", "noopener,noreferrer");
+      } else if (canal === "SMTP" && !resposta?.email_enviat) {
+        setError(
+          resposta?.email_error
+            ? `Esborrany aprovat, però SMTP no configurat o ha fallat (${resposta.email_error}). Pots usar l'opció mailto.`
+            : "Esborrany aprovat, però no s'ha pogut enviar via SMTP. Utilitza el client de correu (mailto)."
+        );
+      }
+      if (canal === "MAILTO" || resposta?.email_enviat) {
+        setModalEmailRecompra(null);
+      }
+      await carregarArticles();
+    } catch (err: any) {
+      setError(err.message || "Error enviant la comanda de recompra");
+    } finally {
+      setEnviantEmail(false);
+    }
+  };
+
   const handleCheckout = async () => {
     if (!einaCheckout) return;
     if (checkoutTargetTipus === "OPERARI" && !selectedOperari) {
@@ -670,6 +970,7 @@ export default function GestioMagatzemPage() {
             unitat_mesura: normalitzarUnitatMesura(nouArticle.unitat_mesura),
             familia: nouArticle.familia,
             es_lot_caducable: nouArticle.es_lot_caducable,
+            es_material_continu: nouArticle.es_material_continu,
             estoc_inicial: Number(nouArticle.estoc_inicial || 0),
             magatzem_id: nouArticle.magatzem_id || null,
             estoc_optim: Number(nouArticle.estoc_optim),
@@ -705,6 +1006,7 @@ export default function GestioMagatzemPage() {
         marge_guanys: 0,
         preu_venda: 0,
         es_lot_caducable: false,
+        es_material_continu: false,
         proveidor_id: "",
       });
       await carregarArticles();
@@ -715,6 +1017,10 @@ export default function GestioMagatzemPage() {
     }
   };
 
+  const articlesEnTrencament = articles.filter(
+    (a) => Number(a.estoc_minim ?? 0) > 0 && Number(a.estoc_disponible ?? a.estoc_real ?? 0) <= Number(a.estoc_minim ?? 0)
+  );
+
   const articlesFiltrats = articles.filter((a) => {
     const q = filtreCerca.toLowerCase();
     const coincideixCerca =
@@ -722,7 +1028,10 @@ export default function GestioMagatzemPage() {
       a.referencia_inventari.toLowerCase().includes(q) ||
       (a.codi_barres || "").toLowerCase().includes(q);
     const coincideixFamilia = filtreFamilia === "TOTS" || a.familia === filtreFamilia;
-    return coincideixCerca && coincideixFamilia;
+    const estocDisp = Number(a.estoc_disponible ?? a.estoc_real ?? 0);
+    const enTrencament = Number(a.estoc_minim ?? 0) > 0 && estocDisp <= Number(a.estoc_minim ?? 0);
+    const coincideixTrencament = !nomesTrencamentEstoc || enTrencament;
+    return coincideixCerca && coincideixFamilia && coincideixTrencament;
   });
 
   const totesLesFamilies = Array.from(
@@ -835,6 +1144,42 @@ export default function GestioMagatzemPage() {
             />
           </div>
 
+          <button
+            type="button"
+            onClick={() => {
+              setActiveTab("MATERIALS");
+              setMostrarLectorBarres((prev) => !prev);
+            }}
+            className={`px-3 py-1.5 rounded-xl border text-xs font-bold flex items-center gap-1.5 transition-colors ${
+              mostrarLectorBarres
+                ? "bg-primary/10 border-primary text-primary"
+                : "border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700"
+            }`}
+            title="Escanejar codi de barres de material (EAN / Code128)"
+          >
+            <Barcode className="w-3.5 h-3.5" />
+            <span>Lector Barres</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              setActiveTab("MATERIALS");
+              setNomesTrencamentEstoc((prev) => !prev);
+            }}
+            className={`px-3 py-1.5 rounded-xl border text-xs font-bold flex items-center gap-1.5 transition-colors ${
+              nomesTrencamentEstoc
+                ? "bg-rose-600 border-rose-600 text-white shadow"
+                : articlesEnTrencament.length > 0
+                ? "bg-amber-50 dark:bg-amber-950/40 border-amber-300 dark:border-amber-800 text-amber-800 dark:text-amber-300 hover:bg-amber-100"
+                : "border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-100"
+            }`}
+            title="Filtrar exclusivament articles per sota de l'estoc mínim"
+          >
+            <AlertTriangle className="w-3.5 h-3.5" />
+            <span>Trencaments ({articlesEnTrencament.length})</span>
+          </button>
+
           <select
             value={filtreFamilia}
             onChange={(e) => setFiltreFamilia(e.target.value)}
@@ -892,6 +1237,25 @@ export default function GestioMagatzemPage() {
           </button>
         </div>
       </div>
+
+      {mostrarLectorBarres && (
+        <div className="mx-4 mt-3 p-3 rounded-2xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 flex flex-col sm:flex-row sm:items-center gap-3">
+          <div className="text-xs font-semibold text-slate-700 dark:text-slate-200 shrink-0 flex items-center gap-1.5">
+            <Barcode className="w-4 h-4 text-primary" />
+            <span>Escaneig de Material (EAN / Code128):</span>
+          </div>
+          <div className="flex-1">
+            <BarcodeScanner
+              placeholder="Escaneja o introdueix el codi de barres per cercar un material..."
+              onScan={(code) => {
+                setFiltreCerca(code);
+                setActiveTab("MATERIALS");
+                setMostrarLectorBarres(false);
+              }}
+            />
+          </div>
+        </div>
+      )}
 
       {error && (
         <div className="mx-4 mt-3 p-3 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-900 text-rose-700 dark:text-rose-300 text-xs flex items-center justify-between">
@@ -961,6 +1325,22 @@ export default function GestioMagatzemPage() {
                   </span>
                 )}
               </button>
+              <button
+                onClick={() => setActiveTab("ALBARANS")}
+                className={`px-4 py-2 rounded-lg text-xs font-bold transition-colors flex items-center gap-2 ${
+                  activeTab === "ALBARANS"
+                    ? "bg-primary text-white"
+                    : "bg-slate-100 text-slate-600 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-400"
+                }`}
+              >
+                <ClipboardCheck className="w-3.5 h-3.5" />
+                <span>Albarans OCR</span>
+                {albaransPendents.filter((a) => a.estat === "PENDENT_AUDITORIA").length > 0 && (
+                  <span className="px-1.5 py-0.5 rounded-full text-[10px] font-mono font-black bg-rose-500 text-white">
+                    {albaransPendents.filter((a) => a.estat === "PENDENT_AUDITORIA").length}
+                  </span>
+                )}
+              </button>
             </div>
 
             {/* Targetes de Resum */}
@@ -989,17 +1369,33 @@ export default function GestioMagatzemPage() {
                 </div>
               </div>
 
-              <div className="p-4 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm flex items-center justify-between">
+              <button
+                type="button"
+                onClick={() => {
+                  setActiveTab("MATERIALS");
+                  setNomesTrencamentEstoc((prev) => !prev);
+                }}
+                className={`p-4 rounded-2xl border shadow-sm flex items-center justify-between text-left transition-all ${
+                  nomesTrencamentEstoc
+                    ? "bg-amber-50 dark:bg-amber-950/40 border-amber-400 dark:border-amber-700"
+                    : "bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 hover:border-amber-300"
+                }`}
+              >
                 <div>
-                  <p className="text-[10px] font-mono uppercase text-slate-400 font-bold">Alertes Trencament HITL</p>
+                  <p className="text-[10px] font-mono uppercase text-slate-400 font-bold">
+                    Articles en Trencament {nomesTrencamentEstoc ? "(Filtre Actiu)" : ""}
+                  </p>
                   <h3 className="text-xl font-black text-amber-600 dark:text-amber-400 mt-0.5 tabular-nums">
-                    {recompraAlertes.filter((a) => a.estat === "ACTIVA").length}
+                    {articlesEnTrencament.length}{" "}
+                    <span className="text-[11px] font-normal text-slate-500">
+                      · {recompraAlertes.filter((a) => a.estat === "ACTIVA").length} esborranys HITL
+                    </span>
                   </h3>
                 </div>
                 <div className="w-10 h-10 rounded-xl bg-amber-50 dark:bg-amber-950/40 text-amber-600 flex items-center justify-center">
                   <ShoppingCart className="w-5 h-5" />
                 </div>
-              </div>
+              </button>
             </div>
 
             {/* Taula d'articles */}
@@ -1024,6 +1420,62 @@ export default function GestioMagatzemPage() {
                     </button>
                   </div>
                 ) : (
+                <>
+                  {nomesTrencamentEstoc && (
+                    <div className="px-4 py-3 bg-amber-50 dark:bg-amber-950/40 border-b border-amber-200 dark:border-amber-900/50 flex flex-wrap items-center justify-between gap-3">
+                      <div className="flex items-center gap-2 text-xs font-semibold text-amber-900 dark:text-amber-200">
+                        <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+                        <span>
+                          Mostrant només articles amb trencament d&apos;estoc ({articlesFiltrats.length} de {articles.length})
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setActiveTab("RECOMPRA_STOCK")}
+                          className="px-3 py-1 rounded-lg bg-primary hover:opacity-90 text-white text-[11px] font-bold inline-flex items-center gap-1"
+                        >
+                          <Mail className="w-3 h-3" />
+                          <span>Preparar Emails Proveïdors</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setNomesTrencamentEstoc(false)}
+                          className="px-3 py-1 rounded-lg border border-amber-300 dark:border-amber-700 text-amber-800 dark:text-amber-200 text-[11px] font-bold hover:bg-amber-100 dark:hover:bg-amber-900/40"
+                        >
+                          Veure tots els articles
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                  {articlesFiltrats.length === 0 ? (
+                    <div className="flex flex-col items-center justify-center p-12 text-center">
+                      <div className="w-12 h-12 rounded-full bg-emerald-50 dark:bg-emerald-950/40 text-emerald-600 flex items-center justify-center mb-3">
+                        <CheckCircle2 className="w-6 h-6" />
+                      </div>
+                      <h3 className="text-sm font-bold text-slate-800 dark:text-slate-100">
+                        {nomesTrencamentEstoc
+                          ? "Cap article en trencament d'estoc"
+                          : "Cap article coincideix amb el filtre"}
+                      </h3>
+                      <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 max-w-sm">
+                        {nomesTrencamentEstoc
+                          ? "Tots els materials superen el llindar d'estoc mínim configurat."
+                          : "Prova de netejar la cerca o canviar de família."}
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setNomesTrencamentEstoc(false);
+                          setFiltreCerca("");
+                          setFiltreFamilia("TOTS");
+                        }}
+                        className="mt-4 px-4 py-2 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 text-slate-700 dark:text-slate-200 text-xs font-bold"
+                      >
+                        Mostrar tot el catàleg
+                      </button>
+                    </div>
+                  ) : (
                 <table className="w-full text-left text-xs border-collapse">
                   <thead>
                     <tr className="bg-slate-50 dark:bg-slate-800/60 border-b border-slate-200 dark:border-slate-800 font-bold text-slate-600 dark:text-slate-300">
@@ -1056,7 +1508,12 @@ export default function GestioMagatzemPage() {
                           )}
                         </td>
                         <td className="p-3 font-medium text-slate-900 dark:text-white">
-                          {art.nom}
+                          <span>{art.nom}</span>
+                          {art.es_material_continu && (
+                            <span className="ml-2 px-1.5 py-0.5 rounded bg-sky-100 text-sky-700 dark:bg-sky-900/40 dark:text-sky-300 text-[10px] font-bold">
+                              Continu
+                            </span>
+                          )}
                         </td>
                         <td className="p-3">
                           <span className="text-xs font-semibold text-slate-700 dark:text-slate-300">
@@ -1074,7 +1531,7 @@ export default function GestioMagatzemPage() {
                         <td className="p-3 text-right font-mono tabular-nums">
                           <span
                             className={`px-2 py-1 rounded-lg font-bold inline-block ${
-                              estocDisp <= art.estoc_minim
+                              art.estoc_minim > 0 && estocDisp <= art.estoc_minim
                                 ? "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400"
                                 : "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300"
                             }`}
@@ -1102,23 +1559,41 @@ export default function GestioMagatzemPage() {
                           {Number(art.preu_venda ?? 0).toFixed(2)} €
                         </td>
                         <td className="p-3 text-right">
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              obrirAjustEstoc(art);
-                            }}
-                            className="px-2.5 py-1 rounded-lg bg-primary/10 hover:bg-primary/20 text-primary text-[11px] font-bold inline-flex items-center gap-1 transition-colors"
-                            title="Registrar entrada, sortida o reserva manual"
-                          >
-                            <SlidersHorizontal className="w-3 h-3" />
-                            <span>Ajustar Estoc</span>
-                          </button>
+                          <div className="inline-flex items-center justify-end gap-1.5">
+                            {!esEnginyer && art.estoc_minim > 0 && estocDisp <= art.estoc_minim && (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  obrirModalEmailArticle(art);
+                                }}
+                                className="px-2.5 py-1 rounded-lg bg-amber-100 hover:bg-amber-200 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300 text-[11px] font-bold inline-flex items-center gap-1 transition-colors"
+                                title="Preparar esborrany d'email al proveïdor"
+                              >
+                                <Mail className="w-3 h-3" />
+                                <span>Demanar</span>
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                obrirAjustEstoc(art);
+                              }}
+                              className="px-2.5 py-1 rounded-lg bg-primary/10 hover:bg-primary/20 text-primary text-[11px] font-bold inline-flex items-center gap-1 transition-colors"
+                              title="Registrar entrada, sortida o reserva manual"
+                            >
+                              <SlidersHorizontal className="w-3 h-3" />
+                              <span>Ajustar Estoc</span>
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     );})}
                   </tbody>
                 </table>
+                  )}
+                </>
                 )
               ) : activeTab === "EINES" ? (
                 <table className="w-full text-left text-xs border-collapse">
@@ -1218,6 +1693,71 @@ export default function GestioMagatzemPage() {
                     </button>
                   </div>
 
+                  {recompraGrups.length > 0 && (
+                    <div className="space-y-2.5">
+                      <h4 className="text-xs font-bold uppercase tracking-wider text-slate-500 flex items-center gap-1.5">
+                        <Mail className="w-3.5 h-3.5 text-primary" />
+                        Esborranys de Comanda Agrupats per Proveïdor
+                      </h4>
+                      <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+                        {recompraGrups.map((grup) => (
+                          <div
+                            key={grup.grup_key}
+                            className="p-4 rounded-2xl border border-primary/20 bg-primary/5 flex flex-col justify-between gap-3"
+                          >
+                            <div className="space-y-1.5">
+                              <div className="flex items-center justify-between gap-2">
+                                <span className="text-xs font-bold text-slate-900 dark:text-white">
+                                  {grup.proveidor_nom}
+                                </span>
+                                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300">
+                                  {grup.total_articles} {grup.total_articles === 1 ? "article" : "articles"}
+                                </span>
+                              </div>
+                              <p className="text-[11px] font-mono text-slate-500">
+                                Email: {grup.proveidor_email || "Sense email configurat (editable al revisar)"}
+                              </p>
+                              <ul className="text-[11px] text-slate-700 dark:text-slate-300 space-y-0.5 pt-1">
+                                {grup.items.map((it) => (
+                                  <li key={it.alerta_id} className="flex justify-between gap-2 font-mono">
+                                    <span className="truncate">
+                                      • {it.referencia || "N/A"} · {it.nom}
+                                    </span>
+                                    <span className="font-bold shrink-0">
+                                      {it.quantitat_proposada} {it.unitat_mesura}
+                                    </span>
+                                  </li>
+                                ))}
+                              </ul>
+                              {!esEnginyer && grup.import_total_estimat != null && (
+                                <p className="text-[11px] font-mono text-slate-700 dark:text-slate-200 pt-1">
+                                  Import estimat conjunt: <strong>{Number(grup.import_total_estimat).toFixed(2)} €</strong>
+                                </p>
+                              )}
+                            </div>
+                            <div className="flex items-center justify-between gap-2 pt-2 border-t border-primary/15">
+                              <span className="text-[10px] font-semibold text-emerald-700 dark:text-emerald-400">
+                                HITL: Pendent d&apos;aprovació humana
+                              </span>
+                              {!esEnginyer ? (
+                                <button
+                                  type="button"
+                                  onClick={() => obrirModalEmailGrup(grup)}
+                                  className="px-3 py-1.5 rounded-xl bg-primary hover:opacity-90 text-white text-xs font-bold inline-flex items-center gap-1.5 shadow-sm"
+                                >
+                                  <Mail className="w-3.5 h-3.5" />
+                                  <span>Revisar i Enviar Email</span>
+                                </button>
+                              ) : (
+                                <span className="text-[11px] text-slate-500 font-semibold">Només Direcció / Admin</span>
+                              )}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
                   {recompraAlertes.length === 0 ? (
                     <div className="rounded-xl border border-dashed border-slate-200 dark:border-slate-800 py-10 text-center text-xs text-slate-500">
                       Cap alerta activa de trencament d&apos;estoc. Tots els articles superen l&apos;estoc mínim configurat.
@@ -1284,6 +1824,14 @@ export default function GestioMagatzemPage() {
                                     />
                                     <button
                                       type="button"
+                                      onClick={() => obrirModalEmailAlerta(alerta)}
+                                      className="px-3 py-1.5 rounded-xl bg-amber-100 hover:bg-amber-200 text-amber-900 dark:bg-amber-900/40 dark:text-amber-200 text-xs font-bold inline-flex items-center gap-1"
+                                    >
+                                      <Mail className="w-3.5 h-3.5" />
+                                      <span>Revisar Email</span>
+                                    </button>
+                                    <button
+                                      type="button"
                                       disabled={resolentAlertaId === alerta.id}
                                       onClick={() => handleAccioRecompra(alerta, "APROVAR")}
                                       className="px-3 py-1.5 rounded-xl bg-primary hover:opacity-90 text-white text-xs font-bold disabled:opacity-50"
@@ -1309,6 +1857,86 @@ export default function GestioMagatzemPage() {
                           </div>
                         );
                       })}
+                    </div>
+                  )}
+                </div>
+              ) : activeTab === "ALBARANS" ? (
+                <div className="p-5 space-y-4">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-200 dark:border-slate-800">
+                    <div>
+                      <h3 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                        <ClipboardCheck className="w-4 h-4 text-primary" />
+                        Albarans d&apos;Entrada Pendents d&apos;Auditoria i Consolidats (FR-009)
+                      </h3>
+                      <p className="text-xs text-slate-500 mt-0.5">
+                        Els albarans desats en pendent no incrementen l&apos;estoc ni recalculen el PMP fins a la consolidació humana.
+                      </p>
+                    </div>
+                  </div>
+                  {albaransPendents.length === 0 ? (
+                    <div className="rounded-xl border border-dashed border-slate-200 dark:border-slate-800 py-10 text-center text-xs text-slate-500">
+                      Cap albarà enregistrat. Puja un albarà des d&apos;Entrada Assistida IA per auditar-lo abans de consolidar.
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      {albaransPendents.map((alb) => (
+                        <div
+                          key={alb.id}
+                          className="p-4 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-800/30 space-y-2"
+                        >
+                          <div className="flex flex-wrap items-center justify-between gap-3">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span
+                                className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${
+                                  alb.estat === "PENDENT_AUDITORIA"
+                                    ? "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300"
+                                    : "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300"
+                                }`}
+                              >
+                                {alb.estat}
+                              </span>
+                              <span className="font-mono text-xs font-bold text-primary">
+                                {alb.numero_albara}
+                              </span>
+                              <span className="text-xs font-bold text-slate-800 dark:text-white">
+                                {alb.proveidor_nom || "Proveïdor"}
+                              </span>
+                              {alb.data_albara && (
+                                <span className="text-[11px] font-mono text-slate-400">
+                                  {alb.data_albara}
+                                </span>
+                              )}
+                            </div>
+                            {alb.estat === "PENDENT_AUDITORIA" && (
+                              <button
+                                type="button"
+                                disabled={consolidantAlbaraId === alb.id}
+                                onClick={() => handleConsolidarAlbara(alb.id)}
+                                className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold inline-flex items-center gap-1.5 disabled:opacity-50"
+                              >
+                                <CheckCircle2 className="w-3.5 h-3.5" />
+                                <span>
+                                  {consolidantAlbaraId === alb.id
+                                    ? "Consolidant..."
+                                    : "Consolidar i Augmentar Estoc"}
+                                </span>
+                              </button>
+                            )}
+                          </div>
+                          {alb.linies && alb.linies.length > 0 && (
+                            <div className="text-[11px] text-slate-600 dark:text-slate-300 grid grid-cols-1 md:grid-cols-2 gap-1 pt-1">
+                              {alb.linies.map((lin, idx) => (
+                                <div key={`${alb.id}-${idx}`} className="font-mono flex justify-between gap-2 bg-white dark:bg-slate-900 px-2.5 py-1 rounded-lg border border-slate-100 dark:border-slate-800">
+                                  <span className="truncate">{lin.referencia} · {lin.nom}</span>
+                                  <span className="font-bold shrink-0">
+                                    x{lin.quantitat}{!esEnginyer && lin.preu != null ? ` · ${Number(lin.preu).toFixed(2)}€` : ""}
+                                  </span>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      ))}
                     </div>
                   )}
                 </div>
@@ -1390,6 +2018,19 @@ export default function GestioMagatzemPage() {
                       </button>
                     </div>
                   </form>
+
+                  {suggerimentMerma && (
+                    <div className="rounded-xl border border-sky-200 dark:border-sky-900 bg-sky-50/70 dark:bg-sky-950/30 p-3 flex flex-wrap items-center justify-between gap-2 text-xs">
+                      <div className="flex items-center gap-2 text-sky-900 dark:text-sky-200">
+                        <AlertTriangle className="w-4 h-4 text-sky-600 shrink-0" />
+                        <span>{suggerimentMerma.recomanacio}</span>
+                      </div>
+                      <span className="px-2.5 py-0.5 rounded-full bg-sky-100 dark:bg-sky-900/60 text-sky-800 dark:text-sky-200 font-mono font-bold text-[11px]">
+                        Merma suggerida: {Number(suggerimentMerma.merma_suggerida_pct || 0).toFixed(1)}%
+                        {suggerimentMerma.es_material_continu ? " · Material continu" : ""}
+                      </span>
+                    </div>
+                  )}
 
                   {mermes.length === 0 ? (
                     <div className="rounded-xl border border-dashed border-slate-200 dark:border-slate-800 py-10 text-center text-xs text-slate-500">
@@ -1763,13 +2404,22 @@ export default function GestioMagatzemPage() {
                       </strong>
                     </div>
 
-                    <div className="flex gap-2">
+                    <div className="flex flex-wrap gap-2">
                       <button
                         onClick={() => setResultatOcr(null)}
                         className="px-4 py-2 rounded-xl border border-slate-300 dark:border-slate-700 text-slate-600 dark:text-slate-300 text-xs font-medium hover:bg-slate-100 dark:hover:bg-slate-800"
                         disabled={processantOcr}
                       >
                         Tornar
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleDesarAlbaraPendent}
+                        disabled={processantOcr}
+                        className="px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-600 text-white text-xs font-bold shadow flex items-center gap-1.5 disabled:opacity-50"
+                      >
+                        <ClipboardCheck className="w-3.5 h-3.5" />
+                        <span>Desar Pendent d&apos;Auditoria</span>
                       </button>
                       <button
                         onClick={handleConfirmarOcr}
@@ -2110,6 +2760,17 @@ export default function GestioMagatzemPage() {
                       </select>
                     </div>
                   </div>
+                  <label className="flex items-center gap-2.5 p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50/70 dark:bg-slate-800/40 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={nouArticle.es_material_continu}
+                      onChange={(e) => setNouArticle({ ...nouArticle, es_material_continu: e.target.checked })}
+                      className="rounded border-slate-300 text-primary focus:ring-primary"
+                    />
+                    <span className="text-xs font-semibold text-slate-700 dark:text-slate-200">
+                      Material continu / a tall (cable, tub, mànega — calcula % merma històric)
+                    </span>
+                  </label>
                 </>
               )}
 
@@ -2400,6 +3061,17 @@ export default function GestioMagatzemPage() {
                         />
                       </div>
                     </div>
+                    <label className="flex items-center gap-2 p-2 rounded-xl bg-white dark:bg-slate-900 border border-emerald-100 dark:border-emerald-900/40 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={Boolean(articleEditant.es_material_continu)}
+                        onChange={(e) => setArticleEditant({ ...articleEditant, es_material_continu: e.target.checked })}
+                        className="rounded border-slate-300 text-primary focus:ring-primary"
+                      />
+                      <span className="text-[11px] font-semibold text-slate-700 dark:text-slate-200">
+                        Material continu / a tall (aplica suggeriment de merma històric FR-008)
+                      </span>
+                    </label>
                   </div>
                   
                   <div className="p-4 bg-primary/5 rounded-2xl border border-primary/20 space-y-4">
@@ -2999,6 +3671,152 @@ export default function GestioMagatzemPage() {
         </div>
       )}
 
+      {/* Modal Esborrany d'Email de Recompra al Proveïdor (HITL FR-010) */}
+      {modalEmailRecompra && !esEnginyer && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl w-full max-w-2xl shadow-2xl overflow-hidden">
+            <div className="p-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between bg-slate-50 dark:bg-slate-800/50">
+              <div className="flex items-center gap-2">
+                <Mail className="w-4 h-4 text-primary" />
+                <div>
+                  <h3 className="text-sm font-bold text-slate-900 dark:text-white">
+                    {modalEmailRecompra.titol}
+                  </h3>
+                  <p className="text-[11px] text-slate-500">
+                    Revisió humana obligatòria (HITL): edita el correu abans d&apos;aprovar l&apos;enviament al proveïdor.
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setModalEmailRecompra(null)}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-slate-200"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-5 space-y-4 max-h-[75vh] overflow-y-auto">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-400 mb-1">
+                    Proveïdor
+                  </label>
+                  <select
+                    value={modalEmailRecompra.proveidorId}
+                    onChange={(e) => {
+                      const provId = e.target.value;
+                      const prov = proveidors.find((p: any) => p.id === provId);
+                      setModalEmailRecompra({
+                        ...modalEmailRecompra,
+                        proveidorId: provId,
+                        destinatariEmail: prov?.email || modalEmailRecompra.destinatariEmail,
+                      });
+                    }}
+                    className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs"
+                  >
+                    <option value="">Selecciona proveïdor...</option>
+                    {proveidors.map((p: any) => (
+                      <option key={p.id} value={p.id}>
+                        {p.nom} {p.email ? `(${p.email})` : ""}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-400 mb-1">
+                    Email destinatari *
+                  </label>
+                  <input
+                    type="email"
+                    required
+                    placeholder="comandes@proveidor.cat"
+                    value={modalEmailRecompra.destinatariEmail}
+                    onChange={(e) =>
+                      setModalEmailRecompra({ ...modalEmailRecompra, destinatariEmail: e.target.value })
+                    }
+                    className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-mono"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-400 mb-1">
+                  Assumpte
+                </label>
+                <input
+                  type="text"
+                  value={modalEmailRecompra.assumpte}
+                  onChange={(e) =>
+                    setModalEmailRecompra({ ...modalEmailRecompra, assumpte: e.target.value })
+                  }
+                  className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-semibold"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-400 mb-1">
+                  Cos del missatge
+                </label>
+                <textarea
+                  rows={8}
+                  value={modalEmailRecompra.cosMissatge}
+                  onChange={(e) =>
+                    setModalEmailRecompra({ ...modalEmailRecompra, cosMissatge: e.target.value })
+                  }
+                  className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-mono leading-relaxed"
+                />
+              </div>
+            </div>
+
+            <div className="p-4 border-t border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 flex flex-wrap items-center justify-between gap-2">
+              <button
+                type="button"
+                onClick={() => setModalEmailRecompra(null)}
+                disabled={enviantEmail}
+                className="px-4 py-2 rounded-xl border border-slate-300 dark:border-slate-700 text-xs font-medium text-slate-600 dark:text-slate-300"
+              >
+                Cancel·lar
+              </button>
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  disabled={enviantEmail}
+                  onClick={() => handleEnviarEmailRecompra("MAILTO")}
+                  className="px-4 py-2 rounded-xl border border-primary/40 bg-primary/10 hover:bg-primary/20 text-primary text-xs font-bold inline-flex items-center gap-1.5 disabled:opacity-50"
+                >
+                  <ExternalLink className="w-3.5 h-3.5" />
+                  <span>Aprovar i Obrir Correu (mailto:)</span>
+                </button>
+                <button
+                  type="button"
+                  disabled={enviantEmail}
+                  onClick={() => handleEnviarEmailRecompra("SMTP")}
+                  className="px-4 py-2 rounded-xl bg-primary hover:opacity-90 text-white text-xs font-bold shadow inline-flex items-center gap-1.5 disabled:opacity-50"
+                >
+                  <Send className="w-3.5 h-3.5" />
+                  <span>{enviantEmail ? "Enviant..." : "Aprovar i Enviar per SMTP"}</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
+  );
+}
+
+export default function GestioMagatzemPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="flex-1 flex flex-col items-center justify-center p-12 text-center text-xs text-slate-500">
+          Carregant magatzem i alertes d&apos;estoc...
+        </div>
+      }
+    >
+      <MagatzemContent />
+    </Suspense>
   );
 }

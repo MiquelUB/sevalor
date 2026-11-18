@@ -82,9 +82,8 @@ export default function GestioClientsPage() {
   const [loadingFitxa, setLoadingFitxa] = useState(false);
 
 
-  // Formulari nou client
+  // Formulari nou client (codi generat automàticament al backend: CLI-XXXX)
   const [nouClient, setNouClient] = useState({
-    codi: "",
     rao_social: "",
     nif: "",
     telefon: "",
@@ -182,7 +181,6 @@ export default function GestioClientsPage() {
       const updated = await apiFetch<Client>(`/gestio/clients/${clientEditant.id}`, {
         method: "PUT",
         body: JSON.stringify({
-          codi: clientEditant.codi,
           rao_social: clientEditant.rao_social,
           nif: clientEditant.nif,
           telefon: clientEditant.telefon || null,
@@ -267,7 +265,6 @@ export default function GestioClientsPage() {
       });
       setModalNouClient(false);
       setNouClient({
-        codi: "",
         rao_social: "",
         nif: "",
         telefon: "",
@@ -735,16 +732,12 @@ export default function GestioClientsPage() {
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-400 mb-1">
-                    Codi Client *
+                    Codi Client
                   </label>
-                  <input
-                    type="text"
-                    required
-                    placeholder="CLI-0001"
-                    value={nouClient.codi}
-                    onChange={(e) => setNouClient({ ...nouClient, codi: e.target.value })}
-                    className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-mono"
-                  />
+                  <div className="w-full px-3 py-2 rounded-xl border border-dashed border-emerald-300 dark:border-emerald-800 bg-emerald-50/70 dark:bg-emerald-950/30 text-xs font-mono text-emerald-700 dark:text-emerald-300 flex items-center gap-1.5">
+                    <Lock className="w-3.5 h-3.5 shrink-0" />
+                    <span>Automàtic (CLI-XXXX)</span>
+                  </div>
                 </div>
                 <div>
                   <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-400 mb-1">
@@ -885,13 +878,15 @@ export default function GestioClientsPage() {
             <form onSubmit={handleDesarEdicioClient} className="p-5 space-y-3">
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-400 mb-1">Codi *</label>
+                  <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-400 mb-1">
+                    Codi (Automàtic)
+                  </label>
                   <input
                     type="text"
-                    required
+                    readOnly
                     value={clientEditant.codi}
-                    onChange={(e) => setClientEditant({ ...clientEditant, codi: e.target.value })}
-                    className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-mono"
+                    title="Numeració automàtica assignada pel sistema"
+                    className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-100 dark:bg-slate-800/60 text-slate-500 dark:text-slate-400 text-xs font-mono cursor-not-allowed"
                   />
                 </div>
                 <div>

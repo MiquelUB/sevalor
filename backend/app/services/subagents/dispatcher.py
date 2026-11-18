@@ -15,7 +15,11 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.core.network_utils import build_node_ia_headers, resolve_effective_node_url
+from app.core.network_utils import (
+    build_node_ia_headers,
+    resoldre_url_tunel_ia,
+    resolve_effective_node_url,
+)
 from app.models.models import ConsultaXatCopilot, Empresa, Usuari
 from app.services.sovereign_storage import SovereignStorageGateway
 from app.services.subagents.base import BaseSubagent
@@ -475,8 +479,9 @@ class CopilotDispatcher:
         tool_result: Optional[dict] = None
         selected_subagent: BaseSubagent = primary_subagent
 
-        if node_url and node_url.startswith(("http://", "https://")):
-            effective_url = resolve_effective_node_url(node_url) or node_url
+        tunel_lm_url = resoldre_url_tunel_ia(node_url, disc_url)
+        if tunel_lm_url and tunel_lm_url.startswith(("http://", "https://")):
+            effective_url = resolve_effective_node_url(tunel_lm_url) or tunel_lm_url
             base_url = effective_url.rstrip("/")
             endpoint = f"{base_url}/chat/completions" if base_url.endswith("/v1") else f"{base_url}/v1/chat/completions"
             model_name = getattr(settings, "LM_STUDIO_MODEL", "qwen2.5-vl-7b-instruct")
@@ -526,14 +531,6 @@ class CopilotDispatcher:
                         "message": "No s'ha pogut completar la inferència al node local de l'empresa.",
                     },
                 )
-        elif disc_url and disc_url.startswith(("http://", "https://")):
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail={
-                    "code": "NODE_IA_OFFLINE",
-                    "message": "L'empresa utilitza disc remot HTTP sense URL de túnel LM Studio configurada (node_ia_url).",
-                },
-            )
 
         # ── 6. Resolució Final i Grounding Fallback ─────────────────────────────
         enllacos: List[dict] = []

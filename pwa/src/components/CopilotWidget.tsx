@@ -1,13 +1,20 @@
 "use client";
 import React, { useState, useEffect } from "react";
+import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Sparkles, X, Send, ExternalLink, Bot, MessageSquare, Camera, Image as ImageIcon } from "lucide-react";
+import { Sparkles, X, Send, ExternalLink, Bot, Camera } from "lucide-react";
 import { apiFetch, getAuthToken } from "@/lib/api";
 
 export default function CopilotWidget({ isMobile = false }: { isMobile?: boolean }) {
   const pathname = usePathname();
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
   const [hasCopilotIa, setHasCopilotIa] = useState<boolean>(false);
+  const [iaStatus, setIaStatus] = useState<{
+    estat: string;
+    model_actiu?: string;
+    latencia_ms?: number | null;
+    error?: string;
+  } | null>(null);
   const [obert, setObert] = useState(false);
   const [missatgeXat, setMissatgeXat] = useState("");
   const [conversaXat, setConversaXat] = useState<any[]>([
@@ -42,9 +49,14 @@ export default function CopilotWidget({ isMobile = false }: { isMobile?: boolean
 
     apiFetch<any>("/auth/me")
       .then((res) => {
-        if (res && res.id && res.feature_copilot_ia === true && res.node_ia_actiu === true) {
+        if (res && res.id && res.feature_copilot_ia !== false) {
           setIsAuthenticated(true);
           setHasCopilotIa(true);
+          if (!isMobile) {
+            apiFetch<any>("/gestio/copilot/ia-status")
+              .then((st) => setIaStatus(st || null))
+              .catch(() => setIaStatus({ estat: "OFFLINE" }));
+          }
         } else {
           setIsAuthenticated(false);
           setHasCopilotIa(false);
@@ -118,11 +130,13 @@ export default function CopilotWidget({ isMobile = false }: { isMobile?: boolean
       const requiresConf = dades?.metadata?.tool_resultat?.requires_confirmation;
       setConversaXat((prev) => [
         ...prev,
-        { 
-          sender: "bot", 
-          text: dades?.resposta || (requiresConf ? dades?.metadata?.tool_resultat?.missatge : ""), 
+        {
+          sender: "bot",
+          text: dades?.resposta || (requiresConf ? dades?.metadata?.tool_resultat?.missatge : ""),
           links: dades?.enllacos || [],
-          actionContext: requiresConf ? dades?.metadata?.tool_resultat : null
+          subagent: dades?.subagent_utilitzat || null,
+          latencyMs: dades?.temps_inferencia_ms ?? null,
+          actionContext: requiresConf ? dades?.metadata?.tool_resultat : null,
         },
       ]);
     } catch (err: any) {
@@ -141,7 +155,15 @@ export default function CopilotWidget({ isMobile = false }: { isMobile?: boolean
     <>
       {/* Botó Flotant Global */}
       <button
-        onClick={() => setObert(true)}
+        onClick={() => {
+          setObert(true);
+          if (!isMobile) {
+            apiFetch<any>("/gestio/copilot/ia-status")
+              .then((st) => setIaStatus(st || null))
+              .catch(() => setIaStatus({ estat: "OFFLINE" }));
+          }
+        }}
+        title="Obrir Sevalor Copilot IA"
         className={`fixed p-4 rounded-full bg-primary text-on-primary shadow-xl hover:bg-primary/90 transition-all z-50 flex items-center justify-center ${obert ? 'hidden' : ''} ${isMobile ? "bottom-20 right-4" : "bottom-6 right-6"}`}
       >
         <Sparkles className="w-6 h-6" />
@@ -151,22 +173,82 @@ export default function CopilotWidget({ isMobile = false }: { isMobile?: boolean
       {obert && (
         <div className={`fixed z-50 bg-surface-container-lowest dark:bg-slate-900 flex flex-col overflow-hidden shadow-2xl border-outline-variant/40 dark:border-slate-800 ${isMobile ? "inset-0 w-full h-full pb-[60px]" : "bottom-6 right-6 w-96 h-[550px] border rounded-2xl"}`}>
           {/* Header */}
-          <div className="p-3 bg-primary text-on-primary flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <Bot className="w-5 h-5" />
-              <h4 className="font-bold text-sm">Sevalor Copilot</h4>
+          <div className="p-3 bg-primary text-on-primary flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2 min-w-0">
+              <Bot className="w-5 h-5 shrink-0" />
+              <div className="min-w-0">
+                <div className="flex items-center gap-1.5">
+                  <h4 className="font-bold text-sm truncate">Sevalor Copilot</h4>
+                  {!isMobile && iaStatus && (
+                    <span
+                      className={`px-1.5 py-0.5 rounded-full text-[9px] font-mono font-bold ${
+                        iaStatus.estat === "ONLINE"
+                          ? "bg-emerald-400 text-slate-950"
+                          : "bg-amber-300 text-slate-950"
+                      }`}
+                    >
+                      {iaStatus.estat === "ONLINE"
+                        ? `LIVE${iaStatus.latencia_ms != null ? ` ${iaStatus.latencia_ms}ms` : ""}`
+                        : "OFFLINE"}
+                    </span>
+                  )}
+                </div>
+                {!isMobile && iaStatus?.model_actiu && iaStatus.estat === "ONLINE" && (
+                  <p className="text-[10px] text-white/75 font-mono truncate">{iaStatus.model_actiu}</p>
+                )}
+              </div>
             </div>
-            <button onClick={() => setObert(false)} className="hover:bg-primary-container p-1 rounded-md transition-colors">
-              <X className="w-4 h-4" />
-            </button>
+            <div className="flex items-center gap-1 shrink-0">
+              {!isMobile && (
+                <Link
+                  href="/gestio/copilot"
+                  onClick={() => setObert(false)}
+                  className="px-2 py-1 rounded-md text-[10px] font-semibold bg-white/15 hover:bg-white/25 transition-colors"
+                  title="Obrir Centre Complet del Copilot"
+                >
+                  Centre IA
+                </Link>
+              )}
+              <button onClick={() => setObert(false)} className="hover:bg-primary-container p-1 rounded-md transition-colors">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
           </div>
+
+          {/* Avís si node offline */}
+          {!isMobile && iaStatus && iaStatus.estat !== "ONLINE" && (
+            <div className="px-3 py-2 bg-amber-50 dark:bg-amber-950/50 border-b border-amber-200 dark:border-amber-900 text-[11px] text-amber-900 dark:text-amber-200 flex items-center justify-between gap-2">
+              <span className="truncate">{iaStatus.error || "Node IA local fora de línia."}</span>
+              <Link href="/gestio/copilot" onClick={() => setObert(false)} className="font-bold underline shrink-0">
+                Estat
+              </Link>
+            </div>
+          )}
 
           {/* Chat Messages */}
           <div className="flex-1 p-4 overflow-y-auto space-y-3 bg-surface-container-low dark:bg-slate-900">
+            {conversaXat.length <= 1 && (
+              <div className="flex flex-wrap gap-1.5">
+                {[
+                  "Quin estoc tenim sota mínims?",
+                  "Quin equip està treballant avui?",
+                  "Estat dels vehicles i ITV",
+                ].map((q) => (
+                  <button
+                    key={q}
+                    type="button"
+                    onClick={() => enviarMissatgeXat(q)}
+                    className="text-[10px] px-2.5 py-1 rounded-full bg-surface-container-lowest border border-outline-variant/50 text-on-surface hover:border-primary hover:text-primary transition-colors"
+                  >
+                    {q}
+                  </button>
+                ))}
+              </div>
+            )}
             {conversaXat.map((m, idx) => (
               <div key={idx} className={`flex flex-col ${m.sender === "user" ? "items-end" : "items-start"}`}>
                 <div
-                  className={`max-w-[85%] p-3 rounded-2xl text-xs leading-relaxed ${
+                  className={`max-w-[85%] p-3 rounded-2xl text-xs leading-relaxed whitespace-pre-wrap ${
                     m.sender === "user"
                       ? "bg-primary text-on-primary rounded-br-none"
                       : m.error
@@ -176,6 +258,13 @@ export default function CopilotWidget({ isMobile = false }: { isMobile?: boolean
                 >
                   {m.text}
                 </div>
+                {m.sender === "bot" && (m.subagent || m.latencyMs != null) && (
+                  <span className="text-[9px] font-mono text-on-surface-variant/80 mt-0.5 pl-1">
+                    {m.subagent ? `Agent: ${m.subagent}` : ""}
+                    {m.subagent && m.latencyMs != null ? " · " : ""}
+                    {m.latencyMs != null ? `${m.latencyMs} ms` : ""}
+                  </span>
+                )}
                 {m.actionContext && (
                   <div className="mt-2 p-2 bg-primary/10 border border-primary/30 rounded-xl">
                     <p className="text-[10px] font-bold text-primary mb-1">Requereix Confirmació:</p>

@@ -70,9 +70,8 @@ async def test_clients_crud_dia0_i_alta(gestio_tenant_setup):
         assert res0.status_code == 200
         assert res0.json() == []
 
-        # 2. Alta de nou client real
+        # 2. Alta de nou client real (enumeració automàtica CLI-0001)
         payload = {
-            "codi": "CLI-REAL-01",
             "rao_social": "Client Hidràulic del Bages S.L.",
             "nif": "B87654321",
             "telefon": "+34 938 000 111",
@@ -83,14 +82,14 @@ async def test_clients_crud_dia0_i_alta(gestio_tenant_setup):
         create_res = await client.post("/gestio/clients", json=payload, headers=headers)
         assert create_res.status_code == 201
         created = create_res.json()
-        assert created["codi"] == "CLI-REAL-01"
+        assert created["codi"] == "CLI-0001"
         assert created["rao_social"] == "Client Hidràulic del Bages S.L."
 
         # 3. Llista ara conté 1 client
         res1 = await client.get("/gestio/clients", headers=headers)
         assert res1.status_code == 200
         assert len(res1.json()) == 1
-        assert res1.json()[0]["codi"] == "CLI-REAL-01"
+        assert res1.json()[0]["codi"] == "CLI-0001"
 
 
 @pytest.mark.asyncio

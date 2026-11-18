@@ -37,9 +37,18 @@ from app.models.models import (  # noqa: E402
     Usuari,
     Vehicle,
 )
+from app.services.codis_service import generar_seguent_codi  # noqa: E402
 from app.services.magatzem_comptabilitat_service import (  # noqa: E402
     processar_entrada_albara_i_recalcular_pmp,
     registrar_merma_i_imputar_a_comptabilitat,
+)
+from app.services.pressupost_service import construir_mailto_url  # noqa: E402
+from app.services.recompra_service import (  # noqa: E402
+    agrupar_alertes_recompra_per_proveidor,
+    avaluar_i_sincronitzar_alertes_recompra,
+    construir_text_esborrany_email_recompra,
+    enviar_email_recompra_smtp,
+    validar_email_destinatari,
 )
 from app.services.sovereign_storage import SovereignStorageGateway  # noqa: E402
 
@@ -292,6 +301,7 @@ async def llistar_articles(
     request: Request,
     q: Optional[str] = None,
     magatzem_id: Optional[uuid.UUID] = None,
+    nomes_trencament: bool = False,
     limit: int = 50,
     offset: int = 0,
     claims: dict = Depends(get_current_user_claims),
@@ -316,7 +326,28 @@ async def llistar_articles(
             )
         )
 
-    stmt = stmt.limit(limit).offset(offset).order_by(Article.created_at.desc())
+    if nomes_trencament:
+        estoc_stmt = select(
+            EstocMagatzem.article_id.label("art_id"),
+            func.coalesce(
+                func.sum(EstocMagatzem.quantitat_fisica - EstocMagatzem.quantitat_virtual_reservada),
+                0.0,
+            ).label("disp"),
+        ).where(EstocMagatzem.empresa_id == empresa_uuid)
+        if magatzem_id:
+            estoc_stmt = estoc_stmt.where(EstocMagatzem.magatzem_id == magatzem_id)
+        estoc_subq = estoc_stmt.group_by(EstocMagatzem.article_id).subquery()
+
+        stmt = stmt.outerjoin(estoc_subq, Article.id == estoc_subq.c.art_id).where(
+            Article.actiu.is_(True),
+            Article.estoc_minim > 0,
+            func.coalesce(estoc_subq.c.disp, 0.0) <= Article.estoc_minim,
+        )
+        effective_limit = max(limit, 200)
+    else:
+        effective_limit = limit
+
+    stmt = stmt.limit(effective_limit).offset(offset).order_by(Article.created_at.desc())
     result = await db.execute(stmt)
     articles = result.scalars().all()
 
@@ -466,6 +497,7 @@ async def alta_article(
             )
         )
 
+    await avaluar_i_sincronitzar_alertes_recompra(db, emp_uuid, [nou_article.id])
     await db.commit()
 
     await _sync_article_disc(
@@ -774,6 +806,7 @@ async def registrar_moviment_estoc(
             )
         )
 
+    await avaluar_i_sincronitzar_alertes_recompra(db, emp_uuid, [payload.article_id])
     await db.commit()
     await _sync_article_disc(db, emp_uuid, art_obj)
 
@@ -1023,6 +1056,7 @@ async def afegir_linia_picking(
         quantitat_mermada=0.0,
     )
     db.add(linia)
+    await avaluar_i_sincronitzar_alertes_recompra(db, emp_uuid, [payload.article_id])
     await db.commit()
 
     await _sync_article_disc(db, emp_uuid, art_obj)
@@ -1167,6 +1201,7 @@ async def confirmar_devolucio(
         "quantitat_mermada": float(linia.quantitat_mermada or 0.0),
     }
 
+    await avaluar_i_sincronitzar_alertes_recompra(db, emp_uuid, [linia.article_id])
     await db.commit()
 
     art_obj = (
@@ -1218,6 +1253,175 @@ async def processar_document_ocr(
     }
 
 
+async def _resoldre_o_crear_proveidor_albara(
+    db: AsyncSession,
+    empresa_id: uuid.UUID,
+    prov_ocr: ProveidorOcr,
+) -> Proveidor:
+    """Cerca o dona d'alta automàticament el proveïdor d'un albarà OCR amb codi seqüencial."""
+    stmt_prov = select(Proveidor).where(
+        Proveidor.empresa_id == empresa_id,
+        or_(
+            Proveidor.nif == prov_ocr.nif,
+            func.lower(Proveidor.rao_social) == prov_ocr.nom.strip().lower(),
+        ),
+    )
+    prov = (await db.execute(stmt_prov)).scalars().first()
+    if not prov:
+        codi_prov_auto = await generar_seguent_codi(db, Proveidor, empresa_id, "PRV")
+        prov = Proveidor(
+            empresa_id=empresa_id,
+            codi=codi_prov_auto,
+            rao_social=prov_ocr.nom,
+            nif=prov_ocr.nif,
+            telefon=prov_ocr.telefon,
+            email=prov_ocr.email,
+            especialitat="MATERIALS",
+        )
+        db.add(prov)
+        await db.flush()
+    else:
+        if prov_ocr.telefon and not prov.telefon:
+            prov.telefon = prov_ocr.telefon
+        if prov_ocr.email and not prov.email:
+            prov.email = prov_ocr.email
+        await db.flush()
+    return prov
+
+
+async def _obtenir_nau_central(db: AsyncSession, empresa_id: uuid.UUID) -> Magatzem:
+    """Obté o inicialitza el magatzem principal NAU_CENTRAL del tenant."""
+    stmt_mag = select(Magatzem).where(
+        Magatzem.empresa_id == empresa_id,
+        Magatzem.tipus == "NAU_CENTRAL",
+    )
+    magatzem = (await db.execute(stmt_mag)).scalars().first()
+    if not magatzem:
+        magatzem = Magatzem(empresa_id=empresa_id, nom="Nau Central Base", tipus="NAU_CENTRAL")
+        db.add(magatzem)
+        await db.flush()
+    return magatzem
+
+
+async def _aplicar_linies_albara_a_estoc(
+    db: AsyncSession,
+    empresa_id: uuid.UUID,
+    prov: Proveidor,
+    magatzem: Magatzem,
+    numero_document: str,
+    linies: List[LiniaOcr],
+) -> tuple[int, int, List[Article]]:
+    """Aplica les línies validades d'un albarà al magatzem, PMP i alertes d'estoc."""
+    articles_creats = 0
+    moviments_creats = 0
+    articles_afectats: List[Article] = []
+
+    for linia in linies:
+        nou_preu = float(linia.preu) * (1.0 - (float(linia.descompte_percent) / 100.0))
+
+        if linia.tipus == "EINA":
+            quantitat = int(linia.quantitat) if linia.quantitat > 0 else 1
+            for _ in range(quantitat):
+                eina_ocr = EinaCustodia(
+                    empresa_id=empresa_id,
+                    referencia_fabricant=linia.referencia[:100] if linia.referencia else None,
+                    nom=linia.nom.strip()[:500] if linia.nom else "Eina sense nom",
+                    model="OCR pendent revisió",
+                    numero_serie=f"PENDENT_SN_{uuid.uuid4().hex[:8].upper()}",
+                    estat="DISPONIBLE",
+                )
+                db.add(eina_ocr)
+            await db.flush()
+            continue
+
+        ref_neta = (
+            linia.referencia.strip()[:50]
+            if linia.referencia
+            else f"REF-{uuid.uuid4().hex[:8].upper()}"
+        )
+        stmt_art = select(Article).where(
+            Article.empresa_id == empresa_id,
+            Article.referencia_inventari == ref_neta,
+        )
+        article = (await db.execute(stmt_art)).scalars().first()
+
+        if not article:
+            nom_net = linia.nom.strip()[:500] if linia.nom else "Article sense nom"
+            article = Article(
+                empresa_id=empresa_id,
+                referencia_inventari=ref_neta,
+                nom=nom_net,
+                unitat_mesura="UNITAT",
+                familia="GENERAL",
+                proveidor_id=prov.id,
+                descompte_proveidor=float(linia.descompte_percent),
+                preu_cost=nou_preu,
+            )
+            db.add(article)
+            await db.flush()
+            articles_creats += 1
+        else:
+            if not article.proveidor_id:
+                article.proveidor_id = prov.id
+            article.descompte_proveidor = float(linia.descompte_percent)
+            estoc_res = await db.execute(
+                select(EstocMagatzem).where(
+                    EstocMagatzem.empresa_id == empresa_id,
+                    EstocMagatzem.article_id == article.id,
+                )
+            )
+            estocs_actuals = estoc_res.scalars().all()
+            estoc_total_actual = sum(float(e.quantitat_fisica) for e in estocs_actuals)
+
+            if estoc_total_actual + float(linia.quantitat) > 0 and nou_preu > 0:
+                valor_actual = estoc_total_actual * float(article.preu_cost)
+                valor_entrada = float(linia.quantitat) * nou_preu
+                pmp = (valor_actual + valor_entrada) / (
+                    estoc_total_actual + float(linia.quantitat)
+                )
+                article.preu_cost = pmp
+            elif nou_preu > 0 and estoc_total_actual <= 0:
+                article.preu_cost = nou_preu
+
+        articles_afectats.append(article)
+
+        stmt_estoc = select(EstocMagatzem).where(
+            EstocMagatzem.empresa_id == empresa_id,
+            EstocMagatzem.magatzem_id == magatzem.id,
+            EstocMagatzem.article_id == article.id,
+        )
+        estoc = (await db.execute(stmt_estoc)).scalars().first()
+        if not estoc:
+            estoc = EstocMagatzem(
+                empresa_id=empresa_id,
+                magatzem_id=magatzem.id,
+                article_id=article.id,
+                quantitat_fisica=0.0,
+            )
+            db.add(estoc)
+            await db.flush()
+
+        moviment = MovimentEstoc(
+            empresa_id=empresa_id,
+            magatzem_id=magatzem.id,
+            article_id=article.id,
+            tipus_moviment="ENTRADA",
+            quantitat=linia.quantitat,
+            usuari_id=None,
+            referencia_document=numero_document,
+            notes="Albarà Proveïdor OCR",
+        )
+        db.add(moviment)
+        estoc.quantitat_fisica = float(estoc.quantitat_fisica) + linia.quantitat
+        moviments_creats += 1
+
+    if articles_afectats:
+        await avaluar_i_sincronitzar_alertes_recompra(
+            db, empresa_id, [a.id for a in articles_afectats]
+        )
+    return articles_creats, moviments_creats, articles_afectats
+
+
 @router.post("/albara/confirmar", status_code=status.HTTP_201_CREATED)
 async def confirmar_document(
     request: Request,
@@ -1230,46 +1434,12 @@ async def confirmar_document(
     empresa_id = valida_uuid(str(raw_emp))
 
     # 1. Buscar o crear Proveïdor dins del tenant (per NIF o nom)
-    stmt_prov = select(Proveidor).where(
-        Proveidor.empresa_id == empresa_id,
-        or_(
-            Proveidor.nif == payload.proveidor.nif,
-            func.lower(Proveidor.rao_social) == payload.proveidor.nom.strip().lower(),
-        ),
-    )
-    prov = (await db.execute(stmt_prov)).scalars().first()
-
-    if not prov:
-        prov = Proveidor(
-            empresa_id=empresa_id,
-            codi=f"PRV-{str(uuid.uuid4())[:6].upper()}",
-            rao_social=payload.proveidor.nom,
-            nif=payload.proveidor.nif,
-            telefon=payload.proveidor.telefon,
-            email=payload.proveidor.email,
-            especialitat="MATERIALS",
-        )
-        db.add(prov)
-        await db.flush()
-    else:
-        if payload.proveidor.telefon and not prov.telefon:
-            prov.telefon = payload.proveidor.telefon
-        if payload.proveidor.email and not prov.email:
-            prov.email = payload.proveidor.email
-        await db.flush()
+    prov = await _resoldre_o_crear_proveidor_albara(db, empresa_id, payload.proveidor)
 
     ruta_sobirana_proveidor = f"vault://{empresa_id}/02_proveidors/fitxes/{prov.id}.json"
 
     # Buscar el magatzem principal del tenant
-    stmt_mag = select(Magatzem).where(
-        Magatzem.empresa_id == empresa_id,
-        Magatzem.tipus == "NAU_CENTRAL",
-    )
-    magatzem = (await db.execute(stmt_mag)).scalars().first()
-    if not magatzem:
-        magatzem = Magatzem(empresa_id=empresa_id, nom="Nau Central Base", tipus="NAU_CENTRAL")
-        db.add(magatzem)
-        await db.flush()
+    magatzem = await _obtenir_nau_central(db, empresa_id)
 
     articles_creats = 0
     moviments_creats = 0
@@ -1414,108 +1584,17 @@ async def confirmar_document(
             proveidor_id=prov.id,
             numero_albara=payload.numero_document,
             data_albara=payload.data_document,
+            estat="CONSOLIDAT",
         )
         db.add(nou_albara)
-        articles_afectats: List[Article] = []
-
-        for linia in payload.linies:
-            nou_preu = float(linia.preu) * (1.0 - (float(linia.descompte_percent) / 100.0))
-
-            if linia.tipus == "EINA":
-                quantitat = int(linia.quantitat) if linia.quantitat > 0 else 1
-                for _ in range(quantitat):
-                    eina_ocr = EinaCustodia(
-                        empresa_id=empresa_id,
-                        referencia_fabricant=linia.referencia[:100] if linia.referencia else None,
-                        nom=linia.nom.strip()[:500] if linia.nom else "Eina sense nom",
-                        model="OCR pendent revisió",
-                        numero_serie=f"PENDENT_SN_{uuid.uuid4().hex[:8].upper()}",
-                        estat="DISPONIBLE",
-                    )
-                    db.add(eina_ocr)
-                await db.flush()
-                continue
-
-            ref_neta = (
-                linia.referencia.strip()[:50]
-                if linia.referencia
-                else f"REF-{uuid.uuid4().hex[:8].upper()}"
-            )
-            stmt_art = select(Article).where(
-                Article.empresa_id == empresa_id,
-                Article.referencia_inventari == ref_neta,
-            )
-            article = (await db.execute(stmt_art)).scalars().first()
-
-            if not article:
-                nom_net = linia.nom.strip()[:500] if linia.nom else "Article sense nom"
-                article = Article(
-                    empresa_id=empresa_id,
-                    referencia_inventari=ref_neta,
-                    nom=nom_net,
-                    unitat_mesura="UNITAT",
-                    familia="GENERAL",
-                    proveidor_id=prov.id,
-                    descompte_proveidor=float(linia.descompte_percent),
-                    preu_cost=nou_preu,
-                )
-                db.add(article)
-                await db.flush()
-                articles_creats += 1
-            else:
-                if not article.proveidor_id:
-                    article.proveidor_id = prov.id
-                article.descompte_proveidor = float(linia.descompte_percent)
-                estoc_res = await db.execute(
-                    select(EstocMagatzem).where(
-                        EstocMagatzem.empresa_id == empresa_id,
-                        EstocMagatzem.article_id == article.id,
-                    )
-                )
-                estocs_actuals = estoc_res.scalars().all()
-                estoc_total_actual = sum(float(e.quantitat_fisica) for e in estocs_actuals)
-
-                if estoc_total_actual + float(linia.quantitat) > 0 and nou_preu > 0:
-                    valor_actual = estoc_total_actual * float(article.preu_cost)
-                    valor_entrada = float(linia.quantitat) * nou_preu
-                    pmp = (valor_actual + valor_entrada) / (
-                        estoc_total_actual + float(linia.quantitat)
-                    )
-                    article.preu_cost = pmp
-                elif nou_preu > 0 and estoc_total_actual <= 0:
-                    article.preu_cost = nou_preu
-
-            articles_afectats.append(article)
-
-            stmt_estoc = select(EstocMagatzem).where(
-                EstocMagatzem.empresa_id == empresa_id,
-                EstocMagatzem.magatzem_id == magatzem.id,
-                EstocMagatzem.article_id == article.id,
-            )
-            estoc = (await db.execute(stmt_estoc)).scalars().first()
-            if not estoc:
-                estoc = EstocMagatzem(
-                    empresa_id=empresa_id,
-                    magatzem_id=magatzem.id,
-                    article_id=article.id,
-                    quantitat_fisica=0.0,
-                )
-                db.add(estoc)
-                await db.flush()
-
-            moviment = MovimentEstoc(
-                empresa_id=empresa_id,
-                magatzem_id=magatzem.id,
-                article_id=article.id,
-                tipus_moviment="ENTRADA",
-                quantitat=linia.quantitat,
-                usuari_id=None,
-                referencia_document=payload.numero_document,
-                notes="Albarà Proveïdor OCR",
-            )
-            db.add(moviment)
-            estoc.quantitat_fisica = float(estoc.quantitat_fisica) + linia.quantitat
-            moviments_creats += 1
+        articles_creats, moviments_creats, articles_afectats = await _aplicar_linies_albara_a_estoc(
+            db=db,
+            empresa_id=empresa_id,
+            prov=prov,
+            magatzem=magatzem,
+            numero_document=payload.numero_document,
+            linies=payload.linies,
+        )
 
         await db.commit()
 
@@ -1544,6 +1623,7 @@ async def confirmar_document(
                     "proveidor_id": str(prov.id),
                     "numero_albara": nou_albara.numero_albara,
                     "data_albara": nou_albara.data_albara.isoformat(),
+                    "estat": "CONSOLIDAT",
                     "linies": [lin.model_dump() for lin in payload.linies],
                 },
             )
@@ -1557,11 +1637,252 @@ async def confirmar_document(
         return {
             "estat": "OK",
             "missatge": "Albarà registrat, estoc augmentat.",
+            "albara_id": str(nou_albara.id),
             "proveidor_id": str(prov.id),
             "articles_creats": articles_creats,
             "moviments_realitzats": moviments_creats,
             "carpeta": ruta_sobirana_proveidor,
         }
+
+
+@router.post("/albarans/desar-pendent", status_code=status.HTTP_201_CREATED)
+async def desar_albara_pendent_auditoria(
+    request: Request,
+    payload: ConfirmarDocumentRequest,
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+):
+    """Desa un albarà OCR en estat PENDENT_AUDITORIA sense incrementar l'estoc fins consolidació humana (FR-009 / T023)."""
+    raw_emp = getattr(request.state, "empresa_id", None)
+    if not raw_emp or raw_emp in ("undefined", "null", "None"):
+        raise HTTPException(status_code=401, detail="No identificat")
+    empresa_id = valida_uuid(str(raw_emp))
+
+    prov = await _resoldre_o_crear_proveidor_albara(db, empresa_id, payload.proveidor)
+
+    dup = (
+        await db.execute(
+            select(AlbaraProveidor).where(
+                AlbaraProveidor.empresa_id == empresa_id,
+                AlbaraProveidor.proveidor_id == prov.id,
+                AlbaraProveidor.numero_albara == payload.numero_document,
+            )
+        )
+    ).scalars().first()
+    if dup:
+        raise HTTPException(
+            status_code=400,
+            detail="Albarà ja pujat. Aquest document ja consta al sistema per aquest proveïdor.",
+        )
+
+    nou_albara = AlbaraProveidor(
+        empresa_id=empresa_id,
+        proveidor_id=prov.id,
+        numero_albara=payload.numero_document,
+        data_albara=payload.data_document,
+        estat="PENDENT_AUDITORIA",
+    )
+    db.add(nou_albara)
+    await db.flush()
+
+    ruta_alb = ""
+    try:
+        ruta_alb = await SovereignStorageGateway.desar_entitat_json(
+            db=db,
+            empresa_id=empresa_id,
+            categoria="albarans",
+            item_id=str(nou_albara.id),
+            dades={
+                "id": str(nou_albara.id),
+                "proveidor_id": str(prov.id),
+                "proveidor": payload.proveidor.model_dump(),
+                "numero_albara": nou_albara.numero_albara,
+                "data_albara": nou_albara.data_albara.isoformat(),
+                "estat": "PENDENT_AUDITORIA",
+                "linies": [lin.model_dump() for lin in payload.linies],
+            },
+        )
+        nou_albara.fitxer_path = ruta_alb
+    except Exception as exc:
+        logger.warning("No s'ha pogut desar esborrany JSON albarà pendent %s: %s", nou_albara.id, exc)
+
+    await db.commit()
+    return {
+        "id": str(nou_albara.id),
+        "estat": nou_albara.estat,
+        "numero_albara": nou_albara.numero_albara,
+        "proveidor_id": str(prov.id),
+        "proveidor_nom": prov.rao_social,
+        "linies": [lin.model_dump() for lin in payload.linies],
+        "fitxer_path": ruta_alb,
+    }
+
+
+@router.get("/albarans")
+async def llistar_albarans_proveidor(
+    request: Request,
+    estat: Optional[str] = None,
+    claims: dict = Depends(get_current_user_claims),
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+):
+    """Llista albarans de proveïdors (inclosos els PENDENT_AUDITORIA per revisió humana T023/T024)."""
+    raw_emp = getattr(request.state, "empresa_id", None) or claims.get("empresa_id")
+    if not raw_emp or str(raw_emp) in ("undefined", "null", "None"):
+        raise HTTPException(status_code=401, detail="No identificat")
+    emp_uuid = valida_uuid(str(raw_emp))
+    rol = str(claims.get("rol", "")).upper()
+    is_enginyer = rol == "ENGINYER"
+
+    stmt = (
+        select(AlbaraProveidor, Proveidor.rao_social, Proveidor.nif, Proveidor.email)
+        .outerjoin(Proveidor, AlbaraProveidor.proveidor_id == Proveidor.id)
+        .where(AlbaraProveidor.empresa_id == emp_uuid)
+        .order_by(AlbaraProveidor.created_at.desc())
+    )
+    if estat and estat.upper() != "TOTS":
+        stmt = stmt.where(AlbaraProveidor.estat == estat.upper())
+
+    rows = (await db.execute(stmt)).all()
+    json_albarans = await SovereignStorageGateway.llegir_entitats_json(db, emp_uuid, "albarans")
+    drafts_map: Dict[str, Dict[str, Any]] = {}
+    for item in json_albarans:
+        if not isinstance(item, dict):
+            continue
+        alb_key = str(item.get("id") or "")
+        if alb_key:
+            drafts_map[alb_key] = item
+
+    resultat: List[Dict[str, Any]] = []
+    for alb, prov_nom, prov_nif, prov_email in rows:
+        esborrany = drafts_map.get(str(alb.id), {})
+        linies_raw = esborrany.get("linies") or []
+        linies_out = []
+        for lin in linies_raw:
+            if not isinstance(lin, dict):
+                continue
+            linies_out.append(
+                {
+                    **lin,
+                    "preu": None if is_enginyer else lin.get("preu", 0.0),
+                }
+            )
+        resultat.append(
+            {
+                "id": str(alb.id),
+                "proveidor_id": str(alb.proveidor_id),
+                "proveidor_nom": prov_nom or (esborrany.get("proveidor") or {}).get("nom"),
+                "proveidor_nif": prov_nif or (esborrany.get("proveidor") or {}).get("nif"),
+                "proveidor_email": prov_email,
+                "numero_albara": alb.numero_albara,
+                "data_albara": alb.data_albara.isoformat() if alb.data_albara else None,
+                "estat": alb.estat,
+                "linies": linies_out,
+                "created_at": alb.created_at.isoformat() if alb.created_at else None,
+            }
+        )
+    return resultat
+
+
+@router.post("/albarans/{albara_id}/consolidar")
+async def consolidar_albara_pendent(
+    request: Request,
+    albara_id: uuid.UUID,
+    payload: Optional[ConfirmarDocumentRequest] = None,
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+):
+    """Consolida manualment un albarà PENDENT_AUDITORIA i aplica l'increment físic d'estoc (T024)."""
+    raw_emp = getattr(request.state, "empresa_id", None)
+    if not raw_emp or raw_emp in ("undefined", "null", "None"):
+        raise HTTPException(status_code=401, detail="No identificat")
+    emp_uuid = valida_uuid(str(raw_emp))
+
+    albara = (
+        await db.execute(
+            select(AlbaraProveidor).where(
+                AlbaraProveidor.id == albara_id,
+                AlbaraProveidor.empresa_id == emp_uuid,
+            )
+        )
+    ).scalars().first()
+    if not albara:
+        raise HTTPException(status_code=404, detail="Albarà no trobat")
+    if albara.estat == "CONSOLIDAT":
+        raise HTTPException(status_code=400, detail="Aquest albarà ja es troba consolidat.")
+
+    linies_aplicar: List[LiniaOcr] = []
+    if payload and payload.linies:
+        prov = await _resoldre_o_crear_proveidor_albara(db, emp_uuid, payload.proveidor)
+        albara.proveidor_id = prov.id
+        albara.numero_albara = payload.numero_document
+        albara.data_albara = payload.data_document
+        linies_aplicar = payload.linies
+    else:
+        prov_trobat = (
+            await db.execute(
+                select(Proveidor).where(
+                    Proveidor.id == albara.proveidor_id,
+                    Proveidor.empresa_id == emp_uuid,
+                )
+            )
+        ).scalars().first()
+        if not prov_trobat:
+            raise HTTPException(status_code=404, detail="Proveïdor de l'albarà no trobat")
+        prov = prov_trobat
+        json_albarans = await SovereignStorageGateway.llegir_entitats_json(db, emp_uuid, "albarans")
+        esborrany = next(
+            (x for x in json_albarans if isinstance(x, dict) and str(x.get("id") or "") == str(albara.id)),
+            None,
+        )
+        if esborrany and isinstance(esborrany.get("linies"), list):
+            linies_aplicar = [LiniaOcr(**lin) for lin in esborrany["linies"]]
+
+    if not linies_aplicar:
+        raise HTTPException(
+            status_code=422,
+            detail="L'albarà pendent no conté cap línia d'article per consolidar.",
+        )
+
+    magatzem = await _obtenir_nau_central(db, emp_uuid)
+    articles_creats, moviments_creats, articles_afectats = await _aplicar_linies_albara_a_estoc(
+        db=db,
+        empresa_id=emp_uuid,
+        prov=prov,
+        magatzem=magatzem,
+        numero_document=albara.numero_albara,
+        linies=linies_aplicar,
+    )
+    albara.estat = "CONSOLIDAT"
+    await db.commit()
+
+    try:
+        from app.core.db import set_tenant_context
+
+        await set_tenant_context(db, str(emp_uuid))
+        await SovereignStorageGateway.desar_entitat_json(
+            db=db,
+            empresa_id=emp_uuid,
+            categoria="albarans",
+            item_id=str(albara.id),
+            dades={
+                "id": str(albara.id),
+                "proveidor_id": str(prov.id),
+                "numero_albara": albara.numero_albara,
+                "data_albara": albara.data_albara.isoformat(),
+                "estat": "CONSOLIDAT",
+                "linies": [lin.model_dump() for lin in linies_aplicar],
+            },
+        )
+        for art_afectat in articles_afectats:
+            await _sync_article_disc(db, emp_uuid, art_afectat)
+    except Exception as exc:
+        logger.warning("No s'ha pogut sincronitzar consolidació d'albarà %s: %s", albara.id, exc)
+
+    return {
+        "estat": "CONSOLIDAT",
+        "missatge": "Albarà consolidat manualment i estoc incrementat.",
+        "albara_id": str(albara.id),
+        "articles_creats": articles_creats,
+        "moviments_realitzats": moviments_creats,
+    }
 
 
 @router.put("/articles/{article_id}", response_model=ArticleResponse)
@@ -1635,6 +1956,7 @@ async def modificar_article(
     art_db.preu_venda = article.preu_venda
     art_db.proveidor_id = article.proveidor_id
 
+    await avaluar_i_sincronitzar_alertes_recompra(db, emp_uuid, [art_db.id])
     await db.commit()
 
     stmt_estoc = select(
@@ -2091,6 +2413,77 @@ async def llistar_mermes_inventari(
     ]
 
 
+@router.get("/articles/{article_id}/suggeriment-merma")
+async def suggeriment_merma_article(
+    request: Request,
+    article_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+):
+    """Calcula el % històric de merma recomanat per a materials continus (FR-008)."""
+    raw_emp = getattr(request.state, "empresa_id", None) or request.headers.get("X-Empresa-ID")
+    if not raw_emp or raw_emp in ("undefined", "null", "None"):
+        raise HTTPException(status_code=401, detail="No identificat")
+    emp_uuid = valida_uuid(str(raw_emp))
+
+    art = (
+        await db.execute(
+            select(Article).where(Article.id == article_id, Article.empresa_id == emp_uuid)
+        )
+    ).scalars().first()
+    if not art:
+        raise HTTPException(status_code=404, detail="Article no trobat")
+
+    merma_stats = (
+        await db.execute(
+            select(
+                func.count(MermaInventari.id),
+                func.coalesce(func.sum(MermaInventari.quantitat), 0.0),
+            ).where(
+                MermaInventari.empresa_id == emp_uuid,
+                MermaInventari.article_id == article_id,
+            )
+        )
+    ).one()
+    total_registres = int(merma_stats[0] or 0)
+    total_mermat = float(merma_stats[1] or 0.0)
+
+    total_sortides = float(
+        (
+            await db.execute(
+                select(func.coalesce(func.sum(MovimentEstoc.quantitat), 0.0)).where(
+                    MovimentEstoc.empresa_id == emp_uuid,
+                    MovimentEstoc.article_id == article_id,
+                    MovimentEstoc.tipus_moviment.in_(["SORTIDA", "MERMA"]),
+                )
+            )
+        ).scalar()
+        or 0.0
+    )
+
+    pct_suggerit = 0.0
+    if total_sortides > 0 and total_mermat > 0:
+        pct_suggerit = round(min(25.0, (total_mermat / total_sortides) * 100.0), 2)
+    elif bool(getattr(art, "es_material_continu", False)):
+        pct_suggerit = 5.0 if total_registres == 0 else 0.0
+
+    return {
+        "article_id": str(art.id),
+        "es_material_continu": bool(getattr(art, "es_material_continu", False)),
+        "merma_suggerida_pct": pct_suggerit,
+        "total_mermes_registrades": total_registres,
+        "quantitat_total_mermada": total_mermat,
+        "recomanacio": (
+            f"Basat en {total_registres} registres històrics de merma: tolerància recomanada del {pct_suggerit}%."
+            if total_registres > 0
+            else (
+                "Material continu sense històric previ: s'aplica tolerància estàndard de tall del 5%."
+                if getattr(art, "es_material_continu", False)
+                else "Sense històric de mermes previ per a aquest article."
+            )
+        ),
+    }
+
+
 # ---------------------------------------------------------------------------
 # Safata HITL de Recompra d'Estoc Mínim (Spec 01-backoffice FR-010)
 # ---------------------------------------------------------------------------
@@ -2100,6 +2493,21 @@ class RecompraAccioRequest(BaseModel):
     accio: str = Field(..., pattern="^(APROVAR|DESCARTAR)$")
     quantitat_aprovada: Optional[float] = Field(default=None, gt=0)
     notes: Optional[str] = Field(default=None, max_length=500)
+    proveidor_id: Optional[uuid.UUID] = None
+    proveidor_email: Optional[str] = Field(default=None, max_length=200)
+    assumpte: Optional[str] = Field(default=None, max_length=250)
+    cos_email: Optional[str] = Field(default=None, max_length=5000)
+    enviar_email: bool = False
+
+
+class RecompraEnviarEmailRequest(BaseModel):
+    alerta_ids: List[uuid.UUID] = Field(..., min_length=1)
+    proveidor_id: Optional[uuid.UUID] = None
+    destinatari_email: str = Field(..., min_length=5, max_length=200)
+    assumpte: str = Field(..., min_length=3, max_length=250)
+    cos_missatge: str = Field(..., min_length=5, max_length=8000)
+    quantitats: Optional[Dict[str, float]] = None
+    canal: str = Field("SMTP", pattern="^(SMTP|MAILTO)$")
 
 
 def _serialitzar_alerta_recompra(
@@ -2109,11 +2517,37 @@ def _serialitzar_alerta_recompra(
     art_cb: Optional[str],
     prov_nom: Optional[str],
     rol: str,
+    prov_email: Optional[str] = None,
 ) -> Dict[str, Any]:
     proposta = dict(alerta.dades_comanda_proposta or {})
     if rol.upper() == "ENGINYER":
         proposta["preu_unitari_estimat"] = None
         proposta["import_estimat"] = None
+
+    email_eff = prov_email or proposta.get("proveidor_email")
+    assumpte = proposta.get("esborrany_email_assumpte")
+    cos = proposta.get("esborrany_email_cos")
+    if not assumpte or not cos:
+        assumpte, cos = construir_text_esborrany_email_recompra(
+            empresa_nom="la nostra empresa",
+            proveidor_nom=prov_nom or proposta.get("proveidor_nom"),
+            items=[
+                {
+                    "referencia": art_ref or proposta.get("referencia"),
+                    "codi_barres": art_cb or proposta.get("codi_barres"),
+                    "nom": art_nom or proposta.get("nom"),
+                    "unitat_mesura": proposta.get("unitat_mesura") or "UNITAT",
+                    "quantitat_proposada": proposta.get("quantitat_proposada") or 1,
+                    "quantitat_aprovada": proposta.get("quantitat_aprovada"),
+                }
+            ],
+        )
+    mailto_eff = proposta.get("mailto_url")
+    if not mailto_eff and email_eff and "@" in str(email_eff):
+        try:
+            mailto_eff = construir_mailto_url(str(email_eff), str(assumpte), str(cos))
+        except Exception:
+            mailto_eff = None
 
     return {
         "id": str(alerta.id),
@@ -2124,6 +2558,10 @@ def _serialitzar_alerta_recompra(
         "article_codi_barres": art_cb or proposta.get("codi_barres"),
         "proveidor_id": str(alerta.proveidor_id) if alerta.proveidor_id else None,
         "proveidor_nom": prov_nom or proposta.get("proveidor_nom"),
+        "proveidor_email": email_eff,
+        "esborrany_email_assumpte": assumpte,
+        "esborrany_email_cos": cos,
+        "mailto_url": mailto_eff,
         "missatge": alerta.missatge,
         "estat": alerta.estat,
         "dades_comanda_proposta": proposta,
@@ -2140,12 +2578,14 @@ async def llistar_esborranys_recompra(
     claims: dict = Depends(get_current_user_claims),
     db: AsyncSession = Depends(get_db_with_tenant_context),
 ):
-    """Llista la safata HITL de propostes de recompra per trencament d'estoc (FR-010)."""
+    """Llista la safata HITL de propostes de recompra sincronitzant automàticament trencaments d'estoc (FR-010)."""
     empresa_raw = getattr(request.state, "empresa_id", None) or claims.get("empresa_id")
     if not empresa_raw or str(empresa_raw) == "undefined":
         raise HTTPException(status_code=401, detail="No identificat")
     emp_uuid = valida_uuid(str(empresa_raw))
     rol = str(claims.get("rol", "")).upper()
+
+    await avaluar_i_sincronitzar_alertes_recompra(db, emp_uuid)
 
     stmt = (
         select(
@@ -2154,6 +2594,7 @@ async def llistar_esborranys_recompra(
             Article.referencia_inventari,
             Article.codi_barres,
             Proveidor.rao_social,
+            Proveidor.email,
         )
         .outerjoin(Article, AlertaGarantiaRecompra.article_id == Article.id)
         .outerjoin(Proveidor, AlertaGarantiaRecompra.proveidor_id == Proveidor.id)
@@ -2167,10 +2608,56 @@ async def llistar_esborranys_recompra(
         stmt = stmt.where(AlertaGarantiaRecompra.estat == estat.upper())
 
     rows = (await db.execute(stmt)).all()
-    return [
-        _serialitzar_alerta_recompra(alerta, art_nom, art_ref, art_cb, prov_nom, rol)
-        for alerta, art_nom, art_ref, art_cb, prov_nom in rows
+    resultat = [
+        _serialitzar_alerta_recompra(alerta, art_nom, art_ref, art_cb, prov_nom, rol, prov_email)
+        for alerta, art_nom, art_ref, art_cb, prov_nom, prov_email in rows
     ]
+    await db.commit()
+    return resultat
+
+
+@router.get("/recompra/agrupades-proveidor")
+async def llistar_esborranys_recompra_agrupats(
+    request: Request,
+    claims: dict = Depends(get_current_user_claims),
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+):
+    """Agrupa les alertes ACTIVA per proveïdor i genera esborranys d'email conjunts HITL (FR-010)."""
+    empresa_raw = getattr(request.state, "empresa_id", None) or claims.get("empresa_id")
+    if not empresa_raw or str(empresa_raw) == "undefined":
+        raise HTTPException(status_code=401, detail="No identificat")
+    emp_uuid = valida_uuid(str(empresa_raw))
+    rol = str(claims.get("rol", "")).upper()
+
+    await avaluar_i_sincronitzar_alertes_recompra(db, emp_uuid)
+
+    empresa_nom = (
+        await db.execute(select(Empresa.nom).where(Empresa.id == emp_uuid))
+    ).scalar() or "Sevalor"
+
+    stmt = (
+        select(
+            AlertaGarantiaRecompra,
+            Article.nom,
+            Article.referencia_inventari,
+            Article.codi_barres,
+            Proveidor.rao_social,
+            Proveidor.email,
+        )
+        .outerjoin(Article, AlertaGarantiaRecompra.article_id == Article.id)
+        .outerjoin(Proveidor, AlertaGarantiaRecompra.proveidor_id == Proveidor.id)
+        .where(
+            AlertaGarantiaRecompra.empresa_id == emp_uuid,
+            AlertaGarantiaRecompra.tipus_alerta == "RECOMPRA_STOCK",
+            AlertaGarantiaRecompra.estat == "ACTIVA",
+        )
+        .order_by(AlertaGarantiaRecompra.created_at.desc())
+    )
+    rows = (await db.execute(stmt)).all()
+    rows_tuples = [(r[0], r[1], r[2], r[3], r[4], r[5]) for r in rows]
+    grups = agrupar_alertes_recompra_per_proveidor(rows_tuples, empresa_nom=empresa_nom, rol=rol)
+    await db.commit()
+    return grups
 
 
 @router.post("/recompra/escanejar", status_code=status.HTTP_201_CREATED)
@@ -2186,109 +2673,164 @@ async def escanejar_trencaments_recompra(
     emp_uuid = valida_uuid(str(empresa_raw))
     rol = str(claims.get("rol", "")).upper()
 
-    stmt_arts = (
-        select(Article, Proveidor.rao_social, Proveidor.email)
-        .outerjoin(Proveidor, Article.proveidor_id == Proveidor.id)
-        .where(
-            Article.empresa_id == emp_uuid,
-            Article.actiu.is_(True),
-            Article.estoc_minim > 0,
-        )
-    )
-    articles_rows = (await db.execute(stmt_arts)).all()
-    if not articles_rows:
-        return {"esborranys_generats": 0, "alertes": []}
+    noves = await avaluar_i_sincronitzar_alertes_recompra(db, emp_uuid)
+    noves_ids = [a.id for a in noves]
+    alertes_out: List[Dict[str, Any]] = []
+    if noves_ids:
+        rows = (
+            await db.execute(
+                select(
+                    AlertaGarantiaRecompra,
+                    Article.nom,
+                    Article.referencia_inventari,
+                    Article.codi_barres,
+                    Proveidor.rao_social,
+                    Proveidor.email,
+                )
+                .outerjoin(Article, AlertaGarantiaRecompra.article_id == Article.id)
+                .outerjoin(Proveidor, AlertaGarantiaRecompra.proveidor_id == Proveidor.id)
+                .where(AlertaGarantiaRecompra.id.in_(noves_ids))
+            )
+        ).all()
+        alertes_out = [
+            _serialitzar_alerta_recompra(alerta, art_nom, art_ref, art_cb, prov_nom, rol, prov_email)
+            for alerta, art_nom, art_ref, art_cb, prov_nom, prov_email in rows
+        ]
 
-    stmt_estocs = (
-        select(
-            EstocMagatzem.article_id,
-            func.coalesce(func.sum(EstocMagatzem.quantitat_fisica), 0.0),
-            func.coalesce(func.sum(EstocMagatzem.quantitat_virtual_reservada), 0.0),
-        )
-        .where(EstocMagatzem.empresa_id == emp_uuid)
-        .group_by(EstocMagatzem.article_id)
-    )
-    estoc_map = {
-        row[0]: max(0.0, float(row[1] or 0.0) - float(row[2] or 0.0))
-        for row in (await db.execute(stmt_estocs)).all()
+    await db.commit()
+    return {
+        "esborranys_generats": len(alertes_out),
+        "alertes": alertes_out,
     }
 
-    existing_actives = set(
-        (
+
+@router.post("/recompra/enviar-email")
+async def enviar_email_recompra_proveidor(
+    request: Request,
+    payload: RecompraEnviarEmailRequest,
+    claims: dict = Depends(get_current_user_claims),
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+):
+    """Envia (només sota confirmació humana BOSS/SECRETARIA) l'esborrany d'email de reposició al proveïdor."""
+    empresa_raw = getattr(request.state, "empresa_id", None) or claims.get("empresa_id")
+    if not empresa_raw or str(empresa_raw) in ("undefined", "null", "None"):
+        raise HTTPException(status_code=401, detail="No identificat")
+    emp_uuid = valida_uuid(str(empresa_raw))
+    rol = str(claims.get("rol", "")).upper()
+
+    if rol not in ("BOSS", "SECRETARIA"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Només direcció o administració (BOSS/SECRETARIA) poden aprovar i enviar comandes a proveïdors.",
+        )
+
+    try:
+        dest_email = validar_email_destinatari(payload.destinatari_email)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    empresa_nom = (
+        await db.execute(select(Empresa.nom).where(Empresa.id == emp_uuid))
+    ).scalar() or "Sevalor"
+
+    if payload.proveidor_id is not None:
+        prov_check = (
             await db.execute(
-                select(AlertaGarantiaRecompra.article_id).where(
-                    AlertaGarantiaRecompra.empresa_id == emp_uuid,
-                    AlertaGarantiaRecompra.tipus_alerta == "RECOMPRA_STOCK",
-                    AlertaGarantiaRecompra.estat == "ACTIVA",
-                    AlertaGarantiaRecompra.article_id.is_not(None),
+                select(Proveidor.id).where(
+                    Proveidor.id == payload.proveidor_id,
+                    Proveidor.empresa_id == emp_uuid,
                 )
             )
+        ).scalars().first()
+        if not prov_check:
+            raise HTTPException(status_code=404, detail="Proveïdor no trobat")
+
+    alertes_db = (
+        await db.execute(
+            select(AlertaGarantiaRecompra).where(
+                AlertaGarantiaRecompra.id.in_(payload.alerta_ids),
+                AlertaGarantiaRecompra.empresa_id == emp_uuid,
+                AlertaGarantiaRecompra.tipus_alerta == "RECOMPRA_STOCK",
+            )
         )
-        .scalars()
-        .all()
-    )
+    ).scalars().all()
+    if not alertes_db:
+        raise HTTPException(status_code=404, detail="No s'han trobat alertes de recompra vàlides")
 
-    noves_alertes: List[tuple[AlertaGarantiaRecompra, Article, Optional[str]]] = []
-    for art, prov_nom, prov_email in articles_rows:
-        disponible = estoc_map.get(art.id, 0.0)
-        estoc_min = float(art.estoc_minim or 0.0)
-        if disponible > estoc_min or art.id in existing_actives:
-            continue
+    ara = datetime.now(timezone.utc)
+    mailto_url = construir_mailto_url(dest_email, payload.assumpte, payload.cos_missatge)
+    email_enviat = False
+    email_error: Optional[str] = None
 
-        estoc_opt = float(art.estoc_optim or 0.0)
-        qty_sug = max(estoc_opt - disponible, estoc_min * 2.0 - disponible, 1.0)
-        qty_sug = round(qty_sug, 2)
-        preu_unit = float(getattr(art, "pmp_actual", None) or art.preu_cost or 0.0)
-
-        proposta = {
-            "article_id": str(art.id),
-            "referencia": art.referencia_inventari,
-            "codi_barres": getattr(art, "codi_barres", None),
-            "nom": art.nom,
-            "unitat_mesura": art.unitat_mesura,
-            "estoc_disponible": disponible,
-            "estoc_minim": estoc_min,
-            "estoc_optim": estoc_opt,
-            "quantitat_proposada": qty_sug,
-            "proveidor_id": str(art.proveidor_id) if art.proveidor_id else None,
-            "proveidor_nom": prov_nom,
-            "proveidor_email": prov_email,
-            "preu_unitari_estimat": preu_unit,
-            "import_estimat": round(qty_sug * preu_unit, 2),
-            "enviat_automaticament": False,
-            "requereix_aprovacio_humana": True,
-            "estat_hitl": "ESBORRANY_PENDENT_APROVACIO",
-        }
-        alerta = AlertaGarantiaRecompra(
-            empresa_id=emp_uuid,
-            tipus_alerta="RECOMPRA_STOCK",
-            article_id=art.id,
-            proveidor_id=art.proveidor_id,
-            missatge=(
-                f"Trencament d'estoc a {art.nom} ({art.referencia_inventari}): "
-                f"disponible {disponible} <= mínim {estoc_min}. Esborrany per {qty_sug} {art.unitat_mesura}."
-            ),
-            estat="ACTIVA",
-            dades_comanda_proposta=proposta,
+    if payload.canal.upper() == "SMTP":
+        email_enviat, email_error = enviar_email_recompra_smtp(
+            empresa_nom=empresa_nom,
+            destinatari_email=dest_email,
+            assumpte=payload.assumpte,
+            cos_missatge=payload.cos_missatge,
         )
-        db.add(alerta)
-        noves_alertes.append((alerta, art, prov_nom))
+
+    qty_overrides = payload.quantitats or {}
+    for al in alertes_db:
+        prop = dict(al.dades_comanda_proposta or {})
+        override_val = qty_overrides.get(str(al.id))
+        if override_val is not None and float(override_val) > 0:
+            prop["quantitat_aprovada"] = float(override_val)
+            preu_u = float(prop.get("preu_unitari_estimat") or 0.0)
+            prop["import_estimat"] = round(float(override_val) * preu_u, 2)
+        else:
+            prop["quantitat_aprovada"] = float(prop.get("quantitat_aprovada") or prop.get("quantitat_proposada") or 0.0)
+
+        if payload.proveidor_id is not None:
+            al.proveidor_id = payload.proveidor_id
+            prop["proveidor_id"] = str(payload.proveidor_id)
+
+        prop["proveidor_email"] = dest_email
+        prop["esborrany_email_assumpte"] = payload.assumpte
+        prop["esborrany_email_cos"] = payload.cos_missatge
+        prop["mailto_url"] = mailto_url
+        prop["estat_hitl"] = "ENVIADA_SMTP_HITL" if email_enviat else "APROVADA_PER_EMISSIO_MANUAL"
+        prop["enviat_automaticament"] = False
+        prop["confirmacio_humana"] = True
+        prop["canal_enviament"] = "SMTP" if email_enviat else "MAILTO"
+        prop["resolt_per_usuari_id"] = str(claims.get("sub")) if claims.get("sub") else None
+        prop["resolt_en"] = ara.isoformat()
+
+        al.estat = "APROVADA"
+        al.dades_comanda_proposta = prop
+        al.updated_at = ara
 
     await db.commit()
 
+    try:
+        from app.core.db import set_tenant_context
+
+        await set_tenant_context(db, str(emp_uuid), role=rol)
+        await SovereignStorageGateway.desar_entitat_json(
+            db=db,
+            empresa_id=emp_uuid,
+            categoria="albarans",
+            item_id=f"recompra_email_{alertes_db[0].id}",
+            dades={
+                "alerta_ids": [str(a.id) for a in alertes_db],
+                "destinatari_email": dest_email,
+                "assumpte": payload.assumpte,
+                "cos_missatge": payload.cos_missatge,
+                "email_enviat_smtp": email_enviat,
+                "canal": "SMTP" if email_enviat else "MAILTO",
+                "resolt_en": ara.isoformat(),
+            },
+        )
+    except Exception as exc:
+        logger.warning("No s'ha pogut desar traça d'email de recompra al disc sobirà: %s", exc)
+
     return {
-        "esborranys_generats": len(noves_alertes),
-        "alertes": [
-            _serialitzar_alerta_recompra(
-                alerta,
-                art.nom,
-                art.referencia_inventari,
-                getattr(art, "codi_barres", None),
-                prov_nom,
-                rol,
-            )
-            for alerta, art, prov_nom in noves_alertes
-        ],
+        "estat": "OK",
+        "alertes_aprovades": [str(a.id) for a in alertes_db],
+        "destinatari_email": dest_email,
+        "email_enviat": email_enviat,
+        "email_error": email_error,
+        "mailto_url": mailto_url,
     }
 
 
@@ -2320,6 +2862,7 @@ async def resoldre_esborrany_recompra(
             Article.referencia_inventari,
             Article.codi_barres,
             Proveidor.rao_social,
+            Proveidor.email,
         )
         .outerjoin(Article, AlertaGarantiaRecompra.article_id == Article.id)
         .outerjoin(Proveidor, AlertaGarantiaRecompra.proveidor_id == Proveidor.id)
@@ -2333,9 +2876,32 @@ async def resoldre_esborrany_recompra(
     if not row:
         raise HTTPException(status_code=404, detail="Esborrany de recompra no trobat")
 
-    alerta, art_nom, art_ref, art_cb, prov_nom = row
+    alerta, art_nom, art_ref, art_cb, prov_nom, prov_email = row
     proposta = dict(alerta.dades_comanda_proposta or {})
     ara = datetime.now(timezone.utc)
+    email_enviat = False
+    email_error: Optional[str] = None
+
+    if payload.proveidor_id is not None:
+        prov_row = (
+            await db.execute(
+                select(Proveidor).where(
+                    Proveidor.id == payload.proveidor_id,
+                    Proveidor.empresa_id == emp_uuid,
+                )
+            )
+        ).scalars().first()
+        if not prov_row:
+            raise HTTPException(status_code=404, detail="Proveïdor no trobat")
+        alerta.proveidor_id = prov_row.id
+        prov_nom = prov_row.rao_social
+        prov_email = prov_row.email
+        proposta["proveidor_id"] = str(prov_row.id)
+        proposta["proveidor_nom"] = prov_row.rao_social
+
+    email_dest = (payload.proveidor_email or prov_email or proposta.get("proveidor_email") or "").strip() or None
+    if email_dest:
+        proposta["proveidor_email"] = email_dest
 
     if payload.accio == "APROVAR":
         alerta.estat = "APROVADA"
@@ -2345,7 +2911,55 @@ async def resoldre_esborrany_recompra(
             proposta["import_estimat"] = round(float(payload.quantitat_aprovada) * preu_u, 2)
         else:
             proposta["quantitat_aprovada"] = float(proposta.get("quantitat_proposada") or 0.0)
-        proposta["estat_hitl"] = "APROVADA_PER_EMISSIO_MANUAL"
+
+        empresa_nom = (
+            await db.execute(select(Empresa.nom).where(Empresa.id == emp_uuid))
+        ).scalar() or "Sevalor"
+        assumpte_def, cos_def = construir_text_esborrany_email_recompra(
+            empresa_nom=empresa_nom,
+            proveidor_nom=prov_nom,
+            items=[
+                {
+                    "referencia": art_ref or proposta.get("referencia"),
+                    "codi_barres": art_cb or proposta.get("codi_barres"),
+                    "nom": art_nom or proposta.get("nom"),
+                    "unitat_mesura": proposta.get("unitat_mesura") or "UNITAT",
+                    "quantitat_proposada": proposta.get("quantitat_proposada"),
+                    "quantitat_aprovada": proposta.get("quantitat_aprovada"),
+                }
+            ],
+            notes_extra=payload.notes,
+        )
+        assumpte_final = (payload.assumpte or proposta.get("esborrany_email_assumpte") or assumpte_def).strip()
+        cos_final = (payload.cos_email or proposta.get("esborrany_email_cos") or cos_def).strip()
+        proposta["esborrany_email_assumpte"] = assumpte_final
+        proposta["esborrany_email_cos"] = cos_final
+        if email_dest:
+            try:
+                proposta["mailto_url"] = construir_mailto_url(email_dest, assumpte_final, cos_final)
+            except Exception:
+                pass
+
+        if payload.enviar_email:
+            if not email_dest:
+                raise HTTPException(
+                    status_code=422,
+                    detail="Cal indicar l'adreça de correu del proveïdor per enviar la comanda.",
+                )
+            try:
+                validar_email_destinatari(email_dest)
+            except ValueError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+            email_enviat, email_error = enviar_email_recompra_smtp(
+                empresa_nom=empresa_nom,
+                destinatari_email=email_dest,
+                assumpte=assumpte_final,
+                cos_missatge=cos_final,
+            )
+            proposta["estat_hitl"] = "ENVIADA_SMTP_HITL" if email_enviat else "APROVADA_PER_EMISSIO_MANUAL"
+        else:
+            proposta["estat_hitl"] = "APROVADA_PER_EMISSIO_MANUAL"
     else:
         alerta.estat = "DESCARTADA"
         proposta["estat_hitl"] = "DESCARTADA"
@@ -2363,6 +2977,9 @@ async def resoldre_esborrany_recompra(
 
     if alerta.estat == "APROVADA":
         try:
+            from app.core.db import set_tenant_context
+
+            await set_tenant_context(db, str(emp_uuid), role=rol)
             ruta = await SovereignStorageGateway.desar_entitat_json(
                 db=db,
                 empresa_id=emp_uuid,
@@ -2381,4 +2998,9 @@ async def resoldre_esborrany_recompra(
         except Exception as exc:
             logger.warning("No s'ha pogut sincronitzar recompra %s al disc sobirà: %s", alerta.id, exc)
 
-    return _serialitzar_alerta_recompra(alerta, art_nom, art_ref, art_cb, prov_nom, rol)
+    res_serialitzat = _serialitzar_alerta_recompra(
+        alerta, art_nom, art_ref, art_cb, prov_nom, rol, email_dest
+    )
+    res_serialitzat["email_enviat"] = email_enviat
+    res_serialitzat["email_error"] = email_error
+    return res_serialitzat

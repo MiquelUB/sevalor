@@ -218,7 +218,7 @@ function GestioLayoutContent({ children }: { children: React.ReactNode }) {
             .filter((link) => {
               if (
                 link.href === "/gestio/copilot" &&
-                (!usuari || empresa?.feature_copilot_ia !== true || empresa?.node_ia_actiu !== true)
+                (!usuari || empresa?.feature_copilot_ia === false)
               ) {
                 return false;
               }
@@ -379,7 +379,7 @@ function GestioLayoutContent({ children }: { children: React.ReactNode }) {
                 )}
               </button>
 
-              {Boolean(usuari) && empresa?.feature_copilot_ia === true && empresa?.node_ia_actiu === true && (
+              {Boolean(usuari) && empresa?.feature_copilot_ia !== false && (
                 <Link
                   href="/gestio/copilot"
                   className="p-2 rounded-lg hover:bg-surface-container-high text-on-surface-variant hover:text-primary transition-colors"
@@ -471,7 +471,7 @@ function GestioLayoutContent({ children }: { children: React.ReactNode }) {
         </main>
       </div>
 
-      {Boolean(usuari) && empresa?.feature_copilot_ia === true && empresa?.node_ia_actiu === true && <CopilotWidget />}
+      {Boolean(usuari) && empresa?.feature_copilot_ia !== false && <CopilotWidget />}
 
       {/* MODAL SPOTLIGHT META-SEARCH (<200 ms) */}
       {spotlightObert && (

@@ -110,7 +110,6 @@ export default function GestioProveidorsPage() {
       await apiFetch(`/gestio/proveidors/${provEdicio.id}`, {
         method: "PUT",
         body: JSON.stringify({
-          codi: provEdicio.codi,
           rao_social: provEdicio.rao_social,
           nif: provEdicio.nif,
           telefon: provEdicio.telefon || null,
@@ -306,7 +305,6 @@ export default function GestioProveidorsPage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          codi: `PRV-${Date.now().toString().slice(-4)}`,
           rao_social: novaRaoSocial,
           nif: nouNif,
           telefon: nouTelefon || null,
@@ -994,6 +992,10 @@ export default function GestioProveidorsPage() {
             </div>
 
             <form onSubmit={handleCrearProveidor} className="space-y-4 text-xs font-mono">
+              <div className="px-3 py-2 rounded-xl border border-dashed border-emerald-300 dark:border-emerald-800 bg-emerald-50/70 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-300 flex items-center gap-2">
+                <Lock className="w-3.5 h-3.5 shrink-0" />
+                <span>Codi Proveïdor: <strong>Automàtic (PRV-XXXX)</strong> assignat en desar</span>
+              </div>
               <div className="grid grid-cols-2 gap-3">
                 <div className="space-y-1">
                   <label className="font-bold text-slate-700 dark:text-slate-300">Raó Social:</label>
@@ -1136,13 +1138,13 @@ export default function GestioProveidorsPage() {
                   <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Informació General</h4>
                   <div className="grid grid-cols-2 gap-4">
                     <div>
-                      <label className="block text-xs font-bold text-slate-600 dark:text-slate-400 mb-1">Codi Proveïdor</label>
+                      <label className="block text-xs font-bold text-slate-600 dark:text-slate-400 mb-1">Codi Proveïdor (Automàtic)</label>
                       <input
                         type="text"
+                        readOnly
                         value={provEdicio.codi}
-                        onChange={(e) => setProvEdicio({ ...provEdicio, codi: e.target.value })}
-                        className="w-full p-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-mono"
-                        required
+                        title="Numeració automàtica assignada pel sistema"
+                        className="w-full p-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-100 dark:bg-slate-800/60 text-slate-500 dark:text-slate-400 text-xs font-mono cursor-not-allowed"
                       />
                     </div>
                     <div>

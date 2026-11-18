@@ -844,7 +844,8 @@ async def generar_pressupost_ia(
     ]
 
     llm_summary: Optional[str] = None
-    if node_url.startswith(("http://", "https://")):
+    effective_ia_url = node_url or (disc_url if disc_url.startswith(("http://", "https://")) else "")
+    if effective_ia_url.startswith(("http://", "https://")):
         from app.api.v1.gestio.copilot import cridar_lm_studio
 
         context_str = (
@@ -856,6 +857,7 @@ async def generar_pressupost_ia(
             vertical=empresa.vertical or "SEVALOR",
             context_addicional=context_str,
             empresa=empresa,
+            node_ia_url=effective_ia_url,
         )
         if llm_summary is None:
             raise HTTPException(
@@ -865,14 +867,6 @@ async def generar_pressupost_ia(
                     "message": "El túnel Copilot / Node IA local no respon. Zero fallback a Hetzner.",
                 },
             )
-    elif disc_url.startswith(("http://", "https://")) and not node_url:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail={
-                "code": "NODE_IA_OFFLINE",
-                "message": "Falta configurar node_ia_url per al node IA local de l'empresa.",
-            },
-        )
 
     if not linies:
         te_preus_reals = False

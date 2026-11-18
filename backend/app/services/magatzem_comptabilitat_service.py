@@ -192,6 +192,9 @@ async def processar_entrada_albara_i_recalcular_pmp(
         )
     )
 
+    from app.services.recompra_service import avaluar_i_sincronitzar_alertes_recompra
+
+    await avaluar_i_sincronitzar_alertes_recompra(db, empresa_id, [article.id])
     await db.commit()
     return {
         "article_id": str(article.id),
@@ -359,6 +362,9 @@ async def registrar_merma_i_imputar_a_comptabilitat(
         )
     )
 
+    from app.services.recompra_service import avaluar_i_sincronitzar_alertes_recompra
+
+    await avaluar_i_sincronitzar_alertes_recompra(db, empresa_id, [article.id])
     await db.commit()
     return {
         "merma_id": str(merma.id),

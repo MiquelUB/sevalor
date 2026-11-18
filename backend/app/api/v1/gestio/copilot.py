@@ -15,7 +15,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.db import get_db_with_tenant_context
-from app.core.network_utils import build_node_ia_headers, resolve_effective_node_url
+from app.core.network_utils import (
+    build_node_ia_headers,
+    resoldre_url_tunel_ia,
+    resolve_effective_node_url,
+)
 from app.core.security import get_current_user_claims, require_roles
 from app.models.models import (
     AlertaGarantiaRecompra,
@@ -640,13 +644,16 @@ async def cridar_lm_studio(
 ) -> Optional[str]:
     """Cridar el node d'IA local dedicat de l'empresa. Zero egress a Hetzner."""
     if empresa is not None:
+        raw_tunel = resoldre_url_tunel_ia(
+            getattr(empresa, "node_ia_url", None) or node_ia_url,
+            getattr(empresa, "disc_dur_url", None),
+        )
         raw_target = (
-            empresa.node_ia_url.strip()
+            raw_tunel
             if (
                 empresa.node_ia_actiu
                 and getattr(empresa, "feature_copilot_ia", False)
-                and empresa.node_ia_url
-                and empresa.node_ia_url.strip()
+                and raw_tunel
             )
             else None
         )
@@ -720,18 +727,26 @@ async def cridar_lm_studio_amb_tools(
     # NORMA CONSTITUCIONAL SUPREMA: La IA només corre si l'empresa té ordinador dedicat.
     res = await db.execute(select(Empresa).where(Empresa.id == empresa_id))
     empresa = res.scalar_one_or_none()
+    raw_tunel = (
+        resoldre_url_tunel_ia(
+            getattr(empresa, "node_ia_url", None),
+            getattr(empresa, "disc_dur_url", None),
+        )
+        if empresa
+        else None
+    )
     if (
         not empresa
         or not empresa.node_ia_actiu
-        or not empresa.node_ia_url
-        or not empresa.node_ia_url.strip()
+        or not getattr(empresa, "feature_copilot_ia", False)
+        or not raw_tunel
     ):
         logger.info(
             f"Empresa {empresa_id} sense ordinador dedicat actiu. Zero egress a Hetzner (Constitució §2.V)."
         )
         return None, None, None, None
 
-    lm_url = resolve_effective_node_url(empresa.node_ia_url.strip())
+    lm_url = resolve_effective_node_url(raw_tunel)
     if not lm_url:
         return None, None, None, None
     base_url = lm_url.rstrip("/")
@@ -1160,7 +1175,19 @@ async def obtenir_estat_node_ia(
     res = await db.execute(select(Empresa).where(Empresa.id == empresa_id))
     empresa = res.scalar_one_or_none()
     vertical = empresa.vertical if empresa else "SEVALOR"
-    node_actiu = bool(empresa and empresa.node_ia_actiu and empresa.node_ia_url)
+    raw_tunel = (
+        resoldre_url_tunel_ia(
+            getattr(empresa, "node_ia_url", None),
+            getattr(empresa, "disc_dur_url", None),
+        )
+        if empresa
+        else None
+    )
+    node_actiu = bool(
+        empresa
+        and empresa.node_ia_actiu
+        and raw_tunel
+    )
 
     if not node_actiu:
         return {
@@ -1179,7 +1206,7 @@ async def obtenir_estat_node_ia(
     return {
         "node_actiu": True,
         "estat": "ORDINADOR_DEDICAT_ACTIU",
-        "url_ordinador": empresa.node_ia_url if empresa else None,
+        "url_ordinador": raw_tunel,
         "proveidor": "Ordinador Local Dedicat de l'Empresa",
         "sobirania_dades": "100% Local a la seu de l'empresa (Zero Cloud Egress)",
         "model_llm": "Local Sovereign LLM (LM Studio / Ollama)",
@@ -1924,11 +1951,20 @@ async def obtenir_estat_ia(
     res_emp = await db.execute(select(Empresa).where(Empresa.id == empresa_id))
     empresa = res_emp.scalar_one_or_none()
 
+    raw_tunel = (
+        resoldre_url_tunel_ia(
+            getattr(empresa, "node_ia_url", None),
+            getattr(empresa, "disc_dur_url", None),
+        )
+        if empresa
+        else None
+    )
+
     if (
         not empresa
         or not empresa.node_ia_actiu
         or not getattr(empresa, "feature_copilot_ia", False)
-        or not (empresa.node_ia_url and empresa.node_ia_url.strip())
+        or not raw_tunel
     ):
         return {
             "estat": "OFFLINE",
@@ -1938,7 +1974,7 @@ async def obtenir_estat_ia(
             "latencia_ms": None,
         }
 
-    lm_url = resolve_effective_node_url(empresa.node_ia_url.strip()) or empresa.node_ia_url.strip()
+    lm_url = resolve_effective_node_url(raw_tunel) or raw_tunel
     base_url = lm_url.rstrip("/")
     models_url = f"{base_url}/models" if base_url.endswith("/v1") else f"{base_url}/v1/models"
     headers = build_node_ia_headers(
@@ -1953,12 +1989,17 @@ async def obtenir_estat_ia(
             elapsed_ms = int((datetime.now() - start_t).total_seconds() * 1000)
             if resp.status_code == 200:
                 data = resp.json()
-                models = [m.get("id") for m in data.get("data", [])]
+                models = [m.get("id") for m in data.get("data", []) if m.get("id")]
+                model_actiu = (
+                    models[0]
+                    if models
+                    else getattr(settings, "LM_STUDIO_MODEL", "qwen2.5-vl-7b-instruct")
+                )
                 return {
                     "estat": "ONLINE",
                     "node_ia_actiu": True,
                     "url": lm_url,
-                    "model_actiu": getattr(settings, "LM_STUDIO_MODEL", "qwen2.5-vl-7b-instruct"),
+                    "model_actiu": model_actiu,
                     "models_disponibles": models,
                     "latencia_ms": elapsed_ms,
                 }

@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.db import get_db_with_tenant_context
 from app.core.security import get_current_user_claims, require_roles
 from app.models.models import DocumentCAERC, Proveidor, RegistreEsdevenimentsSIF
+from app.services.codis_service import generar_seguent_codi
 from app.services.sovereign_storage import SovereignStorageGateway
 
 logger = logging.getLogger("sevalor.proveidors")
@@ -38,7 +39,7 @@ def _resolve_emp_uuid(request: Request, claims: Optional[dict[str, Any]] = None)
 
 
 class ProveidorCreate(BaseModel):
-    codi: str = Field(..., max_length=20)
+    codi: Optional[str] = Field(None, max_length=20)
     rao_social: str = Field(..., max_length=200)
     nif: str = Field(..., max_length=20)
     telefon: Optional[str] = Field(None, max_length=30)
@@ -51,6 +52,7 @@ class ProveidorCreate(BaseModel):
 
 class ProveidorResponse(ProveidorCreate):
     id: uuid.UUID
+    codi: str
     actiu: bool
     es_recc: bool
     aplica_isp_defecte: bool
@@ -118,7 +120,11 @@ async def llistar_proveidors(
     if q:
         search_term = f"%{q}%"
         stmt = stmt.where(
-            or_(Proveidor.rao_social.ilike(search_term), Proveidor.nif.ilike(search_term))
+            or_(
+                Proveidor.codi.ilike(search_term),
+                Proveidor.rao_social.ilike(search_term),
+                Proveidor.nif.ilike(search_term),
+            )
         )
 
     stmt = stmt.limit(limit).offset(offset).order_by(Proveidor.created_at.desc())
@@ -243,19 +249,12 @@ async def alta_proveidor(
             status_code=400, detail="El NIF/CIF ja es troba registrat en el sistema"
         )
 
-    stmt_codi = select(Proveidor).where(
-        Proveidor.empresa_id == emp_uuid,
-        Proveidor.codi == proveidor.codi,
-    )
-    result_codi = await db.execute(stmt_codi)
-    if result_codi.scalars().first():
-        raise HTTPException(status_code=400, detail="El codi ja es troba registrat")
-
+    codi_auto = await generar_seguent_codi(db, Proveidor, emp_uuid, "PRV")
     iban_net = None if rol == "ENGINYER" else _normalitzar_iban_valid(proveidor.iban)
 
     nou_proveidor = Proveidor(
         empresa_id=emp_uuid,
-        codi=proveidor.codi,
+        codi=codi_auto,
         rao_social=proveidor.rao_social,
         nif=proveidor.nif,
         telefon=proveidor.telefon,
@@ -678,18 +677,7 @@ async def editar_proveidor(
                 status_code=400, detail="Aquest NIF ja pertany a un altre proveïdor"
             )
 
-    if prov.codi != proveidor.codi:
-        stmt_cod = select(Proveidor).where(
-            Proveidor.empresa_id == emp_uuid,
-            Proveidor.codi == proveidor.codi,
-            Proveidor.id != proveidor_id,
-        )
-        if (await db.execute(stmt_cod)).scalars().first():
-            raise HTTPException(
-                status_code=400, detail="Aquest codi ja pertany a un altre proveïdor"
-            )
-
-    prov.codi = proveidor.codi
+    # El codi del proveïdor s'assigna automàticament i no s'altera manualment
     prov.rao_social = proveidor.rao_social
     prov.nif = proveidor.nif
     prov.telefon = proveidor.telefon

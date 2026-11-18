@@ -6,20 +6,18 @@ test.describe.serial('Auditoria Zero Mock: Proveïdors E2E', () => {
     await expect(page.locator('h1', { hasText: 'Directori de Proveïdors' })).toBeVisible();
 
     await page.click('button:has-text("Nou Proveïdor")');
-    await expect(page.locator('h3', { hasText: 'Alta de Nou Proveïdor' })).toBeVisible();
+    await expect(page.locator('h3', { hasText: 'Alta Manual de Proveïdor' })).toBeVisible();
 
-    const uniqId = Date.now().toString().slice(-6);
-    const nifUnic = `B${uniqId}PRO`;
-    const codiUnic = `PRV-${uniqId}`;
+    const uniqId = Date.now().toString().slice(-8);
+    const nifUnic = `B${uniqId}`;
 
-    await page.locator('label:has-text("Codi de Proveïdor") + input').fill(codiUnic);
-    await page.locator('label:has-text("Raó Social") + input').fill('Materials de Construcció SA');
-    await page.locator('label:has-text("NIF / CIF") + input').fill(nifUnic);
+    await page.locator('input[placeholder*="Tuberia"]').fill('Materials de Construcció SA');
+    await page.locator('input[placeholder*="65982104"]').fill(nifUnic);
     await page.locator('select').selectOption('MAQUINARIA');
 
-    await page.click('button:has-text("Guardar Proveïdor")');
+    await page.click('button:has-text("Crear Proveïdor")');
 
-    await expect(page.locator('table')).toContainText(codiUnic);
+    await expect(page.locator('table')).toContainText(/PRV-\d{4}/);
     await expect(page.locator('table')).toContainText('Materials de Construcció SA');
   });
 });

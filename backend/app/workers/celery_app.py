@@ -66,6 +66,7 @@ celery_app.conf.update(
         "app.workers.tasks.generar_informe_setmanal": {"queue": "queue_documents"},
         "app.workers.tasks.purgar_tokens_expirats": {"queue": "queue_periodic"},
         "app.workers.tasks.revisar_contractes_manteniment": {"queue": "queue_periodic"},
+        "app.workers.tasks.comprovar_trencament_estoc": {"queue": "queue_periodic"},
         "app.workers.contractes_tasks.revisar_contractes_manteniment": {"queue": "queue_periodic"},
         "app.workers.tasks.buidar_buffer_diari_cap_a_disc_client": {"queue": "queue_periodic"},
         "app.workers.comptabilitat_tasks.processar_tiquet_ocr_a_gestio_task": {
@@ -98,6 +99,12 @@ celery_app.conf.update(
         "auditoria-diaria-financera-tenants": {
             "task": "app.workers.comptabilitat_tasks.executar_auditoria_diaria_financera_tots_tenants",
             "schedule": crontab(hour=5, minute=0),
+        },
+        # T025 / FR-010: Detecció periòdica de trencament d'estoc i generació d'esborranys HITL (cada 30 minuts)
+        "comprovar-trencament-estoc-periodic": {
+            "task": "app.workers.tasks.comprovar_trencament_estoc",
+            "schedule": crontab(minute="*/30"),
+            "kwargs": {"empresa_id": None},
         },
         # T047: Alerta Matinal de Flota — cada dia a les 06:00 UTC
         "alerta-matinal-flota-diaria": {

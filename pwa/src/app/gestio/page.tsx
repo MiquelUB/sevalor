@@ -48,12 +48,29 @@ export default function GestioDashboardPage() {
   const [showModalEditarOT, setShowModalEditarOT] = useState(false);
   const [showIncidenciesDrawer, setShowIncidenciesDrawer] = useState(false);
   const [editingFeinaId, setEditingFeinaId] = useState<string | null>(null);
-  const [hud, setHud] = useState({
+  const [hud, setHud] = useState<{
+    active_jobs: number;
+    completed_jobs: number;
+    open_incidents: number;
+    teams_on_field: number;
+    critical_stock: number;
+    critical_stock_items?: Array<{
+      id: string;
+      referencia_inventari: string;
+      nom: string;
+      unitat_mesura: string;
+      estoc_minim: number;
+      estoc_disponible: number;
+      proveidor_nom?: string | null;
+    }>;
+    vehicles_with_alerts: number;
+  }>({
     active_jobs: 0,
     completed_jobs: 0,
     open_incidents: 0,
     teams_on_field: 0,
     critical_stock: 0,
+    critical_stock_items: [],
     vehicles_with_alerts: 0,
   });
   const [feines, setFeines] = useState<Feina[]>([]);
@@ -793,24 +810,30 @@ export default function GestioDashboardPage() {
 
             {/* Estoc Crític & Completades */}
             <Link
-              href="/gestio/magatzem"
+              href={hud.critical_stock > 0 ? "/gestio/magatzem?filtre=trencament" : "/gestio/magatzem"}
               className="bg-surface-container-lowest p-lg rounded-xl shadow-sm border-b-2 border-secondary-container flex flex-col justify-between hover:shadow-md transition-all"
             >
               <div className="flex justify-between items-start">
                 <span className="font-label-caps text-on-surface-variant uppercase">
                   Alertes d&apos;Estoc
                 </span>
-                <span className="material-symbols-outlined text-secondary bg-secondary-container/10 p-xs rounded-lg">
+                <span className={`material-symbols-outlined p-xs rounded-lg ${hud.critical_stock > 0 ? "text-error bg-error-container/30" : "text-secondary bg-secondary-container/10"}`}>
                   inventory_2
                 </span>
               </div>
               <div className="mt-md">
-                <div className="font-display-lg text-display-lg text-on-surface font-data-tabular">
+                <div className={`font-display-lg text-display-lg font-data-tabular ${hud.critical_stock > 0 ? "text-error" : "text-on-surface"}`}>
                   {hud.critical_stock}
                 </div>
                 <div className="flex items-center gap-xs text-secondary text-xs mt-xs font-body-strong">
-                  <span className="material-symbols-outlined text-[14px]">trending_up</span>
-                  <span>{feinesCompletadesReals} OTs completades</span>
+                  <span className="material-symbols-outlined text-[14px]">
+                    {hud.critical_stock > 0 ? "warning" : "trending_up"}
+                  </span>
+                  <span>
+                    {hud.critical_stock > 0
+                      ? "Veure articles en trencament →"
+                      : `${feinesCompletadesReals} OTs completades`}
+                  </span>
                 </div>
               </div>
             </Link>
@@ -1045,23 +1068,51 @@ export default function GestioDashboardPage() {
               <span className="text-xs text-outline"> Temps real · Zero-Trust</span>
             </div>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-md">
-              <Link
-                href="/gestio/magatzem"
-                className="flex items-start gap-md p-md rounded-lg bg-error-container/15 border border-error/20 hover:bg-error-container/25 transition-colors"
-              >
-                <span className="material-symbols-outlined text-error mt-0.5">inventory_2</span>
-                <div>
-                  <h4 className="font-body-strong text-on-error-container text-sm">
-                    Estoc Crític: {hud.critical_stock} referències
-                  </h4>
-                  <p className="text-xs text-on-error-container/80 mt-xs">
-                    Articles per sota del llindar mínim de seguretat al magatzem central.
-                  </p>
-                  <span className="mt-sm inline-block text-[11px] font-label-caps text-error underline uppercase">
-                    Gestionar Magatzem
-                  </span>
+              <div className="flex flex-col justify-between gap-sm p-md rounded-lg bg-error-container/15 border border-error/20">
+                <Link
+                  href="/gestio/magatzem?filtre=trencament"
+                  className="flex items-start gap-md hover:opacity-90 transition-opacity"
+                >
+                  <span className="material-symbols-outlined text-error mt-0.5">inventory_2</span>
+                  <div className="min-w-0 flex-1">
+                    <h4 className="font-body-strong text-on-error-container text-sm">
+                      Estoc Crític: {hud.critical_stock} referències
+                    </h4>
+                    {hud.critical_stock_items && hud.critical_stock_items.length > 0 ? (
+                      <ul className="mt-xs space-y-1">
+                        {hud.critical_stock_items.slice(0, 3).map((item) => (
+                          <li key={item.id} className="text-[11px] text-on-error-container/90 font-mono truncate">
+                            • <span className="font-bold">{item.referencia_inventari}</span> {item.nom} ({item.estoc_disponible}/{item.estoc_minim} {item.unitat_mesura})
+                          </li>
+                        ))}
+                        {hud.critical_stock > 3 && (
+                          <li className="text-[11px] text-on-error-container/75 italic">
+                            +{hud.critical_stock - 3} referències més sota mínim...
+                          </li>
+                        )}
+                      </ul>
+                    ) : (
+                      <p className="text-xs text-on-error-container/80 mt-xs">
+                        Cap article en trencament d&apos;estoc al magatzem central.
+                      </p>
+                    )}
+                  </div>
+                </Link>
+                <div className="flex flex-wrap items-center gap-md pl-8">
+                  <Link
+                    href="/gestio/magatzem?filtre=trencament"
+                    className="text-[11px] font-label-caps text-error underline uppercase"
+                  >
+                    Veure només trencaments
+                  </Link>
+                  <Link
+                    href="/gestio/magatzem?tab=RECOMPRA_STOCK"
+                    className="text-[11px] font-label-caps text-primary underline uppercase"
+                  >
+                    Emails de recompra →
+                  </Link>
                 </div>
-              </Link>
+              </div>
 
               <Link
                 href="/gestio/flota"

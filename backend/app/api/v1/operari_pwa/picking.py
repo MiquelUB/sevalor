@@ -181,6 +181,9 @@ async def actualitzar_linia_picking_operari(
     if payload.quantitat_mermada is not None:
         linia.quantitat_mermada = payload.quantitat_mermada
 
+    from app.services.recompra_service import avaluar_i_sincronitzar_alertes_recompra
+
+    await avaluar_i_sincronitzar_alertes_recompra(db, uuid.UUID(empresa_id), [linia.article_id])
     await db.commit()
 
     pick_in = float(linia.quantitat_carregada_pick_in or 0.0)

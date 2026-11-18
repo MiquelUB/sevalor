@@ -428,40 +428,39 @@ def revisar_jornades_anomales(empresa_id: str):
     return asyncio.run(process_anomalias())
 
 
-@celery_app.task(name="app.workers.tasks.comprovar_trencament_estoc", queue="queue_critical")
-def comprovar_trencament_estoc(empresa_id: str):
-    """Checks estocs_magatzem.quantitat_fisica < articles.estoc_minim and generates a draft email."""
-    import asyncio
+@celery_app.task(name="app.workers.tasks.comprovar_trencament_estoc", queue="queue_periodic")
+def comprovar_trencament_estoc(empresa_id: str | None = None):
+    """Revisa trencaments d'estoc reals i genera alertes RECOMPRA_STOCK amb esborrany d'email HITL (sense auto-enviar)."""
+    import uuid
 
     from sqlalchemy import select
 
-    from app.models.models import Article, EstocMagatzem
+    from app.core.db import set_tenant_context
+    from app.models.models import Empresa
+    from app.services.recompra_service import avaluar_i_sincronitzar_alertes_recompra
 
-    async def process():
-        async with get_worker_session(empresa_id) as session:
-            # We must use tenant context here, but since it's a worker, we might need a raw query or manually set it.
-            # Using simple query with enterprise_id filter.
-            stmt = (
-                select(EstocMagatzem, Article)
-                .join(Article, EstocMagatzem.article_id == Article.id)
-                .where(
-                    EstocMagatzem.empresa_id == empresa_id,
-                    EstocMagatzem.quantitat_fisica < Article.estoc_minim,
-                )
-            )
-            result = await session.execute(stmt)
-            rows = result.all()
+    async def _run_tenant(session, emp_id: uuid.UUID) -> List[str]:
+        noves = await avaluar_i_sincronitzar_alertes_recompra(session, emp_id)
+        return [str(a.article_id) for a in noves if a.article_id]
 
-            notificats = []
-            for estoc, article in rows:
-                logger.info(
-                    f"Draft Email sent to provider for article: {article.nom} (ID: {article.id}). Current estoc: {estoc.quantitat_fisica}, min: {article.estoc_minim}"
-                )
-                notificats.append(str(article.id))
+    if empresa_id:
+        return _run_async_in_worker(
+            lambda s: _run_tenant(s, uuid.UUID(str(empresa_id))),
+            empresa_id=str(empresa_id),
+        )
 
-            return notificats
+    async def _run_all(session) -> List[str]:
+        emp_ids = (
+            await session.execute(select(Empresa.id).where(Empresa.estat_pagament == "ACTIU"))
+        ).scalars().all()
+        notificats: List[str] = []
+        for eid in emp_ids:
+            await set_tenant_context(session, str(eid), is_superadmin=False, role="BOSS")
+            notificats.extend(await _run_tenant(session, eid))
+            await session.commit()
+        return notificats
 
-    return asyncio.run(process())
+    return _run_async_in_worker(_run_all, is_superadmin=True)
 
 
 @celery_app.task(name="app.workers.tasks.revisar_itv_asseguranca", queue="queue_critical")

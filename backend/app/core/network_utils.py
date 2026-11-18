@@ -49,7 +49,7 @@ def get_candidate_node_urls(raw_url: Optional[str]) -> List[str]:
             if hostname == "host.docker.internal" and not os.path.exists("/.dockerenv"):
                 local_cand = f"{scheme}://127.0.0.1{port_suffix}{path}".rstrip("/")
                 if local_cand not in candidates:
-                    candidates.append(local_cand)
+                    candidates.insert(0, local_cand)
             for gw in gateways:
                 gw_base = f"{scheme}://{gw}{port_suffix}{path}".rstrip("/")
                 if gw_base not in candidates:
@@ -64,6 +64,20 @@ def get_candidate_node_urls(raw_url: Optional[str]) -> List[str]:
         pass
 
     return candidates
+
+
+def resoldre_url_tunel_ia(
+    node_ia_url: Optional[str],
+    disc_dur_url: Optional[str] = None,
+) -> Optional[str]:
+    """Retorna la URL HTTP del node IA (o el túnel unificat disc_dur_url `:9001` que proxieja `/v1/*`)."""
+    if isinstance(node_ia_url, str) and node_ia_url.strip():
+        return node_ia_url.strip()
+    if isinstance(disc_dur_url, str):
+        disc_clean = disc_dur_url.strip()
+        if disc_clean.startswith(("http://", "https://")):
+            return disc_clean
+    return None
 
 
 def resolve_effective_node_url(raw_url: Optional[str]) -> Optional[str]:

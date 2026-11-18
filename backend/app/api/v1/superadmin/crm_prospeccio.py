@@ -1277,11 +1277,14 @@ async def activar_demo_lead(
     await db.flush()
 
     # 6. Client de prova i ordre de treball inicial per provar la PWA
+    from app.services.codis_service import generar_seguent_codi
+
     cli_id = uuid.uuid4()
+    codi_cli_auto = await generar_seguent_codi(db, Client, nou_tenant_id, "CLI")
     cli = Client(
         id=cli_id,
         empresa_id=nou_tenant_id,
-        codi=f"CLI-{nou_tenant_id.hex[:4].upper()}",
+        codi=codi_cli_auto,
         rao_social="Finca / Client de Prova SL",
         nif=f"B{uuid.uuid4().hex[:8].upper()}",
         telefon="611223344",

@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.db import get_db_with_tenant_context
 from app.core.security import require_roles
 from app.models.models import Client, Finca
+from app.services.codis_service import generar_seguent_codi
 from app.services.csv_service import CsvImportResult, generate_csv_content, parse_and_validate_csv
 from app.services.sovereign_storage import SovereignStorageGateway
 
@@ -57,7 +58,7 @@ def _serialitzar_client(c: Client, rol: str) -> dict[str, Any]:
 
 
 class ClientCreate(BaseModel):
-    codi: str = Field(..., max_length=20)
+    codi: Optional[str] = Field(None, max_length=20)
     rao_social: str = Field(..., max_length=200)
     nif: str = Field(..., max_length=20)
     telefon: Optional[str] = Field(None, max_length=30)
@@ -102,6 +103,7 @@ class ClientCreate(BaseModel):
 
 class ClientResponse(ClientCreate):
     id: uuid.UUID
+    codi: str
     estat_canal_telegram: str
     actiu: bool
     model_config = {"from_attributes": True}
@@ -133,7 +135,13 @@ async def llistar_clients(
 
     if q:
         search_term = f"%{q}%"
-        stmt = stmt.where(or_(Client.rao_social.ilike(search_term), Client.nif.ilike(search_term)))
+        stmt = stmt.where(
+            or_(
+                Client.codi.ilike(search_term),
+                Client.rao_social.ilike(search_term),
+                Client.nif.ilike(search_term),
+            )
+        )
 
     stmt = stmt.limit(limit).offset(offset).order_by(Client.created_at.desc())
 
@@ -162,16 +170,11 @@ async def alta_client(
             status_code=400, detail="El NIF/CIF ja es troba registrat en el sistema"
         )
 
-    stmt_codi = select(Client).where(
-        Client.empresa_id == emp_uuid, Client.codi == client.codi
-    )
-    result_codi = await db.execute(stmt_codi)
-    if result_codi.scalars().first():
-        raise HTTPException(status_code=400, detail="El codi ja es troba registrat en el sistema")
+    codi_auto = await generar_seguent_codi(db, Client, emp_uuid, "CLI")
 
     nou_client = Client(
         empresa_id=emp_uuid,
-        codi=client.codi,
+        codi=codi_auto,
         rao_social=client.rao_social,
         nif=client.nif,
         telefon=client.telefon,
@@ -240,20 +243,7 @@ async def modificar_client(
         if dup_nif:
             raise HTTPException(status_code=400, detail="Ja existeix un altre client amb aquest NIF")
 
-    if client_db.codi != payload.codi:
-        dup_cod = (
-            await db.execute(
-                select(Client.id).where(
-                    Client.empresa_id == emp_uuid,
-                    Client.codi == payload.codi,
-                    Client.id != client_id,
-                )
-            )
-        ).first()
-        if dup_cod:
-            raise HTTPException(status_code=400, detail="Ja existeix un altre client amb aquest codi")
-
-    client_db.codi = payload.codi
+    # El codi del client s'assigna automàticament i no s'altera manualment
     client_db.rao_social = payload.rao_social
     client_db.nif = payload.nif
     client_db.telefon = payload.telefon
@@ -701,24 +691,48 @@ async def importar_clients_csv(
     inserits = 0
     total_processats = len(valid_records) + len(set(e["fila"] for e in errors))
 
-    empresa_id = request.state.empresa_id
+    emp_uuid = _resolve_emp_uuid(request)
 
-    # Processar els vàlids un a un per capturar duplicats de BD (ex. NIF repetit)
-    for index, record in enumerate(valid_records):
-        client_db = Client(empresa_id=empresa_id, **record.model_dump())
+    # Processar els vàlids un a un amb enumeració automàtica CLI-XXXX
+    for record in valid_records:
+        dup_nif = (
+            await db.execute(
+                select(Client.id).where(
+                    Client.empresa_id == emp_uuid,
+                    Client.nif == record.nif,  # type: ignore[attr-defined]
+                )
+            )
+        ).first()
+        if dup_nif:
+            errors.append(
+                {
+                    "fila": "Desconeguda",
+                    "columna": "nif",
+                    "valor": record.nif,  # type: ignore[attr-defined]
+                    "motiu": "Ja existeix un client amb aquest NIF",
+                }
+            )
+            continue
+
+        dades_client = record.model_dump(exclude={"codi", "iban"})
+        codi_auto = await generar_seguent_codi(db, Client, emp_uuid, "CLI")
+        client_db = Client(
+            empresa_id=emp_uuid,
+            codi=codi_auto,
+            iban_xifrat_simetric=getattr(record, "iban", None),
+            **dades_client,
+        )
         db.add(client_db)
         try:
             await db.flush()
             inserits += 1
         except IntegrityError:
             await db.rollback()
-            # Mapejem la fila (afegim +2 pel offset d'index i capçalera, assumint sense errors previs,
-            # però millor no lligar-ho estricte si ja hi ha hagut errors, per ara posem info genèrica)
             errors.append(
                 {
                     "fila": "Desconeguda",
                     "columna": "nif/codi",
-                    "valor": record.nif,  # type: ignore
+                    "valor": record.nif,  # type: ignore[attr-defined]
                     "motiu": "Ja existeix un client amb aquest NIF o Codi",
                 }
             )
