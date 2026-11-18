@@ -905,13 +905,16 @@ async def generar_pressupost_ia(
             "client_id": str(client_id) if client_id else None,
             "estat": "PENDENT_AUDITORIA",
             "origen": "COPILOT_IA",
+            "prompt": prompt,
             "draft": draft_payload,
+            "created_at": datetime.now(timezone.utc).isoformat(),
         },
     )
 
     return {
         "id": draft_id,
+        "status": "PENDENT_AUDITORIA",
         "estat": "PENDENT_AUDITORIA",
         "draft": draft_payload,
-        "missatge": "Esborrany generat en mode PENDENT_AUDITORIA amb dades del disc sobirà.",
+        "missatge": "Proposta PENDENT_AUDITORIA desada al disc de l'empresa per a validació humana (HITL).",
     }

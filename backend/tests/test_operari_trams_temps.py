@@ -518,7 +518,7 @@ async def test_flux_complet_feina_acabada_a_prefactura_editable_i_verifactu(
             Empresa(
                 id=emp_a_id,
                 nom="Instal·lacions Prefactura SL",
-                nif=f"B{suf[:8]}",
+                nif=f"B{emp_a_id.hex[:8].upper()}",
                 subdomini=f"prefa-{suf}",
                 pla_subscripcio="PRO",
                 estat_pagament="ACTIU",
@@ -526,7 +526,7 @@ async def test_flux_complet_feina_acabada_a_prefactura_editable_i_verifactu(
             Empresa(
                 id=emp_b_id,
                 nom="Competidor B SL",
-                nif=f"B{suf[:7]}9",
+                nif=f"B{emp_b_id.hex[:8].upper()}",
                 subdomini=f"prefb-{suf}",
                 pla_subscripcio="PRO",
                 estat_pagament="ACTIU",
