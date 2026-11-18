@@ -369,11 +369,23 @@ export function CrearOTModal({ onClose, onSuccess, initialClientId }: CrearOTMod
       return;
     }
 
-    const totalCalculat = liniesPicking.reduce((acc, linia) => {
+    const liniesPayload = liniesPicking.map((linia) => {
       const art = articles.find((a) => a.id === linia.article_id);
       const pvp = art && art.preu_venda != null ? Number(art.preu_venda) : 0;
-      return acc + pvp * linia.quantitat;
-    }, 0);
+      return {
+        article_id: linia.article_id,
+        concepte: art?.nom || "Material d'obra",
+        quantitat: linia.quantitat,
+        preu_unitari: pvp,
+        descompte_pct: 0,
+        tipus_iva: 21,
+      };
+    });
+
+    const totalCalculat = liniesPayload.reduce(
+      (acc, l) => acc + l.preu_unitari * l.quantitat * (1 + l.tipus_iva / 100),
+      0
+    );
 
     setPressupostLoading(true);
     try {
@@ -384,13 +396,16 @@ export function CrearOTModal({ onClose, onSuccess, initialClientId }: CrearOTMod
         body: JSON.stringify({
           client_id: formData.client_id,
           numero,
+          titol: formData.titol.trim() || `Pressupost ${numero}`,
+          descripcio: formData.descripcio.trim() || undefined,
           total: Number(totalCalculat.toFixed(2)),
+          linies: liniesPayload.length > 0 ? liniesPayload : undefined,
         }),
       });
       setModalFeedback({
         type: "ok",
-        text: `Pressupost ${created.numero} generat en estat ${created.estat} (${Number(created.total).toFixed(2)} €).`,
-        href: "/gestio/comptabilitat",
+        text: `Pressupost ${created.numero} generat en estat ${created.estat} (${Number(created.total).toFixed(2)} €). Ara el pots revisar i enviar al client.`,
+        href: `/gestio/pressupostos?id=${created.id}&enviar=1`,
       });
     } catch (err: any) {
       setModalFeedback({
@@ -462,18 +477,28 @@ export function CrearOTModal({ onClose, onSuccess, initialClientId }: CrearOTMod
     try {
       const suffix = Date.now().toString().slice(-4);
       const numero = `IA-${formData.codi}-${suffix}`.slice(0, 30);
+      const liniesIa = (iaDraft.linies || []).map((l) => ({
+        concepte: l.concepte,
+        quantitat: Number(l.quantitat || 1),
+        preu_unitari: Number(l.preu_unitari ?? 0),
+        descompte_pct: 0,
+        tipus_iva: 21,
+      }));
       const created = await apiFetch<any>("/gestio/pressupostos", {
         method: "POST",
         body: JSON.stringify({
           client_id: formData.client_id,
           numero,
+          titol: iaDraft.titol || formData.titol.trim() || `Pressupost ${numero}`,
+          descripcio: iaDraft.resum_tecnic || formData.descripcio.trim() || undefined,
           total: Number(iaDraft.total_estimat ?? 0),
+          linies: liniesIa.length > 0 ? liniesIa : undefined,
         }),
       });
       setModalFeedback({
         type: "ok",
-        text: `Pressupost ${created.numero} consolidat per a aprovació del client.`,
-        href: "/gestio/comptabilitat",
+        text: `Pressupost ${created.numero} consolidat. Ara el pots enviar al client per Email, Telegram o Enllaç.`,
+        href: `/gestio/pressupostos?id=${created.id}&enviar=1`,
       });
     } catch (err: any) {
       setModalFeedback({

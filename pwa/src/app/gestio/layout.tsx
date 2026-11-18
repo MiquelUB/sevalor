@@ -45,6 +45,7 @@ function GestioLayoutContent({ children }: { children: React.ReactNode }) {
   const navLinks = [
     { label: "Dashboard", href: "/gestio", icon: "dashboard", badge: "GIS" },
     { label: "Ordres de Treball", href: "/gestio/feines", icon: "assignment", badge: "OTs" },
+    { label: "Pressupostos", href: "/gestio/pressupostos", icon: "request_quote", badge: "PRE" },
     { label: "Mapa en Temps Real", href: "/gestio/mapa", icon: "explore", badge: "MAP" },
     { label: "Clients", href: "/gestio/clients", icon: "group", badge: "CLI" },
     { label: "Magatzem", href: "/gestio/magatzem", icon: "inventory_2", badge: "STK" },

@@ -18,8 +18,15 @@ class TelegramService:
         self.bot_token = settings.TELEGRAM_BOT_TOKEN
         self.api_url = f"https://api.telegram.org/bot{self.bot_token}"
 
-    async def send_message(self, chat_id: int, text: str, reply_markup: dict | None = None) -> bool:
-        if not self.bot_token or self.bot_token == "DUMMY_TOKEN":
+    async def send_message(
+        self,
+        chat_id: int,
+        text: str,
+        reply_markup: dict | None = None,
+        bot_token: str | None = None,
+    ) -> bool:
+        effective_token = (bot_token or self.bot_token or "").strip()
+        if not effective_token or effective_token == "DUMMY_TOKEN":
             logger.info(f"[TELEGRAM DISPATCH] Missatge a {chat_id}: {text} (markup={reply_markup})")
             return True
 
@@ -27,9 +34,10 @@ class TelegramService:
         if reply_markup:
             payload["reply_markup"] = reply_markup
 
+        api_url = f"https://api.telegram.org/bot{effective_token}"
         async with httpx.AsyncClient() as client:
             try:
-                res = await client.post(f"{self.api_url}/sendMessage", json=payload)
+                res = await client.post(f"{api_url}/sendMessage", json=payload)
                 return res.status_code == 200
             except Exception as e:
                 logger.error(f"Error enviant missatge Telegram: {e}")
@@ -268,9 +276,15 @@ class TelegramService:
 
         return "Acció no reconeguda."
 
-    async def enviar_pressupost_telegram(self, db: AsyncSession, pressupost_id: uuid.UUID) -> dict:
+    async def enviar_pressupost_telegram(
+        self,
+        db: AsyncSession,
+        pressupost_id: uuid.UUID,
+        titol: str | None = None,
+        acceptacio_url: str | None = None,
+    ) -> dict:
         """Envia un pressupost al client amb botons d'Inline Keyboard per aprovar o rebutjar."""
-        from app.models.models import Client, Pressupost
+        from app.models.models import Client, Empresa, Pressupost
 
         q_p = select(Pressupost).where(Pressupost.id == pressupost_id)
         pressupost = (await db.execute(q_p)).scalars().first()
@@ -282,11 +296,24 @@ class TelegramService:
         if not client or not client.telegram_chat_id or client.estat_canal_telegram != "ACTIU":
             return {"ok": False, "detail": "El client no té el canal de Telegram vinculat o actiu"}
 
+        empresa = (
+            await db.execute(select(Empresa).where(Empresa.id == pressupost.empresa_id))
+        ).scalars().first()
+        emp_token = (
+            empresa.telegram_bot_token.strip()
+            if empresa and empresa.telegram_bot_actiu and empresa.telegram_bot_token
+            else None
+        )
+
+        titol_line = f"• *Concepte:* {titol}\n" if titol else ""
+        link_line = f"\n🔗 *Detall complet:* {acceptacio_url}\n" if acceptacio_url else ""
         text = (
             f"📄 *Nou Pressupost Pendent d'Aprovació*\n\n"
             f"• *Número:* {pressupost.numero}\n"
+            f"{titol_line}"
             f"• *Import Total:* {float(pressupost.total):.2f} €\n"
-            f"• *Estat:* {pressupost.estat}\n\n"
+            f"• *Estat:* {pressupost.estat}\n"
+            f"{link_line}\n"
             f"Si us plau, revisa els termes i confirma o rebutja la proposta directament aquí sota:"
         )
         reply_markup = {
@@ -303,7 +330,12 @@ class TelegramService:
                 ]
             ]
         }
-        sent = await self.send_message(client.telegram_chat_id, text, reply_markup=reply_markup)
+        sent = await self.send_message(
+            client.telegram_chat_id,
+            text,
+            reply_markup=reply_markup,
+            bot_token=emp_token,
+        )
         return {
             "ok": sent,
             "pressupost_id": str(pressupost.id),

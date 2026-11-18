@@ -92,6 +92,10 @@ export interface Feina {
   hora_fi_real?: string | null;
   hores_imputades_facturables?: number | null;
   preu_venda_hora_aplicat?: number | null;
+  factura_id?: string | null;
+  factura_serie?: string | null;
+  factura_numero?: number | null;
+  factura_estat_document?: string | null;
   te_tram_obert?: boolean;
   temps_acumulat_segons?: number;
   trams_temps?: TramTempsGestio[];

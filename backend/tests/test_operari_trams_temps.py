@@ -472,3 +472,361 @@ async def test_tarifa_real_barema_panell_control_i_cost_operari_sense_hardcode(
         assert res_eng_det.json()["preu_venda_hora_aplicat"] is None
 
 
+@pytest.mark.asyncio
+async def test_flux_complet_feina_acabada_a_prefactura_editable_i_verifactu(
+    admin_session, tmp_path, monkeypatch
+):
+    """
+    Verifica el flux complet:
+    1) Feina acabada per l'operari (COMPLERT) i feina tancada per gestió (TANCADA) apareixen a /wip-control.
+    2) Materials consumits a picking (PickIn - PickOut) i barema real del panell de control es traslladen a WIP i a la pre-factura.
+    3) Convertir a Pre-factura crea ESBORRANY_PREFACTURA (Sèrie PRE), posa OT a PREFACTURADA, i NO compta encara a facturació emesa.
+    4) Es pot editar la pre-factura (línies, quantitats, preus, descomptes, retencions) i recalcula totals exactes.
+    5) Descartar una pre-factura retorna l'OT a WIP (COMPLERT).
+    6) Emetre definitivament (HITL) converteix l'esborrany en Factura Veri*factu (Sèrie F, EMESA, PDF vàlid, OT FACTURADA) i bloqueja edicions posteriors.
+    7) Aïllament RLS multi-tenant: Tenant B no pot veure, editar ni emetre pre-factures del Tenant A.
+    """
+    from app.models.models import Article, FullaPicking, LiniaPicking
+    from app.services.sovereign_storage import SovereignStorageGateway
+
+    monkeypatch.setenv("CLIENT_DISKS_MOUNT_ROOT", str(tmp_path / "disks_pref"))
+    monkeypatch.setattr(
+        SovereignStorageGateway,
+        "TRANSIT_QUEUE_DIR",
+        tmp_path / "transit_pref",
+    )
+
+    suf = uuid.uuid4().hex[:8]
+    emp_a_id = uuid.uuid4()
+    emp_b_id = uuid.uuid4()
+    boss_a_id = uuid.uuid4()
+    boss_b_id = uuid.uuid4()
+    op_a_id = uuid.uuid4()
+    cli_a_id = uuid.uuid4()
+    ot_op_id = uuid.uuid4()
+    ot_gest_id = uuid.uuid4()
+    art_id = uuid.uuid4()
+    fulla_id = uuid.uuid4()
+
+    disc_a = tmp_path / "disc_pref_a"
+    disc_b = tmp_path / "disc_pref_b"
+    disc_a.mkdir(parents=True, exist_ok=True)
+    disc_b.mkdir(parents=True, exist_ok=True)
+
+    admin_session.add_all(
+        [
+            Empresa(
+                id=emp_a_id,
+                nom="Instal·lacions Prefactura SL",
+                nif=f"B{suf[:8]}",
+                subdomini=f"prefa-{suf}",
+                pla_subscripcio="PRO",
+                estat_pagament="ACTIU",
+            ),
+            Empresa(
+                id=emp_b_id,
+                nom="Competidor B SL",
+                nif=f"B{suf[:7]}9",
+                subdomini=f"prefb-{suf}",
+                pla_subscripcio="PRO",
+                estat_pagament="ACTIU",
+            ),
+        ]
+    )
+    await admin_session.flush()
+
+    await admin_session.execute(text(f"SET LOCAL app.current_empresa_id = '{emp_a_id}';"))
+    await admin_session.execute(text("SET LOCAL app.current_user_role = 'BOSS';"))
+
+    admin_session.add_all(
+        [
+            Usuari(
+                id=boss_a_id,
+                empresa_id=emp_a_id,
+                nif=f"BA-{suf}",
+                nom="Boss A",
+                rol="BOSS",
+                telefon=f"+34610{suf[:6]}",
+                email=f"ba-{suf}@test.cat",
+                password_hash="x",
+                estat="ACTIU",
+            ),
+            Usuari(
+                id=op_a_id,
+                empresa_id=emp_a_id,
+                nif=f"OA-{suf}",
+                nom="Operari A",
+                rol="OPERARI",
+                telefon=f"+34611{suf[:6]}",
+                email=f"oa-{suf}@test.cat",
+                password_hash="x",
+                cost_hora_referencia=25.00,
+                estat="ACTIU",
+            ),
+            Client(
+                id=cli_a_id,
+                empresa_id=emp_a_id,
+                codi=f"CL-{suf[:5]}",
+                rao_social="Agrícola Lleida S.A.",
+                nif="A25001122",
+            ),
+            Article(
+                id=art_id,
+                empresa_id=emp_a_id,
+                referencia_inventari=f"MAT-{suf}",
+                nom="Electrovàlvula 24V",
+                unitat_mesura="UNITAT",
+                preu_cost=15.00,
+                preu_cost_mitja=15.00,
+                preu_venda=40.00,
+                actiu=True,
+            ),
+        ]
+    )
+    await admin_session.flush()
+
+    admin_session.add_all(
+        [
+            OrdreTreball(
+                id=ot_op_id,
+                empresa_id=emp_a_id,
+                codi=f"OT-OP-{suf[:5]}",
+                client_id=cli_a_id,
+                titol="Reparació reg sector B",
+                adreca="Camí de Rufea 10, Lleida",
+                estat="EN_CURS",
+                cap_de_colla_id=op_a_id,
+                hores_imputades_facturables=2.0,
+            ),
+            OrdreTreball(
+                id=ot_gest_id,
+                empresa_id=emp_a_id,
+                codi=f"OT-GS-{suf[:5]}",
+                client_id=cli_a_id,
+                titol="Revisió bomba pou",
+                adreca="Camí de Rufea 11, Lleida",
+                estat="ASSIGNADA",
+                cap_de_colla_id=op_a_id,
+                hores_imputades_facturables=1.0,
+            ),
+        ]
+    )
+    await admin_session.flush()
+
+    admin_session.add(
+        FullaPicking(
+            id=fulla_id,
+            empresa_id=emp_a_id,
+            ordre_treball_id=ot_op_id,
+            estat_picking="CONSOLIDADA",
+        )
+    )
+    await admin_session.flush()
+    admin_session.add(
+        LiniaPicking(
+            empresa_id=emp_a_id,
+            picking_id=fulla_id,
+            article_id=art_id,
+            quantitat_prevista=3.0,
+            quantitat_carregada_pick_in=3.0,
+            quantitat_retornada_pick_out=1.0,
+            quantitat_mermada=0.0,
+        )
+    )
+    await admin_session.commit()
+
+    # Tenant B user
+    await admin_session.execute(text(f"SET LOCAL app.current_empresa_id = '{emp_b_id}';"))
+    await admin_session.execute(text("SET LOCAL app.current_user_role = 'BOSS';"))
+    admin_session.add(
+        Usuari(
+            id=boss_b_id,
+            empresa_id=emp_b_id,
+            nif=f"BB-{suf}",
+            nom="Boss B",
+            rol="BOSS",
+            telefon=f"+34612{suf[:6]}",
+            email=f"bb-{suf}@test.cat",
+            password_hash="x",
+            estat="ACTIU",
+        )
+    )
+    await admin_session.commit()
+
+    # Pujar les 3 fotos QA al disc sobirà per poder finalitzar via /operari/feines/{id}/finalitzar
+    await admin_session.execute(text(f"SET LOCAL app.current_empresa_id = '{emp_a_id}';"))
+    for tipus in ("inicial", "intermedia", "final"):
+        await SovereignStorageGateway.pujar_fitxer_binari(
+            db=admin_session,
+            empresa_id=str(emp_a_id),
+            categoria="ots_actives",
+            nom_fitxer=f"ot_{ot_op_id}_foto_{tipus}.webp",
+            content=b"RIFF....WEBP",
+            content_type="image/webp",
+        )
+
+    h_boss_a = {"Authorization": f"Bearer {_crear_token(boss_a_id, emp_a_id, 'BOSS')}"}
+    h_op_a = {"Authorization": f"Bearer {_crear_token(op_a_id, emp_a_id, 'OPERARI')}"}
+    h_boss_b = {"Authorization": f"Bearer {_crear_token(boss_b_id, emp_b_id, 'BOSS')}"}
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test/api/v1") as client:
+        # 1. Configurar barema real a 55.00 €/h
+        r_bar = await client.put(
+            "/gestio/configuracio/barema",
+            json={"preu_hora_standard_eur": 55.0, "preu_hora_urgencia_eur": 80.0},
+            headers=h_boss_a,
+        )
+        assert r_bar.status_code == 200, r_bar.text
+
+        # 2. L'operari finalitza la feina (COMPLERT) i gestió tanca la segona (TANCADA)
+        r_fin = await client.put(
+            f"/operari/feines/{ot_op_id}/finalitzar",
+            json={"observacions": "Feina acabada a camp"},
+            headers=h_op_a,
+        )
+        assert r_fin.status_code == 200, r_fin.text
+        assert r_fin.json()["estat"] == "COMPLERT"
+
+        r_tan = await client.put(
+            f"/gestio/feines/{ot_gest_id}/tancar-obra",
+            json={"signatura_base64": "data:image/png;base64,AA==", "conformitat_client": True},
+            headers=h_boss_a,
+        )
+        assert r_tan.status_code == 200, r_tan.text
+        assert r_tan.json()["status"] == "TANCADA"
+
+        # 3. Ambdues feines acabades han d'aparèixer a /wip-control amb tarifes i materials reals
+        r_wip = await client.get("/gestio/comptabilitat/wip-control", headers=h_boss_a)
+        assert r_wip.status_code == 200, r_wip.text
+        wip_data = r_wip.json()
+        assert wip_data["nombre_ots_en_wip"] == 2
+        wip_op = next(i for i in wip_data["items"] if i["ordre_treball_id"] == str(ot_op_id))
+        # 2h * 55.00 + (3-1)*40.00 = 110 + 80 = 190.00
+        assert float(wip_op["valor_wip_pvp"]) == pytest.approx(190.0, abs=0.01)
+        assert float(wip_op["pvp_materials"]) == pytest.approx(80.0, abs=0.01)
+        assert wip_op["client_nom"] == "Agrícola Lleida S.A."
+
+        # 4. Convertir OT a Pre-factura -> crea ESBORRANY_PREFACTURA (Sèrie PRE) i NO factura emesa
+        r_pref = await client.post(
+            f"/gestio/comptabilitat/wip-control/{ot_op_id}/prefacturar",
+            headers=h_boss_a,
+        )
+        assert r_pref.status_code == 201, r_pref.text
+        pref_res = r_pref.json()
+        pref_id = pref_res["id"]
+        assert pref_res["serie"] == "PRE"
+        assert pref_res["estat_document"] == "ESBORRANY_PREFACTURA"
+        assert float(pref_res["liquid_exigible"]) == pytest.approx(190.0 * 1.21, abs=0.02)
+
+        # Dashboard P&L encara no computa l'esborrany com a facturació emesa
+        r_dash = await client.get("/gestio/comptabilitat/dashboard-economic", headers=h_boss_a)
+        assert r_dash.status_code == 200
+        assert float(r_dash.json()["facturacio_neta"]) == 0.0
+
+        # Apareix a /prefactures amb les 2 línies (mà d'obra + material consumit)
+        r_list_pref = await client.get("/gestio/comptabilitat/prefactures", headers=h_boss_a)
+        assert r_list_pref.status_code == 200
+        pref_item = next(p for p in r_list_pref.json() if p["id"] == pref_id)
+        assert len(pref_item["linies"]) == 2
+        assert pref_item["ordres_treball_codis"] == [f"OT-OP-{suf[:5]}"]
+
+        # 5. RLS Tenant B no pot veure, editar ni emetre la pre-factura del Tenant A
+        assert (await client.get(f"/gestio/comptabilitat/factures/{pref_id}", headers=h_boss_b)).status_code == 404
+        assert (
+            await client.post(
+                f"/gestio/comptabilitat/prefactures/{pref_id}/emetre",
+                json={"serie": "F", "confirmacio_humana_hitl": True},
+                headers=h_boss_b,
+            )
+        ).status_code == 404
+
+        # 6. Editar la pre-factura: ajustar preu, descompte i afegir línia de desplaçament
+        r_edit = await client.put(
+            f"/gestio/comptabilitat/prefactures/{pref_id}",
+            json={
+                "metode_pagament": "REBUT_DOMICILIAT",
+                "es_inversio_subjecte_passiu": False,
+                "retencio_irpf_pct": 0,
+                "retencio_garantia_pct": 0,
+                "linies": [
+                    {
+                        "obra_id": str(ot_op_id),
+                        "concepte": "Mà d'obra tècnica ajustada",
+                        "quantitat": 2.5,
+                        "preu_venda_unitari": 60.0,
+                        "descompte_aplicat_pct": 10.0,
+                        "tipus_iva_pct": 21.0,
+                    },
+                    {
+                        "obra_id": str(ot_op_id),
+                        "concepte": "Desplaçament urgència",
+                        "quantitat": 1.0,
+                        "preu_venda_unitari": 35.0,
+                        "descompte_aplicat_pct": 0.0,
+                        "tipus_iva_pct": 21.0,
+                    },
+                ],
+            },
+            headers=h_boss_a,
+        )
+        assert r_edit.status_code == 200, r_edit.text
+        edited = r_edit.json()
+        # 2.5 * 60 * 0.9 = 135.00 + 35.00 = 170.00 base | IVA 35.70 | Total 205.70
+        assert float(edited["base_imposable"]) == pytest.approx(170.0, abs=0.01)
+        assert float(edited["quota_iva"]) == pytest.approx(35.70, abs=0.01)
+        assert float(edited["liquid_exigible"]) == pytest.approx(205.70, abs=0.01)
+
+        # 7. Emetre definitivament a Veri*factu (Sèrie F) -> PDF vàlid, hash SHA-256 i bloqueig d'edició posterior
+        r_emit = await client.post(
+            f"/gestio/comptabilitat/prefactures/{pref_id}/emetre",
+            json={"serie": "F", "confirmacio_humana_hitl": True},
+            headers=h_boss_a,
+        )
+        assert r_emit.status_code == 200, r_emit.text
+        emesa = r_emit.json()
+        assert emesa["serie"] == "F"
+        assert emesa["estat_document"] == "EMESA"
+        assert len(emesa["hash_sha256"]) == 64
+
+        r_pdf = await client.get(f"/gestio/comptabilitat/factures/{pref_id}/pdf", headers=h_boss_a)
+        assert r_pdf.status_code == 200
+        assert r_pdf.content.startswith(b"%PDF")
+
+        # Ja no es pot editar un cop emesa a Veri*factu
+        r_edit_blocked = await client.put(
+            f"/gestio/comptabilitat/prefactures/{pref_id}",
+            json={
+                "linies": [
+                    {
+                        "concepte": "Intent mutació",
+                        "quantitat": 1,
+                        "preu_venda_unitari": 10.0,
+                        "tipus_iva_pct": 21.0,
+                    }
+                ]
+            },
+            headers=h_boss_a,
+        )
+        assert r_edit_blocked.status_code == 400
+
+        # 8. Descartar una pre-factura de la segona OT la retorna a WIP
+        r_pref2 = await client.post(
+            f"/gestio/comptabilitat/wip-control/{ot_gest_id}/prefacturar",
+            headers=h_boss_a,
+        )
+        assert r_pref2.status_code == 201
+        pref2_id = r_pref2.json()["id"]
+
+        r_del2 = await client.delete(
+            f"/gestio/comptabilitat/prefactures/{pref2_id}",
+            headers=h_boss_a,
+        )
+        assert r_del2.status_code == 200
+
+        r_wip_after = await client.get("/gestio/comptabilitat/wip-control", headers=h_boss_a)
+        assert r_wip_after.status_code == 200
+        wip_ids = [i["ordre_treball_id"] for i in r_wip_after.json()["items"]]
+        assert str(ot_gest_id) in wip_ids
+        assert str(ot_op_id) not in wip_ids
+
+

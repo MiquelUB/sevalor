@@ -13,7 +13,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db_with_tenant_context
 from app.core.security import get_current_user_claims, require_financial_access, require_roles
-from app.models.models import Client, DespesaComptable, Empresa, FacturaCapcalera, OrdreTreball
+from app.models.models import (
+    Client,
+    DespesaComptable,
+    Empresa,
+    FacturaCapcalera,
+    FacturaLinia,
+    OrdreTreball,
+)
 from app.schemas.comptabilitat import (
     Art80ItemDTO,
     Art80ReclamacioRequestDTO,
@@ -23,22 +30,28 @@ from app.schemas.comptabilitat import (
     DespesaComptableDTO,
     FacturaEmissioCreateDTO,
     FacturaLiniaCreateDTO,
+    FacturaLiniaDetailDTO,
     Norma43ConciliarRequestDTO,
     Norma43MovimentDTO,
     OperariCostEfectiuDTO,
     OTCostMargeDTO,
     OverrideRiscRequestDTO,
+    PrefacturaEmetreDTO,
+    PrefacturaUpdateDTO,
     RetencioGarantiaDTO,
     TiquetAuditoriaRequestDTO,
     TiquetDespesaResponseDTO,
     WIPControlResponseDTO,
 )
 from app.services.barema_service import resoldre_preu_hora_control_panel
-from app.services.economic_suite_service import EconomicSuiteService
+from app.services.economic_suite_service import (
+    ESTATS_OT_PENDENTS_PREFACTURACIO,
+    EconomicSuiteService,
+)
 from app.services.magatzem_comptabilitat_service import calcular_cost_i_marge_analitic_ot
 from app.services.outbox_aeat import registrar_enviament_outbox
 from app.services.sovereign_storage import SovereignStorageGateway
-from app.services.verifactu import generar_factura_pdf
+from app.services.verifactu import generar_factura_pdf, renderitzar_pdf_factura_verifactu
 
 router = APIRouter(
     prefix="/gestio/comptabilitat",
@@ -64,33 +77,191 @@ class FacturaResponse(BaseModel):
     numero_factura: int
     serie: str
     client_id: uuid.UUID
+    client_nom: Optional[str] = None
+    estat_document: str = "EMESA"
+    data_emissio: Optional[datetime] = None
+    data_venciment: Optional[date] = None
+    metode_pagament: str = "TRANSFERENCIA"
+    es_inversio_subjecte_passiu: bool = False
     base_imposable: float = 0.0
     quota_iva: float = 0.0
     import_retencio: float = 0.0
+    import_retencio_garantia_4308: float = 0.0
     import_suplits: float = 0.0
     liquid_exigible: float = 0.0
     hash_sha256: str
-    hash_anterior: Optional[str]
+    hash_anterior: Optional[str] = None
     pdf_path: Optional[str] = None
     estat_cobrament: str
     estat_enviament: str
+    linies: List[FacturaLiniaDetailDTO] = []
+    ordres_treball_codis: List[str] = []
+
+
+async def _serialitzar_factures(
+    db: AsyncSession,
+    emp_uuid: uuid.UUID,
+    factures: Sequence[FacturaCapcalera],
+) -> List[FacturaResponse]:
+    if not factures:
+        return []
+    fact_ids = [f.id for f in factures]
+    client_ids = list({f.client_id for f in factures})
+
+    cli_rows = (
+        await db.execute(
+            select(Client.id, Client.rao_social).where(
+                Client.empresa_id == emp_uuid,
+                Client.id.in_(client_ids),
+            )
+        )
+    ).all()
+    cli_map = {cid: rao for cid, rao in cli_rows}
+
+    lin_rows = (
+        await db.execute(
+            select(FacturaLinia)
+            .where(
+                FacturaLinia.empresa_id == emp_uuid,
+                FacturaLinia.factura_id.in_(fact_ids),
+            )
+            .order_by(FacturaLinia.created_at.asc())
+        )
+    ).scalars().all()
+    lin_map: Dict[uuid.UUID, List[FacturaLiniaDetailDTO]] = {}
+    obra_ids_set: set[uuid.UUID] = set()
+    for lin in lin_rows:
+        if lin.obra_id:
+            obra_ids_set.add(lin.obra_id)
+        lin_map.setdefault(lin.factura_id, []).append(
+            FacturaLiniaDetailDTO(
+                id=lin.id,
+                obra_id=lin.obra_id,
+                centre_de_cost_id=lin.centre_de_cost_id or "CC-GENERAL",
+                article_id=lin.article_id,
+                concepte=lin.concepte,
+                compte_pgc=lin.compte_pgc or "700000",
+                quantitat=float(lin.quantitat or 0),
+                quantitat_merma=float(lin.quantitat_merma or 0),
+                preu_venda_unitari=float(lin.preu_venda_unitari or 0),
+                descompte_aplicat_pct=float(lin.descompte_aplicat_pct or 0),
+                tipus_iva=float(lin.tipus_iva or 0),
+                subtotal=float(lin.subtotal or 0),
+            )
+        )
+
+    ot_rows = (
+        await db.execute(
+            select(OrdreTreball.id, OrdreTreball.codi, OrdreTreball.factura_id).where(
+                OrdreTreball.empresa_id == emp_uuid,
+                (OrdreTreball.factura_id.in_(fact_ids))
+                | (OrdreTreball.id.in_(list(obra_ids_set)) if obra_ids_set else False),
+            )
+        )
+    ).all()
+    ot_codis_by_fact: Dict[uuid.UUID, List[str]] = {}
+    ot_codi_by_id = {oid: codi for oid, codi, _ in ot_rows}
+    for _, codi, fid in ot_rows:
+        if fid and codi not in ot_codis_by_fact.setdefault(fid, []):
+            ot_codis_by_fact[fid].append(codi)
+    for fid, lins in lin_map.items():
+        for lin_dto in lins:
+            if lin_dto.obra_id and lin_dto.obra_id in ot_codi_by_id:
+                codi = ot_codi_by_id[lin_dto.obra_id]
+                if codi not in ot_codis_by_fact.setdefault(fid, []):
+                    ot_codis_by_fact[fid].append(codi)
+
+    return [
+        FacturaResponse(
+            id=f.id,
+            numero_factura=f.numero_factura,
+            serie=f.serie,
+            client_id=f.client_id,
+            client_nom=cli_map.get(f.client_id),
+            estat_document=f.estat_document,
+            data_emissio=f.data_emissio,
+            data_venciment=f.data_venciment,
+            metode_pagament=f.metode_pagament,
+            es_inversio_subjecte_passiu=bool(f.es_inversio_subjecte_passiu),
+            base_imposable=float(f.base_imposable or 0),
+            quota_iva=float(f.quota_iva or 0),
+            import_retencio=float(f.import_retencio or 0),
+            import_retencio_garantia_4308=float(f.import_retencio_garantia_4308 or 0),
+            import_suplits=float(f.import_suplits or 0),
+            liquid_exigible=float(f.liquid_exigible or 0),
+            hash_sha256=f.hash_sha256,
+            hash_anterior=f.hash_anterior,
+            pdf_path=f.pdf_path,
+            estat_cobrament=f.estat_cobrament,
+            estat_enviament=f.estat_enviament,
+            linies=lin_map.get(f.id, []),
+            ordres_treball_codis=ot_codis_by_fact.get(f.id, []),
+        )
+        for f in factures
+    ]
 
 
 @router.get("/factures", response_model=List[FacturaResponse])
 async def llistar_factures(
     request: Request, db: AsyncSession = Depends(get_db_with_tenant_context)
-) -> Sequence[FacturaCapcalera]:
+) -> List[FacturaResponse]:
     empresa_id = request.state.empresa_id
     if not empresa_id or empresa_id == "undefined":
         raise HTTPException(status_code=401)
 
+    emp_uuid = uuid.UUID(empresa_id)
     stmt = (
         select(FacturaCapcalera)
-        .where(FacturaCapcalera.empresa_id == uuid.UUID(empresa_id))
+        .where(FacturaCapcalera.empresa_id == emp_uuid)
         .order_by(FacturaCapcalera.created_at.desc())
     )
-    result = await db.execute(stmt)
-    return result.scalars().all()
+    factures = (await db.execute(stmt)).scalars().all()
+    return await _serialitzar_factures(db, emp_uuid, factures)
+
+
+@router.get("/prefactures", response_model=List[FacturaResponse])
+async def llistar_prefactures(
+    request: Request, db: AsyncSession = Depends(get_db_with_tenant_context)
+) -> List[FacturaResponse]:
+    """Llista totes les pre-factures editables pendents de validació humana (ESBORRANY_PREFACTURA)."""
+    empresa_id = request.state.empresa_id
+    if not empresa_id or empresa_id == "undefined":
+        raise HTTPException(status_code=401)
+
+    emp_uuid = uuid.UUID(empresa_id)
+    stmt = (
+        select(FacturaCapcalera)
+        .where(
+            FacturaCapcalera.empresa_id == emp_uuid,
+            FacturaCapcalera.estat_document == "ESBORRANY_PREFACTURA",
+        )
+        .order_by(FacturaCapcalera.created_at.desc())
+    )
+    factures = (await db.execute(stmt)).scalars().all()
+    return await _serialitzar_factures(db, emp_uuid, factures)
+
+
+@router.get("/factures/{factura_id}", response_model=FacturaResponse)
+async def obtenir_detall_factura(
+    factura_id: uuid.UUID,
+    request: Request,
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+) -> FacturaResponse:
+    empresa_id = request.state.empresa_id
+    if not empresa_id or empresa_id == "undefined":
+        raise HTTPException(status_code=401)
+    emp_uuid = uuid.UUID(empresa_id)
+    factura = (
+        await db.execute(
+            select(FacturaCapcalera).where(
+                FacturaCapcalera.id == factura_id,
+                FacturaCapcalera.empresa_id == emp_uuid,
+            )
+        )
+    ).scalar_one_or_none()
+    if not factura:
+        raise HTTPException(status_code=404, detail="Factura no trobada.")
+    return (await _serialitzar_factures(db, emp_uuid, [factura]))[0]
 
 
 @router.post("/factures", response_model=FacturaResponse, status_code=status.HTTP_201_CREATED)
@@ -251,25 +422,90 @@ async def descarregar_factura_pdf(
     request: Request,
     db: AsyncSession = Depends(get_db_with_tenant_context),
 ) -> Response:
-    """Serveix el PDF de la factura des del disc dur del client."""
+    """Serveix el PDF de la factura (o pre-factura en esborrany) des del disc dur del client o el genera en temps real."""
     empresa_id = request.state.empresa_id
     if not empresa_id or empresa_id == "undefined":
         raise HTTPException(status_code=401)
 
+    emp_uuid = uuid.UUID(empresa_id)
     stmt = select(FacturaCapcalera).where(
-        FacturaCapcalera.id == factura_id, FacturaCapcalera.empresa_id == uuid.UUID(empresa_id)
+        FacturaCapcalera.id == factura_id, FacturaCapcalera.empresa_id == emp_uuid
     )
     factura = (await db.execute(stmt)).scalars().first()
-    if not factura or not factura.pdf_path:
-        raise HTTPException(status_code=404, detail="Factura PDF no trobada")
+    if not factura:
+        raise HTTPException(status_code=404, detail="Factura no trobada")
 
-    return await SovereignStorageGateway.servir_fitxer(
-        db=db,
-        empresa_id=empresa_id,
-        fitxer_path=factura.pdf_path,
-        media_type="application/pdf",
-        disposition="inline",
+    if factura.pdf_path and factura.estat_document != "ESBORRANY_PREFACTURA":
+        return await SovereignStorageGateway.servir_fitxer(
+            db=db,
+            empresa_id=empresa_id,
+            fitxer_path=factura.pdf_path,
+            media_type="application/pdf",
+            disposition="inline",
+        )
+
+    emp = (await db.execute(select(Empresa).where(Empresa.id == emp_uuid))).scalar_one_or_none()
+    cli = (
+        await db.execute(
+            select(Client).where(Client.id == factura.client_id, Client.empresa_id == emp_uuid)
+        )
+    ).scalar_one_or_none()
+    linies = (
+        await db.execute(
+            select(FacturaLinia)
+            .where(FacturaLinia.factura_id == factura.id, FacturaLinia.empresa_id == emp_uuid)
+            .order_by(FacturaLinia.created_at.asc())
+        )
+    ).scalars().all()
+
+    temp_dir = "/tmp/sevalor_factures_temp"
+    os.makedirs(temp_dir, exist_ok=True)
+    data_em_str = (
+        factura.data_emissio.strftime("%Y-%m-%d")
+        if isinstance(factura.data_emissio, datetime)
+        else str(factura.data_emissio)
     )
+    ruta_tmp = os.path.join(temp_dir, f"{uuid.uuid4()}_{factura.serie}_{factura.numero_factura}.pdf")
+    try:
+        renderitzar_pdf_factura_verifactu(
+            empresa_nom=emp.nom if emp else "Sevalor Suite",
+            empresa_nif=emp.nif if emp else "B00000000",
+            primari_hsl=emp.primari_hsl if emp else "150 40 20",
+            client_nom=cli.rao_social if cli else "Client",
+            client_nif=cli.nif if cli else "00000000X",
+            serie=str(factura.serie),
+            numero_factura=int(factura.numero_factura),
+            data_emissio=data_em_str,
+            data_venciment=factura.data_venciment.isoformat() if factura.data_venciment else None,
+            estat_document=str(factura.estat_document),
+            linies=list(linies),
+            base_imposable=float(factura.base_imposable or 0),
+            quota_iva=float(factura.quota_iva or 0),
+            import_suplits=float(factura.import_suplits or 0),
+            import_retencio=float(factura.import_retencio or 0),
+            import_retencio_garantia=float(factura.import_retencio_garantia_4308 or 0),
+            import_total=float(factura.liquid_exigible or 0),
+            es_isp=bool(factura.es_inversio_subjecte_passiu),
+            hash_actual=str(factura.hash_sha256 or ""),
+            hash_anterior=factura.hash_anterior,
+            qr_content=factura.qr_verifactu_payload,
+            ruta_desti=ruta_tmp,
+        )
+        with open(ruta_tmp, "rb") as f_bin:
+            pdf_bytes = f_bin.read()
+        return Response(
+            content=pdf_bytes,
+            media_type="application/pdf",
+            headers={
+                "Content-Disposition": f'inline; filename="FACTURA_{factura.serie}_{factura.numero_factura:04d}.pdf"'
+            },
+        )
+    finally:
+        try:
+            if os.path.exists(ruta_tmp):
+                os.remove(ruta_tmp)
+        except OSError:
+            pass
 
 
 @router.get("/factures/{factura_id}/xml")
@@ -374,7 +610,7 @@ async def convertir_wip_a_prefactura(
     request: Request,
     db: AsyncSession = Depends(get_db_with_tenant_context),
 ) -> Dict[str, Any]:
-    """Converteix en 1 clic una OT pendent en WIP a Pre-factura (Sèrie PRE)."""
+    """Converteix en 1 clic una OT finalitzada en WIP a Pre-factura editable (ESBORRANY_PREFACTURA / Sèrie PRE)."""
     empresa_id, usuari_id, _ = _get_tenant_and_user(request)
     ot = (
         await db.execute(
@@ -388,6 +624,11 @@ async def convertir_wip_a_prefactura(
         raise HTTPException(status_code=404, detail="Ordre de treball no trobada.")
     if ot.factura_id is not None:
         raise HTTPException(status_code=400, detail="L'OT ja es troba facturada o prefacturada.")
+    if str(ot.estat or "").upper() not in ESTATS_OT_PENDENTS_PREFACTURACIO:
+        raise HTTPException(
+            status_code=400,
+            detail="L'ordre de treball encara no està finalitzada per poder passar a prefacturació.",
+        )
     if not ot.client_id:
         raise HTTPException(status_code=400, detail="L'OT no té un client associat.")
 
@@ -395,7 +636,7 @@ async def convertir_wip_a_prefactura(
     preu_hora_real = await resoldre_preu_hora_control_panel(db, empresa_id, ot)
     pvp_h = Decimal(str(preu_hora_real))
     pvp_mat = Decimal(str(ot.pvp_materials_aplicat or 0))
-    pressup = Decimal(str(ot.import_pressupostat_net or 0))
+    pressup = Decimal(str(ot.import_pressupostat_net or ot.import_pressupostat or 0))
 
     linies: List[FacturaLiniaCreateDTO] = []
     if hores > 0:
@@ -408,6 +649,7 @@ async def convertir_wip_a_prefactura(
                 tipus_iva_pct=Decimal("21.00"),
             )
         )
+
     if pvp_mat > 0:
         linies.append(
             FacturaLiniaCreateDTO(
@@ -418,6 +660,22 @@ async def convertir_wip_a_prefactura(
                 tipus_iva_pct=Decimal("21.00"),
             )
         )
+    else:
+        picking_mats = await EconomicSuiteService.obtenir_materials_consumits_ots(
+            db, empresa_id, [ot.id]
+        )
+        for mat in picking_mats.get(ot.id, []):
+            linies.append(
+                FacturaLiniaCreateDTO(
+                    concepte=f"Material {mat['nom']} (OT {ot.codi})",
+                    obra_id=ot.id,
+                    article_id=mat["article_id"],
+                    quantitat=mat["quantitat"],
+                    preu_venda_unitari=mat["preu_venda"],
+                    tipus_iva_pct=Decimal("21.00"),
+                )
+            )
+
     if not linies:
         linies.append(
             FacturaLiniaCreateDTO(
@@ -437,16 +695,70 @@ async def convertir_wip_a_prefactura(
         data_venciment=avui,
         linies=linies,
     )
-    factura = await EconomicSuiteService.emetre_factura_verifactu(
+    prefactura = await EconomicSuiteService.crear_prefactura_esborrany(
         db=db, empresa_id=empresa_id, usuari_id=usuari_id, payload=dto_pre
     )
     return {
-        "id": factura.id,
-        "numero_factura": factura.numero_factura,
-        "serie": factura.serie,
-        "liquid_exigible": factura.liquid_exigible,
+        "id": prefactura.id,
+        "numero_factura": prefactura.numero_factura,
+        "serie": prefactura.serie,
+        "estat_document": prefactura.estat_document,
+        "liquid_exigible": prefactura.liquid_exigible,
         "ordre_treball_id": str(ot.id),
     }
+
+
+@router.put("/prefactures/{factura_id}", response_model=FacturaResponse)
+async def editar_prefactura_esborrany(
+    factura_id: uuid.UUID,
+    payload: PrefacturaUpdateDTO,
+    request: Request,
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+) -> FacturaResponse:
+    """Edita línies, preus, descomptes, IVA i retencions d'una pre-factura abans d'emetre-la a Veri*factu."""
+    empresa_id, usuari_id, _ = _get_tenant_and_user(request)
+    pref = await EconomicSuiteService.actualitzar_prefactura_esborrany(
+        db=db,
+        empresa_id=empresa_id,
+        usuari_id=usuari_id,
+        factura_id=factura_id,
+        payload=payload,
+    )
+    return (await _serialitzar_factures(db, empresa_id, [pref]))[0]
+
+
+@router.delete("/prefactures/{factura_id}", status_code=status.HTTP_200_OK)
+async def descartar_prefactura_esborrany(
+    factura_id: uuid.UUID,
+    request: Request,
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+) -> Dict[str, Any]:
+    """Descarta una pre-factura en esborrany i retorna les OTs vinculades a la safata de WIP."""
+    empresa_id, usuari_id, _ = _get_tenant_and_user(request)
+    await EconomicSuiteService.descartar_prefactura_esborrany(
+        db=db, empresa_id=empresa_id, usuari_id=usuari_id, factura_id=factura_id
+    )
+    return {"status": "DESCARTADA", "factura_id": str(factura_id)}
+
+
+@router.post("/prefactures/{factura_id}/emetre", response_model=FacturaResponse)
+async def emetre_prefactura_definitiva(
+    factura_id: uuid.UUID,
+    request: Request,
+    payload: Optional[PrefacturaEmetreDTO] = None,
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+) -> FacturaResponse:
+    """Valida humanament (HITL) una pre-factura i l'emet definitivament a Veri*factu (Sèrie F)."""
+    empresa_id, usuari_id, _ = _get_tenant_and_user(request)
+    body = payload or PrefacturaEmetreDTO()
+    factura = await EconomicSuiteService.emetre_prefactura_a_verifactu(
+        db=db,
+        empresa_id=empresa_id,
+        usuari_id=usuari_id,
+        factura_id=factura_id,
+        payload=body,
+    )
+    return (await _serialitzar_factures(db, empresa_id, [factura]))[0]
 
 
 class RectificativaRequestDTO(BaseModel):

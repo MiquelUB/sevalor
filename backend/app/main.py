@@ -53,6 +53,7 @@ from app.api.v1.operari_pwa.tiquets import router as tiquets_router
 from app.api.v1.operari_pwa.vehicles import llistar_estoc_furgonetes
 from app.api.v1.operari_pwa.vehicles import router as vehicles_pwa_router
 from app.api.v1.public_docs import router as public_docs_router
+from app.api.v1.public_pressupostos import router as public_pressupostos_router
 from app.api.v1.public_tenant import compat_public_router
 from app.api.v1.public_tenant import router as public_tenant_router
 from app.api.v1.superadmin.crm_facturacio import router as crm_facturacio_router
@@ -278,6 +279,7 @@ app.include_router(flota_router, prefix=settings.API_V1_STR)
 
 
 app.include_router(public_docs_router, prefix=settings.API_V1_STR)
+app.include_router(public_pressupostos_router, prefix=settings.API_V1_STR)
 app.include_router(public_tenant_router, prefix=settings.API_V1_STR)
 app.include_router(compat_public_router, prefix=settings.API_V1_STR)
 app.include_router(docs_serve_router)

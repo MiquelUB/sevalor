@@ -1,6 +1,6 @@
 "use client";
 
-import React from "react";
+import React, { useState } from "react";
 import {
   X,
   FileText,
@@ -20,10 +20,23 @@ import {
   Phone,
   ShieldCheck,
   UserPlus,
+  Receipt,
+  Loader2,
 } from "lucide-react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { Feina } from "@/components/gestio/Map";
 import { useGestio } from "@/lib/gestio-context";
+import { apiFetch } from "@/lib/api";
+
+const ESTATS_OT_ACABADA = [
+  "COMPLERT",
+  "COMPLETADA",
+  "FINALITZADA",
+  "TANCADA",
+  "EXECUTADA_PENDENT_VALIDACIO",
+  "ALBARA_SIGNAT",
+];
 
 interface Fulla360OTDrawerProps {
   feina: Feina | null;
@@ -31,6 +44,7 @@ interface Fulla360OTDrawerProps {
   onClose: () => void;
   onEdit?: (feinaId: string) => void;
   onFocusMapa?: (feinaId: string) => void;
+  onPrefacturaCreated?: () => void;
 }
 
 export function Fulla360OTDrawer({
@@ -39,12 +53,38 @@ export function Fulla360OTDrawer({
   onClose,
   onEdit,
   onFocusMapa,
+  onPrefacturaCreated,
 }: Fulla360OTDrawerProps) {
   const { rolActiu } = useGestio();
+  const router = useRouter();
+  const [enviantPrefactura, setEnviantPrefactura] = useState(false);
+  const [errorPrefactura, setErrorPrefactura] = useState<string | null>(null);
   if (!isOpen || !feina) return null;
 
   const materials = feina.linies_picking || [];
   const eines = feina.eines || [];
+  const esAcabada = ESTATS_OT_ACABADA.includes((feina.estat || "").toUpperCase());
+  const potGestionarFacturacio = rolActiu !== "ENGINYER";
+
+  const handleEnviarAPrefacturacio = async () => {
+    setEnviantPrefactura(true);
+    setErrorPrefactura(null);
+    try {
+      const res = await apiFetch<{ id: string }>(
+        `/gestio/comptabilitat/wip-control/${feina.id}/prefacturar`,
+        { method: "POST" }
+      );
+      if (onPrefacturaCreated) onPrefacturaCreated();
+      onClose();
+      router.push(`/gestio/comptabilitat?tab=PREFACTURACIO&prefactura_id=${res.id}`);
+    } catch (err: unknown) {
+      setErrorPrefactura(
+        err instanceof Error ? err.message : "Error enviant l'ordre a prefacturació."
+      );
+    } finally {
+      setEnviantPrefactura(false);
+    }
+  };
 
   return (
     <div className="fixed inset-0 z-50 overflow-hidden flex justify-end">
@@ -73,7 +113,16 @@ export function Fulla360OTDrawer({
                       ? "bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300"
                       : feina.estat === "ASSIGNADA" || feina.estat === "PROGRAMADA"
                       ? "bg-blue-100 text-blue-800 dark:bg-blue-950/60 dark:text-blue-300"
-                      : ["COMPLETADA", "FINALITZADA", "TANCADA"].includes(feina.estat)
+                      : [
+                          "COMPLERT",
+                          "COMPLETADA",
+                          "FINALITZADA",
+                          "TANCADA",
+                          "PREFACTURADA",
+                          "FACTURADA",
+                          "EXECUTADA_PENDENT_VALIDACIO",
+                          "ALBARA_SIGNAT",
+                        ].includes((feina.estat || "").toUpperCase())
                       ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300"
                       : "bg-primary/10 text-primary"
                   }`}
@@ -511,43 +560,97 @@ export function Fulla360OTDrawer({
         </div>
 
         {/* Footer Actions */}
-        <div className="p-lg border-t border-outline-variant/20 bg-surface-container-low/40 dark:bg-slate-800/40 flex items-center justify-between">
-          <div className="flex items-center gap-sm">
-            <Link
-              href="/gestio/planols"
-              className="py-2 px-3 rounded-xl bg-surface-container-high hover:bg-surface-container-highest text-on-surface text-xs font-body-strong transition-colors"
-            >
-              Plànols GIS
-            </Link>
-            <Link
-              href="/gestio/comptabilitat"
-              className="py-2 px-3 rounded-xl bg-surface-container-high hover:bg-surface-container-highest text-on-surface text-xs font-body-strong transition-colors"
-            >
-              Facturació SIF
-            </Link>
-          </div>
+        <div className="p-lg border-t border-outline-variant/20 bg-surface-container-low/40 dark:bg-slate-800/40 space-y-2">
+          {errorPrefactura && (
+            <div className="rounded-lg bg-rose-50 border border-rose-200 px-3 py-2 text-xs text-rose-800">
+              {errorPrefactura}
+            </div>
+          )}
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-sm flex-wrap">
+              <Link
+                href="/gestio/planols"
+                className="py-2 px-3 rounded-xl bg-surface-container-high hover:bg-surface-container-highest text-on-surface text-xs font-body-strong transition-colors"
+              >
+                Plànols GIS
+              </Link>
+              {potGestionarFacturacio && esAcabada && !feina.factura_id && (
+                <button
+                  type="button"
+                  disabled={enviantPrefactura}
+                  onClick={handleEnviarAPrefacturacio}
+                  className="py-2 px-3.5 rounded-xl bg-secondary hover:opacity-90 text-white text-xs font-bold transition-all inline-flex items-center gap-1.5 cursor-pointer shadow-sm disabled:opacity-50"
+                >
+                  {enviantPrefactura ? (
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  ) : (
+                    <Receipt className="w-3.5 h-3.5" />
+                  )}
+                  <span>
+                    {enviantPrefactura ? "Creant Pre-factura..." : "Enviar a Prefacturació"}
+                  </span>
+                </button>
+              )}
+              {potGestionarFacturacio &&
+                feina.factura_id &&
+                feina.factura_estat_document === "ESBORRANY_PREFACTURA" && (
+                  <Link
+                    href={`/gestio/comptabilitat?tab=PREFACTURACIO&prefactura_id=${feina.factura_id}`}
+                    onClick={onClose}
+                    className="py-2 px-3.5 rounded-xl bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold transition-all inline-flex items-center gap-1.5 shadow-sm"
+                  >
+                    <Receipt className="w-3.5 h-3.5" />
+                    <span>
+                      Editar Pre-factura ({feina.factura_serie || "PRE"}-{feina.factura_numero})
+                    </span>
+                  </Link>
+                )}
+              {potGestionarFacturacio &&
+                feina.factura_id &&
+                feina.factura_estat_document !== "ESBORRANY_PREFACTURA" && (
+                  <Link
+                    href="/gestio/comptabilitat?tab=VERIFACTU"
+                    onClick={onClose}
+                    className="py-2 px-3 rounded-xl bg-emerald-600/15 text-emerald-700 dark:text-emerald-300 text-xs font-bold inline-flex items-center gap-1.5"
+                  >
+                    <CheckCircle2 className="w-3.5 h-3.5" />
+                    <span>
+                      Facturada ({feina.factura_serie}-{feina.factura_numero})
+                    </span>
+                  </Link>
+                )}
+              {potGestionarFacturacio && !feina.factura_id && !esAcabada && (
+                <Link
+                  href="/gestio/comptabilitat"
+                  className="py-2 px-3 rounded-xl bg-surface-container-high hover:bg-surface-container-highest text-on-surface text-xs font-body-strong transition-colors"
+                >
+                  Facturació SIF
+                </Link>
+              )}
+            </div>
 
-          <div className="flex items-center gap-sm">
-            {onEdit && (
+            <div className="flex items-center gap-sm">
+              {onEdit && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    onEdit(feina.id);
+                    onClose();
+                  }}
+                  className="py-2 px-4 rounded-xl bg-primary hover:bg-primary-container text-white text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer shadow-sm"
+                >
+                  <Edit className="w-3.5 h-3.5" />
+                  <span>Editar Ordre</span>
+                </button>
+              )}
               <button
                 type="button"
-                onClick={() => {
-                  onEdit(feina.id);
-                  onClose();
-                }}
-                className="py-2 px-4 rounded-xl bg-primary hover:bg-primary-container text-white text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer shadow-sm"
+                onClick={onClose}
+                className="py-2 px-4 rounded-xl bg-surface-container hover:bg-surface-container-high text-on-surface text-xs font-body-strong transition-colors cursor-pointer"
               >
-                <Edit className="w-3.5 h-3.5" />
-                <span>Editar Ordre</span>
+                Tancar
               </button>
-            )}
-            <button
-              type="button"
-              onClick={onClose}
-              className="py-2 px-4 rounded-xl bg-surface-container hover:bg-surface-container-high text-on-surface text-xs font-body-strong transition-colors cursor-pointer"
-            >
-              Tancar
-            </button>
+            </div>
           </div>
         </div>
       </div>

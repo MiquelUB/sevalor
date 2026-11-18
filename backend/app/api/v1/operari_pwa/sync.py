@@ -183,27 +183,42 @@ async def bulk_sync_push(
                     },
                 )
 
-            elif accio.accio == "FINALITZAR_ORDRE":
-                logger.info(f"Processant FINALITZAR_ORDRE per {accio.id}")
+            elif accio.accio in ("FINALITZAR_ORDRE", "TANCAR_ORDRE"):
+                logger.info(f"Processant {accio.accio} per {accio.id}")
                 # Exemple de validació de timestamp (CRDT/Conflict Resolution)
                 ordre_id = accio.payload.get("ordre_id")
-                if ordre_id and accio.timestamp:
+                if ordre_id:
                     result = await db.execute(
-                        select(OrdreTreball).where(OrdreTreball.id == ordre_id)
+                        select(OrdreTreball).where(
+                            OrdreTreball.id == uuid.UUID(str(ordre_id)),
+                            OrdreTreball.empresa_id == uuid.UUID(claims["empresa_id"]),
+                        )
                     )
                     ordre = result.scalars().first()
 
                     if ordre:
-                        # Convertim el datetime a timestamp (ms)
-                        db_ts = int(ordre.updated_at.timestamp() * 1000) if ordre.updated_at else 0
-                        if accio.timestamp < db_ts:
-                            logger.warning(
-                                f"Conflicte detectat per a ordre {ordre_id}. Client ts: {accio.timestamp}, DB ts: {db_ts}"
-                            )
-                            raise HTTPException(
-                                status_code=409,
-                                detail=f"Conflicte detectat a l'ordre {ordre_id}. DB és més recent.",
-                            )
+                        if accio.timestamp:
+                            # Convertim el datetime a timestamp (ms)
+                            db_ts = int(ordre.updated_at.timestamp() * 1000) if ordre.updated_at else 0
+                            if accio.timestamp < db_ts:
+                                logger.warning(
+                                    f"Conflicte detectat per a ordre {ordre_id}. Client ts: {accio.timestamp}, DB ts: {db_ts}"
+                                )
+                                raise HTTPException(
+                                    status_code=409,
+                                    detail=f"Conflicte detectat a l'ordre {ordre_id}. DB és més recent.",
+                                )
+                        from datetime import datetime, timezone
+
+                        now_utc = datetime.now(timezone.utc)
+                        ordre.estat = "COMPLERT"
+                        if ordre.data_finalitzacio_camp is None:
+                            ordre.data_finalitzacio_camp = now_utc.date()
+                        if (
+                            (not ordre.hores_imputades_facturables or float(ordre.hores_imputades_facturables) <= 0)
+                            and accio.payload.get("hores")
+                        ):
+                            ordre.hores_imputades_facturables = round(float(accio.payload["hores"]), 2)
 
             elif accio.accio == "POST_PLANOL_CAPA":
                 logger.info(f"Processant POST_PLANOL_CAPA per {accio.id}")

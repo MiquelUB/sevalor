@@ -399,6 +399,14 @@ class IntervencioFitxa360(BaseModel):
     marge_brut: Optional[float] = 0.0
 
 
+class PressupostFitxa360(BaseModel):
+    id: uuid.UUID
+    numero: str
+    estat: str
+    total: Optional[float] = None
+    created_at: datetime
+
+
 class Fitxa360Resum(BaseModel):
     total_intervencions: int
     total_incidencies: int
@@ -413,6 +421,7 @@ class Fitxa360Response(BaseModel):
     peces_instalades: List[PecaInstaladaFitxa360]
     incidencies: List[IncidenciaFitxa360]
     alertes_garantia: List[Dict[str, Any]]
+    pressupostos: List[PressupostFitxa360] = []
     resum: Fitxa360Resum
 
 
@@ -455,6 +464,7 @@ async def obtenir_fitxa_360_client(
         Incidencia,
         LiniaPicking,
         OrdreTreball,
+        Pressupost,
     )
 
     res_finques = await db.execute(
@@ -623,6 +633,27 @@ async def obtenir_fitxa_360_client(
                 }
             )
 
+    # 7. Obtenir Pressupostos del client
+    stmt_pres = (
+        select(Pressupost)
+        .where(
+            Pressupost.client_id == client_id,
+            Pressupost.empresa_id == empresa_uuid,
+        )
+        .order_by(Pressupost.created_at.desc())
+    )
+    pres_rows = (await db.execute(stmt_pres)).scalars().all()
+    pressupostos_fitxa = [
+        PressupostFitxa360(
+            id=p.id,
+            numero=p.numero,
+            estat=p.estat,
+            total=None if is_enginyer else float(p.total or 0.0),
+            created_at=p.created_at,
+        )
+        for p in pres_rows
+    ]
+
     resum = Fitxa360Resum(
         total_intervencions=len(intervencions),
         total_incidencies=len(incidencies),
@@ -650,6 +681,7 @@ async def obtenir_fitxa_360_client(
         peces_instalades=peces_instalades,
         incidencies=incidencies,
         alertes_garantia=alertes,
+        pressupostos=pressupostos_fitxa,
         resum=resum,
     )
 

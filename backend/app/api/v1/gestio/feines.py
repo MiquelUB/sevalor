@@ -16,6 +16,7 @@ from app.models.models import (
     Client,
     EinaCustodia,
     EstocMagatzem,
+    FacturaCapcalera,
     Finca,
     FullaPicking,
     LiniaPicking,
@@ -133,6 +134,10 @@ class FeinaResponse(FeinaCreate):
     hora_fi_real: Optional[datetime] = None
     hores_imputades_facturables: Optional[float] = 0.0
     preu_venda_hora_aplicat: Optional[float] = None
+    factura_id: Optional[uuid.UUID] = None
+    factura_serie: Optional[str] = None
+    factura_numero: Optional[int] = None
+    factura_estat_document: Optional[str] = None
     te_tram_obert: bool = False
     temps_acumulat_segons: int = 0
     trams_temps: List[TramTempsGestioItem] = []
@@ -335,7 +340,16 @@ async def _sincronitzar_feina_disc(
 ) -> None:
     """Sincronitza la OT i el seu picking al disc sobirà de l'empresa sense deixar fitxers a Hetzner."""
     estat_up = str(raw_estat or f_resp.estat or "").upper()
-    es_tancada = estat_up in {"TANCADA", "COMPLETADA", "FINALITZADA", "FACTURADA", "CANCEL·LADA", "CANCELLADA"}
+    es_tancada = estat_up in {
+        "COMPLERT",
+        "TANCADA",
+        "COMPLETADA",
+        "FINALITZADA",
+        "PREFACTURADA",
+        "FACTURADA",
+        "CANCEL·LADA",
+        "CANCELLADA",
+    }
     categoria = "ots_historic" if es_tancada else "ots_actives"
     payload = {
         **f_resp.model_dump(mode="json"),
@@ -492,10 +506,33 @@ async def llistar_feines(
             trams_by_ot[t.ordre_treball_id].append(TramTempsGestioItem.model_validate(t))
 
     emp_uuid = uuid.UUID(empresa_id)
+    fact_ids = list({ordre.factura_id for ordre, _, _, _ in rows if ordre.factura_id is not None})
+    factures_map: Dict[uuid.UUID, tuple[str, int, str]] = {}
+    if fact_ids:
+        f_rows = (
+            await db.execute(
+                select(
+                    FacturaCapcalera.id,
+                    FacturaCapcalera.serie,
+                    FacturaCapcalera.numero_factura,
+                    FacturaCapcalera.estat_document,
+                ).where(
+                    FacturaCapcalera.empresa_id == emp_uuid,
+                    FacturaCapcalera.id.in_(fact_ids),
+                )
+            )
+        ).all()
+        factures_map = {fid: (ser, num, edoc) for fid, ser, num, edoc in f_rows}
+
     barema_empresa = await obtenir_barema_empresa(db, emp_uuid)
     feines = []
     for ordre, client, operari, planol in rows:
         f_resp = FeinaResponse.model_validate(ordre)
+        if ordre.factura_id and ordre.factura_id in factures_map:
+            f_ser, f_num, f_edoc = factures_map[ordre.factura_id]
+            f_resp.factura_serie = f_ser
+            f_resp.factura_numero = f_num
+            f_resp.factura_estat_document = f_edoc
         f_resp.preu_venda_hora_aplicat = await resoldre_preu_hora_control_panel(
             db,
             emp_uuid,
@@ -763,6 +800,21 @@ async def build_feina_response(
 ) -> FeinaResponse:
     """Construeix la resposta completa d'una Ordre de Treball amb plànol, picking i eines."""
     f_resp = FeinaResponse.model_validate(ordre)
+    if ordre.factura_id:
+        fact_row = (
+            await db.execute(
+                select(
+                    FacturaCapcalera.serie,
+                    FacturaCapcalera.numero_factura,
+                    FacturaCapcalera.estat_document,
+                ).where(
+                    FacturaCapcalera.empresa_id == empresa_id,
+                    FacturaCapcalera.id == ordre.factura_id,
+                )
+            )
+        ).first()
+        if fact_row:
+            f_resp.factura_serie, f_resp.factura_numero, f_resp.factura_estat_document = fact_row
     f_resp.preu_venda_hora_aplicat = await resoldre_preu_hora_control_panel(
         db, empresa_id, ordre
     )
@@ -1225,6 +1277,20 @@ async def modificar_feina(
                 )
                 db.add(nova_linia)
 
+    if (
+        str(ordre.estat or "").upper()
+        in (
+            "TANCADA",
+            "COMPLETADA",
+            "FINALITZADA",
+            "COMPLERT",
+            "EXECUTADA_PENDENT_VALIDACIO",
+            "ALBARA_SIGNAT",
+        )
+        and ordre.data_finalitzacio_camp is None
+    ):
+        ordre.data_finalitzacio_camp = date.today()
+
     # Sincronització de l'estat del vehicle
     nou_vehicle_id = ordre.vehicle_id
     if antic_vehicle_id != nou_vehicle_id or "estat" in update_data:
@@ -1255,7 +1321,17 @@ async def modificar_feina(
                 if ordre.estat in ("PENDENT", "ASSIGNADA", "PROGRAMADA", "EN_CURS", "EN_RUTA", "EN_OBRA"):
                     if v_nou.estat == "OPERATIU":
                         v_nou.estat = "ASSIGNAT"
-                elif ordre.estat in ("TANCADA", "COMPLETADA", "CANCEL·LADA"):
+                elif ordre.estat in (
+                    "TANCADA",
+                    "COMPLETADA",
+                    "FINALITZADA",
+                    "COMPLERT",
+                    "EXECUTADA_PENDENT_VALIDACIO",
+                    "ALBARA_SIGNAT",
+                    "CANCEL·LADA",
+                ):
+                    if ordre.estat != "CANCEL·LADA" and ordre.data_finalitzacio_camp is None:
+                        ordre.data_finalitzacio_camp = date.today()
                     stmt_altres = select(OrdreTreball).where(
                         OrdreTreball.vehicle_id == nou_vehicle_id,
                         OrdreTreball.id != ordre.id,
@@ -1534,6 +1610,8 @@ async def tancar_obra(
         raise HTTPException(status_code=409, detail="L'obra ja estava tancada")
 
     ordre.estat = "TANCADA"
+    if ordre.data_finalitzacio_camp is None:
+        ordre.data_finalitzacio_camp = date.today()
     if hasattr(ordre, "signatura_client_base64"):
         ordre.signatura_client_base64 = payload.signatura_base64
     if hasattr(ordre, "observacions_tancament"):

@@ -1,11 +1,13 @@
 import hashlib
+import logging
+import os
 import uuid
 from datetime import date, datetime, timedelta, timezone
 from decimal import ROUND_HALF_UP, Decimal
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from fastapi import HTTPException, status
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.models import (
@@ -15,9 +17,12 @@ from app.models.models import (
     ContracteMantenimentMRR,
     DespesaComptable,
     DespesaFixaRecurrent,
+    Empresa,
     FacturaCapcalera,
     FacturaLinia,
     FacturaProveidor,
+    FullaPicking,
+    LiniaPicking,
     OrdreTreball,
     OutboxEnviamentAEAT,
     RegistreEsdevenimentsSIF,
@@ -35,8 +40,11 @@ from app.schemas.comptabilitat import (
     ContracteMRRAuditoriaDTO,
     DashboardEconomicResponseDTO,
     FacturaEmissioCreateDTO,
+    FacturaLiniaCreateDTO,
     Norma43MovimentDTO,
     OperariCostEfectiuDTO,
+    PrefacturaEmetreDTO,
+    PrefacturaUpdateDTO,
     RetencioGarantiaDTO,
     TiquetAuditoriaRequestDTO,
     TiquetDespesaResponseDTO,
@@ -47,6 +55,19 @@ from app.services.barema_service import (
     obtenir_barema_empresa,
     obtenir_cost_hora_operaris_map,
     resoldre_preu_hora_control_panel,
+)
+from app.services.sovereign_storage import SovereignStorageGateway
+from app.services.verifactu import renderitzar_pdf_factura_verifactu
+
+logger = logging.getLogger("sevalor.economic_suite")
+
+ESTATS_OT_PENDENTS_PREFACTURACIO: Tuple[str, ...] = (
+    "COMPLERT",
+    "COMPLETADA",
+    "FINALITZADA",
+    "TANCADA",
+    "EXECUTADA_PENDENT_VALIDACIO",
+    "ALBARA_SIGNAT",
 )
 
 
@@ -80,27 +101,19 @@ class EconomicSuiteService:
         await db.flush()
         return ev
 
-    # --- EMISSIÓ DE FACTURES VERI*FACTU + RETENCIONS 4308 (RF-05 a RF-15, RF-33) ---
-    @classmethod
-    async def emetre_factura_verifactu(
-        cls,
+    # --- HELPERS INTERNS DE FACTURACIÓ I PREFACTURACIÓ ---
+    @staticmethod
+    async def _lock_or_create_serie(
         db: AsyncSession,
         empresa_id: uuid.UUID,
-        usuari_id: uuid.UUID,
-        payload: FacturaEmissioCreateDTO,
-    ) -> FacturaCapcalera:
-        if payload.serie.upper().startswith("R") and not payload.factura_rectificada_id:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="Les factures rectificatives (Sèrie R) exigeixen informar factura_rectificada_id.",
-            )
-
-        exercici = payload.data_emissio.year
+        codi_serie: str,
+        exercici: int,
+    ) -> SerieFiscalVerifactu:
         stmt_serie = (
             select(SerieFiscalVerifactu)
             .where(
                 SerieFiscalVerifactu.empresa_id == empresa_id,
-                SerieFiscalVerifactu.codi_serie == payload.serie,
+                SerieFiscalVerifactu.codi_serie == codi_serie,
                 SerieFiscalVerifactu.exercici == exercici,
             )
             .with_for_update()
@@ -109,22 +122,29 @@ class EconomicSuiteService:
         if not serie_row:
             serie_row = SerieFiscalVerifactu(
                 empresa_id=empresa_id,
-                codi_serie=payload.serie,
+                codi_serie=codi_serie,
                 exercici=exercici,
                 ultim_numero=0,
                 ultim_hash_sha256="0" * 64,
             )
             db.add(serie_row)
             await db.flush()
+        return serie_row
 
-        serie_row.ultim_numero += 1
-        num_factura = serie_row.ultim_numero
-
+    @staticmethod
+    async def _construir_linies_i_totals(
+        db: AsyncSession,
+        empresa_id: uuid.UUID,
+        linies_dto: Sequence[FacturaLiniaCreateDTO],
+        es_inversio_subjecte_passiu: bool,
+        retencio_irpf_pct: Decimal,
+        retencio_garantia_pct: Decimal,
+    ) -> Tuple[List[FacturaLinia], Decimal, Decimal, Decimal, Decimal, Decimal, Decimal]:
         bases_per_iva: Dict[Decimal, Decimal] = {}
         total_suplerts_554 = Decimal("0.00")
         linies_models: List[FacturaLinia] = []
 
-        for l_dto in payload.linies:
+        for l_dto in linies_dto:
             cost_historic = Decimal("0.0000")
             if l_dto.article_id:
                 art = await db.get(Article, l_dto.article_id)
@@ -140,7 +160,7 @@ class EconomicSuiteService:
             else:
                 iva_linia = (
                     Decimal("0.00")
-                    if payload.es_inversio_subjecte_passiu
+                    if es_inversio_subjecte_passiu
                     else l_dto.tipus_iva_pct
                 )
                 bases_per_iva[iva_linia] = bases_per_iva.get(iva_linia, Decimal("0.00")) + import_base
@@ -163,21 +183,15 @@ class EconomicSuiteService:
                 )
             )
 
-        if total_suplerts_554 > Decimal("0.00") and not payload.justificant_suplerts_pdf_path:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="Els suplerts (compte 554) exigeixen adjuntar el PDF del justificant oficial.",
-            )
-
         base_imposable_total = q2(sum(bases_per_iva.values(), Decimal("0.00")))
         quota_iva_total = Decimal("0.00")
-        if not payload.es_inversio_subjecte_passiu:
+        if not es_inversio_subjecte_passiu:
             for tipus, base_agregada in bases_per_iva.items():
                 quota_iva_total += q2(base_agregada * (tipus / Decimal("100.00")))
 
-        import_ret_irpf = q2(base_imposable_total * (payload.retencio_irpf_pct / Decimal("100.00")))
+        import_ret_irpf = q2(base_imposable_total * (retencio_irpf_pct / Decimal("100.00")))
         import_ret_garantia = q2(
-            base_imposable_total * (payload.retencio_garantia_pct / Decimal("100.00"))
+            base_imposable_total * (retencio_garantia_pct / Decimal("100.00"))
         )
 
         # Fórmula RF-05.3 + RF-33
@@ -188,6 +202,557 @@ class EconomicSuiteService:
             - import_ret_irpf
             - import_ret_garantia
         )
+        return (
+            linies_models,
+            base_imposable_total,
+            quota_iva_total,
+            total_suplerts_554,
+            import_ret_irpf,
+            import_ret_garantia,
+            liquid_exigible,
+        )
+
+    @staticmethod
+    async def _generar_pdf_i_pujar(
+        db: AsyncSession,
+        empresa_id: uuid.UUID,
+        factura: FacturaCapcalera,
+        linies: Sequence[FacturaLinia],
+    ) -> Optional[str]:
+        emp = (await db.execute(select(Empresa).where(Empresa.id == empresa_id))).scalar_one_or_none()
+        cli = (
+            await db.execute(
+                select(Client).where(
+                    Client.id == factura.client_id,
+                    Client.empresa_id == empresa_id,
+                )
+            )
+        ).scalar_one_or_none()
+
+        data_em_str = (
+            factura.data_emissio.strftime("%Y-%m-%d")
+            if isinstance(factura.data_emissio, datetime)
+            else str(factura.data_emissio)
+        )
+        data_ven_str = factura.data_venciment.isoformat() if factura.data_venciment else None
+        temp_dir = "/tmp/sevalor_factures_temp"
+        os.makedirs(temp_dir, exist_ok=True)
+        nom_pdf = f"FACTURA_{factura.serie}_{int(factura.numero_factura):05d}_{data_em_str}.pdf"
+        ruta_tmp = os.path.join(temp_dir, f"{uuid.uuid4()}_{nom_pdf}")
+
+        try:
+            renderitzar_pdf_factura_verifactu(
+                empresa_nom=emp.nom if emp else "Sevalor Suite",
+                empresa_nif=emp.nif if emp else "B00000000",
+                primari_hsl=emp.primari_hsl if emp else "150 40 20",
+                client_nom=cli.rao_social if cli else "Client",
+                client_nif=cli.nif if cli else "00000000X",
+                serie=str(factura.serie),
+                numero_factura=int(factura.numero_factura),
+                data_emissio=data_em_str,
+                data_venciment=data_ven_str,
+                estat_document=str(factura.estat_document),
+                linies=list(linies),
+                base_imposable=float(factura.base_imposable or 0),
+                quota_iva=float(factura.quota_iva or 0),
+                import_suplits=float(factura.import_suplits or 0),
+                import_retencio=float(factura.import_retencio or 0),
+                import_retencio_garantia=float(factura.import_retencio_garantia_4308 or 0),
+                import_total=float(factura.liquid_exigible or 0),
+                es_isp=bool(factura.es_inversio_subjecte_passiu),
+                hash_actual=str(factura.hash_sha256 or ""),
+                hash_anterior=factura.hash_anterior,
+                qr_content=factura.qr_verifactu_payload,
+                ruta_desti=ruta_tmp,
+            )
+            with open(ruta_tmp, "rb") as f_bin:
+                pdf_bytes = f_bin.read()
+            ruta_sobirana = await SovereignStorageGateway.pujar_fitxer_binari(
+                db=db,
+                empresa_id=str(empresa_id),
+                categoria="factures_pdf",
+                nom_fitxer=nom_pdf,
+                content=pdf_bytes,
+                content_type="application/pdf",
+            )
+            return ruta_sobirana
+        except Exception as exc:
+            logger.warning("No s'ha pogut generar/desar el PDF de la factura %s: %s", factura.id, exc)
+            return None
+        finally:
+            try:
+                if os.path.exists(ruta_tmp):
+                    os.remove(ruta_tmp)
+            except OSError:
+                pass
+
+    @staticmethod
+    async def obtenir_materials_consumits_ots(
+        db: AsyncSession,
+        empresa_id: uuid.UUID,
+        ot_ids: Sequence[uuid.UUID],
+    ) -> Dict[uuid.UUID, List[Dict[str, Any]]]:
+        if not ot_ids:
+            return {}
+        stmt = (
+            select(FullaPicking.ordre_treball_id, LiniaPicking, Article)
+            .join(LiniaPicking, LiniaPicking.picking_id == FullaPicking.id)
+            .join(Article, LiniaPicking.article_id == Article.id)
+            .where(
+                FullaPicking.empresa_id == empresa_id,
+                FullaPicking.ordre_treball_id.in_(list(ot_ids)),
+                LiniaPicking.empresa_id == empresa_id,
+            )
+        )
+        rows = (await db.execute(stmt)).all()
+        resultat: Dict[uuid.UUID, List[Dict[str, Any]]] = {}
+        for ot_id, lp, art in rows:
+            pick_in = Decimal(str(lp.quantitat_carregada_pick_in or 0))
+            pick_out = Decimal(str(lp.quantitat_retornada_pick_out or 0))
+            consum = max(Decimal("0.000"), pick_in - pick_out)
+            if consum <= 0:
+                continue
+            preu_venda = Decimal(str(art.preu_venda or 0))
+            resultat.setdefault(ot_id, []).append(
+                {
+                    "article_id": art.id,
+                    "nom": art.nom,
+                    "quantitat": consum,
+                    "preu_venda": preu_venda,
+                    "subtotal": q2(consum * preu_venda),
+                }
+            )
+        return resultat
+
+    # --- CREACIÓ I EDICIÓ DE PRE-FACTURES EDITABLES (HITL) ---
+    @classmethod
+    async def crear_prefactura_esborrany(
+        cls,
+        db: AsyncSession,
+        empresa_id: uuid.UUID,
+        usuari_id: uuid.UUID,
+        payload: FacturaEmissioCreateDTO,
+    ) -> FacturaCapcalera:
+        if not payload.linies:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="La pre-factura ha de contenir almenys una línia.",
+            )
+
+        exercici = payload.data_emissio.year
+        serie_row = await cls._lock_or_create_serie(db, empresa_id, "PRE", exercici)
+        serie_row.ultim_numero += 1
+        num_pref = serie_row.ultim_numero
+
+        (
+            linies_models,
+            base_imposable_total,
+            quota_iva_total,
+            total_suplerts_554,
+            import_ret_irpf,
+            import_ret_garantia,
+            liquid_exigible,
+        ) = await cls._construir_linies_i_totals(
+            db=db,
+            empresa_id=empresa_id,
+            linies_dto=payload.linies,
+            es_inversio_subjecte_passiu=payload.es_inversio_subjecte_passiu,
+            retencio_irpf_pct=payload.retencio_irpf_pct,
+            retencio_garantia_pct=payload.retencio_garantia_pct,
+        )
+
+        prefactura = FacturaCapcalera(
+            empresa_id=empresa_id,
+            numero_factura=num_pref,
+            serie="PRE",
+            client_id=payload.client_id,
+            estat_document="ESBORRANY_PREFACTURA",
+            estat_cobrament="PENDENT",
+            estat_enviament="ESBORRANY",
+            data_emissio=datetime.combine(payload.data_emissio, datetime.min.time(), tzinfo=timezone.utc),
+            data_venciment=payload.data_venciment,
+            metode_pagament=payload.metode_pagament,
+            es_inversio_subjecte_passiu=payload.es_inversio_subjecte_passiu,
+            base_imposable=float(base_imposable_total),
+            quota_iva=float(quota_iva_total),
+            import_suplits=float(total_suplerts_554),
+            justificant_suplerts_pdf_path=payload.justificant_suplerts_pdf_path,
+            import_retencio=float(import_ret_irpf),
+            import_retencio_garantia_4308=float(import_ret_garantia),
+            liquid_exigible=float(liquid_exigible),
+            hash_anterior=None,
+            hash_sha256="ESBORRANY_PREFACTURA",
+            qr_verifactu_payload=None,
+        )
+        db.add(prefactura)
+        await db.flush()
+
+        for lm in linies_models:
+            lm.factura_id = prefactura.id
+            db.add(lm)
+            if lm.obra_id:
+                ot = await db.get(OrdreTreball, lm.obra_id)
+                if ot and ot.empresa_id == empresa_id:
+                    ot.factura_id = prefactura.id
+                    ot.estat = "PREFACTURADA"
+
+        await cls.registrar_esdeveniment_sif(
+            db,
+            empresa_id,
+            usuari_id,
+            "EV-01",
+            f"Creació Esborrany Pre-factura PRE-{exercici}-{num_pref:04d} (HITL)",
+        )
+        await db.commit()
+        return prefactura
+
+    @classmethod
+    async def actualitzar_prefactura_esborrany(
+        cls,
+        db: AsyncSession,
+        empresa_id: uuid.UUID,
+        usuari_id: uuid.UUID,
+        factura_id: uuid.UUID,
+        payload: PrefacturaUpdateDTO,
+    ) -> FacturaCapcalera:
+        pref = (
+            await db.execute(
+                select(FacturaCapcalera).where(
+                    FacturaCapcalera.id == factura_id,
+                    FacturaCapcalera.empresa_id == empresa_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if not pref:
+            raise HTTPException(status_code=404, detail="Pre-factura no trobada.")
+        if pref.estat_document != "ESBORRANY_PREFACTURA":
+            raise HTTPException(
+                status_code=400,
+                detail="Només es poden editar pre-factures en estat esborrany; les factures emeses a Veri*factu són immutables.",
+            )
+
+        (
+            linies_models,
+            base_imposable_total,
+            quota_iva_total,
+            total_suplerts_554,
+            import_ret_irpf,
+            import_ret_garantia,
+            liquid_exigible,
+        ) = await cls._construir_linies_i_totals(
+            db=db,
+            empresa_id=empresa_id,
+            linies_dto=payload.linies,
+            es_inversio_subjecte_passiu=payload.es_inversio_subjecte_passiu,
+            retencio_irpf_pct=payload.retencio_irpf_pct,
+            retencio_garantia_pct=payload.retencio_garantia_pct,
+        )
+
+        # Preservar vinculació amb les OTs que originaren la pre-factura si no s'ha passat obra_id a les línies noves
+        existing_obra_ids = list(
+            (
+                await db.execute(
+                    select(FacturaLinia.obra_id).where(
+                        FacturaLinia.factura_id == pref.id,
+                        FacturaLinia.empresa_id == empresa_id,
+                        FacturaLinia.obra_id.is_not(None),
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        default_obra_id = existing_obra_ids[0] if existing_obra_ids else None
+
+        await db.execute(
+            delete(FacturaLinia).where(
+                FacturaLinia.factura_id == pref.id,
+                FacturaLinia.empresa_id == empresa_id,
+            )
+        )
+
+        for lm in linies_models:
+            lm.factura_id = pref.id
+            if lm.obra_id is None and default_obra_id is not None:
+                lm.obra_id = default_obra_id
+            db.add(lm)
+
+        if payload.data_emissio is not None:
+            pref.data_emissio = datetime.combine(
+                payload.data_emissio, datetime.min.time(), tzinfo=timezone.utc
+            )
+        if payload.data_venciment is not None:
+            pref.data_venciment = payload.data_venciment
+        pref.metode_pagament = payload.metode_pagament
+        pref.es_inversio_subjecte_passiu = payload.es_inversio_subjecte_passiu
+        pref.justificant_suplerts_pdf_path = payload.justificant_suplerts_pdf_path
+        pref.base_imposable = float(base_imposable_total)
+        pref.quota_iva = float(quota_iva_total)
+        pref.import_suplits = float(total_suplerts_554)
+        pref.import_retencio = float(import_ret_irpf)
+        pref.import_retencio_garantia_4308 = float(import_ret_garantia)
+        pref.liquid_exigible = float(liquid_exigible)
+        pref.updated_at = datetime.now(timezone.utc)
+
+        await cls.registrar_esdeveniment_sif(
+            db,
+            empresa_id,
+            usuari_id,
+            "EV-01",
+            f"Edició Esborrany Pre-factura {pref.serie}-{pref.numero_factura:04d}",
+        )
+        await db.commit()
+        return pref
+
+    @classmethod
+    async def descartar_prefactura_esborrany(
+        cls,
+        db: AsyncSession,
+        empresa_id: uuid.UUID,
+        usuari_id: uuid.UUID,
+        factura_id: uuid.UUID,
+    ) -> None:
+        pref = (
+            await db.execute(
+                select(FacturaCapcalera).where(
+                    FacturaCapcalera.id == factura_id,
+                    FacturaCapcalera.empresa_id == empresa_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if not pref:
+            raise HTTPException(status_code=404, detail="Pre-factura no trobada.")
+        if pref.estat_document != "ESBORRANY_PREFACTURA":
+            raise HTTPException(
+                status_code=400,
+                detail="No es pot descartar una factura ja emesa a Veri*factu.",
+            )
+
+        ots_vinculades = (
+            await db.execute(
+                select(OrdreTreball).where(
+                    OrdreTreball.empresa_id == empresa_id,
+                    OrdreTreball.factura_id == pref.id,
+                )
+            )
+        ).scalars().all()
+        for ot in ots_vinculades:
+            ot.factura_id = None
+            ot.estat = "COMPLERT"
+
+        await cls.registrar_esdeveniment_sif(
+            db,
+            empresa_id,
+            usuari_id,
+            "EV-01",
+            f"Descartar Esborrany Pre-factura {pref.serie}-{pref.numero_factura:04d} (OT retornada a WIP)",
+        )
+        await db.delete(pref)
+        await db.commit()
+
+    @classmethod
+    async def emetre_prefactura_a_verifactu(
+        cls,
+        db: AsyncSession,
+        empresa_id: uuid.UUID,
+        usuari_id: uuid.UUID,
+        factura_id: uuid.UUID,
+        payload: PrefacturaEmetreDTO,
+    ) -> FacturaCapcalera:
+        if not payload.confirmacio_humana_hitl:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Cal confirmació humana explícita (HITL) abans d'emetre la factura definitiva.",
+            )
+        serie_desti = payload.serie.strip().upper()
+        if not serie_desti or serie_desti == "PRE":
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="La sèrie fiscal definitiva no pot ser 'PRE' (ex: 'F').",
+            )
+
+        pref = (
+            await db.execute(
+                select(FacturaCapcalera).where(
+                    FacturaCapcalera.id == factura_id,
+                    FacturaCapcalera.empresa_id == empresa_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if not pref:
+            raise HTTPException(status_code=404, detail="Pre-factura no trobada.")
+        if pref.estat_document != "ESBORRANY_PREFACTURA":
+            raise HTTPException(
+                status_code=400,
+                detail="Aquesta factura ja ha estat emesa definitivament.",
+            )
+
+        if Decimal(str(pref.import_suplits or 0)) > Decimal("0.00") and not pref.justificant_suplerts_pdf_path:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Els suplerts (compte 554) exigeixen adjuntar el PDF del justificant oficial.",
+            )
+
+        linies = list(
+            (
+                await db.execute(
+                    select(FacturaLinia).where(
+                        FacturaLinia.factura_id == pref.id,
+                        FacturaLinia.empresa_id == empresa_id,
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        if not linies:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="No es pot emetre una factura sense línies.",
+            )
+
+        data_em_date = (
+            payload.data_emissio
+            or (pref.data_emissio.date() if isinstance(pref.data_emissio, datetime) else date.today())
+        )
+        data_ven_date = payload.data_venciment or pref.data_venciment or data_em_date
+        exercici = data_em_date.year
+
+        serie_row = await cls._lock_or_create_serie(db, empresa_id, serie_desti, exercici)
+        serie_row.ultim_numero += 1
+        num_factura = serie_row.ultim_numero
+
+        liquid_exigible = q2(Decimal(str(pref.liquid_exigible or 0)))
+        hash_anterior = serie_row.ultim_hash_sha256
+        codi_complet = f"{serie_desti}-{exercici}-{num_factura:04d}"
+        cadena_verifactu = (
+            f"{empresa_id}|{codi_complet}|{data_em_date.isoformat()}|"
+            f"{liquid_exigible}|{hash_anterior}"
+        )
+        hash_propi = hashlib.sha256(cadena_verifactu.encode("utf-8")).hexdigest()
+        serie_row.ultim_hash_sha256 = hash_propi
+
+        llegenda_isp = (
+            " | Operació amb inversió del subjecte passiu d'acord amb l'art. 84.U.2n.f de la Llei 37/1992 de l'IVA"
+            if pref.es_inversio_subjecte_passiu
+            else ""
+        )
+        qr_payload = (
+            f"https://www2.agenciatributaria.gob.es/wlpl/TIKE-CONT/ValidarQR?"
+            f"num={codi_complet}&imp={liquid_exigible}&hash={hash_propi[:16]}{llegenda_isp}"
+        )
+
+        pref.serie = serie_desti
+        pref.numero_factura = num_factura
+        pref.data_emissio = datetime.combine(data_em_date, datetime.min.time(), tzinfo=timezone.utc)
+        pref.data_venciment = data_ven_date
+        pref.estat_document = "EMESA"
+        pref.estat_enviament = "PENDENT"
+        pref.hash_anterior = hash_anterior
+        pref.hash_sha256 = hash_propi
+        pref.qr_verifactu_payload = qr_payload
+        pref.updated_at = datetime.now(timezone.utc)
+
+        import_ret_gar = Decimal(str(pref.import_retencio_garantia_4308 or 0))
+        if import_ret_gar > Decimal("0.00"):
+            base_imp = Decimal(str(pref.base_imposable or 0))
+            pct_gar = float(q2((import_ret_gar / base_imp) * Decimal("100"))) if base_imp > 0 else 0.0
+            db.add(
+                RetencioGarantia(
+                    empresa_id=empresa_id,
+                    tipus="CLIENT_4308",
+                    factura_client_id=pref.id,
+                    client_id=pref.client_id,
+                    import_retingut=float(import_ret_gar),
+                    percentatge_aplicat=pct_gar,
+                    data_retencio=data_em_date,
+                    data_venciment_garantia=data_em_date + timedelta(days=365),
+                    estat="RETINGUDA",
+                )
+            )
+
+        ots_vinc = (
+            await db.execute(
+                select(OrdreTreball).where(
+                    OrdreTreball.empresa_id == empresa_id,
+                    OrdreTreball.factura_id == pref.id,
+                )
+            )
+        ).scalars().all()
+        for ot in ots_vinc:
+            ot.estat = "FACTURADA"
+
+        for lin in linies:
+            if lin.obra_id:
+                ot_lin = await db.get(OrdreTreball, lin.obra_id)
+                if ot_lin and ot_lin.empresa_id == empresa_id:
+                    ot_lin.factura_id = pref.id
+                    ot_lin.estat = "FACTURADA"
+
+        ruta_pdf = await cls._generar_pdf_i_pujar(db, empresa_id, pref, linies)
+        if ruta_pdf:
+            pref.pdf_path = ruta_pdf
+
+        db.add(
+            OutboxEnviamentAEAT(
+                empresa_id=empresa_id,
+                factura_id=pref.id,
+                payload_xml_path=f"/docs/{empresa_id}/factures/outbox/{codi_complet}.xml",
+                hash_sha256=hash_propi,
+            )
+        )
+        await cls.registrar_esdeveniment_sif(
+            db,
+            empresa_id,
+            usuari_id,
+            "EV-02",
+            f"Validació HITL i Emissió Factura Veri*factu {codi_complet} Hash:{hash_propi[:12]}",
+        )
+        await db.commit()
+        return pref
+
+    # --- EMISSIÓ DE FACTURES VERI*FACTU + RETENCIONS 4308 (RF-05 a RF-15, RF-33) ---
+    @classmethod
+    async def emetre_factura_verifactu(
+        cls,
+        db: AsyncSession,
+        empresa_id: uuid.UUID,
+        usuari_id: uuid.UUID,
+        payload: FacturaEmissioCreateDTO,
+    ) -> FacturaCapcalera:
+        if payload.serie.upper().startswith("R") and not payload.factura_rectificada_id:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Les factures rectificatives (Sèrie R) exigeixen informar factura_rectificada_id.",
+            )
+
+        exercici = payload.data_emissio.year
+        serie_row = await cls._lock_or_create_serie(db, empresa_id, payload.serie, exercici)
+        serie_row.ultim_numero += 1
+        num_factura = serie_row.ultim_numero
+
+        (
+            linies_models,
+            base_imposable_total,
+            quota_iva_total,
+            total_suplerts_554,
+            import_ret_irpf,
+            import_ret_garantia,
+            liquid_exigible,
+        ) = await cls._construir_linies_i_totals(
+            db=db,
+            empresa_id=empresa_id,
+            linies_dto=payload.linies,
+            es_inversio_subjecte_passiu=payload.es_inversio_subjecte_passiu,
+            retencio_irpf_pct=payload.retencio_irpf_pct,
+            retencio_garantia_pct=payload.retencio_garantia_pct,
+        )
+
+        if total_suplerts_554 > Decimal("0.00") and not payload.justificant_suplerts_pdf_path:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Els suplerts (compte 554) exigeixen adjuntar el PDF del justificant oficial.",
+            )
 
         hash_anterior = serie_row.ultim_hash_sha256
         codi_complet = f"{payload.serie}-{exercici}-{num_factura:04d}"
@@ -261,6 +826,10 @@ class EconomicSuiteService:
                     ot.factura_id = factura.id
                     ot.estat = "FACTURADA"
 
+        ruta_pdf = await cls._generar_pdf_i_pujar(db, empresa_id, factura, linies_models)
+        if ruta_pdf:
+            factura.pdf_path = ruta_pdf
+
         outbox = OutboxEnviamentAEAT(
             empresa_id=empresa_id,
             factura_id=factura.id,
@@ -277,7 +846,6 @@ class EconomicSuiteService:
             f"Emissió Factura Veri*factu {codi_complet} Hash:{hash_propi[:12]}",
         )
         await db.commit()
-        await db.refresh(factura)
         return factura
 
     # --- MILLORA 1: CONTROL DEL WIP (OBRA EN CURS NO FACTURADA) (RF-31, RF-32) ---
@@ -286,20 +854,20 @@ class EconomicSuiteService:
         cls, db: AsyncSession, empresa_id: uuid.UUID, avui: Optional[date] = None
     ) -> WIPControlResponseDTO:
         avui = avui or date.today()
-        ots = (
-            (
-                await db.execute(
-                    select(OrdreTreball).where(
-                        OrdreTreball.empresa_id == empresa_id,
-                        OrdreTreball.factura_id.is_(None),
-                        OrdreTreball.estat.in_(["EXECUTADA_PENDENT_VALIDACIO", "ALBARA_SIGNAT"]),
-                    )
+        rows = (
+            await db.execute(
+                select(OrdreTreball, Client.rao_social)
+                .outerjoin(Client, OrdreTreball.client_id == Client.id)
+                .where(
+                    OrdreTreball.empresa_id == empresa_id,
+                    OrdreTreball.factura_id.is_(None),
+                    OrdreTreball.estat.in_(ESTATS_OT_PENDENTS_PREFACTURACIO),
                 )
+                .order_by(OrdreTreball.created_at.desc())
             )
-            .scalars()
-            .all()
-        )
+        ).all()
 
+        ots = [ot for ot, _ in rows]
         items: List[WIPItemDTO] = []
         total_pvp = Decimal("0.00")
         total_cost = Decimal("0.00")
@@ -308,8 +876,11 @@ class EconomicSuiteService:
         barema_empresa = await obtenir_barema_empresa(db, empresa_id)
         cap_ids = [ot.cap_de_colla_id for ot in ots if ot.cap_de_colla_id is not None]
         costs_map = await obtenir_cost_hora_operaris_map(db, empresa_id, cap_ids)
+        picking_mat_map = await cls.obtenir_materials_consumits_ots(
+            db, empresa_id, [ot.id for ot in ots]
+        )
 
-        for ot in ots:
+        for ot, client_nom in rows:
             data_ref = ot.data_finalitzacio_camp or ot.data_planificacio or avui
             dies_wip = max(0, (avui - data_ref).days)
             es_envellit = dies_wip > 7
@@ -324,6 +895,8 @@ class EconomicSuiteService:
             )
             pvp_h = Decimal(str(preu_hora_real))
             pvp_mat = Decimal(str(ot.pvp_materials_aplicat or 0))
+            if pvp_mat <= 0 and ot.id in picking_mat_map:
+                pvp_mat = q2(sum((m["subtotal"] for m in picking_mat_map[ot.id]), Decimal("0.00")))
             cost_mat = Decimal(str(ot.cost_materials_pmp or 0))
 
             valor_pvp = q2((hores * pvp_h) + pvp_mat)
@@ -344,7 +917,13 @@ class EconomicSuiteService:
                 WIPItemDTO(
                     ordre_treball_id=ot.id,
                     codi_ot=ot.codi,
+                    titol_ot=ot.titol,
                     client_id=ot.client_id,
+                    client_nom=client_nom,
+                    estat_ot=ot.estat,
+                    hores_imputades=q2(hores),
+                    preu_hora_aplicat=q2(pvp_h),
+                    pvp_materials=q2(pvp_mat),
                     dies_en_wip=dies_wip,
                     valor_wip_pvp=valor_pvp,
                     cost_wip_avancat=cost_avancat,

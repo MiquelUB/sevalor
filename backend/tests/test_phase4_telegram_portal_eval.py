@@ -16,7 +16,7 @@ from datetime import datetime, timedelta, timezone
 import jwt
 import pytest
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.main import app
@@ -343,3 +343,276 @@ def test_f4_05_generacio_pdf_post_obra():
     assert res.get("status") == "COMPLETED"
     assert res.get("file_path", "").endswith(".pdf")
     assert ot_id in res.get("file_path", "")
+
+
+@pytest.mark.asyncio
+async def test_f4_06_cicle_complet_pressupost_edicio_pdf_email_portal_i_rls(
+    admin_session: AsyncSession,
+    tmp_path,
+    monkeypatch,
+):
+    """
+    TEST-F4-06: Cicle complet de pressupostos:
+    creació amb línies -> edició -> PDF ReportLab -> email/registre enviament ->
+    RBAC ENGINYER + RLS multi-tenant -> portal públic client (acceptació) -> conversió a OT.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    import jwt
+    from httpx import ASGITransport, AsyncClient
+
+    from app.core.config import settings
+    from app.main import app
+    from app.models.models import Client, Empresa, Usuari
+    from app.services.sovereign_storage import SovereignStorageGateway
+
+    monkeypatch.setattr(SovereignStorageGateway, "TRANSIT_QUEUE_DIR", tmp_path / "transit")
+
+    emp_a_id = uuid.uuid4()
+    emp_b_id = uuid.uuid4()
+    boss_a_id = uuid.uuid4()
+    eng_a_id = uuid.uuid4()
+    boss_b_id = uuid.uuid4()
+    client_a_id = uuid.uuid4()
+
+    emp_a = Empresa(
+        id=emp_a_id,
+        nom="Instal·lacions Lleida SL",
+        nif=f"B{emp_a_id.hex[:8].upper()}",
+        subdomini=f"pres-a-{emp_a_id.hex[:6]}",
+    )
+    emp_b = Empresa(
+        id=emp_b_id,
+        nom="Competidor Pressupost B SL",
+        nif=f"B{emp_b_id.hex[:8].upper()}",
+        subdomini=f"pres-b-{emp_b_id.hex[:6]}",
+    )
+    admin_session.add_all([emp_a, emp_b])
+    await admin_session.flush()
+
+    boss_a = Usuari(
+        id=boss_a_id,
+        empresa_id=emp_a_id,
+        nom="Marc",
+        cognoms="Cap",
+        nif=f"BA{boss_a_id.hex[:6].upper()}",
+        rol="BOSS",
+        pin_hash="dummy",
+    )
+    eng_a = Usuari(
+        id=eng_a_id,
+        empresa_id=emp_a_id,
+        nom="Laura",
+        cognoms="Enginyera",
+        nif=f"EA{eng_a_id.hex[:6].upper()}",
+        rol="ENGINYER",
+        pin_hash="dummy",
+    )
+    boss_b = Usuari(
+        id=boss_b_id,
+        empresa_id=emp_b_id,
+        nom="Pere",
+        cognoms="Altre",
+        nif=f"BB{boss_b_id.hex[:6].upper()}",
+        rol="BOSS",
+        pin_hash="dummy",
+    )
+    client_a = Client(
+        id=client_a_id,
+        empresa_id=emp_a_id,
+        codi=f"CLI-{client_a_id.hex[:5].upper()}",
+        rao_social="Client Pressupost A SL",
+        nif="B99887766",
+        email="client.a@example.com",
+        telefon="+34600111222",
+        adreca_fiscal="Carrer Major 1, Lleida",
+    )
+    admin_session.add_all([boss_a, eng_a, boss_b, client_a])
+    await admin_session.commit()
+
+    def _mk_headers(u_id: uuid.UUID, e_id: uuid.UUID, rol: str) -> dict[str, str]:
+        tok = jwt.encode(
+            {
+                "sub": str(u_id),
+                "empresa_id": str(e_id),
+                "rol": rol,
+                "exp": datetime.now(timezone.utc) + timedelta(minutes=30),
+            },
+            settings.SECRET_KEY,
+            algorithm=settings.ALGORITHM,
+        )
+        return {"Authorization": f"Bearer {tok}", "X-Empresa-ID": str(e_id)}
+
+    headers_boss_a = _mk_headers(boss_a_id, emp_a_id, "BOSS")
+    headers_eng_a = _mk_headers(eng_a_id, emp_a_id, "ENGINYER")
+    headers_boss_b = _mk_headers(boss_b_id, emp_b_id, "BOSS")
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test/api/v1") as client:
+        # 1. Crear pressupost amb línies
+        res_create = await client.post(
+            "/gestio/pressupostos",
+            json={
+                "client_id": str(client_a_id),
+                "numero": f"PRE-{uuid.uuid4().hex[:6].upper()}",
+                "titol": "Substitució caldera Baxi",
+                "descripcio": "Inclou desmuntatge i posada en marxa",
+                "validesa_dies": 15,
+                "linies": [
+                    {
+                        "concepte": "Caldera condensació",
+                        "quantitat": 1,
+                        "preu_unitari": 1200.0,
+                        "tipus_iva": 21.0,
+                    },
+                    {
+                        "concepte": "Mà d'obra tècnica",
+                        "quantitat": 4,
+                        "preu_unitari": 45.0,
+                        "tipus_iva": 21.0,
+                    },
+                ],
+            },
+            headers=headers_boss_a,
+        )
+        assert res_create.status_code == 201, res_create.text
+        created = res_create.json()
+        pid = created["id"]
+        assert created["estat"] == "PENDENT"
+        assert created["base_imposable"] == pytest.approx(1380.0, abs=0.01)
+        assert created["quota_iva"] == pytest.approx(289.8, abs=0.01)
+        assert created["total"] == pytest.approx(1669.8, abs=0.01)
+        assert len(created["linies"]) == 2
+        assert created["acceptacio_url"]
+
+        # 2. Editar pressupost (5h de mà d'obra -> base 1425, IVA 299.25, total 1724.25)
+        res_put = await client.put(
+            f"/gestio/pressupostos/{pid}",
+            json={
+                "titol": "Substitució caldera Baxi Platinum",
+                "linies": [
+                    {
+                        "concepte": "Caldera condensació",
+                        "quantitat": 1,
+                        "preu_unitari": 1200.0,
+                        "tipus_iva": 21.0,
+                    },
+                    {
+                        "concepte": "Mà d'obra tècnica",
+                        "quantitat": 5,
+                        "preu_unitari": 45.0,
+                        "tipus_iva": 21.0,
+                    },
+                ],
+            },
+            headers=headers_boss_a,
+        )
+        assert res_put.status_code == 200, res_put.text
+        updated = res_put.json()
+        assert updated["titol"] == "Substitució caldera Baxi Platinum"
+        assert updated["base_imposable"] == pytest.approx(1425.0, abs=0.01)
+        assert updated["quota_iva"] == pytest.approx(299.25, abs=0.01)
+        assert updated["total"] == pytest.approx(1724.25, abs=0.01)
+
+        # 3. Descarregar PDF oficial
+        res_pdf = await client.get(f"/gestio/pressupostos/{pid}/pdf", headers=headers_boss_a)
+        assert res_pdf.status_code == 200, res_pdf.text
+        assert res_pdf.headers.get("content-type", "").startswith("application/pdf")
+        assert res_pdf.content.startswith(b"%PDF")
+
+        # 4. Intentar enviament per Email (en local sense SMTP retorna mailto_url i acceptacio_url honestos)
+        res_email = await client.post(
+            f"/gestio/pressupostos/{pid}/enviar-email",
+            json={"email_destinatari": "client.a@example.com"},
+            headers=headers_boss_a,
+        )
+        assert res_email.status_code == 200, res_email.text
+        email_data = res_email.json()
+        assert email_data["email_destinatari"] == "client.a@example.com"
+        assert email_data["acceptacio_url"]
+        assert email_data["mailto_url"].startswith("mailto:client.a@example.com")
+
+        # 5. Registrar enviament via WhatsApp / Enllaç manual -> queda traçabilitat del canal
+        res_reg = await client.post(
+            f"/gestio/pressupostos/{pid}/registrar-enviament",
+            json={"canal": "WHATSAPP", "destinatari": "+34600111222"},
+            headers=headers_boss_a,
+        )
+        assert res_reg.status_code == 200, res_reg.text
+        reg_data = res_reg.json()
+        assert reg_data["canal_enviament"] == "WHATSAPP"
+        assert reg_data["data_enviament"] is not None
+
+        # 6. RBAC Principi VI: ENGINYER té imports econòmics emmascarats
+        res_eng_list = await client.get("/gestio/pressupostos", headers=headers_eng_a)
+        assert res_eng_list.status_code == 200, res_eng_list.text
+        eng_item = next(p for p in res_eng_list.json() if p["id"] == pid)
+        assert eng_item["total"] == 0.0
+        assert eng_item["base_imposable"] == 0.0
+
+        res_fitxa_eng = await client.get(f"/gestio/clients/{client_a_id}/fitxa-360", headers=headers_eng_a)
+        assert res_fitxa_eng.status_code == 200, res_fitxa_eng.text
+        fitxa_eng_p = next(p for p in res_fitxa_eng.json()["pressupostos"] if p["id"] == pid)
+        assert fitxa_eng_p["total"] is None
+
+        res_fitxa_boss = await client.get(f"/gestio/clients/{client_a_id}/fitxa-360", headers=headers_boss_a)
+        assert res_fitxa_boss.status_code == 200, res_fitxa_boss.text
+        fitxa_boss_p = next(p for p in res_fitxa_boss.json()["pressupostos"] if p["id"] == pid)
+        assert fitxa_boss_p["total"] == pytest.approx(1724.25, abs=0.01)
+
+        # 7. RLS Aïllament multi-tenant: Empresa B NO pot veure, editar, descarregar ni enviar pressupost d'A
+        assert (await client.get(f"/gestio/pressupostos/{pid}", headers=headers_boss_b)).status_code == 404
+        assert (
+            await client.put(f"/gestio/pressupostos/{pid}", json={"titol": "Hack"}, headers=headers_boss_b)
+        ).status_code == 404
+        assert (await client.get(f"/gestio/pressupostos/{pid}/pdf", headers=headers_boss_b)).status_code == 404
+        assert (
+            await client.post(
+                f"/gestio/pressupostos/{pid}/enviar-email",
+                json={"email_destinatari": "x@y.cat"},
+                headers=headers_boss_b,
+            )
+        ).status_code == 404
+
+        # 8. Portal Públic del Client (sense cap token d'usuari intern ni capçalera tenant)
+        token_portal = created["acceptacio_url"].rstrip("/").split("/")[-1]
+        res_pub = await client.get(f"/public/pressupostos/{token_portal}")
+        assert res_pub.status_code == 200, res_pub.text
+        pub_data = res_pub.json()
+        assert pub_data["empresa"]["nom"] == "Instal·lacions Lleida SL"
+        assert pub_data["client_nom"] == "Client Pressupost A SL"
+        assert pub_data["total"] == pytest.approx(1724.25, abs=0.01)
+        assert len(pub_data["linies"]) == 2
+
+        res_pub_pdf = await client.get(f"/public/pressupostos/{token_portal}/pdf")
+        assert res_pub_pdf.status_code == 200
+        assert res_pub_pdf.content.startswith(b"%PDF")
+
+        res_pub_bad = await client.get("/public/pressupostos/token-invalid-123")
+        assert res_pub_bad.status_code in (400, 403, 404)
+
+        res_pub_accept = await client.post(
+            f"/public/pressupostos/{token_portal}/respondre",
+            json={"accio": "APROVAR", "comentari": "Conforme"},
+        )
+        assert res_pub_accept.status_code == 200, res_pub_accept.text
+        assert res_pub_accept.json()["estat"] == "APROVAT"
+
+        res_after_accept = await client.get(f"/gestio/pressupostos/{pid}", headers=headers_boss_a)
+        assert res_after_accept.status_code == 200
+        after_data = res_after_accept.json()
+        assert after_data["estat"] == "APROVAT"
+        assert (after_data.get("token_signatura") or "").startswith("PORTAL-APROV-")
+
+        # 9. Conversió del pressupost aprovat a Ordre de Treball (OT)
+        res_ot = await client.post(
+            f"/gestio/pressupostos/{pid}/convertir-ot",
+            json={},
+            headers=headers_boss_a,
+        )
+        assert res_ot.status_code == 201, res_ot.text
+        ot_data = res_ot.json()
+        assert ot_data["status"] == "convertit"
+        assert ot_data["ordre_treball_id"]
+        assert ot_data["codi_ot"].startswith("OT-")
+

@@ -41,12 +41,14 @@ interface FincaFitxa360 { id: string; nom: string; adreca?: string; superficie_h
 interface IntervencioFitxa360 { id: string; codi: string; titol: string; estat: string; data_planificacio?: string; }
 interface PecaInstaladaFitxa360 { article_id: string; nom_article: string; quantitat_instalada: number; unitat_mesura: string; data_instalacio: string; ordre_treball_codi: string; }
 interface IncidenciaFitxa360 { id: string; ambit: string; estat: string; text_observacions?: string; ordre_treball_codi?: string; created_at: string; }
+interface PressupostFitxa360 { id: string; numero: string; estat: string; total?: number | null; created_at: string; }
 interface Fitxa360Response {
   client: Client;
   finques: FincaFitxa360[];
   intervencions: IntervencioFitxa360[];
   peces_instalades: PecaInstaladaFitxa360[];
   incidencies: IncidenciaFitxa360[];
+  pressupostos?: PressupostFitxa360[];
 }
 
 export default function GestioClientsPage() {
@@ -620,6 +622,61 @@ export default function GestioClientsPage() {
                       )}
                     </div>
                   </div>
+                </div>
+
+                {/* 4. PRESSUPOSTOS DEL CLIENT */}
+                <div className="p-5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm">
+                  <div className="flex items-center justify-between mb-4">
+                    <h3 className="text-sm font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2">
+                      <Send className="w-4 h-4 text-primary" />
+                      Pressupostos del Client
+                    </h3>
+                    <a
+                      href={`/gestio/pressupostos?client_id=${clientSeleccionat.id}`}
+                      className="px-3 py-1.5 rounded-xl bg-primary/10 hover:bg-primary/20 text-primary text-xs font-bold transition-colors"
+                    >
+                      Gestionar / Enviar Pressupostos
+                    </a>
+                  </div>
+                  {!fitxa360.pressupostos || fitxa360.pressupostos.length === 0 ? (
+                    <p className="text-xs text-slate-400">Cap pressupost registrat per a aquest client.</p>
+                  ) : (
+                    <div className="space-y-2">
+                      {fitxa360.pressupostos.map((p) => (
+                        <div
+                          key={p.id}
+                          className="p-3 rounded-xl border border-slate-100 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/40 flex items-center justify-between gap-3"
+                        >
+                          <div>
+                            <div className="flex items-center gap-2">
+                              <span className="font-mono text-xs font-bold text-primary">
+                                {p.numero}
+                              </span>
+                              <span className="text-[10px] px-2 py-0.5 rounded-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 font-semibold">
+                                {p.estat}
+                              </span>
+                            </div>
+                            <p className="text-[10px] text-slate-500 mt-0.5">
+                              {new Date(p.created_at).toLocaleDateString()}
+                            </p>
+                          </div>
+                          <div className="flex items-center gap-3">
+                            {!esEnginyer && p.total != null && (
+                              <span className="font-mono text-xs font-bold text-slate-800 dark:text-slate-200">
+                                {Number(p.total).toFixed(2)} €
+                              </span>
+                            )}
+                            <a
+                              href={`/gestio/pressupostos?id=${p.id}&enviar=1`}
+                              className="px-2.5 py-1 rounded-lg bg-primary text-white text-[11px] font-bold hover:opacity-90"
+                            >
+                              Enviar / Veure
+                            </a>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
 
               </div>

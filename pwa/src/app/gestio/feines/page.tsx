@@ -17,6 +17,7 @@ import {
   Package,
   Wrench,
   Filter,
+  Receipt,
 } from "lucide-react";
 import { apiFetch } from "@/lib/api";
 import { useGestio } from "@/lib/gestio-context";
@@ -35,6 +36,26 @@ const ESTAT_CHIPS = [
 
 type EstatFilter = (typeof ESTAT_CHIPS)[number]["id"];
 
+const ESTATS_ACABADES = [
+  "COMPLERT",
+  "TANCADA",
+  "COMPLETADA",
+  "FINALITZADA",
+  "EXECUTADA_PENDENT_VALIDACIO",
+  "ALBARA_SIGNAT",
+  "PREFACTURADA",
+  "FACTURADA",
+];
+
+const ESTATS_PER_PREFACTURAR = [
+  "COMPLERT",
+  "TANCADA",
+  "COMPLETADA",
+  "FINALITZADA",
+  "EXECUTADA_PENDENT_VALIDACIO",
+  "ALBARA_SIGNAT",
+];
+
 function estatBadgeClass(estat: string): string {
   const up = (estat || "").toUpperCase();
   if (up === "PENDENT") return "bg-amber-100 text-amber-800 border-amber-200";
@@ -42,7 +63,9 @@ function estatBadgeClass(estat: string): string {
     return "bg-secondary-container/25 text-secondary border-secondary/30";
   if (up === "EN_CURS" || up === "EN_OBRA" || up === "EN_RUTA")
     return "bg-emerald-100 text-emerald-800 border-emerald-200";
-  if (up === "TANCADA" || up === "COMPLETADA" || up === "FACTURADA")
+  if (up === "PREFACTURADA")
+    return "bg-amber-100 text-amber-900 border-amber-300";
+  if (ESTATS_ACABADES.includes(up))
     return "bg-primary/10 text-primary border-primary/20";
   if (up === "BLOQUEJADA" || up === "INCIDENCIA")
     return "bg-error-container/30 text-error border-error/30";
@@ -67,6 +90,23 @@ function FeinesContent() {
   const [showCrearModal, setShowCrearModal] = useState<boolean>(false);
   const [editingFeinaId, setEditingFeinaId] = useState<string | null>(null);
   const [drawerFeina, setDrawerFeina] = useState<Feina | null>(null);
+  const [prefacturantId, setPrefacturantId] = useState<string | null>(null);
+
+  const handlePrefacturarOT = async (feinaId: string) => {
+    setPrefacturantId(feinaId);
+    setErrorMsg(null);
+    try {
+      const res = await apiFetch<{ id: string }>(
+        `/gestio/comptabilitat/wip-control/${feinaId}/prefacturar`,
+        { method: "POST" }
+      );
+      router.push(`/gestio/comptabilitat?tab=PREFACTURACIO&prefactura_id=${res.id}`);
+    } catch (err: unknown) {
+      setErrorMsg(err instanceof Error ? err.message : "Error enviant OT a prefacturació.");
+    } finally {
+      setPrefacturantId(null);
+    }
+  };
 
   useEffect(() => {
     if (paramC) setCerca(paramC);
@@ -111,7 +151,7 @@ function FeinesContent() {
         if (filtreEstat === "EN_CURS") {
           if (!["EN_CURS", "EN_OBRA", "EN_RUTA"].includes(up)) return false;
         } else if (filtreEstat === "TANCADA") {
-          if (!["TANCADA", "COMPLETADA", "FINALITZADA", "FACTURADA"].includes(up)) return false;
+          if (!ESTATS_ACABADES.includes(up)) return false;
         } else if (up !== filtreEstat) {
           return false;
         }
@@ -138,9 +178,7 @@ function FeinesContent() {
     ).length;
     const pendents = feines.filter((f) => (f.estat || "").toUpperCase() === "PENDENT").length;
     const tancades = feines.filter((f) =>
-      ["TANCADA", "COMPLETADA", "FINALITZADA", "FACTURADA"].includes(
-        (f.estat || "").toUpperCase()
-      )
+      ESTATS_ACABADES.includes((f.estat || "").toUpperCase())
     ).length;
     return { totals, actives, pendents, tancades };
   }, [feines]);
@@ -402,6 +440,32 @@ function FeinesContent() {
                         onClick={(e) => e.stopPropagation()}
                       >
                         <div className="inline-flex items-center gap-1">
+                          {potVeurePreus &&
+                            ESTATS_PER_PREFACTURAR.includes((f.estat || "").toUpperCase()) &&
+                            !f.factura_id && (
+                              <button
+                                type="button"
+                                disabled={prefacturantId === f.id}
+                                onClick={() => handlePrefacturarOT(f.id)}
+                                className="px-2 py-1 rounded-lg bg-secondary/15 hover:bg-secondary text-secondary hover:text-white text-[11px] font-bold transition-colors cursor-pointer inline-flex items-center gap-1 disabled:opacity-50"
+                                title="Enviar a Prefacturació per editar i facturar"
+                              >
+                                <Receipt className="w-3.5 h-3.5" />
+                                <span>{prefacturantId === f.id ? "..." : "Prefacturar"}</span>
+                              </button>
+                            )}
+                          {potVeurePreus &&
+                            f.factura_id &&
+                            f.factura_estat_document === "ESBORRANY_PREFACTURA" && (
+                              <Link
+                                href={`/gestio/comptabilitat?tab=PREFACTURACIO&prefactura_id=${f.factura_id}`}
+                                className="px-2 py-1 rounded-lg bg-amber-100 hover:bg-amber-200 text-amber-900 text-[11px] font-bold transition-colors inline-flex items-center gap-1"
+                                title="Editar Pre-factura en esborrany"
+                              >
+                                <Receipt className="w-3.5 h-3.5" />
+                                <span>Editar Pre-factura</span>
+                              </Link>
+                            )}
                           <button
                             type="button"
                             onClick={() => setDrawerFeina(f)}
@@ -460,6 +524,9 @@ function FeinesContent() {
         onFocusMapa={() => {
           setDrawerFeina(null);
           router.push("/gestio/mapa");
+        }}
+        onPrefacturaCreated={() => {
+          carregarFeines();
         }}
       />
     </div>

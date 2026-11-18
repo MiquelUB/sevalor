@@ -60,11 +60,52 @@ class FacturaEmissioCreateDTO(BaseModel):
     linies: List[FacturaLiniaCreateDTO]
 
 
+class FacturaLiniaDetailDTO(BaseModel):
+    id: uuid.UUID
+    obra_id: Optional[uuid.UUID] = None
+    centre_de_cost_id: str = "CC-GENERAL"
+    article_id: Optional[uuid.UUID] = None
+    concepte: str
+    compte_pgc: str = "700000"
+    quantitat: float
+    quantitat_merma: float = 0.0
+    preu_venda_unitari: float
+    descompte_aplicat_pct: float = 0.0
+    tipus_iva: float = 21.0
+    subtotal: float
+
+
+class PrefacturaUpdateDTO(BaseModel):
+    data_emissio: Optional[date] = None
+    data_venciment: Optional[date] = None
+    metode_pagament: str = "TRANSFERENCIA"
+    es_inversio_subjecte_passiu: bool = False
+    retencio_irpf_pct: Decimal = Field(default=Decimal("0.00"), ge=Decimal("0"), le=Decimal("30"))
+    retencio_garantia_pct: Decimal = Field(
+        default=Decimal("0.00"), ge=Decimal("0"), le=Decimal("20")
+    )
+    justificant_suplerts_pdf_path: Optional[str] = None
+    linies: List[FacturaLiniaCreateDTO] = Field(..., min_length=1)
+
+
+class PrefacturaEmetreDTO(BaseModel):
+    serie: str = Field(default="F", min_length=1, max_length=20)
+    data_emissio: Optional[date] = None
+    data_venciment: Optional[date] = None
+    confirmacio_humana_hitl: bool = True
+
+
 # --- DTOs DE LES 6 MILLORES I SUITE ECONÒMICA ---
 class WIPItemDTO(BaseModel):
     ordre_treball_id: uuid.UUID
     codi_ot: str
+    titol_ot: Optional[str] = None
     client_id: uuid.UUID
+    client_nom: Optional[str] = None
+    estat_ot: Optional[str] = None
+    hores_imputades: Decimal = Decimal("0.00")
+    preu_hora_aplicat: Decimal = Decimal("0.00")
+    pvp_materials: Decimal = Decimal("0.00")
     dies_en_wip: int
     valor_wip_pvp: Decimal
     cost_wip_avancat: Decimal

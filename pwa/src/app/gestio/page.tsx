@@ -164,7 +164,16 @@ export default function GestioDashboardPage() {
   );
   const feinesPendents = feines.filter((f) => f.estat === "PENDENT");
   const feinesCompletades = feines.filter((f) =>
-    ["COMPLETADA", "FINALITZADA", "TANCADA", "FACTURADA"].includes(f.estat)
+    [
+      "COMPLERT",
+      "COMPLETADA",
+      "FINALITZADA",
+      "TANCADA",
+      "PREFACTURADA",
+      "FACTURADA",
+      "EXECUTADA_PENDENT_VALIDACIO",
+      "ALBARA_SIGNAT",
+    ].includes(f.estat)
   );
 
   const feinesActivesAmbColla = new Set(
@@ -204,7 +213,16 @@ export default function GestioDashboardPage() {
     const matchEstat =
       filtreEstatResultats === "TOTS" ||
       (filtreEstatResultats === "FINALITZADES" &&
-        ["COMPLETADA", "FINALITZADA", "TANCADA", "FACTURADA"].includes(f.estat)) ||
+        [
+          "COMPLERT",
+          "COMPLETADA",
+          "FINALITZADA",
+          "TANCADA",
+          "PREFACTURADA",
+          "FACTURADA",
+          "EXECUTADA_PENDENT_VALIDACIO",
+          "ALBARA_SIGNAT",
+        ].includes(f.estat)) ||
       f.estat === filtreEstatResultats;
     return matchClient && matchEstat;
   });
@@ -356,7 +374,16 @@ export default function GestioDashboardPage() {
                             <td className="px-lg py-md">
                               <div
                                 className={`flex items-center gap-xs ${
-                                  ["COMPLETADA", "FINALITZADA", "TANCADA"].includes(feina.estat)
+                                  [
+                                    "COMPLERT",
+                                    "COMPLETADA",
+                                    "FINALITZADA",
+                                    "TANCADA",
+                                    "PREFACTURADA",
+                                    "FACTURADA",
+                                    "EXECUTADA_PENDENT_VALIDACIO",
+                                    "ALBARA_SIGNAT",
+                                  ].includes(feina.estat)
                                     ? "text-green-600"
                                     : feina.estat === "PENDENT"
                                     ? "text-secondary"
@@ -364,7 +391,16 @@ export default function GestioDashboardPage() {
                                 }`}
                               >
                                 <span className="material-symbols-outlined text-[14px]">
-                                  {["COMPLETADA", "FINALITZADA", "TANCADA"].includes(feina.estat)
+                                  {[
+                                    "COMPLERT",
+                                    "COMPLETADA",
+                                    "FINALITZADA",
+                                    "TANCADA",
+                                    "PREFACTURADA",
+                                    "FACTURADA",
+                                    "EXECUTADA_PENDENT_VALIDACIO",
+                                    "ALBARA_SIGNAT",
+                                  ].includes(feina.estat)
                                     ? "check_circle"
                                     : "schedule"}
                                 </span>

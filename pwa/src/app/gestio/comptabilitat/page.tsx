@@ -1,6 +1,7 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { Suspense, useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import {
   Activity,
   AlertTriangle,
@@ -8,6 +9,7 @@ import {
   Building2,
   CheckCircle2,
   Download,
+  Edit3,
   FileCheck2,
   FileText,
   Lock,
@@ -16,14 +18,15 @@ import {
   Receipt,
   RefreshCw,
   Scale,
-  ShieldAlert,
+  Send,
   ShieldCheck,
+  Trash2,
   TrendingUp,
   Users,
   X,
 } from "lucide-react";
 import { useGestio } from "@/lib/gestio-context";
-import { apiFetch } from "@/lib/api";
+import { apiFetch, getApiBaseUrl } from "@/lib/api";
 import {
   AgingBarChart,
   Evolucio12MChart,
@@ -32,20 +35,44 @@ import {
   WaterfallChart,
 } from "@/components/comptabilitat/EconomicCharts";
 
+interface FacturaLinia {
+  id?: string;
+  obra_id?: string | null;
+  centre_de_cost_id?: string;
+  article_id?: string | null;
+  concepte: string;
+  compte_pgc: string;
+  quantitat: number;
+  quantitat_merma?: number;
+  preu_venda_unitari: number;
+  descompte_aplicat_pct: number;
+  tipus_iva: number;
+  subtotal?: number;
+}
+
 interface Factura {
   id: string;
   numero_factura: number;
   serie: string;
   client_id: string;
+  client_nom?: string | null;
+  estat_document?: string;
+  data_emissio?: string | null;
+  data_venciment?: string | null;
+  metode_pagament?: string;
+  es_inversio_subjecte_passiu?: boolean;
   base_imposable: number;
   quota_iva: number;
   import_retencio: number;
+  import_retencio_garantia_4308?: number;
   import_suplits: number;
   liquid_exigible: number;
   hash_sha256: string;
   hash_anterior?: string;
   estat_cobrament: string;
   estat_enviament: string;
+  linies?: FacturaLinia[];
+  ordres_treball_codis?: string[];
 }
 
 interface ClientOption {
@@ -106,7 +133,13 @@ interface WIPControl {
   items: Array<{
     ordre_treball_id: string;
     codi_ot: string;
+    titol_ot?: string | null;
     client_id: string;
+    client_nom?: string | null;
+    estat_ot?: string | null;
+    hores_imputades?: number;
+    preu_hora_aplicat?: number;
+    pvp_materials?: number;
     dies_en_wip: number;
     valor_wip_pvp: number;
     cost_wip_avancat: number;
@@ -223,20 +256,27 @@ interface Norma43Moviment {
 
 type TabKey =
   | "DASHBOARD"
-  | "VERIFACTU"
   | "WIP_CONTROL"
+  | "PREFACTURACIO"
+  | "VERIFACTU"
   | "MARGES_OT"
   | "OPERARIS_MRR"
   | "TIQUETS"
   | "NORMA43";
 
-export default function GestioComptabilitatPage() {
+function round2(val: number): number {
+  return Math.round((val + Number.EPSILON) * 100) / 100;
+}
+
+function ComptabilitatContent() {
+  const searchParams = useSearchParams();
   const { rolActiu } = useGestio();
   const [tabActiva, setTabActiva] = useState<TabKey>("DASHBOARD");
   const [criteriCaixa, setCriteriCaixa] = useState(false);
   const [periode, setPeriode] = useState("MES_ACTUAL");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [successMsg, setSuccessMsg] = useState<string | null>(null);
 
   const [dashboard, setDashboard] = useState<DashboardEconomic | null>(null);
   const [factures, setFactures] = useState<Factura[]>([]);
@@ -265,6 +305,96 @@ export default function GestioComptabilitatPage() {
   const [facturaRectificar, setFacturaRectificar] = useState<Factura | null>(null);
   const [motiuRectificar, setMotiuRectificar] = useState("");
   const [convertintWipId, setConvertintWipId] = useState<string | null>(null);
+
+  // Editor de Pre-factures (ESBORRANY_PREFACTURA)
+  const [editingPrefactura, setEditingPrefactura] = useState<Factura | null>(null);
+  const [prefDataEmissio, setPrefDataEmissio] = useState("");
+  const [prefDataVenciment, setPrefDataVenciment] = useState("");
+  const [prefMetodePagament, setPrefMetodePagament] = useState("TRANSFERENCIA");
+  const [prefEsIsp, setPrefEsIsp] = useState(false);
+  const [prefRetIrpfPct, setPrefRetIrpfPct] = useState("0");
+  const [prefRetGarantiaPct, setPrefRetGarantiaPct] = useState("0");
+  const [prefLinies, setPrefLinies] = useState<FacturaLinia[]>([]);
+  const [savingPrefactura, setSavingPrefactura] = useState(false);
+  const [emittingPrefId, setEmittingPrefId] = useState<string | null>(null);
+  const [handledParamPrefId, setHandledParamPrefId] = useState<string | null>(null);
+
+  const obrirEditorPrefactura = (f: Factura) => {
+    const baseImp = Number(f.base_imposable || 0);
+    const pctIrpf =
+      baseImp > 0 && Number(f.import_retencio || 0) > 0
+        ? round2((Number(f.import_retencio) / baseImp) * 100)
+        : 0;
+    const pctGar =
+      baseImp > 0 && Number(f.import_retencio_garantia_4308 || 0) > 0
+        ? round2((Number(f.import_retencio_garantia_4308 || 0) / baseImp) * 100)
+        : 0;
+    setEditingPrefactura(f);
+    setPrefDataEmissio(
+      f.data_emissio ? String(f.data_emissio).slice(0, 10) : new Date().toISOString().slice(0, 10)
+    );
+    setPrefDataVenciment(
+      f.data_venciment
+        ? String(f.data_venciment).slice(0, 10)
+        : new Date().toISOString().slice(0, 10)
+    );
+    setPrefMetodePagament(f.metode_pagament || "TRANSFERENCIA");
+    setPrefEsIsp(Boolean(f.es_inversio_subjecte_passiu));
+    setPrefRetIrpfPct(String(pctIrpf));
+    setPrefRetGarantiaPct(String(pctGar));
+    setPrefLinies(
+      f.linies && f.linies.length > 0
+        ? f.linies.map((l) => ({ ...l }))
+        : [
+            {
+              concepte: "Serveis tècnics executats",
+              compte_pgc: "700000",
+              quantitat: 1,
+              preu_venda_unitari: Number(f.base_imposable || 0),
+              descompte_aplicat_pct: 0,
+              tipus_iva: 21,
+            },
+          ]
+    );
+  };
+
+  const prefacturesEsborrany = useMemo(
+    () => factures.filter((f) => f.estat_document === "ESBORRANY_PREFACTURA"),
+    [factures]
+  );
+
+  const facturesEmeses = useMemo(
+    () => factures.filter((f) => f.estat_document !== "ESBORRANY_PREFACTURA"),
+    [factures]
+  );
+
+  const editorTotals = useMemo(() => {
+    const basesPerIva: Record<string, number> = {};
+    let suplerts = 0;
+    for (const lin of prefLinies) {
+      const dtoFactor = 1 - Number(lin.descompte_aplicat_pct || 0) / 100;
+      const sub = round2(Number(lin.quantitat || 0) * Number(lin.preu_venda_unitari || 0) * dtoFactor);
+      if ((lin.compte_pgc || "700000").startsWith("554")) {
+        suplerts += sub;
+      } else {
+        const ivaPct = prefEsIsp ? 0 : Number(lin.tipus_iva ?? 21);
+        const key = String(ivaPct);
+        basesPerIva[key] = (basesPerIva[key] || 0) + sub;
+      }
+    }
+    const baseTotal = round2(Object.values(basesPerIva).reduce((acc, v) => acc + v, 0));
+    let ivaTotal = 0;
+    if (!prefEsIsp) {
+      for (const [pctStr, base] of Object.entries(basesPerIva)) {
+        ivaTotal += round2(base * (Number(pctStr) / 100));
+      }
+    }
+    ivaTotal = round2(ivaTotal);
+    const retIrpf = round2(baseTotal * (Number(prefRetIrpfPct || 0) / 100));
+    const retGar = round2(baseTotal * (Number(prefRetGarantiaPct || 0) / 100));
+    const liquid = round2(baseTotal + ivaTotal + suplerts - retIrpf - retGar);
+    return { baseTotal, ivaTotal, suplerts: round2(suplerts), retIrpf, retGar, liquid };
+  }, [prefLinies, prefEsIsp, prefRetIrpfPct, prefRetGarantiaPct]);
 
   const carregarDades = async () => {
     setLoading(true);
@@ -319,6 +449,39 @@ export default function GestioComptabilitatPage() {
       setLoading(false);
     }
   };
+
+  useEffect(() => {
+    const tabParam = searchParams.get("tab") as TabKey | null;
+    if (
+      tabParam &&
+      [
+        "DASHBOARD",
+        "WIP_CONTROL",
+        "PREFACTURACIO",
+        "VERIFACTU",
+        "MARGES_OT",
+        "OPERARIS_MRR",
+        "TIQUETS",
+        "NORMA43",
+      ].includes(tabParam)
+    ) {
+      setTabActiva(tabParam);
+    }
+  }, [searchParams]);
+
+  useEffect(() => {
+    const prefId = searchParams.get("prefactura_id");
+    if (prefId && prefId !== handledParamPrefId && factures.length > 0) {
+      const match = factures.find(
+        (f) => f.id === prefId && f.estat_document === "ESBORRANY_PREFACTURA"
+      );
+      if (match) {
+        setTabActiva("PREFACTURACIO");
+        obrirEditorPrefactura(match);
+        setHandledParamPrefId(prefId);
+      }
+    }
+  }, [searchParams, factures, handledParamPrefId]);
 
   useEffect(() => {
     if (rolActiu !== "ENGINYER") {
@@ -380,16 +543,127 @@ export default function GestioComptabilitatPage() {
   const handleConvertirWipPrefactura = async (ordreTreballId: string) => {
     setConvertintWipId(ordreTreballId);
     setError(null);
+    setSuccessMsg(null);
     try {
-      await apiFetch(`/gestio/comptabilitat/wip-control/${ordreTreballId}/prefacturar`, {
-        method: "POST",
-      });
-      await carregarDades();
-      setTabActiva("VERIFACTU");
+      const created = await apiFetch<{ id: string }>(
+        `/gestio/comptabilitat/wip-control/${ordreTreballId}/prefacturar`,
+        { method: "POST" }
+      );
+      const factList = await apiFetch<Factura[]>("/gestio/comptabilitat/factures");
+      setFactures(factList || []);
+      const wipRes = await apiFetch<WIPControl>("/gestio/comptabilitat/wip-control");
+      setWip(wipRes);
+      setTabActiva("PREFACTURACIO");
+      const novaPref = (factList || []).find((f) => f.id === created.id);
+      if (novaPref) {
+        obrirEditorPrefactura(novaPref);
+      }
+      setSuccessMsg("Pre-factura generada en esborrany. Pots editar-ne línies i preus abans d'emetre-la.");
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Error en convertir OT a Pre-factura");
     } finally {
       setConvertintWipId(null);
+    }
+  };
+
+  const handleDesarPrefactura = async (emetreDespres: boolean) => {
+    if (!editingPrefactura) return;
+    if (prefLinies.length === 0) {
+      setError("La pre-factura ha de tenir com a mínim una línia.");
+      return;
+    }
+    setSavingPrefactura(true);
+    setError(null);
+    setSuccessMsg(null);
+    try {
+      const payloadUpdate = {
+        data_emissio: prefDataEmissio || null,
+        data_venciment: prefDataVenciment || null,
+        metode_pagament: prefMetodePagament,
+        es_inversio_subjecte_passiu: prefEsIsp,
+        retencio_irpf_pct: Number(prefRetIrpfPct || 0),
+        retencio_garantia_pct: Number(prefRetGarantiaPct || 0),
+        linies: prefLinies.map((l) => ({
+          obra_id: l.obra_id || null,
+          centre_de_cost_id: l.centre_de_cost_id || "CC-GENERAL",
+          article_id: l.article_id || null,
+          concepte: l.concepte.trim() || "Servei tècnic",
+          compte_pgc: l.compte_pgc || "700000",
+          quantitat: Math.max(0.001, Number(l.quantitat || 0)),
+          quantitat_merma: Number(l.quantitat_merma || 0),
+          preu_venda_unitari: Math.max(0, Number(l.preu_venda_unitari || 0)),
+          descompte_aplicat_pct: Math.min(100, Math.max(0, Number(l.descompte_aplicat_pct || 0))),
+          tipus_iva_pct: prefEsIsp ? 0 : Number(l.tipus_iva ?? 21),
+        })),
+      };
+      await apiFetch(`/gestio/comptabilitat/prefactures/${editingPrefactura.id}`, {
+        method: "PUT",
+        body: JSON.stringify(payloadUpdate),
+      });
+
+      if (emetreDespres) {
+        const emesa = await apiFetch<Factura>(
+          `/gestio/comptabilitat/prefactures/${editingPrefactura.id}/emetre`,
+          {
+            method: "POST",
+            body: JSON.stringify({
+              serie: "F",
+              data_emissio: prefDataEmissio || null,
+              data_venciment: prefDataVenciment || null,
+              confirmacio_humana_hitl: true,
+            }),
+          }
+        );
+        setEditingPrefactura(null);
+        await carregarDades();
+        setTabActiva("VERIFACTU");
+        setSuccessMsg(
+          `Factura definitiva ${emesa.serie}-${emesa.numero_factura} emesa i encadenada a Veri*factu.`
+        );
+      } else {
+        setEditingPrefactura(null);
+        await carregarDades();
+        setSuccessMsg("Canvis de la pre-factura desats correctament.");
+      }
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Error en desar la pre-factura");
+    } finally {
+      setSavingPrefactura(false);
+    }
+  };
+
+  const handleEmetrePrefacturaDirecte = async (f: Factura) => {
+    setEmittingPrefId(f.id);
+    setError(null);
+    setSuccessMsg(null);
+    try {
+      const emesa = await apiFetch<Factura>(`/gestio/comptabilitat/prefactures/${f.id}/emetre`, {
+        method: "POST",
+        body: JSON.stringify({ serie: "F", confirmacio_humana_hitl: true }),
+      });
+      await carregarDades();
+      setTabActiva("VERIFACTU");
+      setSuccessMsg(
+        `Factura definitiva ${emesa.serie}-${emesa.numero_factura} emesa a Veri*factu.`
+      );
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Error en emetre la factura definitiva");
+    } finally {
+      setEmittingPrefId(null);
+    }
+  };
+
+  const handleDescartarPrefactura = async (f: Factura) => {
+    setError(null);
+    setSuccessMsg(null);
+    try {
+      await apiFetch(`/gestio/comptabilitat/prefactures/${f.id}`, {
+        method: "DELETE",
+      });
+      await carregarDades();
+      setSuccessMsg("Pre-factura descartada. L'ordre de treball torna a estar disponible a WIP.");
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Error en descartar la pre-factura");
     }
   };
 
@@ -462,10 +736,21 @@ export default function GestioComptabilitatPage() {
     }
   };
 
-  const tabs: Array<{ key: TabKey; label: string; icon: React.ReactNode }> = [
+  const tabs: Array<{ key: TabKey; label: string; icon: React.ReactNode; badge?: number }> = [
     { key: "DASHBOARD", label: "Suite Econòmica & KPIs", icon: <TrendingUp className="h-4 w-4" /> },
+    {
+      key: "WIP_CONTROL",
+      label: "Pendents de Prefacturar",
+      icon: <Activity className="h-4 w-4" />,
+      badge: wip?.nombre_ots_en_wip || 0,
+    },
+    {
+      key: "PREFACTURACIO",
+      label: "Prefactures Editables",
+      icon: <Edit3 className="h-4 w-4" />,
+      badge: prefacturesEsborrany.length,
+    },
     { key: "VERIFACTU", label: "Veri*factu, Art.80 & 4308", icon: <QrCode className="h-4 w-4" /> },
-    { key: "WIP_CONTROL", label: "WIP Obra en Curs", icon: <Activity className="h-4 w-4" /> },
     { key: "MARGES_OT", label: "Costos & Marges OT", icon: <Scale className="h-4 w-4" /> },
     { key: "OPERARIS_MRR", label: "Operaris & MRR", icon: <Users className="h-4 w-4" /> },
     { key: "TIQUETS", label: "Tiquets OCR Camp", icon: <Receipt className="h-4 w-4" /> },
@@ -541,6 +826,18 @@ export default function GestioComptabilitatPage() {
         </div>
       )}
 
+      {successMsg && (
+        <div className="flex items-center justify-between rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
+          <span className="flex items-center gap-2">
+            <CheckCircle2 className="h-4 w-4" />
+            {successMsg}
+          </span>
+          <button onClick={() => setSuccessMsg(null)}>
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+      )}
+
       {/* Navegació per Pestanyes */}
       <div className="flex flex-wrap gap-2 border-b border-slate-200 pb-2">
         {tabs.map((t) => (
@@ -554,7 +851,18 @@ export default function GestioComptabilitatPage() {
             }`}
           >
             {t.icon}
-            {t.label}
+            <span>{t.label}</span>
+            {typeof t.badge === "number" && t.badge > 0 && (
+              <span
+                className={`rounded-full px-1.5 py-0.5 text-[10px] font-bold leading-none ${
+                  tabActiva === t.key
+                    ? "bg-white/25 text-white"
+                    : "bg-primary/15 text-primary"
+                }`}
+              >
+                {t.badge}
+              </span>
+            )}
           </button>
         ))}
       </div>
@@ -669,9 +977,9 @@ export default function GestioComptabilitatPage() {
                 <ShieldCheck className="h-4 w-4" /> SIF Inalterable
               </span>
             </div>
-            {factures.length === 0 ? (
+            {facturesEmeses.length === 0 ? (
               <div className="p-8 text-center text-sm text-slate-500">
-                Estat Dia 0 real: Encara no s&apos;ha emès cap factura en aquest tenant.
+                Estat Dia 0 real: Encara no s&apos;ha emès cap factura definitiva en aquest tenant.
               </div>
             ) : (
               <div className="overflow-x-auto">
@@ -679,6 +987,7 @@ export default function GestioComptabilitatPage() {
                   <thead className="bg-slate-50 text-slate-600">
                     <tr>
                       <th className="px-4 py-3">Número</th>
+                      <th className="px-4 py-3">Client / OTs</th>
                       <th className="px-4 py-3">Base</th>
                       <th className="px-4 py-3">IVA</th>
                       <th className="px-4 py-3">Líquid Exigible</th>
@@ -688,10 +997,18 @@ export default function GestioComptabilitatPage() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
-                    {factures.map((f) => (
+                    {facturesEmeses.map((f) => (
                       <tr key={f.id} className="hover:bg-slate-50">
                         <td className="px-4 py-3 font-semibold text-slate-900">
                           {f.serie}-{f.numero_factura}
+                        </td>
+                        <td className="px-4 py-3">
+                          <p className="font-medium text-slate-800">{f.client_nom || "—"}</p>
+                          {f.ordres_treball_codis && f.ordres_treball_codis.length > 0 && (
+                            <p className="font-mono text-[10px] text-primary">
+                              {f.ordres_treball_codis.join(", ")}
+                            </p>
+                          )}
                         </td>
                         <td className="px-4 py-3 tabular-nums">{Number(f.base_imposable).toFixed(2)} €</td>
                         <td className="px-4 py-3 tabular-nums">{Number(f.quota_iva).toFixed(2)} €</td>
@@ -708,7 +1025,7 @@ export default function GestioComptabilitatPage() {
                         </td>
                         <td className="px-4 py-3 text-right space-x-2">
                           <a
-                            href={`/api/v1/gestio/comptabilitat/factures/${f.id}/pdf`}
+                            href={`${getApiBaseUrl()}/gestio/comptabilitat/factures/${f.id}/pdf`}
                             target="_blank"
                             rel="noreferrer"
                             className="inline-flex items-center gap-1 text-primary hover:underline"
@@ -716,7 +1033,7 @@ export default function GestioComptabilitatPage() {
                             <Download className="h-3.5 w-3.5" /> PDF
                           </a>
                           <a
-                            href={`/api/v1/gestio/comptabilitat/factures/${f.id}/xml`}
+                            href={`${getApiBaseUrl()}/gestio/comptabilitat/factures/${f.id}/xml`}
                             target="_blank"
                             rel="noreferrer"
                             className="inline-flex items-center gap-1 text-slate-600 hover:underline"
@@ -813,12 +1130,137 @@ export default function GestioComptabilitatPage() {
         </div>
       )}
 
+      {/* TAB: PREFACTURES EDITABLES (HITL ABANS DE VERI*FACTU) */}
+      {tabActiva === "PREFACTURACIO" && (
+        <div className="space-y-4">
+          <div className="rounded-xl border border-amber-200 bg-amber-50/60 px-4 py-3 text-xs text-amber-900">
+            Revisa i edita línies, hores, tarifes, materials, IVA o retencions de cada pre-factura abans de validar i emetre la factura definitiva a Veri*factu.
+          </div>
+
+          <div className="rounded-xl border border-slate-200 bg-white overflow-hidden">
+            <div className="border-b border-slate-100 px-5 py-3 flex items-center justify-between">
+              <h2 className="text-sm font-semibold text-slate-900">
+                Prefactures en Esborrany ({prefacturesEsborrany.length})
+              </h2>
+              <button
+                type="button"
+                onClick={() => setTabActiva("WIP_CONTROL")}
+                className="text-xs font-semibold text-primary hover:underline"
+              >
+                + Veure feines acabades pendents de prefacturar
+              </button>
+            </div>
+
+            {prefacturesEsborrany.length === 0 ? (
+              <div className="p-8 text-center space-y-2">
+                <p className="text-sm text-slate-500">
+                  No hi ha cap pre-factura en esborrany pendent de revisió.
+                </p>
+                {wip && wip.nombre_ots_en_wip > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setTabActiva("WIP_CONTROL")}
+                    className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3.5 py-2 text-xs font-semibold text-white"
+                  >
+                    Tens {wip.nombre_ots_en_wip} feines acabades pendents de prefacturar
+                  </button>
+                )}
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs">
+                  <thead className="bg-slate-50 text-slate-600">
+                    <tr>
+                      <th className="px-4 py-3">Pre-factura</th>
+                      <th className="px-4 py-3">Client &amp; Ordre de Treball</th>
+                      <th className="px-4 py-3">Línies</th>
+                      <th className="px-4 py-3 text-right">Base</th>
+                      <th className="px-4 py-3 text-right">IVA</th>
+                      <th className="px-4 py-3 text-right">Líquid Exigible</th>
+                      <th className="px-4 py-3 text-right">Accions HITL</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {prefacturesEsborrany.map((f) => (
+                      <tr key={f.id} className="hover:bg-slate-50">
+                        <td className="px-4 py-3">
+                          <span className="font-mono font-bold text-amber-800">
+                            {f.serie}-{f.numero_factura}
+                          </span>
+                          <span className="block text-[10px] text-slate-500">
+                            {f.data_emissio ? String(f.data_emissio).slice(0, 10) : "—"}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3">
+                          <p className="font-semibold text-slate-900">{f.client_nom || "Client"}</p>
+                          {f.ordres_treball_codis && f.ordres_treball_codis.length > 0 && (
+                            <p className="font-mono text-[11px] text-primary">
+                              OT: {f.ordres_treball_codis.join(", ")}
+                            </p>
+                          )}
+                        </td>
+                        <td className="px-4 py-3 text-slate-600">
+                          {f.linies?.length || 0} línies
+                        </td>
+                        <td className="px-4 py-3 text-right tabular-nums">
+                          {Number(f.base_imposable).toFixed(2)} €
+                        </td>
+                        <td className="px-4 py-3 text-right tabular-nums">
+                          {Number(f.quota_iva).toFixed(2)} €
+                        </td>
+                        <td className="px-4 py-3 text-right font-bold tabular-nums text-slate-900">
+                          {Number(f.liquid_exigible).toFixed(2)} €
+                        </td>
+                        <td className="px-4 py-3 text-right whitespace-nowrap space-x-1.5">
+                          <button
+                            type="button"
+                            onClick={() => obrirEditorPrefactura(f)}
+                            className="inline-flex items-center gap-1 rounded-lg border border-primary/30 bg-primary/10 px-2.5 py-1.5 text-[11px] font-semibold text-primary hover:bg-primary/20"
+                          >
+                            <Edit3 className="h-3.5 w-3.5" /> Editar
+                          </button>
+                          <a
+                            href={`${getApiBaseUrl()}/gestio/comptabilitat/factures/${f.id}/pdf`}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-2.5 py-1.5 text-[11px] font-medium text-slate-700 hover:bg-slate-100"
+                          >
+                            <Download className="h-3.5 w-3.5" /> PDF
+                          </a>
+                          <button
+                            type="button"
+                            disabled={emittingPrefId === f.id}
+                            onClick={() => handleEmetrePrefacturaDirecte(f)}
+                            className="inline-flex items-center gap-1 rounded-lg bg-primary px-2.5 py-1.5 text-[11px] font-semibold text-white hover:opacity-90 disabled:opacity-50"
+                          >
+                            <Send className="h-3.5 w-3.5" />
+                            {emittingPrefId === f.id ? "Emetent..." : "Emetre Veri*factu"}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleDescartarPrefactura(f)}
+                            className="inline-flex items-center gap-1 rounded-lg border border-rose-200 bg-rose-50 px-2 py-1.5 text-[11px] font-medium text-rose-700 hover:bg-rose-100"
+                            title="Descartar esborrany i retornar OT a pendents"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* TAB 3: WIP OBRA EN CURS NO FACTURADA */}
       {tabActiva === "WIP_CONTROL" && wip && (
         <div className="space-y-4">
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
             <div className="rounded-xl border border-slate-200 bg-white p-4">
-              <p className="text-xs text-slate-500">Valor WIP Pendent de Facturar (PVP)</p>
+              <p className="text-xs text-slate-500">Valor WIP Pendent de Prefacturar (PVP)</p>
               <p className="text-xl font-bold text-slate-900">{Number(wip.total_wip_valorat_pvp).toFixed(2)} €</p>
             </div>
             <div className="rounded-xl border border-slate-200 bg-white p-4">
@@ -831,16 +1273,18 @@ export default function GestioComptabilitatPage() {
             </div>
           </div>
 
-          <div className="rounded-xl border border-slate-200 bg-white p-5">
+          <div className="rounded-xl border border-slate-200 bg-white p-5 overflow-x-auto">
             {wip.items.length === 0 ? (
               <p className="text-sm text-slate-500 text-center py-6">
-                Cap ordre de treball pendent de facturar (WIP = 0).
+                Cap ordre de treball acabada pendent de prefacturar (WIP = 0).
               </p>
             ) : (
               <table className="w-full text-left text-xs">
                 <thead className="bg-slate-50 text-slate-600">
                   <tr>
-                    <th className="px-3 py-2">Codi OT</th>
+                    <th className="px-3 py-2">OT &amp; Client</th>
+                    <th className="px-3 py-2">Estat OT</th>
+                    <th className="px-3 py-2">Hores × Tarifa</th>
                     <th className="px-3 py-2">Dies en WIP</th>
                     <th className="px-3 py-2">Valor PVP</th>
                     <th className="px-3 py-2">Cost Avançat</th>
@@ -851,9 +1295,33 @@ export default function GestioComptabilitatPage() {
                 <tbody className="divide-y divide-slate-100">
                   {wip.items.map((item) => (
                     <tr key={item.ordre_treball_id}>
-                      <td className="px-3 py-2 font-semibold">{item.codi_ot}</td>
+                      <td className="px-3 py-2">
+                        <span className="font-mono font-semibold text-primary">{item.codi_ot}</span>
+                        {item.titol_ot && (
+                          <span className="block text-slate-800 font-medium">{item.titol_ot}</span>
+                        )}
+                        {item.client_nom && (
+                          <span className="block text-[11px] text-slate-500">{item.client_nom}</span>
+                        )}
+                      </td>
+                      <td className="px-3 py-2">
+                        <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-700">
+                          {item.estat_ot || "FINALITZADA"}
+                        </span>
+                      </td>
+                      <td className="px-3 py-2 tabular-nums text-slate-700">
+                        {Number(item.hores_imputades || 0).toFixed(2)} h ×{" "}
+                        {Number(item.preu_hora_aplicat || 0).toFixed(2)} €/h
+                        {Number(item.pvp_materials || 0) > 0 && (
+                          <span className="block text-[10px] text-slate-500">
+                            + Mat: {Number(item.pvp_materials).toFixed(2)} €
+                          </span>
+                        )}
+                      </td>
                       <td className="px-3 py-2">{item.dies_en_wip} dies</td>
-                      <td className="px-3 py-2 tabular-nums">{Number(item.valor_wip_pvp).toFixed(2)} €</td>
+                      <td className="px-3 py-2 tabular-nums font-semibold">
+                        {Number(item.valor_wip_pvp).toFixed(2)} €
+                      </td>
                       <td className="px-3 py-2 tabular-nums">{Number(item.cost_wip_avancat).toFixed(2)} €</td>
                       <td className="px-3 py-2">
                         {item.es_wip_envellit_alerta ? (
@@ -871,11 +1339,11 @@ export default function GestioComptabilitatPage() {
                           type="button"
                           disabled={convertintWipId === item.ordre_treball_id}
                           onClick={() => handleConvertirWipPrefactura(item.ordre_treball_id)}
-                          className="rounded-lg bg-primary px-2.5 py-1 text-[11px] font-semibold text-primary-foreground hover:opacity-90 disabled:opacity-50"
+                          className="rounded-lg bg-primary px-2.5 py-1.5 text-[11px] font-semibold text-primary-foreground hover:opacity-90 disabled:opacity-50"
                         >
                           {convertintWipId === item.ordre_treball_id
-                            ? "Convertint..."
-                            : "Convertir a Pre-factura"}
+                            ? "Creant pre-factura..."
+                            : "Passar a Prefacturació"}
                         </button>
                       </td>
                     </tr>
@@ -1365,6 +1833,340 @@ export default function GestioComptabilitatPage() {
         </div>
       )}
 
+      {/* MODAL EDITOR DE PRE-FACTURA (EDITAR ABANS D'EMETRE A VERI*FACTU) */}
+      {editingPrefactura && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4 overflow-y-auto">
+          <div className="w-full max-w-4xl rounded-2xl bg-white p-6 shadow-2xl space-y-5 my-8">
+            <div className="flex items-start justify-between border-b border-slate-100 pb-3">
+              <div>
+                <span className="inline-block rounded-full bg-amber-100 px-2.5 py-0.5 text-[11px] font-bold text-amber-800">
+                  ESBORRANY EDITABLE · HITL
+                </span>
+                <h3 className="text-lg font-bold text-slate-900 mt-1">
+                  Editar Pre-factura {editingPrefactura.serie}-{editingPrefactura.numero_factura}
+                  {editingPrefactura.client_nom ? ` · ${editingPrefactura.client_nom}` : ""}
+                </h3>
+                {editingPrefactura.ordres_treball_codis &&
+                  editingPrefactura.ordres_treball_codis.length > 0 && (
+                    <p className="text-xs font-mono text-primary mt-0.5">
+                      Ordres de Treball vinculades: {editingPrefactura.ordres_treball_codis.join(", ")}
+                    </p>
+                  )}
+              </div>
+              <button
+                type="button"
+                onClick={() => setEditingPrefactura(null)}
+                className="rounded-lg p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            {/* Capçalera Fiscal */}
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5 text-xs">
+              <div>
+                <label className="block font-medium text-slate-700 mb-1">Data Emissió</label>
+                <input
+                  type="date"
+                  value={prefDataEmissio}
+                  onChange={(e) => setPrefDataEmissio(e.target.value)}
+                  className="w-full rounded-lg border border-slate-200 px-2.5 py-2"
+                />
+              </div>
+              <div>
+                <label className="block font-medium text-slate-700 mb-1">Data Venciment</label>
+                <input
+                  type="date"
+                  value={prefDataVenciment}
+                  onChange={(e) => setPrefDataVenciment(e.target.value)}
+                  className="w-full rounded-lg border border-slate-200 px-2.5 py-2"
+                />
+              </div>
+              <div>
+                <label className="block font-medium text-slate-700 mb-1">Mètode Pagament</label>
+                <select
+                  value={prefMetodePagament}
+                  onChange={(e) => setPrefMetodePagament(e.target.value)}
+                  className="w-full rounded-lg border border-slate-200 bg-white px-2.5 py-2"
+                >
+                  <option value="TRANSFERENCIA">Transferència</option>
+                  <option value="REBUT_DOMICILIAT">Rebut Domiciliat SEPA</option>
+                  <option value="TARGETA">Targeta</option>
+                  <option value="EFECTIU">Efectiu</option>
+                  <option value="CONFIRMING">Confirming</option>
+                </select>
+              </div>
+              <div>
+                <label className="block font-medium text-slate-700 mb-1">Retenció IRPF (%)</label>
+                <input
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  max="30"
+                  value={prefRetIrpfPct}
+                  onChange={(e) => setPrefRetIrpfPct(e.target.value)}
+                  className="w-full rounded-lg border border-slate-200 px-2.5 py-2 tabular-nums"
+                />
+              </div>
+              <div>
+                <label className="block font-medium text-slate-700 mb-1">
+                  Retenció Garantia 4308 (%)
+                </label>
+                <input
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  max="20"
+                  value={prefRetGarantiaPct}
+                  onChange={(e) => setPrefRetGarantiaPct(e.target.value)}
+                  className="w-full rounded-lg border border-slate-200 px-2.5 py-2 tabular-nums"
+                />
+              </div>
+            </div>
+
+            <label className="inline-flex items-center gap-2 text-xs text-slate-700">
+              <input
+                type="checkbox"
+                checked={prefEsIsp}
+                onChange={(e) => setPrefEsIsp(e.target.checked)}
+              />
+              <span>Inversió del Subjecte Passiu (ISP · 0% IVA Art. 84 LIVA)</span>
+            </label>
+
+            {/* Taula Editable de Línies */}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <h4 className="text-xs font-bold uppercase tracking-wider text-slate-600">
+                  Línies de Factura ({prefLinies.length})
+                </h4>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setPrefLinies((prev) => [
+                      ...prev,
+                      {
+                        concepte: "",
+                        compte_pgc: "700000",
+                        quantitat: 1,
+                        preu_venda_unitari: 0,
+                        descompte_aplicat_pct: 0,
+                        tipus_iva: prefEsIsp ? 0 : 21,
+                      },
+                    ])
+                  }
+                  className="inline-flex items-center gap-1 rounded-lg border border-primary/30 bg-primary/10 px-2.5 py-1 text-xs font-semibold text-primary hover:bg-primary/20"
+                >
+                  <Plus className="h-3.5 w-3.5" /> Afegir Línia
+                </button>
+              </div>
+
+              <div className="overflow-x-auto rounded-xl border border-slate-200">
+                <table className="w-full text-left text-xs">
+                  <thead className="bg-slate-50 text-slate-600">
+                    <tr>
+                      <th className="px-2.5 py-2 min-w-[220px]">Concepte</th>
+                      <th className="px-2 py-2 w-20">Qt.</th>
+                      <th className="px-2 py-2 w-24">Preu u. (€)</th>
+                      <th className="px-2 py-2 w-20">Dto %</th>
+                      <th className="px-2 py-2 w-20">IVA %</th>
+                      <th className="px-2 py-2 w-24 text-right">Subtotal</th>
+                      <th className="px-2 py-2 w-10"></th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {prefLinies.map((lin, idx) => {
+                      const sub = round2(
+                        Number(lin.quantitat || 0) *
+                          Number(lin.preu_venda_unitari || 0) *
+                          (1 - Number(lin.descompte_aplicat_pct || 0) / 100)
+                      );
+                      return (
+                        <tr key={lin.id || `new-${idx}`}>
+                          <td className="px-2.5 py-2">
+                            <input
+                              type="text"
+                              value={lin.concepte}
+                              onChange={(e) =>
+                                setPrefLinies((prev) =>
+                                  prev.map((item, i) =>
+                                    i === idx ? { ...item, concepte: e.target.value } : item
+                                  )
+                                )
+                              }
+                              placeholder="Descripció del treball o material"
+                              className="w-full rounded border border-slate-200 px-2 py-1"
+                            />
+                          </td>
+                          <td className="px-2 py-2">
+                            <input
+                              type="number"
+                              step="0.01"
+                              min="0.01"
+                              value={lin.quantitat}
+                              onChange={(e) =>
+                                setPrefLinies((prev) =>
+                                  prev.map((item, i) =>
+                                    i === idx
+                                      ? { ...item, quantitat: Number(e.target.value) }
+                                      : item
+                                  )
+                                )
+                              }
+                              className="w-full rounded border border-slate-200 px-2 py-1 tabular-nums"
+                            />
+                          </td>
+                          <td className="px-2 py-2">
+                            <input
+                              type="number"
+                              step="0.01"
+                              min="0"
+                              value={lin.preu_venda_unitari}
+                              onChange={(e) =>
+                                setPrefLinies((prev) =>
+                                  prev.map((item, i) =>
+                                    i === idx
+                                      ? { ...item, preu_venda_unitari: Number(e.target.value) }
+                                      : item
+                                  )
+                                )
+                              }
+                              className="w-full rounded border border-slate-200 px-2 py-1 tabular-nums"
+                            />
+                          </td>
+                          <td className="px-2 py-2">
+                            <input
+                              type="number"
+                              step="0.1"
+                              min="0"
+                              max="100"
+                              value={lin.descompte_aplicat_pct}
+                              onChange={(e) =>
+                                setPrefLinies((prev) =>
+                                  prev.map((item, i) =>
+                                    i === idx
+                                      ? { ...item, descompte_aplicat_pct: Number(e.target.value) }
+                                      : item
+                                  )
+                                )
+                              }
+                              className="w-full rounded border border-slate-200 px-2 py-1 tabular-nums"
+                            />
+                          </td>
+                          <td className="px-2 py-2">
+                            <select
+                              disabled={prefEsIsp}
+                              value={prefEsIsp ? 0 : lin.tipus_iva}
+                              onChange={(e) =>
+                                setPrefLinies((prev) =>
+                                  prev.map((item, i) =>
+                                    i === idx
+                                      ? { ...item, tipus_iva: Number(e.target.value) }
+                                      : item
+                                  )
+                                )
+                              }
+                              className="w-full rounded border border-slate-200 bg-white px-1.5 py-1 tabular-nums disabled:opacity-50"
+                            >
+                              <option value={21}>21%</option>
+                              <option value={10}>10%</option>
+                              <option value={4}>4%</option>
+                              <option value={0}>0%</option>
+                            </select>
+                          </td>
+                          <td className="px-2 py-2 text-right font-semibold tabular-nums">
+                            {sub.toFixed(2)} €
+                          </td>
+                          <td className="px-2 py-2 text-center">
+                            <button
+                              type="button"
+                              disabled={prefLinies.length <= 1}
+                              onClick={() =>
+                                setPrefLinies((prev) => prev.filter((_, i) => i !== idx))
+                              }
+                              className="rounded p-1 text-rose-600 hover:bg-rose-50 disabled:opacity-30"
+                              title="Eliminar línia"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            {/* Resum de Totals en Viu */}
+            <div className="rounded-xl bg-slate-50 border border-slate-200 p-4 flex flex-wrap items-center justify-between gap-4 text-xs">
+              <div className="flex flex-wrap gap-5">
+                <div>
+                  <span className="text-slate-500 block">Base Imposable</span>
+                  <span className="font-bold tabular-nums text-slate-900">
+                    {editorTotals.baseTotal.toFixed(2)} €
+                  </span>
+                </div>
+                <div>
+                  <span className="text-slate-500 block">Quota IVA</span>
+                  <span className="font-bold tabular-nums text-slate-900">
+                    {editorTotals.ivaTotal.toFixed(2)} €
+                  </span>
+                </div>
+                {editorTotals.retIrpf > 0 && (
+                  <div>
+                    <span className="text-slate-500 block">Retenció IRPF</span>
+                    <span className="font-bold tabular-nums text-rose-700">
+                      -{editorTotals.retIrpf.toFixed(2)} €
+                    </span>
+                  </div>
+                )}
+                {editorTotals.retGar > 0 && (
+                  <div>
+                    <span className="text-slate-500 block">Garantia 4308</span>
+                    <span className="font-bold tabular-nums text-rose-700">
+                      -{editorTotals.retGar.toFixed(2)} €
+                    </span>
+                  </div>
+                )}
+              </div>
+              <div className="text-right">
+                <span className="text-slate-500 block">TOTAL LÍQUID EXIGIBLE</span>
+                <span className="text-xl font-black tabular-nums text-primary">
+                  {editorTotals.liquid.toFixed(2)} €
+                </span>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center justify-end gap-2 pt-2 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setEditingPrefactura(null)}
+                className="rounded-lg border border-slate-200 px-4 py-2 text-xs font-medium text-slate-700"
+              >
+                Cancel·lar
+              </button>
+              <button
+                type="button"
+                disabled={savingPrefactura}
+                onClick={() => handleDesarPrefactura(false)}
+                className="rounded-lg border border-primary bg-primary/10 px-4 py-2 text-xs font-semibold text-primary hover:bg-primary/20 disabled:opacity-50"
+              >
+                {savingPrefactura ? "Desant..." : "Desar Canvis (Esborrany)"}
+              </button>
+              <button
+                type="button"
+                disabled={savingPrefactura}
+                onClick={() => handleDesarPrefactura(true)}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-4 py-2 text-xs font-semibold text-white hover:opacity-90 disabled:opacity-50"
+              >
+                <Send className="h-3.5 w-3.5" />
+                {savingPrefactura ? "Processant..." : "Desar i Emetre Factura Veri*factu"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* MODAL RECTIFICATIVA SÈRIE R (Spec 007 RF-14) */}
       {facturaRectificar && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4">
@@ -1415,5 +2217,19 @@ export default function GestioComptabilitatPage() {
         </div>
       )}
     </div>
+  );
+}
+
+export default function GestioComptabilitatPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="p-8 text-center text-xs font-mono text-slate-500 animate-pulse">
+          Carregant Suite de Control Financer i Prefacturació...
+        </div>
+      }
+    >
+      <ComptabilitatContent />
+    </Suspense>
   );
 }
