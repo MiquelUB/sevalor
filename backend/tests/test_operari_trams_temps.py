@@ -830,3 +830,162 @@ async def test_flux_complet_feina_acabada_a_prefactura_editable_i_verifactu(
         assert str(ot_op_id) not in wip_ids
 
 
+@pytest.mark.asyncio
+async def test_prefacturacio_rols_secretaria_comptabilitat_i_veto_enginyer(
+    admin_session: AsyncSession, tmp_path, monkeypatch
+):
+    """Verifica que SECRETARIA i COMPTABILITAT poden prefacturar/editar/emetre sota RLS,
+    mentre ENGINYER i OPERARI continuen bloquejats amb 403 i RLS."""
+    from app.services.sovereign_storage import SovereignStorageGateway
+
+    monkeypatch.setattr(SovereignStorageGateway, "TRANSIT_QUEUE_DIR", tmp_path / "transit_roles")
+
+    emp_id = uuid.uuid4()
+    sec_id = uuid.uuid4()
+    comp_id = uuid.uuid4()
+    eng_id = uuid.uuid4()
+    cli_id = uuid.uuid4()
+    ot_sec_id = uuid.uuid4()
+    ot_comp_id = uuid.uuid4()
+
+    admin_session.add(
+        Empresa(
+            id=emp_id,
+            nom="Empresa Rols Comptables SL",
+            nif=f"R{emp_id.hex[:8].upper()}",
+            subdomini=f"rols-{emp_id.hex[:6]}",
+            pla_subscripcio="PRO",
+            estat_pagament="ACTIU",
+        )
+    )
+    await admin_session.flush()
+
+    await admin_session.execute(text(f"SET LOCAL app.current_empresa_id = '{emp_id}';"))
+    await admin_session.execute(text("SET LOCAL app.current_user_role = 'BOSS';"))
+
+    admin_session.add_all(
+        [
+            Usuari(
+                id=sec_id,
+                empresa_id=emp_id,
+                nif=f"SC-{sec_id.hex[:6]}",
+                nom="Secretaria Test",
+                rol="SECRETARIA",
+                telefon=f"+34620{sec_id.hex[:6]}",
+                email=f"sec-{sec_id.hex[:6]}@test.cat",
+                password_hash="x",
+                estat="ACTIU",
+            ),
+            Usuari(
+                id=comp_id,
+                empresa_id=emp_id,
+                nif=f"CP-{comp_id.hex[:6]}",
+                nom="Comptabilitat Test",
+                rol="COMPTABILITAT",
+                telefon=f"+34621{comp_id.hex[:6]}",
+                email=f"comp-{comp_id.hex[:6]}@test.cat",
+                password_hash="x",
+                estat="ACTIU",
+            ),
+            Usuari(
+                id=eng_id,
+                empresa_id=emp_id,
+                nif=f"EN-{eng_id.hex[:6]}",
+                nom="Enginyer Test",
+                rol="ENGINYER",
+                telefon=f"+34622{eng_id.hex[:6]}",
+                email=f"eng-{eng_id.hex[:6]}@test.cat",
+                password_hash="x",
+                estat="ACTIU",
+            ),
+            Client(
+                id=cli_id,
+                empresa_id=emp_id,
+                codi=f"CL-{cli_id.hex[:5]}",
+                rao_social="Client Rols SL",
+                nif="B55443322",
+                estat_risc_operatiu="NORMAL",
+            ),
+        ]
+    )
+    await admin_session.flush()
+    admin_session.add_all(
+        [
+            OrdreTreball(
+                id=ot_sec_id,
+                empresa_id=emp_id,
+                codi=f"OT-SC-{ot_sec_id.hex[:4]}",
+                client_id=cli_id,
+                titol="OT per Secretaria",
+                adreca="Carrer 1",
+                estat="COMPLERT",
+                hores_imputades_facturables=2.0,
+                preu_venda_hora_aplicat=45.0,
+            ),
+            OrdreTreball(
+                id=ot_comp_id,
+                empresa_id=emp_id,
+                codi=f"OT-CP-{ot_comp_id.hex[:4]}",
+                client_id=cli_id,
+                titol="OT per Comptabilitat",
+                adreca="Carrer 2",
+                estat="TANCADA",
+                hores_imputades_facturables=3.0,
+                preu_venda_hora_aplicat=50.0,
+            ),
+        ]
+    )
+    await admin_session.commit()
+
+    h_sec = {"Authorization": f"Bearer {_crear_token(sec_id, emp_id, 'SECRETARIA')}"}
+    h_comp = {"Authorization": f"Bearer {_crear_token(comp_id, emp_id, 'COMPTABILITAT')}"}
+    h_eng = {"Authorization": f"Bearer {_crear_token(eng_id, emp_id, 'ENGINYER')}"}
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test/api/v1") as client:
+        # SECRETARIA crea prefactura + edita + emet
+        r_sec_pre = await client.post(
+            f"/gestio/comptabilitat/wip-control/{ot_sec_id}/prefacturar",
+            headers=h_sec,
+        )
+        assert r_sec_pre.status_code == 201, r_sec_pre.text
+        pref_sec_id = r_sec_pre.json()["id"]
+
+        r_sec_edit = await client.put(
+            f"/gestio/comptabilitat/prefactures/{pref_sec_id}",
+            json={
+                "linies": [
+                    {
+                        "concepte": "Revisió caldera (Sec)",
+                        "quantitat": 2.0,
+                        "preu_venda_unitari": 55.0,
+                        "tipus_iva_pct": 21.0,
+                    }
+                ]
+            },
+            headers=h_sec,
+        )
+        assert r_sec_edit.status_code == 200, r_sec_edit.text
+
+        r_sec_emit = await client.post(
+            f"/gestio/comptabilitat/prefactures/{pref_sec_id}/emetre",
+            json={"serie": "F", "confirmacio_humana_hitl": True},
+            headers=h_sec,
+        )
+        assert r_sec_emit.status_code == 200, r_sec_emit.text
+
+        # COMPTABILITAT crea prefactura
+        r_comp_pre = await client.post(
+            f"/gestio/comptabilitat/wip-control/{ot_comp_id}/prefacturar",
+            headers=h_comp,
+        )
+        assert r_comp_pre.status_code == 201, r_comp_pre.text
+
+        # ENGINYER bloquejat (403)
+        r_eng_pre = await client.post(
+            f"/gestio/comptabilitat/wip-control/{ot_comp_id}/prefacturar",
+            headers=h_eng,
+        )
+        assert r_eng_pre.status_code == 403
+
+
+

@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.db import get_db_with_tenant_context
+from app.core.db import get_db_with_tenant_context, set_tenant_context
 from app.core.security import get_current_user_claims, require_financial_access, require_roles
 from app.models.models import (
     Client,
@@ -576,7 +576,11 @@ def _get_tenant_and_user(
 ) -> tuple[uuid.UUID, uuid.UUID, str]:
     emp = getattr(request.state, "empresa_id", None)
     uid = (claims or {}).get("sub") or getattr(request.state, "user_id", None)
-    rol = (claims or {}).get("rol") or getattr(request.state, "rol", "SECRETARIA")
+    rol = (
+        (claims or {}).get("rol")
+        or getattr(request.state, "user_role", None)
+        or getattr(request.state, "rol", "SECRETARIA")
+    )
     if not emp or emp == "undefined":
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Tenant no autenticat")
     return uuid.UUID(str(emp)), uuid.UUID(str(uid)) if uid else uuid.uuid4(), str(rol).upper()
@@ -716,13 +720,19 @@ async def editar_prefactura_esborrany(
     db: AsyncSession = Depends(get_db_with_tenant_context),
 ) -> FacturaResponse:
     """Edita línies, preus, descomptes, IVA i retencions d'una pre-factura abans d'emetre-la a Veri*factu."""
-    empresa_id, usuari_id, _ = _get_tenant_and_user(request)
+    empresa_id, usuari_id, rol = _get_tenant_and_user(request)
     pref = await EconomicSuiteService.actualitzar_prefactura_esborrany(
         db=db,
         empresa_id=empresa_id,
         usuari_id=usuari_id,
         factura_id=factura_id,
         payload=payload,
+    )
+    await set_tenant_context(
+        db,
+        str(empresa_id),
+        bool(getattr(request.state, "is_superadmin", False)),
+        role=getattr(request.state, "user_role", None) or rol,
     )
     return (await _serialitzar_factures(db, empresa_id, [pref]))[0]
 
@@ -749,7 +759,7 @@ async def emetre_prefactura_definitiva(
     db: AsyncSession = Depends(get_db_with_tenant_context),
 ) -> FacturaResponse:
     """Valida humanament (HITL) una pre-factura i l'emet definitivament a Veri*factu (Sèrie F)."""
-    empresa_id, usuari_id, _ = _get_tenant_and_user(request)
+    empresa_id, usuari_id, rol = _get_tenant_and_user(request)
     body = payload or PrefacturaEmetreDTO()
     factura = await EconomicSuiteService.emetre_prefactura_a_verifactu(
         db=db,
@@ -757,6 +767,12 @@ async def emetre_prefactura_definitiva(
         usuari_id=usuari_id,
         factura_id=factura_id,
         payload=body,
+    )
+    await set_tenant_context(
+        db,
+        str(empresa_id),
+        bool(getattr(request.state, "is_superadmin", False)),
+        role=getattr(request.state, "user_role", None) or rol,
     )
     return (await _serialitzar_factures(db, empresa_id, [factura]))[0]
 

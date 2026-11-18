@@ -201,6 +201,42 @@ async def _ensure_schema_columns() -> None:
                         """
                     )
                 )
+
+            res_pol = await session.execute(
+                text(
+                    "SELECT 1 FROM pg_policies "
+                    "WHERE tablename = 'factures_capcalera' "
+                    "AND policyname = 'economics_boss_only_factures_capcalera' "
+                    "AND qual LIKE '%SECRETARIA%'"
+                )
+            )
+            if not res_pol.scalar():
+                for tbl in (
+                    "factures_capcalera",
+                    "factures_linies",
+                    "factures_proveidor",
+                    "factures_proveidor_linies",
+                    "outbox_enviaments_aeat",
+                    "registre_esdeveniments_sif",
+                ):
+                    await session.execute(
+                        text(
+                            f"""
+                            DROP POLICY IF EXISTS economics_boss_only_{tbl} ON public.{tbl};
+                            CREATE POLICY economics_boss_only_{tbl} ON public.{tbl}
+                                AS RESTRICTIVE
+                                FOR ALL
+                                USING (
+                                    NULLIF(current_setting('app.current_user_role', true), '')
+                                    IN ('BOSS', 'SUPERADMIN', 'SECRETARIA', 'COMPTABILITAT')
+                                )
+                                WITH CHECK (
+                                    NULLIF(current_setting('app.current_user_role', true), '')
+                                    IN ('BOSS', 'SUPERADMIN', 'SECRETARIA', 'COMPTABILITAT')
+                                );
+                            """
+                        )
+                    )
             await session.commit()
     except Exception:
         pass

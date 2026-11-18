@@ -62,9 +62,25 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
 
 
 async def get_db_with_tenant_context(request: Request) -> AsyncGenerator[AsyncSession, None]:
-    """Deprecated: Utilitzeu get_db. Aquest mètode és un àlies per compatibilitat."""
-    async for session in get_db():
-        yield session
+    """Injecta el context RLS a partir dels ContextVars del middleware amb fallback segur a request.state."""
+    async with AsyncSessionLocal() as session:
+        try:
+            from app.core.context import role_context, superadmin_context, tenant_context
+
+            empresa_id = tenant_context.get() or getattr(request.state, "empresa_id", None)
+            is_superadmin = superadmin_context.get() or bool(
+                getattr(request.state, "is_superadmin", False)
+            )
+            role = role_context.get() or getattr(request.state, "user_role", None)
+
+            await set_tenant_context(session, empresa_id, is_superadmin, role=role)
+            yield session
+        finally:
+            try:
+                await session.execute(text("RESET ROLE;"))
+            except Exception:
+                pass
+            await session.close()
 
 
 async def set_tenant_context(
