@@ -261,6 +261,7 @@ export default function ConfiguracioPage() {
   const [nodeIaUrl, setNodeIaUrl] = useState("");
   const [discDurUrl, setDiscDurUrl] = useState("");
   const [nodeIaActiu, setNodeIaActiu] = useState(false);
+  const [nodeIaExplicitlyDisabled, setNodeIaExplicitlyDisabled] = useState(false);
   const [featureCopilotIa, setFeatureCopilotIa] = useState<boolean | null>(null);
   const [agentPromptSystem, setAgentPromptSystem] = useState("");
   const [nodeIaEstat, setNodeIaEstat] = useState<"OPERATIU" | "ERROR_CONNEXIO" | "NO_CONFIGURAT">("NO_CONFIGURAT");
@@ -295,7 +296,7 @@ export default function ConfiguracioPage() {
               }),
             });
             if (probe?.estat === "OPERATIU") {
-              setNodeIaEstat("OPERATIU");
+              setNodeIaEstat(probe.node_ia_actiu ? "OPERATIU" : "NO_CONFIGURAT");
               setNodeIaLatencia(probe.latencia_ms ?? null);
               if (Array.isArray(probe.models_disponibles) && probe.models_disponibles.length > 0) {
                 setNodeIaModelInfo(probe.models_disponibles.join(", "));
@@ -704,6 +705,7 @@ export default function ConfiguracioPage() {
       return;
     }
     const previ = nodeIaActiu;
+    setNodeIaExplicitlyDisabled(!checked);
     setNodeIaActiu(checked);
     setNodeIaDesant(true);
     try {
@@ -733,7 +735,9 @@ export default function ConfiguracioPage() {
     }
     setNodeIaDesant(true);
     try {
-      const res: any = await persistirNodeIaAlBackend(nodeIaActiu);
+      const teAlgunaUrl = Boolean(nodeIaUrl.trim() || discDurUrl.trim());
+      const actiuFinal = teAlgunaUrl && !nodeIaExplicitlyDisabled ? true : nodeIaActiu;
+      const res: any = await persistirNodeIaAlBackend(actiuFinal);
       if (res?.avis) {
         mostrarFeedback("ERROR", res.avis);
       } else {
@@ -1797,7 +1801,11 @@ export default function ConfiguracioPage() {
                 disabled={esEnginyer}
                 placeholder="Ex: https://node-empresa.projectexinoxano.cat o http://127.0.0.1:1234"
                 value={nodeIaUrl}
-                onChange={(e) => setNodeIaUrl(e.target.value)}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  setNodeIaUrl(val);
+                  if (val.trim() && !nodeIaExplicitlyDisabled) setNodeIaActiu(true);
+                }}
                 className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-mono text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500 disabled:opacity-50"
               />
               <p className="text-[10px] text-slate-400">
@@ -1814,9 +1822,13 @@ export default function ConfiguracioPage() {
               <input
                 type="text"
                 disabled={esEnginyer}
-                placeholder="Ex: http://127.0.0.1:1234/docs, http://127.0.0.1:8080 o ruta del disc dur"
+                placeholder="Ex: https://disc-empresa.projectexinoxano.cat o http://127.0.0.1:9001"
                 value={discDurUrl}
-                onChange={(e) => setDiscDurUrl(e.target.value)}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  setDiscDurUrl(val);
+                  if (val.trim() && !nodeIaExplicitlyDisabled) setNodeIaActiu(true);
+                }}
                 className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-mono text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500 disabled:opacity-50"
               />
             </div>

@@ -225,6 +225,7 @@ export default function EmpresaDetailPage({ params }: { params: { id: string } }
     disc_dur_url: "",
     node_ia_actiu: false,
   });
+  const [nodeIaExplicitlyDisabled, setNodeIaExplicitlyDisabled] = useState(false);
   const [nodeIaTesting, setNodeIaTesting] = useState(false);
   const [nodeIaStatus, setNodeIaStatus] = useState<any>(null);
   const [discDurTesting, setDiscDurTesting] = useState(false);
@@ -314,6 +315,7 @@ export default function EmpresaDetailPage({ params }: { params: { id: string } }
           disc_dur_url: loadedDiscUrl,
           node_ia_actiu: Boolean(data.node_ia_actiu),
         });
+        setNodeIaExplicitlyDisabled(false);
         setVaultToken(loadedVaultTok);
 
         // Auto-verificació en carregar la fitxa perquè l'empresa es vegi connectada sempre en entrar
@@ -438,10 +440,18 @@ export default function EmpresaDetailPage({ params }: { params: { id: string } }
       });
 
       // 4. Guardar Feature Flags i Vault Token
+      const teAlgunaUrlTunel = Boolean(
+        features.node_ia_url?.trim() || features.disc_dur_url?.trim()
+      );
+      const nodeIaActiuFinal =
+        features.feature_copilot_ia && teAlgunaUrlTunel && !nodeIaExplicitlyDisabled
+          ? true
+          : features.node_ia_actiu;
       await apiFetch(`/superadmin/tenants/${params.id}/feature-flags`, {
         method: "PUT",
         body: JSON.stringify({
           ...features,
+          node_ia_actiu: nodeIaActiuFinal,
           vault_token: vaultToken.trim() || undefined,
         }),
       });
@@ -2567,7 +2577,11 @@ export default function EmpresaDetailPage({ params }: { params: { id: string } }
                 <input
                   type="checkbox"
                   checked={features.node_ia_actiu}
-                  onChange={(e) => setFeatures({ ...features, node_ia_actiu: e.target.checked })}
+                  onChange={(e) => {
+                    const checked = e.target.checked;
+                    setNodeIaExplicitlyDisabled(!checked);
+                    setFeatures({ ...features, node_ia_actiu: checked });
+                  }}
                   className="w-4 h-4 text-emerald-600 rounded"
                 />
                 <span className="font-semibold text-slate-700 dark:text-slate-300">Activat</span>
@@ -2587,7 +2601,13 @@ export default function EmpresaDetailPage({ params }: { params: { id: string } }
                     placeholder="Ex: http://127.0.0.1:1234 o http://192.168.1.100:1234"
                     value={features.node_ia_url}
                     onChange={(e) => {
-                      setFeatures({ ...features, node_ia_url: e.target.value.trim() });
+                      const val = e.target.value.trim();
+                      setFeatures((prev) => ({
+                        ...prev,
+                        node_ia_url: val,
+                        node_ia_actiu:
+                          val && !nodeIaExplicitlyDisabled ? true : prev.node_ia_actiu,
+                      }));
                       if (nodeIaStatus) setNodeIaStatus(null);
                     }}
                     className="flex-1 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-white text-xs rounded-xl p-2.5 font-mono focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none"
@@ -2595,7 +2615,7 @@ export default function EmpresaDetailPage({ params }: { params: { id: string } }
                   <button
                     type="button"
                     onClick={handleVerificarNodeIa}
-                    disabled={nodeIaTesting || !features.node_ia_url?.trim()}
+                    disabled={nodeIaTesting || (!features.node_ia_url?.trim() && !features.disc_dur_url?.trim())}
                     className="px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-300 dark:disabled:bg-slate-800 disabled:cursor-not-allowed text-white text-xs font-mono font-bold flex items-center justify-center gap-1.5 shadow-sm transition-all cursor-pointer shrink-0"
                     title="Verifica la connectivitat directa des de la plataforma amb el Copilot local"
                   >
@@ -2620,7 +2640,13 @@ export default function EmpresaDetailPage({ params }: { params: { id: string } }
                     placeholder="Ex: http://127.0.0.1:9001 o https://node-empresa.projectexinoxano.cat"
                     value={features.disc_dur_url}
                     onChange={(e) => {
-                      setFeatures({ ...features, disc_dur_url: e.target.value });
+                      const val = e.target.value;
+                      setFeatures((prev) => ({
+                        ...prev,
+                        disc_dur_url: val,
+                        node_ia_actiu:
+                          val.trim() && !nodeIaExplicitlyDisabled ? true : prev.node_ia_actiu,
+                      }));
                       if (discDurStatus) setDiscDurStatus(null);
                     }}
                     className="flex-1 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-white text-xs rounded-xl p-2.5 font-mono focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 outline-none"
