@@ -1980,12 +1980,12 @@ async def obtenir_estat_ia(
         elif not feature_on:
             motiu = "FEATURE_COPILOT_DESACTIVAT"
             err_msg = "El mòdul Copilot IA (feature_copilot_ia) està desactivat a Superadmin per a aquesta empresa."
-        elif not node_on:
+        elif not raw_tunel:
+            motiu = "TUNEL_NO_CONFIGURAT"
+            err_msg = "No hi ha cap URL d'ordinador dedicat o túnel desada per a aquesta empresa (node_ia_url i disc_dur_url buits)."
+        else:
             motiu = "NODE_IA_INACTIU"
             err_msg = "L'ordinador dedicat d'IA local està desactivat (desa l'activació a Configuració > Ordinador Dedicat)."
-        else:
-            motiu = "TUNEL_NO_CONFIGURAT"
-            err_msg = "No hi ha cap URL d'ordinador dedicat o túnel configurada per a aquesta empresa."
         return {
             "estat": "OFFLINE",
             "motiu": motiu,

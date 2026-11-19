@@ -809,4 +809,123 @@ async def test_aillament_exclusiu_dues_empreses_i_persistencia_triple(
         srv_b.server_close()
 
 
+@pytest.mark.asyncio
+async def test_superadmin_crm_vault_offline_no_bloqueja_feature_flags_i_motiu_tunel_buit(
+    async_client: AsyncClient, admin_session, monkeypatch
+):
+    """
+    Regressió producció Hetzner:
+    1) Quan el túnel del Disc Superadmin està offline, PUT /superadmin/tenants/{id}/crm NO pot
+       retornar 503 i avortar el desat de /feature-flags; retorna 200 amb superadmin_vault_sync=False.
+    2) PUT /superadmin/tenants/{id}/feature-flags persisteix node_ia_url, disc_dur_url i node_ia_actiu=True
+       a PostgreSQL malgrat el Disc Superadmin estigui desconnectat.
+    3) Si una empresa té feature_copilot_ia=True però cap URL desada (node_ia_url=None, disc_dur_url=None),
+       tant /gestio/copilot/xat com /gestio/copilot/ia-status informen motiu='TUNEL_NO_CONFIGURAT'
+       en lloc d'emmascarar-ho com a NODE_IA_INACTIU.
+    """
+    import socket
+
+    from sqlalchemy import select
+
+    from app.core.db import set_tenant_context
+    from app.models.models import Empresa
+
+    # Trobem un port TCP tancat real per simular un Disc Superadmin offline a Hetzner
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.bind(("127.0.0.1", 0))
+    closed_port = sock.getsockname()[1]
+    sock.close()
+
+    monkeypatch.setenv("SUPERADMIN_VAULT_URL", f"http://127.0.0.1:{closed_port}")
+    monkeypatch.setenv("SUPERADMIN_VAULT_SECRET", "svlt_sup_offline_regression_test")
+
+    emp_id = uuid.uuid4()
+    boss_id = uuid.uuid4()
+    await set_tenant_context(admin_session, None, is_superadmin=True)
+    emp = Empresa(
+        id=emp_id,
+        nom="Empresa Regressio Tunel Buit",
+        nif=f"B{str(emp_id.int)[:8]}",
+        subdomini=f"reg-{str(emp_id)[:8]}",
+        vertical="SEVALOR",
+        estat_pagament="ACTIU",
+        pla_subscripcio="PRO",
+        feature_copilot_ia=True,
+        node_ia_actiu=False,
+        node_ia_url=None,
+        disc_dur_url=None,
+    )
+    admin_session.add(emp)
+    await admin_session.commit()
+
+    sa_headers = {
+        "Authorization": f"Bearer {jwt.encode({'sub': str(uuid.uuid4()), 'rol': 'SUPERADMIN', 'totp_activat': True, 'ip_allowlist': ['127.0.0.1', 'testclient'], 'exp': datetime.now(timezone.utc) + timedelta(minutes=15)}, settings.SECRET_KEY, algorithm=settings.ALGORITHM)}"
+    }
+    boss_headers = {
+        "Authorization": f"Bearer {jwt.encode({'sub': str(boss_id), 'rol': 'BOSS', 'empresa_id': str(emp_id), 'exp': datetime.now(timezone.utc) + timedelta(minutes=15)}, settings.SECRET_KEY, algorithm=settings.ALGORITHM)}",
+        "X-Empresa-ID": str(emp_id),
+    }
+
+    # 1. Sense cap URL desada -> motiu exacte TUNEL_NO_CONFIGURAT (no NODE_IA_INACTIU)
+    r_xat_buit = await async_client.post(
+        "/gestio/copilot/xat",
+        json={"pregunta": "Hola"},
+        headers=boss_headers,
+    )
+    assert r_xat_buit.status_code == 503, r_xat_buit.text
+    assert r_xat_buit.json()["detail"]["code"] == "COPILOT_DESACTIVAT"
+    assert r_xat_buit.json()["detail"]["motiu"] == "TUNEL_NO_CONFIGURAT"
+
+    r_st_buit = await async_client.get("/gestio/copilot/ia-status", headers=boss_headers)
+    assert r_st_buit.status_code == 200, r_st_buit.text
+    assert r_st_buit.json()["motiu"] == "TUNEL_NO_CONFIGURAT"
+
+    # 2. PUT /crm amb Disc Superadmin offline retorna 200 OK (no 503) amb avís
+    r_crm = await async_client.put(
+        f"/superadmin/tenants/{emp_id}/crm",
+        json={
+            "tarifa_llicencia_base": 150.0,
+            "tarifa_per_operari": 25.0,
+            "tarifa_config_ia": 0.0,
+            "equips_ia_venuts": [],
+            "notes_crm": "Test regressio",
+            "quota_buffer_mb": 500,
+        },
+        headers=sa_headers,
+    )
+    assert r_crm.status_code == 200, r_crm.text
+    assert r_crm.json()["superadmin_vault_sync"] is False
+    assert "superadmin_vault_avis" in r_crm.json()
+
+    # 3. PUT /feature-flags persisteix URLs i node_ia_actiu=True malgrat Disc Superadmin offline
+    tunel_pub = "https://sevalormante-node.projectexinoxano.cat"
+    r_ff = await async_client.put(
+        f"/superadmin/tenants/{emp_id}/feature-flags",
+        json={
+            "feature_copilot_ia": True,
+            "feature_flota": True,
+            "feature_planols": False,
+            "feature_telegram": True,
+            "node_ia_url": tunel_pub,
+            "disc_dur_url": tunel_pub,
+            "node_ia_actiu": True,
+        },
+        headers=sa_headers,
+    )
+    assert r_ff.status_code == 200, r_ff.text
+    ff = r_ff.json()["feature_flags"]
+    assert ff["node_ia_actiu"] is True
+    assert ff["node_ia_url"] == tunel_pub
+    assert ff["disc_dur_url"] == tunel_pub
+
+    # Verificar persistència real a PostgreSQL
+    await set_tenant_context(admin_session, None, is_superadmin=True)
+    admin_session.expire_all()
+    emp_db = (await admin_session.execute(select(Empresa).where(Empresa.id == emp_id))).scalar_one()
+    assert emp_db.node_ia_actiu is True
+    assert emp_db.node_ia_url == tunel_pub
+    assert emp_db.disc_dur_url == tunel_pub
+
+
+
 

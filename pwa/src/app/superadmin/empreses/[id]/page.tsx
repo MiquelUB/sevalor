@@ -226,6 +226,7 @@ export default function EmpresaDetailPage({ params }: { params: { id: string } }
     node_ia_actiu: false,
   });
   const [nodeIaExplicitlyDisabled, setNodeIaExplicitlyDisabled] = useState(false);
+  const [savingNodeIa, setSavingNodeIa] = useState(false);
   const [nodeIaTesting, setNodeIaTesting] = useState(false);
   const [nodeIaStatus, setNodeIaStatus] = useState<any>(null);
   const [discDurTesting, setDiscDurTesting] = useState(false);
@@ -396,12 +397,73 @@ export default function EmpresaDetailPage({ params }: { params: { id: string } }
     fetchTenantAll();
   }, [params.id]);
 
+  const handleDesarNodeIa = async () => {
+    setSavingNodeIa(true);
+    setErrorMessage(null);
+    setSuccessMessage(null);
+    try {
+      const teAlgunaUrlTunel = Boolean(
+        features.node_ia_url?.trim() || features.disc_dur_url?.trim()
+      );
+      const nodeIaActiuFinal =
+        features.feature_copilot_ia && teAlgunaUrlTunel && !nodeIaExplicitlyDisabled
+          ? true
+          : features.node_ia_actiu;
+      const res: any = await apiFetch(`/superadmin/tenants/${params.id}/feature-flags`, {
+        method: "PUT",
+        body: JSON.stringify({
+          ...features,
+          node_ia_url: features.node_ia_url?.trim() || "",
+          disc_dur_url: features.disc_dur_url?.trim() || "",
+          node_ia_actiu: nodeIaActiuFinal,
+          vault_token: vaultToken.trim() || undefined,
+        }),
+      });
+      if (res?.feature_flags) {
+        setFeatures((prev) => ({
+          ...prev,
+          feature_copilot_ia: Boolean(res.feature_flags.copilot_ia),
+          node_ia_actiu: Boolean(res.feature_flags.node_ia_actiu),
+          node_ia_url: res.feature_flags.node_ia_url || "",
+          disc_dur_url: res.feature_flags.disc_dur_url || "",
+        }));
+      }
+      setSuccessMessage(
+        `Configuració de Copilot i Disc Dur desada a PostgreSQL (node_ia_actiu=${nodeIaActiuFinal ? "ACTIU" : "DESACTIVAT"}).`
+      );
+    } catch (err: any) {
+      setErrorMessage(err.message || "Error en desar la configuració del Node IA i Disc Dur.");
+    } finally {
+      setSavingNodeIa(false);
+    }
+  };
+
   const handleSave = async () => {
     setSaving(true);
     setErrorMessage(null);
     setSuccessMessage(null);
     try {
-      // 1. Guardar Estat
+      // 1. Guardar Feature Flags, URLs del Node IA / Disc Dur i Vault Token PRIMER
+      // (mai bloquejat per incidències del disc Superadmin o altres blocs)
+      const teAlgunaUrlTunel = Boolean(
+        features.node_ia_url?.trim() || features.disc_dur_url?.trim()
+      );
+      const nodeIaActiuFinal =
+        features.feature_copilot_ia && teAlgunaUrlTunel && !nodeIaExplicitlyDisabled
+          ? true
+          : features.node_ia_actiu;
+      await apiFetch(`/superadmin/tenants/${params.id}/feature-flags`, {
+        method: "PUT",
+        body: JSON.stringify({
+          ...features,
+          node_ia_url: features.node_ia_url?.trim() || "",
+          disc_dur_url: features.disc_dur_url?.trim() || "",
+          node_ia_actiu: nodeIaActiuFinal,
+          vault_token: vaultToken.trim() || undefined,
+        }),
+      });
+
+      // 2. Guardar Estat
       if (estat !== tenant.estat_pagament) {
         await apiFetch(`/superadmin/tenants/${params.id}/estat`, {
           method: "PUT",
@@ -409,7 +471,7 @@ export default function EmpresaDetailPage({ params }: { params: { id: string } }
         });
       }
 
-      // 2. Guardar Quota d'Operaris, Pla i Buffer Diari
+      // 3. Guardar Quota d'Operaris, Pla i Buffer Diari
       if (
         pla !== tenant.pla_subscripcio ||
         quotaOperaris !== Number(tenant.quota_operaris) ||
@@ -426,8 +488,8 @@ export default function EmpresaDetailPage({ params }: { params: { id: string } }
         });
       }
 
-      // 3. Guardar Condicions Comercials CRM & Equips IA (Venda)
-      await apiFetch(`/superadmin/tenants/${params.id}/crm`, {
+      // 4. Guardar Condicions Comercials CRM & Equips IA (Venda)
+      const crmRes: any = await apiFetch(`/superadmin/tenants/${params.id}/crm`, {
         method: "PUT",
         body: JSON.stringify({
           tarifa_llicencia_base: tarifaLlicenciaBase,
@@ -436,23 +498,6 @@ export default function EmpresaDetailPage({ params }: { params: { id: string } }
           equips_ia_venuts: equipsIaVenuts,
           notes_crm: notesCrm,
           quota_buffer_mb: quotaBufferMb,
-        }),
-      });
-
-      // 4. Guardar Feature Flags i Vault Token
-      const teAlgunaUrlTunel = Boolean(
-        features.node_ia_url?.trim() || features.disc_dur_url?.trim()
-      );
-      const nodeIaActiuFinal =
-        features.feature_copilot_ia && teAlgunaUrlTunel && !nodeIaExplicitlyDisabled
-          ? true
-          : features.node_ia_actiu;
-      await apiFetch(`/superadmin/tenants/${params.id}/feature-flags`, {
-        method: "PUT",
-        body: JSON.stringify({
-          ...features,
-          node_ia_actiu: nodeIaActiuFinal,
-          vault_token: vaultToken.trim() || undefined,
         }),
       });
 
@@ -484,7 +529,12 @@ export default function EmpresaDetailPage({ params }: { params: { id: string } }
         }),
       });
 
-      setSuccessMessage("Dades de l'empresa, marca camaleó, llicència i CRM desats a PostgreSQL.");
+      const avisVault = crmRes?.superadmin_vault_avis
+        ? ` (Avís Disc Superadmin: ${crmRes.superadmin_vault_avis})`
+        : "";
+      setSuccessMessage(
+        `Dades de l'empresa, túnel IA/Disc Dur, marca camaleó i llicència desats a PostgreSQL.${avisVault}`
+      );
       fetchTenantAll();
     } catch (err: any) {
       setErrorMessage(err.message || "Error en desar els canvis del tenant.");
@@ -2573,19 +2623,31 @@ export default function EmpresaDetailPage({ params }: { params: { id: string } }
                   L'equip dedicat a la seu de l'empresa allotja la <strong>IA local (càlcul i memòria)</strong> i el <strong>disc dur mestre (plànols històrics i arxiu)</strong>. Hetzner Cloud només actua com a passarel·la en temps real amb Buffer Diari de les feines d'avui, eliminant costos desorbitats de servidors GPU i garantint sobirania de dades.
                 </p>
               </div>
-              <label className="flex items-center gap-2 cursor-pointer text-xs shrink-0 self-start mt-1">
-                <input
-                  type="checkbox"
-                  checked={features.node_ia_actiu}
-                  onChange={(e) => {
-                    const checked = e.target.checked;
-                    setNodeIaExplicitlyDisabled(!checked);
-                    setFeatures({ ...features, node_ia_actiu: checked });
-                  }}
-                  className="w-4 h-4 text-emerald-600 rounded"
-                />
-                <span className="font-semibold text-slate-700 dark:text-slate-300">Activat</span>
-              </label>
+              <div className="flex items-center gap-3 shrink-0 self-start mt-1">
+                <label className="flex items-center gap-2 cursor-pointer text-xs">
+                  <input
+                    type="checkbox"
+                    checked={features.node_ia_actiu}
+                    onChange={(e) => {
+                      const checked = e.target.checked;
+                      setNodeIaExplicitlyDisabled(!checked);
+                      setFeatures({ ...features, node_ia_actiu: checked });
+                    }}
+                    className="w-4 h-4 text-emerald-600 rounded"
+                  />
+                  <span className="font-semibold text-slate-700 dark:text-slate-300">Activat</span>
+                </label>
+                <button
+                  type="button"
+                  onClick={handleDesarNodeIa}
+                  disabled={savingNodeIa}
+                  className="px-3.5 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white text-xs font-mono font-bold flex items-center gap-1.5 shadow-sm transition-all cursor-pointer"
+                  title="Desa immediatament els interruptors de Copilot, les URLs de túnel i el Vault Token a PostgreSQL"
+                >
+                  <Save className="w-3.5 h-3.5" />
+                  <span>{savingNodeIa ? "Desant..." : "Desar Node IA i Disc Dur"}</span>
+                </button>
+              </div>
             </div>
 
             <div className="space-y-4">

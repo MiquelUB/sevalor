@@ -2026,10 +2026,21 @@ async def actualitzar_crm_tenant(
         "notes_crm": notes_noves,
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
-    await SuperadminStorageGateway.desar_entitat_json("tenants_llicencies", str(emp_uuid), llic_nova)
-    if fitxa_act:
-        fitxa_act["notes_crm"] = notes_noves
-        await SuperadminStorageGateway.desar_entitat_json("tenants_fitxes", str(emp_uuid), fitxa_act)
+    superadmin_vault_sync = True
+    superadmin_vault_avis: Optional[str] = None
+    try:
+        await SuperadminStorageGateway.desar_entitat_json("tenants_llicencies", str(emp_uuid), llic_nova)
+        if fitxa_act:
+            fitxa_act["notes_crm"] = notes_noves
+            await SuperadminStorageGateway.desar_entitat_json("tenants_fitxes", str(emp_uuid), fitxa_act)
+    except HTTPException as exc:
+        superadmin_vault_sync = False
+        superadmin_vault_avis = str(exc.detail)
+        logger.warning(
+            "No s'ha pogut sincronitzar les condicions CRM al Disc Superadmin per %s: %s",
+            emp_uuid,
+            exc.detail,
+        )
 
     # Zero-Storage Hetzner: no retenir tarifes ni notes comercials en clar a PostgreSQL
     empresa.tarifa_llicencia_base = 0.0
@@ -2041,7 +2052,7 @@ async def actualitzar_crm_tenant(
     empresa.updated_at = datetime.now(timezone.utc)
     await db.commit()
 
-    return {
+    resp_crm: Dict[str, Any] = {
         "status": "OK",
         "empresa_id": empresa_id,
         "quota_operaris": empresa.quota_operaris,
@@ -2051,7 +2062,11 @@ async def actualitzar_crm_tenant(
         "tarifa_config_ia": tarifa_ia,
         "equips_ia_venuts": equips_nous,
         "notes_crm": notes_noves,
+        "superadmin_vault_sync": superadmin_vault_sync,
     }
+    if superadmin_vault_avis:
+        resp_crm["superadmin_vault_avis"] = superadmin_vault_avis
+    return resp_crm
 
 
 @router.get("/{empresa_id}/recuperar-dades")

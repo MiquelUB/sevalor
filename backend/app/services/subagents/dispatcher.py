@@ -402,17 +402,18 @@ class CopilotDispatcher:
                     "El mòdul Copilot IA (feature_copilot_ia) està desactivat a la llicència d'aquesta empresa. "
                     "Activa'l al panell de Superadmin. Zero fallback a Hetzner."
                 )
-            elif not node_on:
+            elif not (node_url or disc_url):
+                motiu = "TUNEL_NO_CONFIGURAT"
+                msg_detall = (
+                    "No hi ha cap URL d'ordinador dedicat o túnel desada per a aquesta empresa "
+                    "(node_ia_url=None, disc_dur_url=None). Configura-la i desa-la a Configuració > Ordinador Dedicat "
+                    "o a la fitxa de Superadmin. Zero fallback a Hetzner."
+                )
+            else:
                 motiu = "NODE_IA_INACTIU"
                 msg_detall = (
                     "L'ordinador dedicat d'IA local està desactivat (node_ia_actiu=False). "
                     "Activa l'interruptor i desa els paràmetres a Configuració > Ordinador Dedicat. Zero fallback a Hetzner."
-                )
-            else:
-                motiu = "TUNEL_NO_CONFIGURAT"
-                msg_detall = (
-                    "No hi ha cap URL d'ordinador dedicat o túnel configurada per a aquesta empresa. "
-                    "Configura-la i desa-la a Configuració > Ordinador Dedicat. Zero fallback a Hetzner."
                 )
             logger.warning(
                 "Copilot 503 COPILOT_DESACTIVAT (%s) per empresa=%s (trobat=%s, feature_copilot_ia=%s, node_ia_actiu=%s, has_node_url=%s, has_disc_url=%s)",
