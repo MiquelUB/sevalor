@@ -210,3 +210,141 @@ async def test_crear_usuari_administratiu_i_login_amb_2fa(
     )
     assert resp_login_2.status_code == 200, resp_login_2.text
 
+
+@pytest.mark.asyncio
+async def test_copilot_diagnostic_503_i_provar_node_ia_amb_vault_i_feature_flags(
+    async_client: AsyncClient, headers, admin_session
+):
+    """
+    Reprodueix i valida la solució del bug de desincronització Configuració vs Copilot:
+    1) GET/PUT /gestio/configuracio/node-ia exposen feature_copilot_ia i copilot_operatiu.
+    2) POST /gestio/configuracio/node-ia/provar accepta URLs no desades al cos, suporta disc_dur_url
+       i envia X-Vault-Token contra un servidor HTTP real (Zero Mock).
+    3) POST /gestio/copilot/xat i GET /gestio/copilot/ia-status informen el motiu exacte quan
+       manca feature_copilot_ia, node_ia_actiu o URL del túnel.
+    """
+    import json
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    from sqlalchemy import select
+
+    from app.models.models import Empresa
+
+    vault_secret = "svlt_probe_cfg_42"
+    seen_tokens: list[str] = []
+
+    class _LocalIaHandler(BaseHTTPRequestHandler):
+        def log_message(self, format: str, *args) -> None:
+            return
+
+        def do_GET(self) -> None:
+            tok = self.headers.get("X-Vault-Token") or ""
+            seen_tokens.append(tok)
+            if tok != vault_secret:
+                self.send_response(403)
+                self.end_headers()
+                return
+            if self.path.startswith("/v1/models"):
+                body = json.dumps(
+                    {
+                        "data": [
+                            {"id": "qwen2.5-vl-7b-instruct"},
+                            {"id": "deepseek-coder-v2-lite-instruct"},
+                            {"id": "text-embedding-nomic-embed-text-v1.5"},
+                        ]
+                    }
+                ).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            self.send_response(404)
+            self.end_headers()
+
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), _LocalIaHandler)
+    port = srv.server_address[1]
+    thread = threading.Thread(target=srv.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+        empresa_id_boss = uuid.UUID(headers["X-Empresa-ID"])
+        res = await admin_session.execute(select(Empresa).where(Empresa.id == empresa_id_boss))
+        empresa = res.scalar_one_or_none()
+        if not empresa:
+            empresa = Empresa(
+                id=empresa_id_boss,
+                nom="Empresa Diagnostic Copilot SL",
+                nif=f"B{empresa_id_boss.hex[:8].upper()}",
+                subdomini=f"diagcop-{empresa_id_boss.hex[:6]}",
+                estat_pagament="ACTIU",
+                feature_copilot_ia=False,
+                node_ia_actiu=True,
+                node_ia_url=f"http://127.0.0.1:{port}",
+                vault_token=vault_secret,
+            )
+            admin_session.add(empresa)
+        else:
+            empresa.feature_copilot_ia = False
+            empresa.node_ia_actiu = True
+            empresa.node_ia_url = f"http://127.0.0.1:{port}"
+            empresa.vault_token = vault_secret
+        await admin_session.commit()
+
+        # 1. GET /node-ia ha d'exposar feature_copilot_ia=False i copilot_operatiu=False
+        resp_get = await async_client.get("/gestio/configuracio/node-ia", headers=headers)
+        assert resp_get.status_code == 200, resp_get.text
+        dades_get = resp_get.json()
+        assert dades_get["feature_copilot_ia"] is False
+        assert dades_get["copilot_operatiu"] is False
+
+        # 2. POST /node-ia/provar amb URL en cos (abans de desar) + vault_token -> OPERATIU + feature_copilot_ia=False
+        resp_probe = await async_client.post(
+            "/gestio/configuracio/node-ia/provar",
+            json={"node_ia_url": f"http://127.0.0.1:{port}"},
+            headers=headers,
+        )
+        assert resp_probe.status_code == 200, resp_probe.text
+        probe_data = resp_probe.json()
+        assert probe_data["estat"] == "OPERATIU"
+        assert "qwen2.5-vl-7b-instruct" in probe_data["models_disponibles"]
+        assert probe_data["feature_copilot_ia"] is False
+        assert vault_secret in seen_tokens
+
+        # 3. Copilot /xat ha d'indicar el motiu exacte: FEATURE_COPILOT_DESACTIVAT
+        resp_xat_feat = await async_client.post(
+            "/gestio/copilot/xat",
+            json={"pregunta": "Hola"},
+            headers=headers,
+        )
+        assert resp_xat_feat.status_code == 503, resp_xat_feat.text
+        det_feat = resp_xat_feat.json()["detail"]
+        assert det_feat["code"] == "COPILOT_DESACTIVAT"
+        assert det_feat["motiu"] == "FEATURE_COPILOT_DESACTIVAT"
+
+        # 4. /ia-status també exposa motiu=FEATURE_COPILOT_DESACTIVAT
+        resp_st_feat = await async_client.get("/gestio/copilot/ia-status", headers=headers)
+        assert resp_st_feat.status_code == 200, resp_st_feat.text
+        assert resp_st_feat.json()["motiu"] == "FEATURE_COPILOT_DESACTIVAT"
+
+        # 5. Activem feature_copilot_ia=True però node_ia_actiu=False -> motiu NODE_IA_INACTIU
+        empresa.feature_copilot_ia = True
+        empresa.node_ia_actiu = False
+        await admin_session.commit()
+
+        resp_xat_node = await async_client.post(
+            "/gestio/copilot/xat",
+            json={"pregunta": "Hola"},
+            headers=headers,
+        )
+        assert resp_xat_node.status_code == 503, resp_xat_node.text
+        det_node = resp_xat_node.json()["detail"]
+        assert det_node["code"] == "COPILOT_DESACTIVAT"
+        assert det_node["motiu"] == "NODE_IA_INACTIU"
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+

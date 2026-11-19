@@ -2174,6 +2174,8 @@ async def update_feature_flags(
         empresa.disc_dur_url = payload.disc_dur_url.strip() if payload.disc_dur_url else None
     if payload.node_ia_actiu is not None:
         empresa.node_ia_actiu = payload.node_ia_actiu
+    elif empresa.feature_copilot_ia and (empresa.node_ia_url or getattr(empresa, "disc_dur_url", None)):
+        empresa.node_ia_actiu = True
     if payload.vault_token is not None:
         empresa.vault_token = payload.vault_token.strip() if payload.vault_token else None
     empresa.updated_at = datetime.now(timezone.utc)

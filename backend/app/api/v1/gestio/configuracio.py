@@ -19,7 +19,12 @@ from sqlalchemy import func, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db, set_tenant_context
-from app.core.network_utils import build_node_ia_headers, resolve_effective_node_url
+from app.core.network_utils import (
+    build_node_ia_headers,
+    get_candidate_ia_tunnel_urls,
+    resolve_effective_node_url,
+    resolve_empresa_vault_token,
+)
 from app.core.security import get_current_user_claims
 from app.models.models import Empresa, OrdreTreball, SlotJornada, Usuari
 from app.services.sovereign_storage import SovereignStorageGateway
@@ -194,6 +199,15 @@ class NodeIaConfigRequest(BaseModel):
     node_ia_actiu: bool = Field(False, description="Activa o desactiva l'ordinador dedicat local")
     agent_prompt_system: Optional[str] = Field(
         None, description="Directrius específiques del negoci per a l'assistent"
+    )
+
+
+class NodeIaProbeRequest(BaseModel):
+    node_ia_url: Optional[str] = Field(
+        None, max_length=255, description="URL opcional a provar abans de desar"
+    )
+    disc_dur_url: Optional[str] = Field(
+        None, max_length=255, description="URL opcional de túnel unificat a provar abans de desar"
     )
 
 
@@ -1307,16 +1321,20 @@ async def obtenir_configuracio_node_ia(
     if not empresa:
         raise HTTPException(status_code=404, detail="Empresa no trobada")
 
+    feature_copilot_ia = bool(getattr(empresa, "feature_copilot_ia", False))
+    te_ordinador = bool(
+        (empresa.node_ia_url or getattr(empresa, "disc_dur_url", None))
+        and empresa.node_ia_actiu
+    )
     return {
         "node_ia_url": empresa.node_ia_url,
         "disc_dur_url": getattr(empresa, "disc_dur_url", None),
         "node_ia_actiu": empresa.node_ia_actiu,
+        "feature_copilot_ia": feature_copilot_ia,
         "agent_prompt_system": empresa.agent_prompt_system,
         "vertical": empresa.vertical,
-        "te_ordinador_dedicat": bool(
-            (empresa.node_ia_url or getattr(empresa, "disc_dur_url", None))
-            and empresa.node_ia_actiu
-        ),
+        "te_ordinador_dedicat": te_ordinador,
+        "copilot_operatiu": bool(te_ordinador and feature_copilot_ia),
     }
 
 
@@ -1359,17 +1377,31 @@ async def actualitzar_configuracio_node_ia(
 
     await db.commit()
 
-    return {
+    feature_copilot_ia = bool(getattr(empresa, "feature_copilot_ia", False))
+    te_ordinador = bool(
+        (empresa.node_ia_url or getattr(empresa, "disc_dur_url", None))
+        and empresa.node_ia_actiu
+    )
+    resp_data: Dict[str, Any] = {
         "status": "OK",
         "missatge": "Configuració de l'ordinador dedicat d'IA i disc dur desada correctament",
         "node_ia_actiu": empresa.node_ia_actiu,
+        "feature_copilot_ia": feature_copilot_ia,
+        "copilot_operatiu": bool(te_ordinador and feature_copilot_ia),
         "node_ia_url": empresa.node_ia_url,
         "disc_dur_url": getattr(empresa, "disc_dur_url", None),
     }
+    if empresa.node_ia_actiu and not feature_copilot_ia:
+        resp_data["avis"] = (
+            "L'ordinador dedicat s'ha desat, però el mòdul Copilot d'IA (feature_copilot_ia) "
+            "està desactivat a Superadmin per a aquesta empresa."
+        )
+    return resp_data
 
 
 @router.post("/node-ia/provar")
 async def provar_connexio_node_ia(
+    payload: Optional[NodeIaProbeRequest] = None,
     claims: Dict[str, Any] = Depends(get_current_user_claims),
     db: AsyncSession = Depends(get_db),
 ) -> Dict[str, Any]:
@@ -1382,46 +1414,90 @@ async def provar_connexio_node_ia(
 
     res = await db.execute(select(Empresa).where(Empresa.id == uuid.UUID(empresa_id)))
     empresa = res.scalar_one_or_none()
-    if not empresa or not empresa.node_ia_url:
+    if not empresa:
         return {
             "estat": "NO_CONFIGURAT",
+            "feature_copilot_ia": False,
+            "node_ia_actiu": False,
+            "missatge": "Empresa no trobada.",
+        }
+
+    feature_copilot_ia = bool(getattr(empresa, "feature_copilot_ia", False))
+    node_ia_actiu = bool(empresa.node_ia_actiu)
+    target_node_url = (
+        payload.node_ia_url.strip()
+        if payload and payload.node_ia_url and payload.node_ia_url.strip()
+        else (empresa.node_ia_url.strip() if empresa.node_ia_url else None)
+    )
+    emp_disc_url = getattr(empresa, "disc_dur_url", None)
+    target_disc_url = (
+        payload.disc_dur_url.strip()
+        if payload and payload.disc_dur_url and payload.disc_dur_url.strip()
+        else (emp_disc_url.strip() if isinstance(emp_disc_url, str) and emp_disc_url.strip() else None)
+    )
+
+    candidate_urls = get_candidate_ia_tunnel_urls(target_node_url, target_disc_url)
+    if not candidate_urls and target_node_url:
+        eff = resolve_effective_node_url(target_node_url) or target_node_url
+        candidate_urls = [eff]
+
+    if not candidate_urls:
+        return {
+            "estat": "NO_CONFIGURAT",
+            "feature_copilot_ia": feature_copilot_ia,
+            "node_ia_actiu": node_ia_actiu,
             "missatge": "No hi ha cap URL d'ordinador dedicat configurat per a aquesta empresa",
         }
 
-    raw_url = empresa.node_ia_url.strip()
-    effective_url = resolve_effective_node_url(raw_url) or raw_url
-    base_url = effective_url.rstrip("/")
-    endpoint = f"{base_url}/models" if base_url.endswith("/v1") else f"{base_url}/v1/models"
+    headers = build_node_ia_headers(vault_token=resolve_empresa_vault_token(empresa))
+    last_status_code: Optional[int] = None
+    last_exc: Optional[str] = None
+    last_latencia_ms: Optional[int] = None
 
-    start_time = time_lib.time()
-    headers = build_node_ia_headers(vault_token=getattr(empresa, "vault_token", None))
-    try:
-        async with httpx.AsyncClient(timeout=4.0) as client:
-            resp = await client.get(endpoint, headers=headers)
-            latencia_ms = int((time_lib.time() - start_time) * 1000)
-            if resp.status_code == 200:
-                data = resp.json()
-                models_list = (
-                    [m.get("id") for m in data.get("data", [])] if isinstance(data, dict) else []
-                )
-                return {
-                    "estat": "OPERATIU",
-                    "latencia_ms": latencia_ms,
-                    "models_disponibles": models_list,
-                    "missatge": f"Connexió establerta amb èxit amb l'ordinador dedicat de l'empresa ({latencia_ms}ms)",
-                }
-            else:
-                return {
-                    "estat": "ERROR_RESPOSTA",
-                    "latencia_ms": latencia_ms,
-                    "missatge": f"L'ordinador dedicat ha retornat codi HTTP {resp.status_code}",
-                }
-    except Exception as exc:
+    async with httpx.AsyncClient(timeout=4.0) as client:
+        for cand in candidate_urls:
+            base_url = cand.rstrip("/")
+            endpoint = f"{base_url}/models" if base_url.endswith("/v1") else f"{base_url}/v1/models"
+            start_time = time_lib.time()
+            try:
+                resp = await client.get(endpoint, headers=headers)
+                latencia_ms = int((time_lib.time() - start_time) * 1000)
+                last_latencia_ms = latencia_ms
+                if resp.status_code == 200:
+                    data = resp.json()
+                    models_list = (
+                        [m.get("id") for m in data.get("data", []) if isinstance(m, dict) and m.get("id")]
+                        if isinstance(data, dict)
+                        else []
+                    )
+                    return {
+                        "estat": "OPERATIU",
+                        "latencia_ms": latencia_ms,
+                        "url_efectiva": cand,
+                        "models_disponibles": models_list,
+                        "feature_copilot_ia": feature_copilot_ia,
+                        "node_ia_actiu": node_ia_actiu,
+                        "missatge": f"Connexió establerta amb èxit amb l'ordinador dedicat de l'empresa ({latencia_ms}ms)",
+                    }
+                last_status_code = resp.status_code
+            except Exception as exc:
+                last_exc = str(exc)
+
+    if last_status_code is not None:
         return {
-            "estat": "ERROR_CONNEXIO",
-            "missatge": "No s'ha pogut establir connexió amb l'ordinador dedicat. Verifiqueu que el servidor local de la seu estigui encès i el túnel o xarxa privada estigui actiu.",
-            "detall": str(exc),
+            "estat": "ERROR_RESPOSTA",
+            "latencia_ms": last_latencia_ms,
+            "feature_copilot_ia": feature_copilot_ia,
+            "node_ia_actiu": node_ia_actiu,
+            "missatge": f"L'ordinador dedicat ha retornat codi HTTP {last_status_code}",
         }
+    return {
+        "estat": "ERROR_CONNEXIO",
+        "feature_copilot_ia": feature_copilot_ia,
+        "node_ia_actiu": node_ia_actiu,
+        "missatge": "No s'ha pogut establir connexió amb l'ordinador dedicat. Verifiqueu que el servidor local de la seu estigui encès i el túnel o xarxa privada estigui actiu.",
+        "detall": last_exc or "Sense resposta del túnel",
+    }
 
 
 # ---------------------------------------------------------------------------

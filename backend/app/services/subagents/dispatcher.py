@@ -242,7 +242,10 @@ class CopilotDispatcher:
                                 if isinstance(m, dict) and m.get("id")
                             ]
                             if loaded and active_model not in loaded:
-                                active_model = str(loaded[0])
+                                chat_models = [
+                                    str(m) for m in loaded if "embed" not in str(m).lower()
+                                ]
+                                active_model = chat_models[0] if chat_models else str(loaded[0])
                                 payload["model"] = active_model
                                 resp = await client.post(endpoint, json=payload, headers=headers)
                     except Exception:
@@ -252,7 +255,7 @@ class CopilotDispatcher:
                         payload.pop("tool_choice", None)
                         resp = await client.post(endpoint, json=payload, headers=headers)
 
-                if resp.status_code >= 500:
+                if resp.status_code in (401, 403) or resp.status_code >= 500:
                     raise httpx.HTTPStatusError(
                         f"Node IA Local HTTP {resp.status_code}",
                         request=resp.request,
@@ -388,8 +391,30 @@ class CopilotDispatcher:
         node_on = bool(empresa and getattr(empresa, "node_ia_actiu", False))
 
         if not empresa or not feature_on or not node_on or not (node_url or disc_url):
+            if not empresa:
+                motiu = "EMPRESA_NO_TROBADA"
+                msg_detall = "Empresa no trobada per executar el Copilot IA local. Zero fallback a Hetzner."
+            elif not feature_on:
+                motiu = "FEATURE_COPILOT_DESACTIVAT"
+                msg_detall = (
+                    "El mòdul Copilot IA (feature_copilot_ia) està desactivat a la llicència d'aquesta empresa. "
+                    "Activa'l al panell de Superadmin. Zero fallback a Hetzner."
+                )
+            elif not node_on:
+                motiu = "NODE_IA_INACTIU"
+                msg_detall = (
+                    "L'ordinador dedicat d'IA local està desactivat (node_ia_actiu=False). "
+                    "Activa l'interruptor i desa els paràmetres a Configuració > Ordinador Dedicat. Zero fallback a Hetzner."
+                )
+            else:
+                motiu = "TUNEL_NO_CONFIGURAT"
+                msg_detall = (
+                    "No hi ha cap URL d'ordinador dedicat o túnel configurada per a aquesta empresa. "
+                    "Configura-la i desa-la a Configuració > Ordinador Dedicat. Zero fallback a Hetzner."
+                )
             logger.warning(
-                "Copilot 503 COPILOT_DESACTIVAT per empresa=%s (trobat=%s, feature_copilot_ia=%s, node_ia_actiu=%s, has_node_url=%s, has_disc_url=%s)",
+                "Copilot 503 COPILOT_DESACTIVAT (%s) per empresa=%s (trobat=%s, feature_copilot_ia=%s, node_ia_actiu=%s, has_node_url=%s, has_disc_url=%s)",
+                motiu,
                 empresa_id,
                 bool(empresa),
                 feature_on,
@@ -401,7 +426,8 @@ class CopilotDispatcher:
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail={
                     "code": "COPILOT_DESACTIVAT",
-                    "message": "El Copilot IA local està desactivat o sense túnel configurat per a aquesta empresa. Zero fallback a Hetzner.",
+                    "motiu": motiu,
+                    "message": msg_detall,
                 },
             )
 

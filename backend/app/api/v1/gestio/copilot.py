@@ -1193,9 +1193,11 @@ async def obtenir_estat_node_ia(
         and raw_tunel
     )
 
+    feature_on = bool(getattr(empresa, "feature_copilot_ia", False)) if empresa else False
     if not node_actiu:
         return {
             "node_actiu": False,
+            "feature_copilot_ia": feature_on,
             "estat": "SENSE_ORDINADOR_DEDICAT",
             "sobirania_dades": "100% Local a la seu de l'empresa (Zero Cloud Egress)",
             "proveidor": "Ordinador Local Dedicat (No vinculat)",
@@ -1209,6 +1211,7 @@ async def obtenir_estat_node_ia(
 
     return {
         "node_actiu": True,
+        "feature_copilot_ia": feature_on,
         "estat": "ORDINADOR_DEDICAT_ACTIU",
         "url_ordinador": raw_tunel,
         "proveidor": "Ordinador Local Dedicat de l'Empresa",
@@ -1964,17 +1967,29 @@ async def obtenir_estat_ia(
         else None
     )
 
-    if (
-        not empresa
-        or not empresa.node_ia_actiu
-        or not getattr(empresa, "feature_copilot_ia", False)
-        or not raw_tunel
-    ):
+    feature_on = bool(getattr(empresa, "feature_copilot_ia", False)) if empresa else False
+    node_on = bool(empresa.node_ia_actiu) if empresa else False
+
+    if not empresa or not node_on or not feature_on or not raw_tunel:
+        if not empresa:
+            motiu = "EMPRESA_NO_TROBADA"
+            err_msg = "Empresa no trobada per comprovar l'estat del Copilot IA."
+        elif not feature_on:
+            motiu = "FEATURE_COPILOT_DESACTIVAT"
+            err_msg = "El mòdul Copilot IA (feature_copilot_ia) està desactivat a Superadmin per a aquesta empresa."
+        elif not node_on:
+            motiu = "NODE_IA_INACTIU"
+            err_msg = "L'ordinador dedicat d'IA local està desactivat (desa l'activació a Configuració > Ordinador Dedicat)."
+        else:
+            motiu = "TUNEL_NO_CONFIGURAT"
+            err_msg = "No hi ha cap URL d'ordinador dedicat o túnel configurada per a aquesta empresa."
         return {
             "estat": "OFFLINE",
-            "node_ia_actiu": bool(empresa.node_ia_actiu) if empresa else False,
+            "motiu": motiu,
+            "feature_copilot_ia": feature_on,
+            "node_ia_actiu": node_on,
             "url": None,
-            "error": "Copilot IA desactivat o sense túnel configurat per a l'empresa",
+            "error": err_msg,
             "latencia_ms": None,
         }
 

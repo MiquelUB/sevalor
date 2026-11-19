@@ -55,6 +55,7 @@ async def seed() -> None:
                     estat_domini="NO_CONFIGURAT",
                     pla_subscripcio="ENTERPRISE",
                     estat_pagament="ACTIU",
+                    feature_copilot_ia=True,
                 )
                 session.add(empresa)
                 await session.flush()

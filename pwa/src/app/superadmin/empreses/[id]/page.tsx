@@ -2447,7 +2447,17 @@ export default function EmpresaDetailPage({ params }: { params: { id: string } }
               <input
                 type="checkbox"
                 checked={features.feature_copilot_ia}
-                onChange={(e) => setFeatures({ ...features, feature_copilot_ia: e.target.checked })}
+                onChange={(e) => {
+                  const checked = e.target.checked;
+                  setFeatures((prev) => ({
+                    ...prev,
+                    feature_copilot_ia: checked,
+                    node_ia_actiu:
+                      checked && (prev.node_ia_url?.trim() || prev.disc_dur_url?.trim())
+                        ? true
+                        : prev.node_ia_actiu,
+                  }));
+                }}
                 className="w-4 h-4 mt-0.5 text-emerald-600 rounded"
               />
               <div>

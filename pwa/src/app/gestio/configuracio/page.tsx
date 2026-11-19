@@ -235,6 +235,7 @@ export default function ConfiguracioPage() {
   const [nodeIaUrl, setNodeIaUrl] = useState("");
   const [discDurUrl, setDiscDurUrl] = useState("");
   const [nodeIaActiu, setNodeIaActiu] = useState(false);
+  const [featureCopilotIa, setFeatureCopilotIa] = useState<boolean | null>(null);
   const [agentPromptSystem, setAgentPromptSystem] = useState("");
   const [nodeIaEstat, setNodeIaEstat] = useState<"OPERATIU" | "ERROR_CONNEXIO" | "NO_CONFIGURAT">("NO_CONFIGURAT");
   const [nodeIaLatencia, setNodeIaLatencia] = useState<number | null>(null);
@@ -248,6 +249,9 @@ export default function ConfiguracioPage() {
         if (data.node_ia_url) setNodeIaUrl(data.node_ia_url);
         if (data.disc_dur_url) setDiscDurUrl(data.disc_dur_url);
         if (data.node_ia_actiu !== undefined) setNodeIaActiu(Boolean(data.node_ia_actiu));
+        if (data.feature_copilot_ia !== undefined) {
+          setFeatureCopilotIa(Boolean(data.feature_copilot_ia));
+        }
         if (data.agent_prompt_system) setAgentPromptSystem(data.agent_prompt_system);
         if (data.te_ordinador_dedicat) {
           setNodeIaEstat("OPERATIU");
@@ -620,6 +624,25 @@ export default function ConfiguracioPage() {
   };
 
   // Node d'IA Sobirà / Ordinador Dedicat (Constitució §2.V)
+  const persistirNodeIaAlBackend = async (actiuFinal: boolean) => {
+    const res: any = await apiFetch("/gestio/configuracio/node-ia", {
+      method: "PUT",
+      body: JSON.stringify({
+        node_ia_url: nodeIaUrl.trim() || null,
+        disc_dur_url: discDurUrl.trim() || null,
+        node_ia_actiu: actiuFinal,
+        agent_prompt_system: agentPromptSystem.trim() || null,
+      }),
+    });
+    if (res && res.feature_copilot_ia !== undefined) {
+      setFeatureCopilotIa(Boolean(res.feature_copilot_ia));
+    }
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent("sevalor:node-ia-updated"));
+    }
+    return res;
+  };
+
   const handleDesarNodeIa = async () => {
     if (esEnginyer) {
       mostrarFeedback("ERROR", "Veto d'Enginyer (HTTP 403): La configuració del node d'IA està reservada al Boss.");
@@ -627,16 +650,12 @@ export default function ConfiguracioPage() {
     }
     setNodeIaDesant(true);
     try {
-      await apiFetch("/gestio/configuracio/node-ia", {
-        method: "PUT",
-        body: JSON.stringify({
-          node_ia_url: nodeIaUrl.trim() || null,
-          disc_dur_url: discDurUrl.trim() || null,
-          node_ia_actiu: nodeIaActiu,
-          agent_prompt_system: agentPromptSystem.trim() || null,
-        }),
-      });
-      mostrarFeedback("EXIT", "Paràmetres de l'ordinador dedicat d'IA i disc dur desats correctament.");
+      const res: any = await persistirNodeIaAlBackend(nodeIaActiu);
+      if (res?.avis) {
+        mostrarFeedback("ERROR", res.avis);
+      } else {
+        mostrarFeedback("EXIT", "Paràmetres de l'ordinador dedicat d'IA i disc dur desats correctament.");
+      }
     } catch (err: any) {
       mostrarFeedback("ERROR", err.message || "Error en desar el node d'IA dedicat.");
     } finally {
@@ -646,7 +665,7 @@ export default function ConfiguracioPage() {
 
   const handleProvarNodeIa = async () => {
     const rawUrl = nodeIaUrl.trim();
-    if (!rawUrl) {
+    if (!rawUrl && !discDurUrl.trim()) {
       mostrarFeedback("ERROR", "Cal introduir la URL de l'ordinador dedicat abans de provar la connexió.");
       return;
     }
@@ -655,8 +674,11 @@ export default function ConfiguracioPage() {
     // 1. Sonda directa des de la plataforma (navegador -> 127.0.0.1 / LAN)
     const base = rawUrl.replace(/\/+$/, "");
     const isLocalClientUrl =
+      Boolean(base) &&
       /^https?:\/\/(127\.0\.0\.1|localhost|192\.168\.|10\.|172\.(1[6-9]|2\d|3[0-1])\.)/i.test(base);
-    const candidateEndpoints = base.endsWith("/v1")
+    const candidateEndpoints = !base
+      ? []
+      : base.endsWith("/v1")
       ? [`${base}/models`]
       : [`${base}/v1/models`, `${base}/api/tags`, `${base}/models`];
 
@@ -688,7 +710,26 @@ export default function ConfiguracioPage() {
           setNodeIaLatencia(latencia);
           setNodeIaModelInfo(models.length > 0 ? models.join(", ") : "Model OpenAI compatible actiu");
           setNodeIaActiu(true);
-          mostrarFeedback("EXIT", `Connexió establerta directament des de la plataforma (${latencia} ms)`);
+          if (!esEnginyer) {
+            try {
+              const saved: any = await persistirNodeIaAlBackend(true);
+              if (saved?.avis) {
+                mostrarFeedback("ERROR", saved.avis);
+              } else {
+                mostrarFeedback(
+                  "EXIT",
+                  `Connexió establerta (${latencia} ms) i activació desada automàticament.`
+                );
+              }
+            } catch {
+              mostrarFeedback(
+                "EXIT",
+                `Connexió establerta (${latencia} ms). Recorda prémer 'Desar Paràmetres del Node' per activar-lo.`
+              );
+            }
+          } else {
+            mostrarFeedback("EXIT", `Connexió establerta directament des de la plataforma (${latencia} ms)`);
+          }
           setNodeIaTestant(false);
           return;
         }
@@ -697,7 +738,7 @@ export default function ConfiguracioPage() {
       }
     }
 
-    if (isLocalClientUrl) {
+    if (isLocalClientUrl && !discDurUrl.trim()) {
       setNodeIaEstat("ERROR_CONNEXIO");
       mostrarFeedback("ERROR", `El navegador no ha pogut connectar amb ${base}. Verifica que LM Studio / Ollama tingui el servidor local engegat i CORS activat.`);
       setNodeIaTestant(false);
@@ -707,13 +748,37 @@ export default function ConfiguracioPage() {
     try {
       const res: any = await apiFetch("/gestio/configuracio/node-ia/provar", {
         method: "POST",
+        body: JSON.stringify({
+          node_ia_url: rawUrl || null,
+          disc_dur_url: discDurUrl.trim() || null,
+        }),
       });
+      if (res && res.feature_copilot_ia !== undefined) {
+        setFeatureCopilotIa(Boolean(res.feature_copilot_ia));
+      }
       if (res.estat === "OPERATIU") {
         setNodeIaEstat("OPERATIU");
         setNodeIaLatencia(res.latencia_ms);
         const models = res.models_disponibles || [];
         setNodeIaModelInfo(models.length > 0 ? models.join(", ") : "Model OpenAI compatible actiu");
-        mostrarFeedback("EXIT", res.missatge || `Connexió establerta amb l'ordinador de la seu (${res.latencia_ms}ms)`);
+        setNodeIaActiu(true);
+        if (!esEnginyer) {
+          try {
+            const saved: any = await persistirNodeIaAlBackend(true);
+            if (saved?.avis) {
+              mostrarFeedback("ERROR", saved.avis);
+            } else {
+              mostrarFeedback(
+                "EXIT",
+                `${res.missatge || `Connexió establerta amb l'ordinador de la seu (${res.latencia_ms}ms)`} — Activació desada.`
+              );
+            }
+          } catch {
+            mostrarFeedback("EXIT", res.missatge || `Connexió establerta amb l'ordinador de la seu (${res.latencia_ms}ms)`);
+          }
+        } else {
+          mostrarFeedback("EXIT", res.missatge || `Connexió establerta amb l'ordinador de la seu (${res.latencia_ms}ms)`);
+        }
       } else {
         setNodeIaEstat("ERROR_CONNEXIO");
         mostrarFeedback("ERROR", res.missatge || "No s'ha pogut connectar amb l'ordinador dedicat.");
@@ -1615,6 +1680,19 @@ export default function ConfiguracioPage() {
             </div>
           </div>
 
+          {/* AVÍS SI EL MÒDUL COPILOT ESTÀ DESACTIVAT A SUPERADMIN */}
+          {featureCopilotIa === false && (
+            <div className="p-4 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-800 space-y-1">
+              <div className="flex items-center gap-2 text-xs font-bold text-amber-900 dark:text-amber-200">
+                <AlertTriangle className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0" />
+                <span>Mòdul Copilot d'IA desactivat a la llicència de l'empresa</span>
+              </div>
+              <p className="text-xs text-amber-800 dark:text-amber-300 leading-relaxed">
+                Encara que l'ordinador local de la seu respongui, el Copilot retornarà error fins que Superadmin activi l'interruptor <strong>Copilot d'IA</strong> (<code>feature_copilot_ia</code>) a la fitxa d'aquesta empresa.
+              </p>
+            </div>
+          )}
+
           {/* MANIFEST CONSTITUCIONAL DE SOBIRANIA */}
           <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/80 space-y-2">
             <div className="flex items-center gap-2 text-xs font-bold text-slate-800 dark:text-slate-200">
@@ -1733,7 +1811,7 @@ export default function ConfiguracioPage() {
             <div className="flex gap-2">
               <button
                 type="button"
-                disabled={nodeIaTestant || !nodeIaUrl}
+                disabled={nodeIaTestant || (!nodeIaUrl.trim() && !discDurUrl.trim())}
                 onClick={handleProvarNodeIa}
                 className="flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold bg-slate-800 hover:bg-slate-700 text-white transition-colors disabled:opacity-50 shadow-sm"
               >

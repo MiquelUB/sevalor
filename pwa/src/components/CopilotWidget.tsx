@@ -47,28 +47,41 @@ export default function CopilotWidget({ isMobile = false }: { isMobile?: boolean
       return;
     }
 
-    apiFetch<any>("/auth/me")
-      .then((res) => {
-        if (res && res.id && res.feature_copilot_ia !== false) {
-          setIsAuthenticated(true);
-          setHasCopilotIa(true);
-          if (!isMobile) {
-            apiFetch<any>("/gestio/copilot/ia-status")
-              .then((st) => setIaStatus(st || null))
-              .catch(() => setIaStatus({ estat: "OFFLINE" }));
+    const loadCopilotState = () => {
+      apiFetch<any>("/auth/me")
+        .then((res) => {
+          if (res && res.id && res.feature_copilot_ia !== false) {
+            setIsAuthenticated(true);
+            setHasCopilotIa(true);
+            if (!isMobile) {
+              apiFetch<any>("/gestio/copilot/ia-status")
+                .then((st) => setIaStatus(st || null))
+                .catch(() => setIaStatus({ estat: "OFFLINE" }));
+            }
+          } else {
+            setIsAuthenticated(false);
+            setHasCopilotIa(false);
+            setObert(false);
           }
-        } else {
+        })
+        .catch(() => {
           setIsAuthenticated(false);
           setHasCopilotIa(false);
           setObert(false);
-        }
-      })
-      .catch(() => {
-        setIsAuthenticated(false);
-        setHasCopilotIa(false);
-        setObert(false);
-      });
-  }, [pathname, isAuthPage]);
+        });
+    };
+
+    loadCopilotState();
+    const handleNodeIaUpdated = () => loadCopilotState();
+    if (typeof window !== "undefined") {
+      window.addEventListener("sevalor:node-ia-updated", handleNodeIaUpdated);
+    }
+    return () => {
+      if (typeof window !== "undefined") {
+        window.removeEventListener("sevalor:node-ia-updated", handleNodeIaUpdated);
+      }
+    };
+  }, [pathname, isAuthPage, isMobile]);
 
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
