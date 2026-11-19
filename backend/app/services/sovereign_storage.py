@@ -1249,6 +1249,12 @@ class SovereignStorageGateway:
         nif_real = str(extra.get("nif") or fitxa_existent.get("nif") or empresa.nif)
         adreca_real = extra.get("adreca", fitxa_existent.get("adreca", empresa.adreca))
 
+        prompt_efectiu = (
+            extra.get("agent_prompt_system")
+            or fitxa_existent.get("agent_prompt_system")
+            or empresa.agent_prompt_system
+        )
+
         fitxa_superadmin: Dict[str, Any] = {
             **fitxa_existent,
             "id": emp_id_str,
@@ -1270,7 +1276,7 @@ class SovereignStorageGateway:
             "feature_flota": bool(getattr(empresa, "feature_flota", True)),
             "feature_planols": bool(getattr(empresa, "feature_planols", False)),
             "feature_telegram": bool(getattr(empresa, "feature_telegram", True)),
-            "agent_prompt_system": empresa.agent_prompt_system,
+            "agent_prompt_system": prompt_efectiu,
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }
         if "created_at" not in fitxa_superadmin:
@@ -1303,7 +1309,7 @@ class SovereignStorageGateway:
                     "node_ia_actiu": bool(getattr(empresa, "node_ia_actiu", False)),
                     "feature_copilot_ia": bool(getattr(empresa, "feature_copilot_ia", False)),
                 },
-                agent_prompt_system=empresa.agent_prompt_system,
+                agent_prompt_system=prompt_efectiu,
             )
             await cls.drenar_cua_transit_empresa(db, empresa.id)
         except Exception as exc:

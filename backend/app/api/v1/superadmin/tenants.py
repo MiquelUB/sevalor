@@ -1391,7 +1391,7 @@ async def crear_nou_tenant(
         quota_disc_bytes_autoritzada=quota_bytes,
         vertical=vertical_norm,
         magatzem_families_default=payload.magatzem_families_default,
-        agent_prompt_system=agent_prompt_final,
+        agent_prompt_system=None,
         node_ia_url=node_ia_url_final,
         disc_dur_url=disc_dur_url_final,
         vault_token=vault_token_unic,
