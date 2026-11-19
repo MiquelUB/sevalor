@@ -25,7 +25,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.db import get_db_with_tenant_context
-from app.core.network_utils import build_node_ia_headers, get_candidate_node_urls
+from app.core.network_utils import (
+    build_node_ia_headers,
+    get_candidate_ia_tunnel_urls,
+    get_candidate_node_urls,
+    is_private_or_loopback_url,
+)
 from app.core.security import blind_email, blind_nif, blind_telefon, require_roles
 from app.models.models import (
     Client,
@@ -172,6 +177,7 @@ class OnboardingTenantRequest(BaseModel):
 
 class VerificarNodeIaRequest(BaseModel):
     node_ia_url: str = Field(..., min_length=5, max_length=255)
+    disc_dur_url: Optional[str] = Field(None, max_length=255)
     empresa_id: Optional[str] = None
     vault_token: Optional[str] = Field(None, min_length=1, max_length=255)
 
@@ -630,7 +636,8 @@ async def verificar_node_ia(
     )
     probe_headers = build_node_ia_headers(vault_token=vault_secret)
 
-    candidate_bases = get_candidate_node_urls(raw_url)
+    raw_disc = payload.disc_dur_url.strip() if payload.disc_dur_url and payload.disc_dur_url.strip() else None
+    candidate_bases = get_candidate_ia_tunnel_urls(raw_url, raw_disc) or get_candidate_node_urls(raw_url)
     if not candidate_bases:
         candidate_bases = [raw_url.rstrip("/")]
 
@@ -669,6 +676,20 @@ async def verificar_node_ia(
                                     ]
                         except Exception:
                             pass
+                        if payload.empresa_id:
+                            emp_target = await _resolve_empresa(db, payload.empresa_id)
+                            if emp_target:
+                                emp_target.node_ia_url = raw_url
+                                if raw_disc:
+                                    emp_target.disc_dur_url = raw_disc
+                                if payload.vault_token and payload.vault_token.strip():
+                                    emp_target.vault_token = payload.vault_token.strip()
+                                emp_target.node_ia_actiu = True
+                                emp_target.updated_at = datetime.now(timezone.utc)
+                                await db.commit()
+                                await SovereignStorageGateway.sincronitzar_vincle_client_vault_empresa(
+                                    db, emp_target
+                                )
                         return {
                             "status": "OK",
                             "motiu": "CONNEXIO_ESTABLERTA",
@@ -676,6 +697,7 @@ async def verificar_node_ia(
                             "models": models,
                             "latencia_ms": latencia,
                             "url_efectiva": base,
+                            "node_ia_actiu": True,
                         }
                     elif resp.status_code in (401, 403):
                         return {
@@ -713,11 +735,20 @@ async def verificar_node_ia(
                     last_error_msg = f"Error de xarxa: {str(e)}"
 
     total_latency = int((time.perf_counter() - start) * 1000)
+    totes_loopback = all(is_private_or_loopback_url(u) for u in candidate_bases)
+    if totes_loopback and last_error_motiu in ("PORT_TANCAT", "TIMEOUT", "CONNEXIO_FALLIDA"):
+        last_error_msg = (
+            f"El servidor de Sevalor no pot connectar amb l'adreça local ({', '.join(candidate_bases[:2])}). "
+            "Si Sevalor corre al núvol (Hetzner), cal configurar una URL pública HTTPS de túnel "
+            "(Cloudflare Tunnel cap al port 9001 de client_vault_agent.py o port 1234)."
+        )
     return {
         "status": "ERROR",
         "motiu": last_error_motiu,
         "missatge": last_error_msg,
         "models": [],
+        "urls_provades": candidate_bases,
+        "totes_loopback": totes_loopback,
         "latencia_ms": total_latency,
     }
 
@@ -766,6 +797,18 @@ async def verificar_disc_dur(
             and not os.path.abspath(raw_url).startswith("/data/")
         )
         lat = int((time.perf_counter() - t0) * 1000)
+        if payload.empresa_id:
+            emp_local = await _resolve_empresa(db, payload.empresa_id)
+            if emp_local:
+                emp_local.disc_dur_url = raw_url
+                if payload.node_ia_url and payload.node_ia_url.strip():
+                    emp_local.node_ia_url = payload.node_ia_url.strip()
+                if payload.vault_token and payload.vault_token.strip():
+                    emp_local.vault_token = payload.vault_token.strip()
+                emp_local.node_ia_actiu = True
+                emp_local.updated_at = datetime.now(timezone.utc)
+                await db.commit()
+                await SovereignStorageGateway.sincronitzar_vincle_client_vault_empresa(db, emp_local)
         return {
             "status": "OK",
             "motiu": "DISC_OPERATIU",
@@ -781,6 +824,7 @@ async def verificar_disc_dur(
             "url_efectiva": raw_url,
             "carpetes_creades": len(creades),
             "avis_docker_efimer": ruta_efimera,
+            "node_ia_actiu": True,
         }
 
     if not (raw_url.startswith("http://") or raw_url.startswith("https://")):
@@ -814,6 +858,20 @@ async def verificar_disc_dur(
             check_res = await SovereignStorageGateway.verificar_roundtrip_http_vault(base, vault_secret)
             latencia = int((time.perf_counter() - t0) * 1000)
             if check_res.get("ok"):
+                if payload.empresa_id:
+                    emp_target = await _resolve_empresa(db, payload.empresa_id)
+                    if emp_target:
+                        emp_target.disc_dur_url = raw_url
+                        if payload.node_ia_url and payload.node_ia_url.strip():
+                            emp_target.node_ia_url = payload.node_ia_url.strip()
+                        if payload.vault_token and payload.vault_token.strip():
+                            emp_target.vault_token = payload.vault_token.strip()
+                        emp_target.node_ia_actiu = True
+                        emp_target.updated_at = datetime.now(timezone.utc)
+                        await db.commit()
+                        await SovereignStorageGateway.sincronitzar_vincle_client_vault_empresa(
+                            db, emp_target
+                        )
                 return {
                     "status": "OK",
                     "motiu": "DISC_OPERATIU",
@@ -829,6 +887,7 @@ async def verificar_disc_dur(
                     "vault_root": check_res.get("vault_root"),
                     "disc_a_lliure_gb": check_res.get("disc_a_lliure_gb"),
                     "roundtrip_escriptura": True,
+                    "node_ia_actiu": True,
                 }
             last_error_motiu = str(check_res.get("motiu") or "HTTP_ERROR")
             last_error_msg = str(check_res.get("missatge") or last_error_msg)
@@ -1017,8 +1076,9 @@ async def llistar_tenants(
                 ),
                 "equips_ia_venuts": equips_venuts,
                 "notes_crm": llic.get("notes_crm", fitxa.get("notes_crm", getattr(emp, "notes_crm", None))),
-                "node_ia_actiu": bool(emp.node_ia_actiu),
-                "node_ia_url": emp.node_ia_url,
+                "node_ia_actiu": bool(emp.node_ia_actiu or fitxa.get("node_ia_actiu", False)),
+                "node_ia_url": emp.node_ia_url or fitxa.get("node_ia_url"),
+                "disc_dur_url": getattr(emp, "disc_dur_url", None) or fitxa.get("disc_dur_url"),
                 "feature_copilot_ia": bool(emp.feature_copilot_ia),
                 "feature_flota": bool(emp.feature_flota),
                 "feature_planols": bool(emp.feature_planols),
@@ -1253,7 +1313,9 @@ async def crear_nou_tenant(
     boss_nom_real = payload.boss_nom.strip()
     boss_cognoms_real = payload.boss_cognoms.strip()
 
-    # Persistència sobirana del perfil comercial i llicències al Disc Dur del Superadmin (abans del commit SQL)
+    node_ia_actiu_inicial = bool(node_ia_url_final or disc_dur_url_final)
+
+    # Persistència sobirana del perfil comercial i client_vault al Disc Dur del Superadmin (abans del commit SQL)
     fitxa_superadmin = {
         "id": str(nou_id),
         "empresa_id": str(nou_id),
@@ -1272,6 +1334,21 @@ async def crear_nou_tenant(
         "boss_nif": boss_nif_real,
         "boss_email": email_boss_norm,
         "boss_telefon": telefon_boss_norm,
+        "node_ia_url": node_ia_url_final,
+        "disc_dur_url": disc_dur_url_final,
+        "vault_token": vault_token_unic,
+        "node_ia_actiu": node_ia_actiu_inicial,
+        "feature_copilot_ia": copilot_actiu,
+        "feature_flota": payload.feature_flags.get("flota_avancada", True)
+        if payload.feature_flags
+        else True,
+        "feature_planols": payload.feature_flags.get("planols_tecnics", False)
+        if payload.feature_flags
+        else False,
+        "feature_telegram": payload.feature_flags.get("telegram_bot", True)
+        if payload.feature_flags
+        else True,
+        "agent_prompt_system": agent_prompt_final,
         "notes_crm": payload.notes_crm,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
@@ -1314,11 +1391,11 @@ async def crear_nou_tenant(
         quota_disc_bytes_autoritzada=quota_bytes,
         vertical=vertical_norm,
         magatzem_families_default=payload.magatzem_families_default,
-        agent_prompt_system=None,
+        agent_prompt_system=agent_prompt_final,
         node_ia_url=node_ia_url_final,
         disc_dur_url=disc_dur_url_final,
         vault_token=vault_token_unic,
-        node_ia_actiu=bool(node_ia_url_final or disc_dur_url_final),
+        node_ia_actiu=node_ia_actiu_inicial,
         telegram_webhook_secret=None,
         data_onboarding=datetime.now(timezone.utc),
         feature_copilot_ia=copilot_actiu,
@@ -1420,6 +1497,10 @@ async def crear_nou_tenant(
             "logotip_path": nova_empresa.logotip_path,
             "node_ia_url": nova_empresa.node_ia_url,
             "disc_dur_url": nova_empresa.disc_dur_url,
+            "vault_token": vault_token_unic,
+            "node_ia_actiu": nova_empresa.node_ia_actiu,
+            "feature_copilot_ia": copilot_actiu,
+            "agent_prompt_system": agent_prompt_final,
             "magatzem_families_default": payload.magatzem_families_default,
         }
         dades_boss_reals = {
@@ -1648,6 +1729,7 @@ async def obtenir_tenant(
     fitxes_map, llicencies_map = await _carregar_mapes_superadmin_tenants()
     fitxa = fitxes_map.get(str(emp.id), {})
     llic = llicencies_map.get(str(emp.id), {})
+    await SovereignStorageGateway.autocurar_config_tunel_empresa(db, emp, commit=True)
     nom_real = str(fitxa.get("rao_social") or fitxa.get("nom") or emp.nom)
     nif_real = str(fitxa.get("nif") or emp.nif)
     adreca_real = fitxa.get("adreca", emp.adreca)
@@ -2181,6 +2263,7 @@ async def update_feature_flags(
     empresa.updated_at = datetime.now(timezone.utc)
 
     await db.commit()
+    await SovereignStorageGateway.sincronitzar_vincle_client_vault_empresa(db, empresa)
 
     return {
         "status": "OK",
@@ -2218,6 +2301,7 @@ async def rotar_vault_token(
     empresa.vault_token = nou_token
     empresa.updated_at = datetime.now(timezone.utc)
     await db.commit()
+    await SovereignStorageGateway.sincronitzar_vincle_client_vault_empresa(db, empresa)
 
     return {
         "status": "OK",

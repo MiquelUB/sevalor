@@ -18,6 +18,7 @@ from app.core.db import get_db_with_tenant_context
 from app.core.network_utils import (
     build_node_ia_headers,
     get_candidate_ia_tunnel_urls,
+    is_private_or_loopback_url,
     resoldre_url_tunel_ia,
     resolve_effective_node_url,
     resolve_empresa_vault_token,
@@ -1178,6 +1179,7 @@ async def obtenir_estat_node_ia(
 
     res = await db.execute(select(Empresa).where(Empresa.id == empresa_id))
     empresa = res.scalar_one_or_none()
+    await SovereignStorageGateway.autocurar_config_tunel_empresa(db, empresa, commit=True)
     vertical = empresa.vertical if empresa else "SEVALOR"
     raw_tunel = (
         resoldre_url_tunel_ia(
@@ -1957,6 +1959,7 @@ async def obtenir_estat_ia(
     empresa_id = aplicar_tenant_context(claims)
     res_emp = await db.execute(select(Empresa).where(Empresa.id == empresa_id))
     empresa = res_emp.scalar_one_or_none()
+    await SovereignStorageGateway.autocurar_config_tunel_empresa(db, empresa, commit=True)
 
     raw_tunel = (
         resoldre_url_tunel_ia(
@@ -2011,6 +2014,7 @@ async def obtenir_estat_ia(
     )
 
     last_error: Optional[str] = None
+    last_status_code: Optional[int] = None
     last_url: str = candidate_urls[0] if candidate_urls else str(raw_tunel)
     async with httpx.AsyncClient(timeout=8.0) as client:
         for cand in candidate_urls:
@@ -2023,29 +2027,60 @@ async def obtenir_estat_ia(
                 elapsed_ms = int((datetime.now() - start_t).total_seconds() * 1000)
                 if resp.status_code == 200:
                     data = resp.json()
-                    models = [m.get("id") for m in data.get("data", []) if m.get("id")]
+                    models = [
+                        str(m.get("id"))
+                        for m in data.get("data", [])
+                        if isinstance(m, dict) and m.get("id")
+                    ]
+                    chat_models = [m for m in models if "embed" not in m.lower()]
                     model_actiu = (
-                        models[0]
-                        if models
-                        else getattr(settings, "LM_STUDIO_MODEL", "qwen2.5-vl-7b-instruct")
+                        chat_models[0]
+                        if chat_models
+                        else (
+                            models[0]
+                            if models
+                            else getattr(settings, "LM_STUDIO_MODEL", "qwen2.5-vl-7b-instruct")
+                        )
                     )
                     return {
                         "estat": "ONLINE",
                         "node_ia_actiu": True,
+                        "feature_copilot_ia": True,
                         "url": cand,
                         "model_actiu": model_actiu,
                         "models_disponibles": models,
                         "latencia_ms": elapsed_ms,
                     }
+                last_status_code = resp.status_code
                 last_error = f"HTTP {resp.status_code} a {models_url}"
             except Exception as e:
                 last_error = str(e)
 
+    totes_loopback = bool(candidate_urls) and all(is_private_or_loopback_url(u) for u in candidate_urls)
+    if last_status_code in (401, 403):
+        motiu_off = "TOKEN_INVALID"
+        err_display = (
+            f"Token Vault rebutjat pel túnel ({last_url}, HTTP {last_status_code}). "
+            "Verifica SEVALOR_VAULT_SECRET vs vault_token."
+        )
+    elif totes_loopback:
+        motiu_off = "LOOPBACK_INACCESSIBLE"
+        err_display = (
+            f"El servidor no pot arribar a {last_url}. Si Sevalor corre al núvol (Hetzner), "
+            "configura una URL pública HTTPS de túnel (Cloudflare Tunnel -> port 9001 o 1234)."
+        )
+    else:
+        motiu_off = "TUNEL_OFFLINE"
+        err_display = last_error or "Resposta no vàlida del node d'IA"
+
     return {
         "estat": "OFFLINE",
+        "motiu": motiu_off,
+        "feature_copilot_ia": True,
         "node_ia_actiu": True,
         "url": last_url,
-        "error": last_error or "Resposta no vàlida del node d'IA",
+        "urls_provades": candidate_urls,
+        "error": err_display,
         "latencia_ms": None,
     }
 

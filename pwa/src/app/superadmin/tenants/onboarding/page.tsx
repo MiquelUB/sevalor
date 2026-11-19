@@ -126,6 +126,7 @@ export default function SuperadminTenantOnboardingPage() {
   const [agentPrompt, setAgentPrompt] = useState<string>("");
   const [nodeIaUrl, setNodeIaUrl] = useState<string>("");
   const [discDurUrl, setDiscDurUrl] = useState<string>("");
+  const [vaultToken, setVaultToken] = useState<string>("");
   const [nodeIaTesting, setNodeIaTesting] = useState<boolean>(false);
   const [nodeIaStatus, setNodeIaStatus] = useState<{
     status: "OK" | "ERROR";
@@ -293,7 +294,11 @@ export default function SuperadminTenantOnboardingPage() {
     try {
       const res = await apiFetch<any>("/superadmin/tenants/verificar-node-ia", {
         method: "POST",
-        body: JSON.stringify({ node_ia_url: targetUrl }),
+        body: JSON.stringify({
+          node_ia_url: targetUrl,
+          disc_dur_url: discDurUrl.trim() || undefined,
+          vault_token: vaultToken.trim() || undefined,
+        }),
       });
       setNodeIaStatus(res);
     } catch (err: any) {
@@ -333,10 +338,10 @@ export default function SuperadminTenantOnboardingPage() {
         setErrorMessage("El prompt de sistema de Copilot (agent_prompt_system) és obligatori quan la IA està activada.");
         return;
       }
-      if (!nodeIaUrl.trim()) {
+      if (!nodeIaUrl.trim() && !discDurUrl.trim()) {
         setDryRunRunning(false);
         setDryRunSuccess(false);
-        setErrorMessage("Cal indicar l'adreça URL del node d'IA dedicat quan la IA està activada.");
+        setErrorMessage("Cal indicar l'adreça URL del node d'IA dedicat o del disc dur quan la IA està activada.");
         return;
       }
     }
@@ -366,6 +371,7 @@ export default function SuperadminTenantOnboardingPage() {
     setErrorMessage(null);
     setNodeIaUrl("");
     setDiscDurUrl("");
+    setVaultToken("");
     setNodeIaTesting(false);
     setNodeIaStatus(null);
     setAgentPrompt("");
@@ -416,7 +422,8 @@ export default function SuperadminTenantOnboardingPage() {
           magatzem_families_default: magatzemFamilies.trim() || undefined,
           agent_prompt_system: featureFlags.copilot_ia ? agentPrompt.trim() : undefined,
           node_ia_url: featureFlags.copilot_ia ? (nodeIaUrl.trim() || urlNodeUnificat) : undefined,
-          disc_dur_url: urlNodeUnificat,
+          disc_dur_url: discDurUrl.trim() || undefined,
+          vault_token: vaultToken.trim() || undefined,
           estat_inicial: estatInicial,
           pla_subscripcio: plaSubscripcio,
           quota_operaris: Number(quotaOperaris),
@@ -1215,6 +1222,18 @@ export default function SuperadminTenantOnboardingPage() {
                   onChange={(e) => setDiscDurUrl(e.target.value)}
                   className="w-full p-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 font-mono text-xs font-bold"
                 />
+                <div className="pt-1">
+                  <label className="block text-[11px] font-bold text-emerald-900 dark:text-emerald-200 mb-1">
+                    Token Segur del Disc Dur (<code>SEVALOR_VAULT_SECRET</code> opcional — si es deixa buit se&apos;n genera un de nou exclusiu)
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="ex: svlt_... (deixa buit per generar un token criptogràfic nou)"
+                    value={vaultToken}
+                    onChange={(e) => setVaultToken(e.target.value)}
+                    className="w-full p-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 font-mono text-xs font-bold"
+                  />
+                </div>
               </div>
             </div>
 

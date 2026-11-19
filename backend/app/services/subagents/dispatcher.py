@@ -18,6 +18,7 @@ from app.core.config import settings
 from app.core.network_utils import (
     build_node_ia_headers,
     get_candidate_ia_tunnel_urls,
+    is_private_or_loopback_url,
     resolve_empresa_vault_token,
 )
 from app.models.models import ConsultaXatCopilot, Empresa, Usuari
@@ -383,6 +384,7 @@ class CopilotDispatcher:
         # ── 2. Porta Estrica Zero-Storage / Túnel Obligatori (Principi V) ──────
         res_emp = await db.execute(select(Empresa).where(Empresa.id == empresa_id))
         empresa = res_emp.scalar_one_or_none()
+        await SovereignStorageGateway.autocurar_config_tunel_empresa(db, empresa, commit=True)
         raw_node_url = getattr(empresa, "node_ia_url", None) if empresa else None
         raw_disc_url = getattr(empresa, "disc_dur_url", None) if empresa else None
         node_url = raw_node_url.strip() if isinstance(raw_node_url, str) and raw_node_url.strip() else None
@@ -631,11 +633,36 @@ class CopilotDispatcher:
                     last_endpoint,
                     last_exc,
                 )
+                is_auth_err = isinstance(last_exc, httpx.HTTPStatusError) and (
+                    last_exc.response is not None and last_exc.response.status_code in (401, 403)
+                )
+                totes_loopback = all(is_private_or_loopback_url(u) for u in candidate_ia_urls)
+                if is_auth_err:
+                    offline_msg = (
+                        "La passarel·la del túnel IA local ha rebutjat el Token Vault (HTTP 401/403). "
+                        "Verifica que SEVALOR_VAULT_SECRET al PC de la seu coincideixi amb el vault_token de l'empresa. "
+                        "Zero fallback a Hetzner."
+                    )
+                    offline_motiu = "TOKEN_INVALID"
+                elif totes_loopback:
+                    offline_msg = (
+                        f"El servidor de Sevalor no pot arribar a l'adreça local ({', '.join(candidate_ia_urls[:2])}). "
+                        "Si Sevalor corre al núvol (Hetzner), cal configurar una URL pública HTTPS de túnel "
+                        "(Cloudflare Tunnel cap al port 9001 de client_vault_agent.py o port 1234). Zero fallback a Hetzner."
+                    )
+                    offline_motiu = "LOOPBACK_INACCESSIBLE"
+                else:
+                    offline_msg = (
+                        "El node d'IA local de l'empresa no respon (túnel offline o timeout). Zero fallback a Hetzner."
+                    )
+                    offline_motiu = "TUNEL_OFFLINE"
                 raise HTTPException(
                     status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                     detail={
                         "code": "NODE_IA_OFFLINE",
-                        "message": "El node d'IA local de l'empresa no respon (túnel offline o timeout). Zero fallback a Hetzner.",
+                        "motiu": offline_motiu,
+                        "urls_provades": candidate_ia_urls,
+                        "message": offline_msg,
                     },
                 )
 

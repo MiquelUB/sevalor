@@ -22,6 +22,7 @@ from app.core.db import get_db, set_tenant_context
 from app.core.network_utils import (
     build_node_ia_headers,
     get_candidate_ia_tunnel_urls,
+    is_private_or_loopback_url,
     resolve_effective_node_url,
     resolve_empresa_vault_token,
 )
@@ -208,6 +209,10 @@ class NodeIaProbeRequest(BaseModel):
     )
     disc_dur_url: Optional[str] = Field(
         None, max_length=255, description="URL opcional de túnel unificat a provar abans de desar"
+    )
+    activar_si_operatiu: bool = Field(
+        True,
+        description="Si el túnel respon 200 OK des del backend, activa i desa node_ia_actiu=True automàticament",
     )
 
 
@@ -1321,6 +1326,8 @@ async def obtenir_configuracio_node_ia(
     if not empresa:
         raise HTTPException(status_code=404, detail="Empresa no trobada")
 
+    await SovereignStorageGateway.autocurar_config_tunel_empresa(db, empresa, commit=True)
+
     feature_copilot_ia = bool(getattr(empresa, "feature_copilot_ia", False))
     te_ordinador = bool(
         (empresa.node_ia_url or getattr(empresa, "disc_dur_url", None))
@@ -1349,7 +1356,7 @@ async def actualitzar_configuracio_node_ia(
     empresa_id = claims.get("empresa_id")
 
     if empresa_id:
-        await set_tenant_context(db, empresa_id)
+        await set_tenant_context(db, empresa_id, role=claims.get("rol"))
 
     res = await db.execute(select(Empresa).where(Empresa.id == uuid.UUID(empresa_id)))
     empresa = res.scalar_one_or_none()
@@ -1360,22 +1367,27 @@ async def actualitzar_configuracio_node_ia(
     if payload.disc_dur_url is not None:
         empresa.disc_dur_url = payload.disc_dur_url.strip() if payload.disc_dur_url else None
     empresa.node_ia_actiu = payload.node_ia_actiu
+    prompt_to_sync: Optional[str] = None
     if payload.agent_prompt_system is not None:
         empresa.agent_prompt_system = payload.agent_prompt_system.strip()
-        # Persistir el prompt de sistema al disc dur dedicat de l'empresa
+        prompt_to_sync = empresa.agent_prompt_system
+
+    # Confirmar primer a PostgreSQL perquè una incidència del disc dur remot mai impedeixi desar node_ia_actiu
+    await db.commit()
+    await SovereignStorageGateway.sincronitzar_vincle_client_vault_empresa(db, empresa)
+
+    if prompt_to_sync is not None:
         try:
             await SovereignStorageGateway.pujar_fitxer_binari(
                 db=db,
                 empresa_id=empresa.id,
                 categoria="copilot_prompt",
                 nom_fitxer="system_prompt.txt",
-                content=empresa.agent_prompt_system.encode("utf-8"),
+                content=prompt_to_sync.encode("utf-8"),
                 content_type="text/plain; charset=utf-8",
             )
         except Exception:
             pass
-
-    await db.commit()
 
     feature_copilot_ia = bool(getattr(empresa, "feature_copilot_ia", False))
     te_ordinador = bool(
@@ -1405,12 +1417,12 @@ async def provar_connexio_node_ia(
     claims: Dict[str, Any] = Depends(get_current_user_claims),
     db: AsyncSession = Depends(get_db),
 ) -> Dict[str, Any]:
-    """Test asíncron de connectivitat contra l'ordinador dedicat de la seu de l'empresa (GET /v1/models amb timeout de 4s)."""
+    """Test asíncron de connectivitat des del backend cap al túnel de l'ordinador dedicat."""
     validar_permisos_gestio(claims, requereix_escriptura=True, nomes_boss=True)
     empresa_id = claims.get("empresa_id")
 
     if empresa_id:
-        await set_tenant_context(db, empresa_id)
+        await set_tenant_context(db, empresa_id, role=claims.get("rol"))
 
     res = await db.execute(select(Empresa).where(Empresa.id == uuid.UUID(empresa_id)))
     empresa = res.scalar_one_or_none()
@@ -1419,11 +1431,14 @@ async def provar_connexio_node_ia(
             "estat": "NO_CONFIGURAT",
             "feature_copilot_ia": False,
             "node_ia_actiu": False,
+            "copilot_operatiu": False,
             "missatge": "Empresa no trobada.",
         }
 
     feature_copilot_ia = bool(getattr(empresa, "feature_copilot_ia", False))
     node_ia_actiu = bool(empresa.node_ia_actiu)
+    activar_si_operatiu = bool(payload.activar_si_operatiu) if payload is not None else True
+
     target_node_url = (
         payload.node_ia_url.strip()
         if payload and payload.node_ia_url and payload.node_ia_url.strip()
@@ -1446,7 +1461,9 @@ async def provar_connexio_node_ia(
             "estat": "NO_CONFIGURAT",
             "feature_copilot_ia": feature_copilot_ia,
             "node_ia_actiu": node_ia_actiu,
-            "missatge": "No hi ha cap URL d'ordinador dedicat configurat per a aquesta empresa",
+            "copilot_operatiu": False,
+            "urls_provades": [],
+            "missatge": "No hi ha cap URL d'ordinador dedicat o túnel HTTP(S) configurada per a aquesta empresa",
         }
 
     headers = build_node_ia_headers(vault_token=resolve_empresa_vault_token(empresa))
@@ -1457,45 +1474,114 @@ async def provar_connexio_node_ia(
     async with httpx.AsyncClient(timeout=4.0) as client:
         for cand in candidate_urls:
             base_url = cand.rstrip("/")
-            endpoint = f"{base_url}/models" if base_url.endswith("/v1") else f"{base_url}/v1/models"
-            start_time = time_lib.time()
-            try:
-                resp = await client.get(endpoint, headers=headers)
-                latencia_ms = int((time_lib.time() - start_time) * 1000)
-                last_latencia_ms = latencia_ms
-                if resp.status_code == 200:
-                    data = resp.json()
-                    models_list = (
-                        [m.get("id") for m in data.get("data", []) if isinstance(m, dict) and m.get("id")]
-                        if isinstance(data, dict)
-                        else []
-                    )
-                    return {
-                        "estat": "OPERATIU",
-                        "latencia_ms": latencia_ms,
-                        "url_efectiva": cand,
-                        "models_disponibles": models_list,
-                        "feature_copilot_ia": feature_copilot_ia,
-                        "node_ia_actiu": node_ia_actiu,
-                        "missatge": f"Connexió establerta amb èxit amb l'ordinador dedicat de l'empresa ({latencia_ms}ms)",
-                    }
-                last_status_code = resp.status_code
-            except Exception as exc:
-                last_exc = str(exc)
+            endpoints = (
+                [f"{base_url}/models"]
+                if base_url.endswith("/v1")
+                else [f"{base_url}/v1/models", f"{base_url}/api/tags"]
+            )
+            for endpoint in endpoints:
+                start_time = time_lib.time()
+                try:
+                    resp = await client.get(endpoint, headers=headers)
+                    latencia_ms = int((time_lib.time() - start_time) * 1000)
+                    last_latencia_ms = latencia_ms
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        models_list: List[str] = []
+                        if isinstance(data, dict):
+                            if isinstance(data.get("data"), list):
+                                models_list = [
+                                    str(m.get("id") or m.get("name"))
+                                    for m in data["data"]
+                                    if isinstance(m, dict) and (m.get("id") or m.get("name"))
+                                ]
+                            elif isinstance(data.get("models"), list):
+                                models_list = [
+                                    str(m.get("name") or m.get("id"))
+                                    for m in data["models"]
+                                    if isinstance(m, dict) and (m.get("name") or m.get("id"))
+                                ]
+                        if activar_si_operatiu:
+                            if payload and payload.node_ia_url is not None and payload.node_ia_url.strip():
+                                empresa.node_ia_url = payload.node_ia_url.strip()
+                            if payload and payload.disc_dur_url is not None and payload.disc_dur_url.strip():
+                                empresa.disc_dur_url = payload.disc_dur_url.strip()
+                            empresa.node_ia_actiu = True
+                            await db.commit()
+                            await SovereignStorageGateway.sincronitzar_vincle_client_vault_empresa(
+                                db, empresa
+                            )
+                            node_ia_actiu = True
 
+                        resp_ok: Dict[str, Any] = {
+                            "estat": "OPERATIU",
+                            "latencia_ms": latencia_ms,
+                            "url_efectiva": cand,
+                            "urls_provades": candidate_urls,
+                            "models_disponibles": models_list,
+                            "feature_copilot_ia": feature_copilot_ia,
+                            "node_ia_actiu": node_ia_actiu,
+                            "copilot_operatiu": bool(node_ia_actiu and feature_copilot_ia),
+                            "missatge": (
+                                f"Túnel operatiu des del servidor cap a l'ordinador dedicat ({latencia_ms}ms) "
+                                "i activació desada automàticament."
+                                if activar_si_operatiu
+                                else f"Connexió establerta amb èxit amb l'ordinador dedicat ({latencia_ms}ms)."
+                            ),
+                        }
+                        if not feature_copilot_ia:
+                            resp_ok["avis"] = (
+                                "El túnel respon correctament i l'ordinador dedicat s'ha activat, "
+                                "però el mòdul Copilot d'IA (feature_copilot_ia) està desactivat a Superadmin."
+                            )
+                        return resp_ok
+                    last_status_code = resp.status_code
+                    if resp.status_code in (401, 403):
+                        return {
+                            "estat": "TOKEN_INVALID",
+                            "latencia_ms": latencia_ms,
+                            "url_efectiva": cand,
+                            "urls_provades": candidate_urls,
+                            "feature_copilot_ia": feature_copilot_ia,
+                            "node_ia_actiu": node_ia_actiu,
+                            "copilot_operatiu": False,
+                            "missatge": (
+                                f"La passarel·la del túnel ({cand}) ha rebutjat el Token Vault (HTTP {resp.status_code}). "
+                                "Verifica que SEVALOR_VAULT_SECRET a l'ordinador dedicat coincideixi amb el vault_token de l'empresa."
+                            ),
+                        }
+                except Exception as exc:
+                    last_exc = str(exc)
+                    break
+
+    totes_loopback = all(is_private_or_loopback_url(u) for u in candidate_urls)
     if last_status_code is not None:
         return {
             "estat": "ERROR_RESPOSTA",
             "latencia_ms": last_latencia_ms,
+            "urls_provades": candidate_urls,
+            "totes_loopback": totes_loopback,
             "feature_copilot_ia": feature_copilot_ia,
             "node_ia_actiu": node_ia_actiu,
+            "copilot_operatiu": False,
             "missatge": f"L'ordinador dedicat ha retornat codi HTTP {last_status_code}",
         }
+    msg_err = (
+        "El servidor backend de Sevalor no pot connectar amb una adreça local/privada "
+        f"({', '.join(candidate_urls[:2])}). Si Sevalor corre al núvol (Hetzner/EasyPanel), "
+        "cal configurar una URL pública HTTPS de túnel (Cloudflare Tunnel cap al port 9001 de client_vault_agent.py o port 1234)."
+        if totes_loopback
+        else "No s'ha pogut establir connexió pel túnel amb l'ordinador dedicat. "
+        "Verifiqueu que LM Studio, client_vault_agent.py i el Cloudflare Tunnel estiguin encesos."
+    )
     return {
         "estat": "ERROR_CONNEXIO",
+        "urls_provades": candidate_urls,
+        "totes_loopback": totes_loopback,
         "feature_copilot_ia": feature_copilot_ia,
         "node_ia_actiu": node_ia_actiu,
-        "missatge": "No s'ha pogut establir connexió amb l'ordinador dedicat. Verifiqueu que el servidor local de la seu estigui encès i el túnel o xarxa privada estigui actiu.",
+        "copilot_operatiu": False,
+        "missatge": msg_err,
         "detall": last_exc or "Sense resposta del túnel",
     }
 

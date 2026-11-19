@@ -86,7 +86,33 @@ export default function ConfiguracioPage() {
   const esEnginyer = rolActiu === "ENGINYER";
   const esBoss = rolActiu === "BOSS";
 
-  const [pestanyaActiva, setPestanyaActiva] = useState<PestanyaConfig>("jornada");
+  const [pestanyaActiva, setPestanyaActivaState] = useState<PestanyaConfig>("jornada");
+  const setPestanyaActiva = (tab: PestanyaConfig) => {
+    setPestanyaActivaState(tab);
+    if (typeof window !== "undefined") {
+      try {
+        sessionStorage.setItem("sevalor_config_tab", tab);
+      } catch {
+        // Ignorar si sessionStorage no està disponible
+      }
+    }
+  };
+
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      try {
+        const savedTab = sessionStorage.getItem("sevalor_config_tab") as PestanyaConfig | null;
+        if (
+          savedTab &&
+          ["marca", "personal", "jornada", "telegram", "node_ia", "barema"].includes(savedTab)
+        ) {
+          setPestanyaActivaState(savedTab);
+        }
+      } catch {
+        // Ignorar
+      }
+    }
+  }, []);
 
   // Estat d'Empresa & Marca Camaleònica (carregat del backend - Zero Mock)
   const [empresaId, setEmpresaId] = useState<string | null>(null);
@@ -245,7 +271,7 @@ export default function ConfiguracioPage() {
 
   useEffect(() => {
     apiFetch("/gestio/configuracio/node-ia")
-      .then((data: any) => {
+      .then(async (data: any) => {
         if (data.node_ia_url) setNodeIaUrl(data.node_ia_url);
         if (data.disc_dur_url) setDiscDurUrl(data.disc_dur_url);
         if (data.node_ia_actiu !== undefined) setNodeIaActiu(Boolean(data.node_ia_actiu));
@@ -257,6 +283,29 @@ export default function ConfiguracioPage() {
           setNodeIaEstat("OPERATIU");
         } else {
           setNodeIaEstat("NO_CONFIGURAT");
+        }
+        if (data.node_ia_url || data.disc_dur_url) {
+          try {
+            const probe: any = await apiFetch("/gestio/configuracio/node-ia/provar", {
+              method: "POST",
+              body: JSON.stringify({
+                node_ia_url: data.node_ia_url || null,
+                disc_dur_url: data.disc_dur_url || null,
+                activar_si_operatiu: false,
+              }),
+            });
+            if (probe?.estat === "OPERATIU") {
+              setNodeIaEstat("OPERATIU");
+              setNodeIaLatencia(probe.latencia_ms ?? null);
+              if (Array.isArray(probe.models_disponibles) && probe.models_disponibles.length > 0) {
+                setNodeIaModelInfo(probe.models_disponibles.join(", "));
+              } else if (probe.detall) {
+                setNodeIaModelInfo(probe.detall);
+              }
+            }
+          } catch {
+            // Conservem l'estat base carregat de la fitxa si la sonda ràpida falla
+          }
         }
       })
       .catch(() => setNodeIaEstat("NO_CONFIGURAT"));
@@ -634,13 +683,47 @@ export default function ConfiguracioPage() {
         agent_prompt_system: agentPromptSystem.trim() || null,
       }),
     });
-    if (res && res.feature_copilot_ia !== undefined) {
-      setFeatureCopilotIa(Boolean(res.feature_copilot_ia));
+    if (res) {
+      if (res.node_ia_actiu !== undefined) setNodeIaActiu(Boolean(res.node_ia_actiu));
+      if (res.feature_copilot_ia !== undefined) {
+        setFeatureCopilotIa(Boolean(res.feature_copilot_ia));
+      }
+      if (!res.node_ia_actiu) {
+        setNodeIaEstat("NO_CONFIGURAT");
+      }
     }
     if (typeof window !== "undefined") {
       window.dispatchEvent(new CustomEvent("sevalor:node-ia-updated"));
     }
     return res;
+  };
+
+  const handleToggleNodeIaActiu = async (checked: boolean) => {
+    if (esEnginyer) {
+      mostrarFeedback("ERROR", "Veto d'Enginyer (HTTP 403): La configuració del node d'IA està reservada al Boss.");
+      return;
+    }
+    const previ = nodeIaActiu;
+    setNodeIaActiu(checked);
+    setNodeIaDesant(true);
+    try {
+      const res: any = await persistirNodeIaAlBackend(checked);
+      if (res?.avis) {
+        mostrarFeedback("ERROR", res.avis);
+      } else {
+        mostrarFeedback(
+          "EXIT",
+          checked
+            ? "Ordinador dedicat d'IA local activat i desat a PostgreSQL."
+            : "Ordinador dedicat d'IA local desactivat i desat."
+        );
+      }
+    } catch (err: any) {
+      setNodeIaActiu(previ);
+      mostrarFeedback("ERROR", err?.message || "No s'ha pogut desar l'estat de l'ordinador dedicat.");
+    } finally {
+      setNodeIaDesant(false);
+    }
   };
 
   const handleDesarNodeIa = async () => {
@@ -663,129 +746,104 @@ export default function ConfiguracioPage() {
     }
   };
 
+  const detectarLmStudioLocalNavegador = async (baseUrl: string): Promise<string[] | null> => {
+    const clean = baseUrl.replace(/\/+$/, "");
+    if (!clean) return null;
+    const candidateEndpoints = clean.endsWith("/v1")
+      ? [`${clean}/models`]
+      : [`${clean}/v1/models`, `${clean}/api/tags`];
+    for (const url of candidateEndpoints) {
+      try {
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), 2500);
+        const resp = await fetch(url, { method: "GET", mode: "cors", signal: ctrl.signal });
+        clearTimeout(timer);
+        if (resp.ok) {
+          const data = await resp.json().catch(() => null);
+          if (data && Array.isArray(data.data)) {
+            return data.data.map((m: any) => String(m.id || m.name)).filter(Boolean);
+          }
+          if (data && Array.isArray(data.models)) {
+            return data.models.map((m: any) => String(m.name || m.id)).filter(Boolean);
+          }
+          return [];
+        }
+      } catch {
+        // Ignorar errors de sonda secundària
+      }
+    }
+    return null;
+  };
+
   const handleProvarNodeIa = async () => {
     const rawUrl = nodeIaUrl.trim();
-    if (!rawUrl && !discDurUrl.trim()) {
-      mostrarFeedback("ERROR", "Cal introduir la URL de l'ordinador dedicat abans de provar la connexió.");
+    const rawDiscUrl = discDurUrl.trim();
+    if (!rawUrl && !rawDiscUrl) {
+      mostrarFeedback("ERROR", "Cal introduir la URL de l'ordinador dedicat o del túnel abans de provar la connexió.");
       return;
     }
     setNodeIaTestant(true);
 
-    // 1. Sonda directa des de la plataforma (navegador -> 127.0.0.1 / LAN)
-    const base = rawUrl.replace(/\/+$/, "");
-    const isLocalClientUrl =
-      Boolean(base) &&
-      /^https?:\/\/(127\.0\.0\.1|localhost|192\.168\.|10\.|172\.(1[6-9]|2\d|3[0-1])\.)/i.test(base);
-    const candidateEndpoints = !base
-      ? []
-      : base.endsWith("/v1")
-      ? [`${base}/models`]
-      : [`${base}/v1/models`, `${base}/api/tags`, `${base}/models`];
-
-    for (const url of candidateEndpoints) {
-      try {
-        const t0 = performance.now();
-        const ctrl = new AbortController();
-        const timer = setTimeout(() => ctrl.abort(), 3500);
-        const resp = await fetch(url, {
-          method: "GET",
-          mode: "cors",
-          signal: ctrl.signal,
-        });
-        clearTimeout(timer);
-        const latencia = Math.max(1, Math.round(performance.now() - t0));
-        if (resp.ok) {
-          let models: string[] = [];
-          try {
-            const data = await resp.json();
-            if (data && Array.isArray(data.data)) {
-              models = data.data.map((m: any) => String(m.id || m.name)).filter(Boolean);
-            } else if (data && Array.isArray(data.models)) {
-              models = data.models.map((m: any) => String(m.name || m.id)).filter(Boolean);
-            }
-          } catch {
-            // Ignorem error de parseig
-          }
-          setNodeIaEstat("OPERATIU");
-          setNodeIaLatencia(latencia);
-          setNodeIaModelInfo(models.length > 0 ? models.join(", ") : "Model OpenAI compatible actiu");
-          setNodeIaActiu(true);
-          if (!esEnginyer) {
-            try {
-              const saved: any = await persistirNodeIaAlBackend(true);
-              if (saved?.avis) {
-                mostrarFeedback("ERROR", saved.avis);
-              } else {
-                mostrarFeedback(
-                  "EXIT",
-                  `Connexió establerta (${latencia} ms) i activació desada automàticament.`
-                );
-              }
-            } catch {
-              mostrarFeedback(
-                "EXIT",
-                `Connexió establerta (${latencia} ms). Recorda prémer 'Desar Paràmetres del Node' per activar-lo.`
-              );
-            }
-          } else {
-            mostrarFeedback("EXIT", `Connexió establerta directament des de la plataforma (${latencia} ms)`);
-          }
-          setNodeIaTestant(false);
-          return;
-        }
-      } catch {
-        // Continua amb el següent endpoint
-      }
-    }
-
-    if (isLocalClientUrl && !discDurUrl.trim()) {
-      setNodeIaEstat("ERROR_CONNEXIO");
-      mostrarFeedback("ERROR", `El navegador no ha pogut connectar amb ${base}. Verifica que LM Studio / Ollama tingui el servidor local engegat i CORS activat.`);
-      setNodeIaTestant(false);
-      return;
-    }
-
     try {
+      // Sonda REAL des del servidor backend de Sevalor (és el servidor qui executa el Copilot via túnel)
       const res: any = await apiFetch("/gestio/configuracio/node-ia/provar", {
         method: "POST",
         body: JSON.stringify({
           node_ia_url: rawUrl || null,
-          disc_dur_url: discDurUrl.trim() || null,
+          disc_dur_url: rawDiscUrl || null,
+          activar_si_operatiu: !esEnginyer,
         }),
       });
       if (res && res.feature_copilot_ia !== undefined) {
         setFeatureCopilotIa(Boolean(res.feature_copilot_ia));
       }
-      if (res.estat === "OPERATIU") {
+      if (res && res.node_ia_actiu !== undefined) {
+        setNodeIaActiu(Boolean(res.node_ia_actiu));
+      }
+      if (res?.estat === "OPERATIU") {
         setNodeIaEstat("OPERATIU");
-        setNodeIaLatencia(res.latencia_ms);
-        const models = res.models_disponibles || [];
+        setNodeIaLatencia(res.latencia_ms ?? null);
+        const models = Array.isArray(res.models_disponibles) ? res.models_disponibles : [];
         setNodeIaModelInfo(models.length > 0 ? models.join(", ") : "Model OpenAI compatible actiu");
-        setNodeIaActiu(true);
-        if (!esEnginyer) {
-          try {
-            const saved: any = await persistirNodeIaAlBackend(true);
-            if (saved?.avis) {
-              mostrarFeedback("ERROR", saved.avis);
-            } else {
-              mostrarFeedback(
-                "EXIT",
-                `${res.missatge || `Connexió establerta amb l'ordinador de la seu (${res.latencia_ms}ms)`} — Activació desada.`
-              );
-            }
-          } catch {
-            mostrarFeedback("EXIT", res.missatge || `Connexió establerta amb l'ordinador de la seu (${res.latencia_ms}ms)`);
-          }
+        if (typeof window !== "undefined") {
+          window.dispatchEvent(new CustomEvent("sevalor:node-ia-updated"));
+        }
+        if (res.avis) {
+          mostrarFeedback("ERROR", res.avis);
         } else {
-          mostrarFeedback("EXIT", res.missatge || `Connexió establerta amb l'ordinador de la seu (${res.latencia_ms}ms)`);
+          mostrarFeedback(
+            "EXIT",
+            res.missatge || `Túnel operatiu (${res.latencia_ms}ms) i activació desada.`
+          );
         }
       } else {
         setNodeIaEstat("ERROR_CONNEXIO");
-        mostrarFeedback("ERROR", res.missatge || "No s'ha pogut connectar amb l'ordinador dedicat.");
+        setNodeIaLatencia(null);
+        setNodeIaModelInfo(null);
+
+        // Diagnòstic secundari: detectar si LM Studio respon només al navegador local però NO pel túnel del servidor
+        const base = rawUrl.replace(/\/+$/, "");
+        const isLocalClientUrl =
+          Boolean(base) &&
+          /^https?:\/\/(127\.0\.0\.1|localhost|192\.168\.|10\.|172\.(1[6-9]|2\d|3[0-1])\.)/i.test(base);
+        if (res?.estat === "ERROR_CONNEXIO" && isLocalClientUrl) {
+          const localModels = await detectarLmStudioLocalNavegador(base);
+          if (localModels !== null) {
+            const modelsTxt = localModels.length > 0 ? localModels.join(", ") : "actiu";
+            mostrarFeedback(
+              "ERROR",
+              `LM Studio respon només al teu navegador local (${modelsTxt}), però el servidor de Sevalor NO hi pot arribar per túnel! Configura una URL pública HTTPS (Cloudflare Tunnel cap al port 9001 de client_vault_agent.py o port 1234).`
+            );
+            setNodeIaTestant(false);
+            return;
+          }
+        }
+        mostrarFeedback("ERROR", res?.missatge || "No s'ha pogut connectar pel túnel amb l'ordinador dedicat.");
       }
     } catch (err: any) {
       setNodeIaEstat("ERROR_CONNEXIO");
-      mostrarFeedback("ERROR", err.message || "Error de xarxa en provar l'ordinador dedicat.");
+      setNodeIaLatencia(null);
+      mostrarFeedback("ERROR", err?.message || "Error de xarxa en provar el túnel de l'ordinador dedicat.");
     } finally {
       setNodeIaTestant(false);
     }
@@ -1719,9 +1777,9 @@ export default function ConfiguracioPage() {
               <label className="relative inline-flex items-center cursor-pointer">
                 <input
                   type="checkbox"
-                  disabled={esEnginyer}
+                  disabled={esEnginyer || nodeIaDesant}
                   checked={nodeIaActiu}
-                  onChange={(e) => setNodeIaActiu(e.target.checked)}
+                  onChange={(e) => handleToggleNodeIaActiu(e.target.checked)}
                   className="sr-only peer"
                 />
                 <div className="w-11 h-6 bg-slate-300 peer-focus:outline-none rounded-full peer dark:bg-slate-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-600"></div>
@@ -1737,13 +1795,13 @@ export default function ConfiguracioPage() {
               <input
                 type="text"
                 disabled={esEnginyer}
-                placeholder="Ex: http://127.0.0.1:1234 o http://192.168.1.100:1234"
+                placeholder="Ex: https://node-empresa.projectexinoxano.cat o http://127.0.0.1:1234"
                 value={nodeIaUrl}
                 onChange={(e) => setNodeIaUrl(e.target.value)}
                 className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-mono text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500 disabled:opacity-50"
               />
               <p className="text-[10px] text-slate-400">
-                La plataforma verifica i connecta directament des del navegador cap al port local (ex: <code>http://127.0.0.1:1234</code>).
+                El backend verifica la connectivitat real pel túnel. En núvol (Hetzner) cal una URL pública HTTPS (Cloudflare Tunnel cap al port 9001 o 1234); en local Docker pots usar <code>http://127.0.0.1:1234</code>.
               </p>
             </div>
 

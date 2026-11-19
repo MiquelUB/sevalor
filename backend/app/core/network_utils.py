@@ -98,12 +98,11 @@ def resoldre_url_tunel_ia(
         else ""
     )
 
-    # Si estem en Docker (Hetzner/Compose) i node_ia_url és loopback/LAN però disc_dur_url és un túnel públic,
-    # prioritzar el túnel HTTP públic cap a client_vault_agent.py (:9001 que proxieja /v1/*).
+    # Si node_ia_url és loopback/LAN privada però disc_dur_url és un túnel HTTP(S) públic,
+    # prioritzar sempre el túnel públic cap a client_vault_agent.py (:9001 que proxieja /v1/*).
     if (
         node_clean
         and disc_clean
-        and os.path.exists("/.dockerenv")
         and is_private_or_loopback_url(node_clean)
         and not is_private_or_loopback_url(disc_clean)
     ):
@@ -136,7 +135,6 @@ def get_candidate_ia_tunnel_urls(
     if (
         node_clean
         and disc_clean
-        and os.path.exists("/.dockerenv")
         and is_private_or_loopback_url(node_clean)
         and not is_private_or_loopback_url(disc_clean)
     ):

@@ -377,7 +377,7 @@ export default function EmpresesPage() {
                           <Cpu className="w-3 h-3" />
                           <span>
                             PC Client:{" "}
-                            {t.node_ia_url
+                            {t.node_ia_url || (t as any).disc_dur_url
                               ? t.node_ia_actiu
                                 ? "🟢 ONLINE"
                                 : "🔴 APAGAT"

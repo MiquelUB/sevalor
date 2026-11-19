@@ -302,16 +302,63 @@ export default function EmpresaDetailPage({ params }: { params: { id: string } }
         if (data.primari_hsl) setPrimariHsl(data.primari_hsl);
         if (data.secundari_hsl) setSecundariHsl(data.secundari_hsl);
         if (data.accent_hsl) setAccentHsl(data.accent_hsl);
+        const loadedNodeUrl = (data.node_ia_url || "").trim();
+        const loadedDiscUrl = (data.disc_dur_url || "").trim();
+        const loadedVaultTok = (data.vault_token || "").trim();
         setFeatures({
           feature_copilot_ia: Boolean(data.feature_copilot_ia),
           feature_flota: Boolean(data.feature_flota),
           feature_planols: Boolean(data.feature_planols),
           feature_telegram: Boolean(data.feature_telegram),
-          node_ia_url: data.node_ia_url || "",
-          disc_dur_url: data.disc_dur_url || "",
+          node_ia_url: loadedNodeUrl,
+          disc_dur_url: loadedDiscUrl,
           node_ia_actiu: Boolean(data.node_ia_actiu),
         });
-        setVaultToken(data.vault_token || "");
+        setVaultToken(loadedVaultTok);
+
+        // Auto-verificació en carregar la fitxa perquè l'empresa es vegi connectada sempre en entrar
+        const targetIaProbe = loadedNodeUrl || loadedDiscUrl;
+        if (targetIaProbe) {
+          apiFetch<any>("/superadmin/tenants/verificar-node-ia", {
+            method: "POST",
+            body: JSON.stringify({
+              node_ia_url: targetIaProbe,
+              disc_dur_url: loadedDiscUrl || undefined,
+              empresa_id: actualId,
+              vault_token: loadedVaultTok || undefined,
+            }),
+          })
+            .then((resIa) => {
+              if (resIa) {
+                setNodeIaStatus(resIa);
+                if (resIa.status === "OK") {
+                  setFeatures((prev) => ({ ...prev, node_ia_actiu: true }));
+                }
+              }
+            })
+            .catch(() => {});
+        }
+        const targetDiscProbe = loadedDiscUrl || loadedNodeUrl;
+        if (targetDiscProbe && !targetDiscProbe.startsWith("Carpeta Local:")) {
+          apiFetch<any>("/superadmin/tenants/verificar-disc-dur", {
+            method: "POST",
+            body: JSON.stringify({
+              disc_dur_url: targetDiscProbe,
+              node_ia_url: loadedNodeUrl || targetDiscProbe,
+              empresa_id: actualId,
+              vault_token: loadedVaultTok || undefined,
+            }),
+          })
+            .then((resDisc) => {
+              if (resDisc) {
+                setDiscDurStatus(resDisc);
+                if (resDisc.status === "OK") {
+                  setFeatures((prev) => ({ ...prev, node_ia_actiu: true }));
+                }
+              }
+            })
+            .catch(() => {});
+        }
 
         // CRM fields
         const tBase = Number(data.tarifa_llicencia_base ?? 0);
@@ -516,97 +563,80 @@ export default function EmpresaDetailPage({ params }: { params: { id: string } }
 
   const handleVerificarNodeIa = async () => {
     const rawUrl = features.node_ia_url?.trim();
-    if (!rawUrl) {
-      setErrorMessage("Introdueix l'adreça URL del Copilot local (ex: http://127.0.0.1:1234) abans de verificar.");
+    const rawDiscUrl = features.disc_dur_url?.trim();
+    if (!rawUrl && !rawDiscUrl) {
+      setErrorMessage("Introdueix l'adreça URL del Copilot local o túnel HTTPS abans de verificar.");
       return;
     }
     setNodeIaTesting(true);
     setNodeIaStatus(null);
     setErrorMessage(null);
 
-    const base = rawUrl.replace(/\/+$/, "");
-    const candidateEndpoints = base.endsWith("/v1")
-      ? [`${base}/models`]
-      : [`${base}/v1/models`, `${base}/api/tags`, `${base}/models`];
-
+    const targetUrl = rawUrl || rawDiscUrl || "";
+    const base = targetUrl.replace(/\/+$/, "");
     const isLocalClientUrl =
       /^https?:\/\/(127\.0\.0\.1|localhost|192\.168\.|10\.|172\.(1[6-9]|2\d|3[0-1])\.)/i.test(base);
 
-    // 1. Sonda directa des de la plataforma (navegador del client -> ordinador local 127.0.0.1 / LAN)
-    let lastClientErr = "";
-    for (const url of candidateEndpoints) {
-      try {
-        const t0 = performance.now();
-        const ctrl = new AbortController();
-        const timer = setTimeout(() => ctrl.abort(), 3500);
-        const resp = await fetch(url, {
-          method: "GET",
-          mode: "cors",
-          signal: ctrl.signal,
-        });
-        clearTimeout(timer);
-        const latencia = Math.max(1, Math.round(performance.now() - t0));
-        if (resp.ok) {
-          let models: string[] = [];
-          try {
-            const data = await resp.json();
-            if (data && Array.isArray(data.data)) {
-              models = data.data.map((m: any) => String(m.id || m.name)).filter(Boolean);
-            } else if (data && Array.isArray(data.models)) {
-              models = data.models.map((m: any) => String(m.name || m.id)).filter(Boolean);
-            }
-          } catch {
-            // Ignorem error de parseig si no és JSON
-          }
-          const okRes = {
-            status: "OK",
-            motiu: "CONNEXIO_ESTABLERTA",
-            missatge: `Connexió establerta directament des de la plataforma amb el Copilot local (${latencia} ms).`,
-            models,
-            latencia_ms: latencia,
-            url_efectiva: base,
-          };
-          setNodeIaStatus(okRes);
-          setFeatures((prev) => ({ ...prev, node_ia_actiu: true }));
-          setNodeIaTesting(false);
-          return;
-        } else {
-          lastClientErr = `HTTP ${resp.status}`;
-        }
-      } catch (e: any) {
-        lastClientErr = e?.message || "Connexió rebutjada pel navegador";
-      }
-    }
-
-    // Si és una adreça local (127.0.0.1 / localhost / LAN), NO enviem mai la petició al servidor de Hetzner
-    if (isLocalClientUrl) {
-      setNodeIaStatus({
-        status: "ERROR",
-        motiu: "PORT_LOCAL_NO_RESPON",
-        missatge: `El navegador no ha pogut connectar amb ${base} (${lastClientErr}). Verifica que LM Studio / Ollama tingui el servidor local engegat ('Start Server') i l'opció CORS activada.`,
-        models: [],
-        latencia_ms: null,
-      });
-      setNodeIaTesting(false);
-      return;
-    }
-
-    // 2. Fallback via servidor backend només per a dominis públics remots amb restricció CORS al navegador
+    // 1. Sonda REAL des del servidor backend cap al túnel de l'empresa
     try {
       const res = await apiFetch<any>("/superadmin/tenants/verificar-node-ia", {
         method: "POST",
         body: JSON.stringify({
-          node_ia_url: rawUrl,
+          node_ia_url: targetUrl,
+          disc_dur_url: rawDiscUrl || undefined,
           empresa_id: empresaId,
           vault_token: vaultToken.trim() || undefined,
         }),
       });
-      setNodeIaStatus(res);
       if (res.status === "OK") {
+        setNodeIaStatus(res);
         if (!features.node_ia_actiu) {
           setFeatures((prev) => ({ ...prev, node_ia_actiu: true }));
         }
+        setNodeIaTesting(false);
+        return;
       }
+
+      // 2. Si el backend no hi pot arribar i la URL és local, fer diagnòstic secundari al navegador
+      if (isLocalClientUrl) {
+        const candidateEndpoints = base.endsWith("/v1")
+          ? [`${base}/models`]
+          : [`${base}/v1/models`, `${base}/api/tags`];
+        for (const url of candidateEndpoints) {
+          try {
+            const ctrl = new AbortController();
+            const timer = setTimeout(() => ctrl.abort(), 2500);
+            const resp = await fetch(url, { method: "GET", mode: "cors", signal: ctrl.signal });
+            clearTimeout(timer);
+            if (resp.ok) {
+              let models: string[] = [];
+              try {
+                const data = await resp.json();
+                if (data && Array.isArray(data.data)) {
+                  models = data.data.map((m: any) => String(m.id || m.name)).filter(Boolean);
+                } else if (data && Array.isArray(data.models)) {
+                  models = data.models.map((m: any) => String(m.name || m.id)).filter(Boolean);
+                }
+              } catch {
+                // Ignorar error de parseig
+              }
+              setNodeIaStatus({
+                status: "ERROR",
+                motiu: "LOOPBACK_INACCESSIBLE_DES_DE_SERVIDOR",
+                missatge: `LM Studio respon al teu navegador (${models.join(", ") || "actiu"}), però el servidor de Sevalor NO pot arribar a ${base} sense túnel HTTPS públic (Cloudflare Tunnel cap al port 9001 o 1234).`,
+                models,
+                latencia_ms: null,
+              });
+              setNodeIaTesting(false);
+              return;
+            }
+          } catch {
+            // Següent endpoint
+          }
+        }
+      }
+
+      setNodeIaStatus(res);
     } catch (err: any) {
       setNodeIaStatus({
         status: "ERROR",
@@ -681,11 +711,27 @@ export default function EmpresaDetailPage({ params }: { params: { id: string } }
     setInitDiskStatus(null);
     setErrorMessage(null);
     try {
+      // Persistir primer les URLs i el vault_token actuals del formulari abans d'inicialitzar les carpetes i fitxers
+      await apiFetch(`/superadmin/tenants/${params.id}/feature-flags`, {
+        method: "PUT",
+        body: JSON.stringify({
+          ...features,
+          node_ia_actiu:
+            Boolean(features.node_ia_url?.trim() || features.disc_dur_url?.trim()) ||
+            features.node_ia_actiu,
+          vault_token: vaultToken.trim() || undefined,
+        }),
+      });
       const res = await apiFetch<any>(`/superadmin/tenants/${params.id}/inicialitzar-disc`, {
         method: "POST",
         body: JSON.stringify({}),
       });
       setInitDiskStatus(res);
+      setFeatures((prev) => ({
+        ...prev,
+        node_ia_actiu:
+          Boolean(prev.node_ia_url?.trim() || prev.disc_dur_url?.trim()) || prev.node_ia_actiu,
+      }));
     } catch (err: any) {
       setInitDiskStatus({
         status: "ERROR",
@@ -2558,7 +2604,7 @@ export default function EmpresaDetailPage({ params }: { params: { id: string } }
                   </button>
                 </div>
                 <p className="text-[10px] text-slate-500 dark:text-slate-400">
-                  La plataforma verifica la connexió directament des del teu navegador contra <code className="px-1 py-0.5 rounded bg-slate-200 dark:bg-slate-700">http://127.0.0.1:1234</code> sense passar pel servidor de Hetzner.
+                  La verificació comprova la connectivitat real des del servidor backend cap al túnel del client (en producció Hetzner cal una URL pública HTTPS com <code className="px-1 py-0.5 rounded bg-slate-200 dark:bg-slate-700">https://node-empresa.projectexinoxano.cat</code>).
                 </p>
               </div>
 

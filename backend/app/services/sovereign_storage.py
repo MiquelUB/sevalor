@@ -233,11 +233,96 @@ class SovereignStorageGateway:
         return bytes(out)
 
     @staticmethod
+    async def recuperar_fitxa_superadmin_empresa(
+        empresa_id: str | uuid.UUID,
+    ) -> Dict[str, Any]:
+        """Recupera la fitxa B2B exclusiva d'aquesta empresa des del Disc Dur de Superadmin."""
+        emp_str = str(empresa_id)
+        try:
+            fitxes = await SuperadminStorageGateway.llegir_entitats_json("tenants_fitxes")
+            for f in fitxes:
+                if isinstance(f, dict) and str(f.get("id") or f.get("empresa_id") or "") == emp_str:
+                    return f
+        except Exception:
+            pass
+        return {}
+
+    @classmethod
+    async def autocurar_config_tunel_empresa(
+        cls,
+        db: Optional[AsyncSession],
+        emp: Optional[Empresa],
+        *,
+        commit: bool = False,
+    ) -> bool:
+        """
+        Si a la fila SQL d'Empresa li falta disc_dur_url, node_ia_url, vault_token o node_ia_actiu,
+        els restaura des de la fitxa exclusiva d'aquesta mateixa empresa al Disc de Superadmin.
+        """
+        if emp is None:
+            return False
+        needs_heal = (
+            not getattr(emp, "disc_dur_url", None)
+            or not getattr(emp, "node_ia_url", None)
+            or not getattr(emp, "vault_token", None)
+            or not bool(getattr(emp, "node_ia_actiu", False))
+        )
+        if not needs_heal:
+            return False
+
+        fitxa = await cls.recuperar_fitxa_superadmin_empresa(emp.id)
+        if not fitxa:
+            return False
+
+        had_any_url_in_sql = bool(
+            getattr(emp, "node_ia_url", None) or getattr(emp, "disc_dur_url", None)
+        )
+        changed = False
+        f_disc = fitxa.get("disc_dur_url")
+        if not getattr(emp, "disc_dur_url", None) and isinstance(f_disc, str) and f_disc.strip():
+            emp.disc_dur_url = f_disc.strip()
+            changed = True
+
+        f_node = fitxa.get("node_ia_url")
+        if not getattr(emp, "node_ia_url", None) and isinstance(f_node, str) and f_node.strip():
+            emp.node_ia_url = f_node.strip()
+            changed = True
+
+        f_tok = fitxa.get("vault_token")
+        if not getattr(emp, "vault_token", None) and isinstance(f_tok, str) and f_tok.strip():
+            emp.vault_token = f_tok.strip()
+            changed = True
+
+        if (
+            not had_any_url_in_sql
+            and not bool(getattr(emp, "node_ia_actiu", False))
+            and bool(fitxa.get("node_ia_actiu", False))
+        ):
+            if getattr(emp, "node_ia_url", None) or getattr(emp, "disc_dur_url", None):
+                emp.node_ia_actiu = True
+                changed = True
+
+        if (
+            not had_any_url_in_sql
+            and not bool(getattr(emp, "feature_copilot_ia", False))
+            and bool(fitxa.get("feature_copilot_ia", False))
+        ):
+            emp.feature_copilot_ia = True
+            changed = True
+
+        if changed and commit and db is not None:
+            try:
+                await db.commit()
+            except Exception:
+                pass
+        return changed
+
+    @staticmethod
     async def resoldre_desti_disc_empresa(
         db: Optional[AsyncSession], empresa_id: str | uuid.UUID
     ) -> Tuple[str, str, Optional[str]]:
         """
-        Obté la destinació del disc dur configurat per a l'empresa.
+        Obté la destinació del disc dur exclusiu configurat per a l'empresa.
         Retorna: (mode: 'LOCAL_FS' | 'HTTP_VAULT', base_target: str, secret: Optional[str])
         """
         emp_uuid = uuid.UUID(str(empresa_id))
@@ -254,9 +339,24 @@ class SovereignStorageGateway:
                 base_vaults = os.getenv("CLIENT_DISKS_MOUNT_ROOT", "/tmp/sevalor_client_disks")
 
         if not emp:
+            fitxa_sa = await SovereignStorageGateway.recuperar_fitxa_superadmin_empresa(emp_uuid)
+            raw_sa_disc = str(fitxa_sa.get("disc_dur_url") or "").strip()
+            sa_tok = str(fitxa_sa.get("vault_token") or "").strip() or None
+            if raw_sa_disc and ":1234" not in raw_sa_disc and not raw_sa_disc.startswith("Carpeta Local:"):
+                if raw_sa_disc.startswith(("http://", "https://")):
+                    eff = resolve_effective_node_url(raw_sa_disc) or raw_sa_disc
+                    return (
+                        "HTTP_VAULT",
+                        eff.rstrip("/"),
+                        sa_tok or os.getenv("SEVALOR_VAULT_SECRET", "sevalor-vault-secret-token"),
+                    )
+                inicialitzar_arbre_carpetes_disc(raw_sa_disc)
+                return ("LOCAL_FS", str(Path(raw_sa_disc).resolve()), None)
             raw_disc = os.path.join(base_vaults, f"disc_{emp_uuid}")
             inicialitzar_arbre_carpetes_disc(raw_disc)
             return ("LOCAL_FS", str(Path(raw_disc).resolve()), None)
+
+        await SovereignStorageGateway.autocurar_config_tunel_empresa(db, emp, commit=False)
 
         raw_disc = (getattr(emp, "disc_dur_url", None) or "").strip()
         if raw_disc.startswith("Carpeta Local:"):
@@ -1044,6 +1144,11 @@ class SovereignStorageGateway:
         """Bolca la fitxa d'identitat camaleònica, la fitxa del Boss i el system_prompt.txt al disc del client."""
         rutes: Dict[str, str] = {}
         reals_emp = dades_empresa_reals or {}
+        prompt_final = (
+            agent_prompt_system
+            if agent_prompt_system is not None
+            else empresa.agent_prompt_system
+        )
         dades_empresa: Dict[str, Any] = {
             "id": str(empresa.id),
             "nom": reals_emp.get("nom", empresa.nom),
@@ -1058,7 +1163,13 @@ class SovereignStorageGateway:
             "accent_hsl": reals_emp.get("accent_hsl", empresa.accent_hsl),
             "logotip_path": reals_emp.get("logotip_path", empresa.logotip_path),
             "node_ia_url": reals_emp.get("node_ia_url", empresa.node_ia_url),
-            "disc_dur_url": reals_emp.get("disc_dur_url", empresa.disc_dur_url),
+            "disc_dur_url": reals_emp.get("disc_dur_url", getattr(empresa, "disc_dur_url", None)),
+            "vault_token": reals_emp.get("vault_token", getattr(empresa, "vault_token", None)),
+            "node_ia_actiu": bool(reals_emp.get("node_ia_actiu", getattr(empresa, "node_ia_actiu", False))),
+            "feature_copilot_ia": bool(
+                reals_emp.get("feature_copilot_ia", getattr(empresa, "feature_copilot_ia", False))
+            ),
+            "agent_prompt_system": prompt_final,
         }
         if "magatzem_families_default" in reals_emp:
             dades_empresa["magatzem_families_default"] = reals_emp["magatzem_families_default"]
@@ -1098,11 +1209,6 @@ class SovereignStorageGateway:
                 )
             except Exception:
                 pass
-        prompt_final = (
-            agent_prompt_system
-            if agent_prompt_system is not None
-            else empresa.agent_prompt_system
-        )
         if prompt_final:
             rutes["system_prompt"] = await cls.pujar_fitxer_binari(
                 db=db,
@@ -1113,6 +1219,104 @@ class SovereignStorageGateway:
                 content_type="text/plain; charset=utf-8",
             )
         return rutes
+
+    @classmethod
+    async def sincronitzar_vincle_client_vault_empresa(
+        cls,
+        db: AsyncSession,
+        empresa: Empresa,
+        *,
+        dades_extra: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """
+        Persistència Sobirana Doble (Superadmin Disk + Empresa Exclusive Disk):
+        1. Actualitza la fitxa B2B al Disc Dur de Superadmin (01_tenants_b2b/fitxes_empreses/<id>.json)
+           amb node_ia_url, disc_dur_url, vault_token, node_ia_actiu i feature_copilot_ia.
+        2. Escriu empresa.json (i system_prompt.txt si n'hi ha) a la carpeta 11_configuracio_i_backups
+           del Disc Dur Exclusiu de l'Empresa i drena la cua de trànsit pendent.
+        """
+        emp_id_str = str(empresa.id)
+        extra = dades_extra or {}
+        fitxa_existent = await cls.recuperar_fitxa_superadmin_empresa(empresa.id)
+
+        nom_real = str(
+            extra.get("nom")
+            or extra.get("rao_social")
+            or fitxa_existent.get("rao_social")
+            or fitxa_existent.get("nom")
+            or empresa.nom
+        )
+        nif_real = str(extra.get("nif") or fitxa_existent.get("nif") or empresa.nif)
+        adreca_real = extra.get("adreca", fitxa_existent.get("adreca", empresa.adreca))
+
+        fitxa_superadmin: Dict[str, Any] = {
+            **fitxa_existent,
+            "id": emp_id_str,
+            "empresa_id": emp_id_str,
+            "nom": nom_real,
+            "rao_social": nom_real,
+            "nif": nif_real,
+            "adreca": adreca_real,
+            "subdomini": empresa.subdomini,
+            "domini_custom": empresa.domini_custom,
+            "vertical": empresa.vertical,
+            "pla_subscripcio": empresa.pla_subscripcio,
+            "estat_pagament": empresa.estat_pagament,
+            "node_ia_url": empresa.node_ia_url,
+            "disc_dur_url": getattr(empresa, "disc_dur_url", None),
+            "vault_token": getattr(empresa, "vault_token", None),
+            "node_ia_actiu": bool(getattr(empresa, "node_ia_actiu", False)),
+            "feature_copilot_ia": bool(getattr(empresa, "feature_copilot_ia", False)),
+            "feature_flota": bool(getattr(empresa, "feature_flota", True)),
+            "feature_planols": bool(getattr(empresa, "feature_planols", False)),
+            "feature_telegram": bool(getattr(empresa, "feature_telegram", True)),
+            "agent_prompt_system": empresa.agent_prompt_system,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        if "created_at" not in fitxa_superadmin:
+            fitxa_superadmin["created_at"] = datetime.now(timezone.utc).isoformat()
+
+        superadmin_path: Optional[str] = None
+        try:
+            superadmin_path = await SuperadminStorageGateway.desar_entitat_json(
+                "tenants_fitxes", emp_id_str, fitxa_superadmin
+            )
+        except Exception as exc:
+            logger.warning(
+                "No s'ha pogut sincronitzar fitxa de %s al Disc de Superadmin: %s",
+                emp_id_str,
+                exc,
+            )
+
+        empresa_rutes: Dict[str, str] = {}
+        try:
+            empresa_rutes = await cls.inicialitzar_dades_onboarding_empresa(
+                db=db,
+                empresa=empresa,
+                dades_empresa_reals={
+                    "nom": nom_real,
+                    "nif": nif_real,
+                    "adreca": adreca_real,
+                    "node_ia_url": empresa.node_ia_url,
+                    "disc_dur_url": getattr(empresa, "disc_dur_url", None),
+                    "vault_token": getattr(empresa, "vault_token", None),
+                    "node_ia_actiu": bool(getattr(empresa, "node_ia_actiu", False)),
+                    "feature_copilot_ia": bool(getattr(empresa, "feature_copilot_ia", False)),
+                },
+                agent_prompt_system=empresa.agent_prompt_system,
+            )
+            await cls.drenar_cua_transit_empresa(db, empresa.id)
+        except Exception as exc:
+            logger.warning(
+                "No s'ha pogut sincronitzar empresa.json al disc exclusiu de %s: %s",
+                emp_id_str,
+                exc,
+            )
+
+        return {
+            "superadmin_fitxa": superadmin_path,
+            "empresa_files": empresa_rutes,
+        }
 
     @classmethod
     async def reanomenar_fitxer_binari(
@@ -1190,12 +1394,20 @@ class SuperadminStorageGateway:
 
     @staticmethod
     def _resolve_target() -> Tuple[str, str, Optional[str]]:
-        url = os.getenv("SUPERADMIN_VAULT_URL", "http://host.docker.internal:9002").strip()
-        if not url:
-            url = "http://host.docker.internal:9002"
-        secret = os.getenv("SUPERADMIN_VAULT_SECRET", "").strip()
+        url = (
+            os.getenv("SUPERADMIN_VAULT_URL", "").strip()
+            or str(getattr(settings, "SUPERADMIN_VAULT_URL", "") or "").strip()
+            or "http://host.docker.internal:9002"
+        )
+        secret = (
+            os.getenv("SUPERADMIN_VAULT_SECRET", "").strip()
+            or str(getattr(settings, "SUPERADMIN_VAULT_SECRET", "") or "").strip()
+        )
         if url.startswith(("http://", "https://")):
             if not secret:
+                local_default = Path("/media/akaun/Project_1/Sevalor_Superadmin_docs")
+                if not os.path.exists("/.dockerenv") and local_default.is_dir():
+                    return ("LOCAL_FS", str(local_default.resolve()), None)
                 raise HTTPException(
                     status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                     detail="SUPERADMIN_VAULT_SECRET no configurat per accedir al túnel del Disc Superadmin.",
