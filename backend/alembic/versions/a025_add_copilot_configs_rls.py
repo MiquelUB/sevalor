@@ -25,32 +25,37 @@ def upgrade() -> None:
             subagent_prompts JSONB NOT NULL DEFAULT '{}'::jsonb,
             llm_model VARCHAR(120) NOT NULL DEFAULT '',
             updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
-        );
-
-        ALTER TABLE public.copilot_configs ENABLE ROW LEVEL SECURITY;
-        ALTER TABLE public.copilot_configs FORCE ROW LEVEL SECURITY;
-
-        DROP POLICY IF EXISTS copilot_configs_strict_isolation ON public.copilot_configs;
+        )
+        """
+    )
+    op.execute("ALTER TABLE public.copilot_configs ENABLE ROW LEVEL SECURITY")
+    op.execute("ALTER TABLE public.copilot_configs FORCE ROW LEVEL SECURITY")
+    op.execute(
+        "DROP POLICY IF EXISTS copilot_configs_strict_isolation ON public.copilot_configs"
+    )
+    op.execute(
+        """
         CREATE POLICY copilot_configs_strict_isolation ON public.copilot_configs
             FOR ALL
             USING (empresa_id = NULLIF(current_setting('app.current_empresa_id', true), '')::uuid)
-            WITH CHECK (empresa_id = NULLIF(current_setting('app.current_empresa_id', true), '')::uuid);
-
+            WITH CHECK (empresa_id = NULLIF(current_setting('app.current_empresa_id', true), '')::uuid)
+        """
+    )
+    op.execute(
+        """
         DO $$
         BEGIN
             IF EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = 'sevalor_app') THEN
                 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.copilot_configs TO sevalor_app;
             END IF;
         END
-        $$;
+        $$
         """
     )
 
 
 def downgrade() -> None:
     op.execute(
-        """
-        DROP POLICY IF EXISTS copilot_configs_strict_isolation ON public.copilot_configs;
-        DROP TABLE IF EXISTS public.copilot_configs;
-        """
+        "DROP POLICY IF EXISTS copilot_configs_strict_isolation ON public.copilot_configs"
     )
+    op.execute("DROP TABLE IF EXISTS public.copilot_configs")
