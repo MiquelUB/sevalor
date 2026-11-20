@@ -851,6 +851,7 @@ async def generar_pressupost_ia(
             vertical=empresa.vertical or "SEVALOR",
             context_addicional=context_str,
             empresa=empresa,
+            db=db,
         )
         if llm_summary is None:
             raise HTTPException(

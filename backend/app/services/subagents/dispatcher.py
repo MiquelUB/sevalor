@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.core.network_utils import build_wss_tunnel_uri
 from app.models.models import ConsultaXatCopilot, Empresa, Usuari
+from app.services.copilot_config_service import get_strict_copilot_config
 from app.services.sovereign_storage import SovereignStorageGateway
 from app.services.subagents.base import BaseSubagent
 from app.services.subagents.subagent_auditoria_marge import SubagentAuditoriaMarge
@@ -67,6 +68,50 @@ PARAULES_CLAU_FINANCERES_VETO = [
     "no facturat",
     "falta facturar",
 ]
+
+
+async def build_isolated_system_prompt(
+    db: AsyncSession,
+    empresa_id: uuid.UUID,
+    primary_subagent_id: str,
+    ara_str: str,
+    usuari_nom: str,
+    usuari_id: str,
+    rol_usuari: str,
+    empresa_nom: str,
+    vertical_efectiva: str,
+    context_extra_str: str = "",
+) -> Tuple[str, str]:
+    """Construeix el system prompt estrictament aïllat per empresa des de copilot_configs (FORCE RLS)."""
+    cfg = await get_strict_copilot_config(db, empresa_id)
+    if not cfg or not (cfg.system_prompt or "").strip():
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="COPILOT_NOT_CONFIGURED: Aquesta empresa no té el prompt configurat a /gestio/copilot/.",
+        )
+
+    subagent_prompt = str((cfg.subagent_prompts or {}).get(primary_subagent_id, "") or "").strip()
+    rag_prompt = str(cfg.rag_prompt or "").strip()
+
+    parts: List[str] = []
+    if subagent_prompt:
+        parts.append(subagent_prompt)
+    parts.append(f"DIRECTRIUS DE L'EMPRESA ({empresa_nom}):\n{cfg.system_prompt.strip()}")
+    if rag_prompt:
+        parts.append(f"INSTRUCCIONS RAG DE L'EMPRESA:\n{rag_prompt}")
+    parts.append(
+        f"DATA I HORA ACTUALS: {ara_str}\n"
+        f"USUARI ACTUAL: {usuari_nom} (ID: {usuari_id}, Rol: {rol_usuari})\n"
+        f"EMPRESA_ID: {empresa_id} | VERTICAL: {vertical_efectiva}"
+    )
+    if context_extra_str.strip():
+        parts.append(context_extra_str.strip())
+    parts.append(
+        "INSTRUCCIÓ OBLIGATÒRIA ZERO-HALLUCINATION: Basa les respostes STRICTAMENT en les dades "
+        "obtingudes a través de les eines del disc dur d'aquesta empresa. No inventis mai dades."
+    )
+
+    return "\n\n".join(parts).strip(), str(cfg.llm_model or "").strip()
 
 
 class CopilotDispatcher:
@@ -497,34 +542,19 @@ class CopilotDispatcher:
             primary_subagent, secondary_subagent, rol_usuari
         )
 
-        # ── 5. Injecció Dinàmica de Context i System Prompt Sobirà ─────────────
-        anti_hallucination = (
-            "INSTRUCCIÓ OBLIGATÒRIA ZERO-HALLUCINATION: Basa les respostes STRICTAMENT en les dades "
-            "obtingudes a través de les eines de consulta disponibles al disc dur de l'empresa "
-            "(ordres de treball, horaris d'equip, estoc de magatzem, vehicles o clients). Si la pregunta "
-            "fa referència a informació operativa, crida SEMPRE l'eina pertinent abans de contestar. "
-            "No inventis mai matrícules, codis ni xifres. Si l'eina no troba registres, informa amablement "
-            "que no s'ha trobat informació al disc dur de l'empresa."
+        # ── 5. Injecció Dinàmica de Context i System Prompt Estrictament Aïllat ─
+        system_content, configured_llm_model = await build_isolated_system_prompt(
+            db=db,
+            empresa_id=empresa_id,
+            primary_subagent_id=primary_subagent.id,
+            ara_str=ara_str,
+            usuari_nom=usuari_nom or rol_usuari,
+            usuari_id=str(usuari_id),
+            rol_usuari=rol_usuari,
+            empresa_nom=empresa_nom,
+            vertical_efectiva=vertical_efectiva,
+            context_extra_str=context_extra_str,
         )
-
-        system_content = (
-            f"{primary_subagent.system_prompt}\n"
-            f"DATA I HORA ACTUALS: {ara_str}\n"
-            f"USUARI ACTUAL: {usuari_nom} (ID: {usuari_id}, Rol: {rol_usuari})\n"
-            f"EMPRESA: {empresa_nom} | VERTICAL: {vertical_efectiva}\n"
-            f"{context_extra_str}\n"
-            f"{anti_hallucination}\n"
-        )
-        disk_prompt = await SovereignStorageGateway.llegir_text_fitxer(
-            db, empresa_id, "copilot_prompt", "system_prompt.txt"
-        )
-        effective_company_prompt = (
-            (agent_prompt_system or "").strip()
-            or (disk_prompt or "").strip()
-            or (empresa.agent_prompt_system or "").strip()
-        )
-        if effective_company_prompt:
-            system_content += f"DIRECTRIUS DE L'EMPRESA: {effective_company_prompt}\n"
 
         # ── 6. Inferència Obligatòria amb Ordinador Local via Túnel WSS Únic ───
         # NORMA CONSTITUCIONAL: Zero fallback a Hetzner. Si el túnel WSS o LM Studio no respon -> 503.
@@ -553,7 +583,7 @@ class CopilotDispatcher:
                 },
             )
 
-        model_name = getattr(settings, "LM_STUDIO_MODEL", "qwen2.5-vl-7b-instruct")
+        model_name = configured_llm_model or getattr(settings, "LM_STUDIO_MODEL", "qwen2.5-vl-7b-instruct")
         try:
             (
                 resposta_ia,

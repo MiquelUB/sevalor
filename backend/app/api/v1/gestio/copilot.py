@@ -31,6 +31,10 @@ from app.models.models import (
     Usuari,
     Vehicle,
 )
+from app.services.copilot_config_service import (
+    get_strict_copilot_config,
+    save_strict_copilot_config,
+)
 from app.services.sovereign_storage import SovereignStorageGateway
 from app.services.subagents.dispatcher import copilot_dispatcher
 from app.services.vault_tunnel import (
@@ -645,8 +649,9 @@ async def cridar_lm_studio(
     empresa: Optional[Empresa] = None,
     node_ia_url: Optional[str] = None,
     vault_token: Optional[str] = None,
+    db: Optional[AsyncSession] = None,
 ) -> Optional[str]:
-    """Cridar el node d'IA local dedicat de l'empresa via Túnel WSS Únic. Zero egress a Hetzner."""
+    """Cridar el node d'IA local dedicat de l'empresa via Túnel WSS Únic amb prompt estricte per tenant."""
     emp_target_id: Optional[str] = None
     if empresa is not None:
         if not (empresa.node_ia_actiu and getattr(empresa, "feature_copilot_ia", False)):
@@ -666,15 +671,31 @@ async def cridar_lm_studio(
     if not await vault_tunnel_broker.is_online(target_key):
         return None
 
-    system_prompt = (
-        f"Ets el Copilot Tècnic Especialitzat de SEVALOR (Vertical: {vertical}). "
-        "Respon sempre en català de forma professional, tècnica, breu i concisa."
-    )
+    configured_model = ""
+    if db is not None:
+        cfg = await get_strict_copilot_config(db, uuid.UUID(emp_target_id))
+        if not cfg or not (cfg.system_prompt or "").strip():
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="COPILOT_NOT_CONFIGURED: Aquesta empresa no té el prompt configurat a /gestio/copilot/.",
+            )
+        system_prompt = cfg.system_prompt.strip()
+        if (cfg.rag_prompt or "").strip():
+            system_prompt += f"\n\nINSTRUCCIONS RAG:\n{cfg.rag_prompt.strip()}"
+        configured_model = (cfg.llm_model or "").strip()
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="COPILOT_NOT_CONFIGURED: Cal sessió de BD per carregar la configuració aïllada del Copilot.",
+        )
+
     if context_addicional:
         system_prompt += f"\nContext addicional:\n{context_addicional}"
 
-    model_name = getattr(settings, "LM_STUDIO_MODEL", None) or getattr(
-        settings, "LMSTUDIO_MODEL", "qwen2.5-vl-7b-instruct"
+    model_name = (
+        configured_model
+        or getattr(settings, "LM_STUDIO_MODEL", None)
+        or getattr(settings, "LMSTUDIO_MODEL", "qwen2.5-vl-7b-instruct")
     )
     payload: Dict[str, Any] = {
         "model": model_name,
@@ -1890,6 +1911,55 @@ async def verificar_stock_en_assignacio(
         "alertes_recompra_generades": alertes_generades,
         "missatge": "Verificació de stock completada amb èxit sota transacció ACID.",
     }
+
+
+class CopilotConfigIn(BaseModel):
+    system_prompt: str
+    rag_prompt: str = ""
+    subagent_prompts: Dict[str, str] = Field(default_factory=dict)
+    llm_model: str = ""
+
+
+@router.get("/config", response_model=CopilotConfigIn)
+async def obtenir_config_copilot(
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+    claims: Dict[str, Any] = Depends(require_roles(["BOSS", "ADMIN", "ENGINYER"])),
+) -> CopilotConfigIn:
+    """Retorna la configuració aïllada del Copilot per a l'empresa del JWT (Anti-IDOR + FORCE RLS)."""
+    empresa_id = aplicar_tenant_context(claims)
+    cfg = await get_strict_copilot_config(db, empresa_id)
+    if not cfg:
+        return CopilotConfigIn(system_prompt="", rag_prompt="", subagent_prompts={}, llm_model="")
+    return CopilotConfigIn(
+        system_prompt=cfg.system_prompt or "",
+        rag_prompt=cfg.rag_prompt or "",
+        subagent_prompts=dict(cfg.subagent_prompts or {}),
+        llm_model=cfg.llm_model or "",
+    )
+
+
+@router.put("/config", response_model=CopilotConfigIn)
+async def actualitzar_config_copilot(
+    payload: CopilotConfigIn,
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+    claims: Dict[str, Any] = Depends(require_roles(["BOSS", "ADMIN"])),
+) -> CopilotConfigIn:
+    """Desa la configuració aïllada del Copilot per a l'empresa del JWT (Anti-IDOR + FORCE RLS)."""
+    empresa_id = aplicar_tenant_context(claims)
+    cfg = await save_strict_copilot_config(
+        db=db,
+        empresa_id=empresa_id,
+        system_prompt=payload.system_prompt,
+        rag_prompt=payload.rag_prompt,
+        subagent_prompts=payload.subagent_prompts,
+        llm_model=payload.llm_model,
+    )
+    return CopilotConfigIn(
+        system_prompt=cfg.system_prompt or "",
+        rag_prompt=cfg.rag_prompt or "",
+        subagent_prompts=dict(cfg.subagent_prompts or {}),
+        llm_model=cfg.llm_model or "",
+    )
 
 
 @router.post("/xat")
