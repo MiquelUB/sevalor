@@ -15,6 +15,7 @@ async def test_triple_button_and_copilot(admin_session, headers, boss_token, tmp
 
     # 1. Creem l'empresa inicialment sense node IA actiu (fail-closed)
     boss_nif = "B" + str(uuid.uuid4())[:8].upper()
+    vault_token = f"svlt_pres_{uuid.uuid4().hex[:12]}"
     emp = Empresa(
         id=emp_uuid,
         nom="Test Pressupostos",
@@ -22,6 +23,9 @@ async def test_triple_button_and_copilot(admin_session, headers, boss_token, tmp
         subdomini="testpres-" + str(uuid.uuid4())[:5],
         pla_subscripcio="STARTER",
         estat_pagament="ACTIU",
+        disc_dur_url=f"wss-tunnel://{emp_uuid}",
+        node_ia_url=f"wss-tunnel://{emp_uuid}",
+        vault_token=vault_token,
         feature_copilot_ia=False,
         node_ia_actiu=False,
     )
@@ -85,32 +89,35 @@ async def test_triple_button_and_copilot(admin_session, headers, boss_token, tmp
         )
         assert res_ia_off.status_code == 503, res_ia_off.text
 
-        # Activem disc sobirà + catàleg real + node_ia_actiu sense endpoint remot trencat
+        # Activem disc sobirà + catàleg real + node_ia_actiu
         disc_root = tmp_path / "disc_pres"
         inicialitzar_arbre_carpetes_disc(disc_root)
-        emp.disc_dur_url = str(disc_root)
         emp.feature_copilot_ia = True
         emp.node_ia_actiu = True
         await admin_session.commit()
 
-        await SovereignStorageGateway.desar_entitat_json(
-            db=admin_session,
-            empresa_id=emp_uuid,
-            categoria="magatzem_articles",
-            item_id="art-cuina-1",
-            dades={
-                "nom": "Caldera Condensació Cuina",
-                "referencia_inventari": "CALD-200",
-                "preu_venda": 780.0,
-            },
-        )
+        # Connectem Túnel Invers Sobirà WSS real (Zero Mock / ADR-001)
+        from tests.wss_test_helpers import live_empresa_wss_context
 
-        res_ia_on = await httpx_client.post(
-            "/api/v1/gestio/pressupostos/generar-ia?prompt=Instal%C2%B7lar%20caldera%20cuina",
-            headers=headers,
-        )
-        assert res_ia_on.status_code == 200, res_ia_on.text
-        data_ia = res_ia_on.json()
-        assert data_ia["status"] == "PENDENT_AUDITORIA"
-        assert "draft" in data_ia
-        assert data_ia["draft"]["total_estimat"] == 780.0
+        async with live_empresa_wss_context(emp_uuid, vault_token, disc_root):
+            await SovereignStorageGateway.desar_entitat_json(
+                db=admin_session,
+                empresa_id=emp_uuid,
+                categoria="magatzem_articles",
+                item_id="art-cuina-1",
+                dades={
+                    "nom": "Caldera Condensació Cuina",
+                    "referencia_inventari": "CALD-200",
+                    "preu_venda": 780.0,
+                },
+            )
+
+            res_ia_on = await httpx_client.post(
+                "/api/v1/gestio/pressupostos/generar-ia?prompt=Instal%C2%B7lar%20caldera%20cuina",
+                headers=headers,
+            )
+            assert res_ia_on.status_code == 200, res_ia_on.text
+            data_ia = res_ia_on.json()
+            assert data_ia["status"] == "PENDENT_AUDITORIA"
+            assert "draft" in data_ia
+            assert data_ia["draft"]["total_estimat"] == 780.0
