@@ -7,7 +7,6 @@ import uuid
 from datetime import date, datetime, timezone
 from typing import Any, Dict, List, Optional
 
-import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import Response
 from pydantic import BaseModel, Field, field_validator
@@ -16,7 +15,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.superadmin.tenants import _resolve_empresa
 from app.core.db import get_db_with_tenant_context
-from app.core.network_utils import resolve_effective_node_url
 from app.core.security import require_roles
 from app.models.models import (
     Empresa,
@@ -25,6 +23,7 @@ from app.models.models import (
     SaasTiquetSuport,
 )
 from app.services.sovereign_storage import SuperadminStorageGateway
+from app.services.vault_tunnel import empresa_target_key, vault_tunnel_broker
 from app.services.verifactu import generar_qr_verifactu, generar_sha256_encadenat
 
 logger = logging.getLogger("superadmin.crm_facturacio")
@@ -814,20 +813,9 @@ async def descarregar_pdf_factura_b2b(
     raise HTTPException(status_code=404, detail="Fitxer PDF de la factura no trobat.")
 
 
-async def _comprovar_pc_local_empresa(node_ia_url: Optional[str]) -> bool:
-    """Fa un ping ràpid a l'ordinador local de l'empresa per diagnosticar si està encès."""
-    if not node_ia_url or not node_ia_url.strip():
-        return False
-    raw_url = node_ia_url.strip()
-    if not raw_url.startswith("http"):
-        raw_url = f"http://{raw_url}"
-    effective = resolve_effective_node_url(raw_url) or raw_url
-    try:
-        async with httpx.AsyncClient(timeout=1.5) as client:
-            resp = await client.get(effective)
-            return resp.status_code < 500
-    except Exception:
-        return False
+async def _comprovar_pc_local_empresa(empresa_id: uuid.UUID) -> bool:
+    """Comprova en viu si el Túnel Invers WSS de l'ordinador dedicat de l'empresa està connectat."""
+    return await vault_tunnel_broker.is_online(empresa_target_key(empresa_id))
 
 
 def _serialitzar_tiquet(t: SaasTiquetSuport) -> Dict[str, Any]:
@@ -887,19 +875,18 @@ async def crear_tiquet_suport(
     if not emp:
         raise HTTPException(status_code=404, detail="Empresa no trobada.")
 
-    pc_online = await _comprovar_pc_local_empresa(emp.node_ia_url)
-    if not emp.node_ia_url:
+    pc_online = await _comprovar_pc_local_empresa(emp.id)
+    if not pc_online:
         diagnostic = (
-            "⚠️ L'empresa no té configurada cap adreça d'Ordinador Local (node_ia_url) o el té APAGAT. "
-            "Qualsevol consulta a l'arxiu històric de plànols o IA local requerirà que encenguin i connectin el seu equip d'oficina."
-        )
-    elif not pc_online:
-        diagnostic = (
-            f"🔴 S'ha detectat automàticament que l'ordinador central del client ({emp.node_ia_url}) està APAGAT o sense connexió. "
+            f"🔴 S'ha detectat automàticament que l'ordinador central del client (wss-tunnel://{emp.id}) "
+            "té el Túnel Sobirà WSS APAGAT o sense connexió. "
             "Si l'operari no pot obrir un plànol extra no inclòs a l'OT d'avui, és responsabilitat de l'empresa encendre el seu ordinador d'oficina."
         )
     else:
-        diagnostic = f"🟢 L'ordinador central del client ({emp.node_ia_url}) respon ONLINE en el moment d'obrir el tiquet."
+        diagnostic = (
+            f"🟢 L'ordinador central del client (wss-tunnel://{emp.id}) respon ONLINE "
+            "via Túnel Sobirà WSS en el moment d'obrir el tiquet."
+        )
 
     nou_tiquet = SaasTiquetSuport(
         empresa_id=emp.id,

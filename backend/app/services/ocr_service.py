@@ -10,16 +10,20 @@ import io
 import json
 import logging
 import re
+import uuid
 import xml.etree.ElementTree as ET
 import zipfile
 from dataclasses import dataclass
 from datetime import date
 from typing import Any, Dict, List, Optional
 
-import httpx
-
 from app.core.config import settings
-from app.core.network_utils import build_node_ia_headers, resolve_effective_node_url
+from app.core.network_utils import extract_wss_tunnel_target
+from app.services.vault_tunnel import (
+    VaultTunnelError,
+    empresa_target_key,
+    vault_tunnel_broker,
+)
 
 logger = logging.getLogger("ocr_service")
 
@@ -158,17 +162,24 @@ async def _cridar_ia_vision(
     max_tokens: int = 2000,
     node_ia_url: Optional[str] = None,
     vault_token: Optional[str] = None,
+    empresa_id: Optional[str | uuid.UUID] = None,
 ) -> Optional[Dict[str, Any]]:
-    """Crida el node local dedicat de l'empresa per extreure dades estructurades. Zero fallback a Hetzner."""
-    lm_url = resolve_effective_node_url(node_ia_url)
-    if not lm_url:
-        logger.info("Empresa sense node d'IA dedicat actiu. Zero egress d'IA a Hetzner (Constitució §2.V).")
+    """Crida el node local dedicat de l'empresa via Túnel WSS Únic (Zero fallback a Hetzner)."""
+    emp_target_str: Optional[str] = str(empresa_id) if empresa_id is not None else extract_wss_tunnel_target(node_ia_url)
+    if not emp_target_str:
+        logger.info("Empresa sense túnel WSS d'IA dedicat actiu. Zero egress d'IA a Hetzner (Constitució §2.V).")
         return None
 
-    base_url = lm_url.rstrip("/")
-    endpoint = f"{base_url}/chat/completions" if base_url.endswith("/v1") else f"{base_url}/v1/chat/completions"
+    try:
+        target_key = empresa_target_key(emp_target_str)
+    except ValueError:
+        return None
+
+    if not await vault_tunnel_broker.is_online(target_key):
+        logger.info("Túnel WSS fora de línia per a OCR (%s). S'aplica extracció directa.", target_key)
+        return None
+
     model_name = getattr(settings, "LM_STUDIO_MODEL", "qwen2.5-vl-7b-instruct")
-    api_key = getattr(settings, "LM_STUDIO_API_KEY", "lm-studio")
 
     user_content: Any = text_contingut
     if imatge_b64:
@@ -177,7 +188,7 @@ async def _cridar_ia_vision(
             {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{imatge_b64}"}},
         ]
 
-    payload = {
+    payload: Dict[str, Any] = {
         "model": model_name,
         "messages": [
             {"role": "system", "content": prompt_sistema},
@@ -188,26 +199,17 @@ async def _cridar_ia_vision(
     }
 
     try:
-        headers = build_node_ia_headers(api_key=api_key, vault_token=vault_token)
-        async with httpx.AsyncClient(timeout=45.0) as client:
-            resp = await client.post(
-                endpoint,
-                json=payload,
-                headers=headers,
-            )
-            if resp.status_code == 200:
-                data = resp.json()
-                choices = data.get("choices", [])
-                if choices:
-                    content_str = choices[0].get("message", {}).get("content", "").strip()
-                    # Extreure bloc JSON si el model l'envolta en ```json ... ```
-                    json_match = re.search(r"\{[\s\S]*\}", content_str)
-                    if json_match:
-                        parsed = json.loads(json_match.group(0))
-                        if isinstance(parsed, dict):
-                            return parsed
-    except Exception as e:
-        logger.info(f"Node d'IA local no disponible per a OCR ({e}). S'aplica extracció directa.")
+        data = await vault_tunnel_broker.call_llm_chat(target_key, payload, timeout=45.0)
+        choices = data.get("choices", [])
+        if choices:
+            content_str = str(choices[0].get("message", {}).get("content", "")).strip()
+            json_match = re.search(r"\{[\s\S]*\}", content_str)
+            if json_match:
+                parsed = json.loads(json_match.group(0))
+                if isinstance(parsed, dict):
+                    return parsed
+    except (VaultTunnelError, Exception) as e:
+        logger.info("Node d'IA local via WSS no disponible per a OCR (%s). S'aplica extracció directa.", e)
 
     return None
 

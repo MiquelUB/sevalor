@@ -603,9 +603,12 @@ async def test_subagent_general_rag_noves_eines(admin_session, tmp_path: Path):
 
 @pytest.mark.asyncio
 async def test_copilot_dispatcher_dispatch_sovereign(admin_session, tmp_path: Path):
-    """Verifica 503 quan Copilot apagat i execució sobirana sobre disc quan actiu amb log BD + disc."""
+    """Verifica 503 quan Copilot apagat i execució sobirana via Túnel WSS quan actiu amb log BD + disc."""
+    from tests.wss_test_helpers import live_empresa_wss_context
+
     empresa_id = uuid.uuid4()
     boss_id = uuid.uuid4()
+    vault_token = f"svlt_copv2_{uuid.uuid4().hex[:12]}"
 
     emp = Empresa(
         id=empresa_id,
@@ -614,8 +617,9 @@ async def test_copilot_dispatcher_dispatch_sovereign(admin_session, tmp_path: Pa
         subdomini="sov-" + uuid.uuid4().hex[:5],
         pla_subscripcio="ENTERPRISE",
         estat_pagament="ACTIU",
-        disc_dur_url=str(tmp_path),
-        node_ia_url=str(tmp_path),
+        disc_dur_url=f"wss-tunnel://{empresa_id}",
+        node_ia_url=f"wss-tunnel://{empresa_id}",
+        vault_token=vault_token,
         node_ia_actiu=False,
         feature_copilot_ia=True,
     )
@@ -646,29 +650,30 @@ async def test_copilot_dispatcher_dispatch_sovereign(admin_session, tmp_path: Pa
         )
     assert exc_info.value.status_code == 503
 
-    # 2. Activem node local sobirà -> execució vàlida amb auditoria
+    # 2. Activem node local sobirà + connectem Túnel WSS -> execució vàlida amb auditoria
     emp.node_ia_actiu = True
     await admin_session.commit()
 
-    res_salutacio = await dispatcher.dispatch(
-        pregunta="Hola, qui ets?",
-        db=admin_session,
-        empresa_id=empresa_id,
-        usuari_id=boss_id,
-        rol_usuari="BOSS",
-    )
-    assert "Copilot Tècnic de SEVALOR Suite" in res_salutacio["resposta"]
+    async with live_empresa_wss_context(empresa_id, vault_token, tmp_path, default_reply=""):
+        res_salutacio = await dispatcher.dispatch(
+            pregunta="Hola, qui ets?",
+            db=admin_session,
+            empresa_id=empresa_id,
+            usuari_id=boss_id,
+            rol_usuari="BOSS",
+        )
+        assert "Copilot Tècnic de SEVALOR Suite" in res_salutacio["resposta"]
 
-    stmt = select(ConsultaXatCopilot).where(
-        ConsultaXatCopilot.empresa_id == empresa_id,
-        ConsultaXatCopilot.usuari_id == boss_id,
-    )
-    log_db = (await admin_session.execute(stmt)).scalars().first()
-    assert log_db is not None
-    assert log_db.pregunta == "Hola, qui ets?"
-    assert log_db.temps_inferencia_ms >= 0
+        stmt = select(ConsultaXatCopilot).where(
+            ConsultaXatCopilot.empresa_id == empresa_id,
+            ConsultaXatCopilot.usuari_id == boss_id,
+        )
+        log_db = (await admin_session.execute(stmt)).scalars().first()
+        assert log_db is not None
+        assert log_db.pregunta == "Hola, qui ets?"
+        assert log_db.temps_inferencia_ms >= 0
 
-    feedbacks = await SovereignStorageGateway.llegir_entitats_json(
-        admin_session, empresa_id, "copilot_feedback"
-    )
-    assert any(fb.get("pregunta") == "Hola, qui ets?" for fb in feedbacks)
+        feedbacks = await SovereignStorageGateway.llegir_entitats_json(
+            admin_session, empresa_id, "copilot_feedback"
+        )
+        assert any(fb.get("pregunta") == "Hola, qui ets?" for fb in feedbacks)

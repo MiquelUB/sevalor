@@ -1,5 +1,6 @@
 import logging
 import uuid
+from typing import Any, Dict
 
 import httpx
 from sqlalchemy import select
@@ -7,8 +8,8 @@ from sqlalchemy import text as sa_text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.core.network_utils import build_node_ia_headers, resolve_effective_node_url
 from app.models.models import Client, Empresa, TokenInvitacioTelegram
+from app.services.vault_tunnel import VaultTunnelError, empresa_target_key, vault_tunnel_broker
 
 logger = logging.getLogger("telegram_service")
 
@@ -147,31 +148,26 @@ class TelegramService:
             "Context proporcionat:\n" + context_rag
         )
 
-        # La IA només opera si l'empresa té ordinador dedicat actiu. Zero egress a Hetzner.
+        # La IA només opera si l'empresa té ordinador dedicat actiu i connectat via Túnel WSS. Zero egress a Hetzner.
         stmt_emp = select(Empresa).where(Empresa.id == empresa_id)
         emp_obj = (await db.execute(stmt_emp)).scalar_one_or_none()
-        raw_url = (
-            emp_obj.node_ia_url.strip()
-            if (emp_obj and emp_obj.node_ia_actiu and getattr(emp_obj, "feature_copilot_ia", True) and emp_obj.node_ia_url)
-            else None
-        )
-        lm_url = resolve_effective_node_url(raw_url)
-        if not lm_url:
+        if not (
+            emp_obj
+            and emp_obj.node_ia_actiu
+            and getattr(emp_obj, "feature_copilot_ia", True)
+        ):
             if context_rag:
                 return f"Informació d'atenció al client:\n\n{context_rag}"
-            else:
-                return "Gràcies pel vostre missatge. Hem registrat la vostra consulta i el nostre equip tècnic us respondrà aviat."
+            return "Gràcies pel vostre missatge. Hem registrat la vostra consulta i el nostre equip tècnic us respondrà aviat."
 
-        base_url = lm_url.rstrip("/")
-        endpoint = (
-            f"{base_url}/chat/completions"
-            if base_url.endswith("/v1")
-            else f"{base_url}/v1/chat/completions"
-        )
+        target_key = empresa_target_key(empresa_id)
+        if not await vault_tunnel_broker.is_online(target_key):
+            if context_rag:
+                return f"Informació d'atenció al client:\n\n{context_rag}"
+            return "Gràcies pel vostre missatge. Hem registrat la vostra consulta i el nostre equip tècnic us respondrà aviat."
+
         model_name = getattr(settings, "LM_STUDIO_MODEL", "qwen2.5-vl-7b-instruct")
-        api_key = getattr(settings, "LM_STUDIO_API_KEY", "lm-studio")
-
-        payload = {
+        payload: Dict[str, Any] = {
             "model": model_name,
             "messages": [
                 {"role": "system", "content": system_prompt_telegram},
@@ -181,25 +177,13 @@ class TelegramService:
             "max_tokens": 400,
         }
 
-        headers = build_node_ia_headers(
-            api_key=api_key,
-            vault_token=getattr(emp_obj, "vault_token", None) if emp_obj else None,
-        )
-
         try:
-            async with httpx.AsyncClient(timeout=35.0) as http_client:
-                resp = await http_client.post(
-                    endpoint,
-                    json=payload,
-                    headers=headers,
-                )
-                if resp.status_code == 200:
-                    resultat = resp.json()
-                    choices = resultat.get("choices", [])
-                    if choices and "message" in choices[0]:
-                        return choices[0]["message"].get("content", "").strip()  # type: ignore
-        except Exception as e:
-            logger.warning(f"Error connectant a LM Studio des de Telegram: {e}")
+            resultat = await vault_tunnel_broker.call_llm_chat(target_key, payload, timeout=35.0)
+            choices = resultat.get("choices", [])
+            if choices and "message" in choices[0]:
+                return str(choices[0]["message"].get("content", "")).strip()
+        except (VaultTunnelError, Exception) as e:
+            logger.warning("Error connectant a LM Studio via WSS des de Telegram: %s", e)
 
         if context_rag:
             return f"He trobat aquesta informació que et podria ser útil:\n\n{context_rag}"

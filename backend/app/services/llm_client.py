@@ -1,10 +1,15 @@
+"""Client LLM sobirà que enruta tota la inferència exclusivament pel Túnel WSS (ADR-001)."""
+
 import logging
+import uuid
 from typing import Any, Dict, List, Optional
 
-import httpx
-from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
-
-from app.core.network_utils import build_node_ia_headers, resolve_effective_node_url
+from app.core.network_utils import extract_wss_tunnel_target
+from app.services.vault_tunnel import (
+    VaultTunnelError,
+    empresa_target_key,
+    vault_tunnel_broker,
+)
 
 logger = logging.getLogger("llm_client")
 
@@ -14,27 +19,32 @@ class LLMClientError(Exception):
 
 
 class LLMClient:
+    """Enruta crides OpenAI-compatible al motor LLM local de l'empresa via Túnel WSS Únic."""
+
     def __init__(
         self,
         base_url: Optional[str] = None,
-        timeout: int = 30,
+        timeout: int = 120,
         vault_token: Optional[str] = None,
-    ):
-        resolved = resolve_effective_node_url(base_url)
-        url: Optional[str] = str(resolved).rstrip("/") if (resolved and str(resolved).strip()) else None
-        self.base_url = url
+        empresa_id: Optional[str | uuid.UUID] = None,
+    ) -> None:
+        self.base_url = base_url.strip().rstrip("/") if isinstance(base_url, str) and base_url.strip() else None
         self.timeout = timeout
         self.vault_token = vault_token.strip() if (vault_token and vault_token.strip()) else None
+        self.empresa_id: Optional[str] = None
+        if empresa_id is not None:
+            self.empresa_id = str(uuid.UUID(str(empresa_id)))
+        elif self.base_url:
+            extracted = extract_wss_tunnel_target(self.base_url)
+            if extracted:
+                try:
+                    self.empresa_id = str(uuid.UUID(extracted))
+                except ValueError:
+                    self.empresa_id = None
 
-        # Max input length to prevent injection or context limit issues
+        # Límit anti-saturació de context
         self.MAX_PROMPT_LENGTH = 8000
 
-    @retry(
-        stop=stop_after_attempt(5),
-        wait=wait_exponential(multiplier=1, min=2, max=10),
-        retry=retry_if_exception_type((httpx.RequestError, httpx.TimeoutException)),
-        reraise=True,
-    )
     async def chat_completion(
         self,
         messages: List[Dict[str, str]],
@@ -42,15 +52,12 @@ class LLMClient:
         temperature: float = 0.7,
         max_tokens: Optional[int] = None,
     ) -> Dict[str, Any]:
-        """
-        Call a local LLM via an OpenAI-compatible API endpoint (like LM Studio).
-        """
-        if not self.base_url:
+        """Executa `llm_chat` al PC dedicat de l'empresa mitjançant el Túnel Invers Natiu WSS."""
+        if not self.empresa_id:
             raise LLMClientError(
-                "No s'ha configurat cap ordinador dedicat d'IA (node_ia_url) per a aquest client."
+                "No s'ha indicat cap empresa amb túnel WSS sobirà (`wss-tunnel://<empresa_id>`)."
             )
 
-        # Validate inputs to prevent context limit exhaustion
         for msg in messages:
             content = msg.get("content", "")
             if len(content) > self.MAX_PROMPT_LENGTH:
@@ -58,21 +65,19 @@ class LLMClient:
                     f"Message content exceeds maximum length of {self.MAX_PROMPT_LENGTH} characters."
                 )
 
-        url = f"{self.base_url}/chat/completions"
-
-        payload = {"model": model, "messages": messages, "temperature": temperature}
+        payload: Dict[str, Any] = {
+            "model": model,
+            "messages": messages,
+            "temperature": temperature,
+        }
         if max_tokens:
             payload["max_tokens"] = max_tokens
 
+        target_key = empresa_target_key(self.empresa_id)
         try:
-            headers = build_node_ia_headers(vault_token=self.vault_token)
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
-                response = await client.post(url, json=payload, headers=headers)
-                response.raise_for_status()
-                return response.json()  # type: ignore
-        except httpx.HTTPStatusError as e:
-            logger.error(f"HTTPStatusError calling LLM: {e.response.text}")
-            raise LLMClientError(f"API returned status {e.response.status_code}") from e
-        except Exception as e:
-            logger.error(f"Error calling LLM: {e}")
-            raise LLMClientError(f"Failed to communicate with LLM node: {str(e)}") from e
+            return await vault_tunnel_broker.call_llm_chat(
+                target_key, payload, timeout=float(self.timeout)
+            )
+        except VaultTunnelError as exc:
+            logger.error("Error comunicant amb LLM local via WSS (%s): %s", exc.code, exc.detail)
+            raise LLMClientError(exc.detail) from exc

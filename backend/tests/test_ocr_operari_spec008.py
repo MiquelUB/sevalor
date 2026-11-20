@@ -180,8 +180,11 @@ async def test_persistencia_disc_dur_client_i_calcul_alertes_operari(tmp_path, m
         _executar_ocr_operari_i_desar_al_disc,
         _persistir_alertes_operari_disc,
     )
+    from app.services.sovereign_storage import SovereignStorageGateway
 
-    monkeypatch.setenv("CLIENT_DISKS_MOUNT_ROOT", str(tmp_path))
+    transit_dir = tmp_path / "transit_ocr_operari"
+    monkeypatch.setenv("SOVEREIGN_TRANSIT_QUEUE_DIR", str(transit_dir))
+    monkeypatch.setattr(SovereignStorageGateway, "TRANSIT_QUEUE_DIR", transit_dir)
     empresa_id = uuid.uuid4()
 
     dni_bytes = (
@@ -214,24 +217,24 @@ async def test_persistencia_disc_dur_client_i_calcul_alertes_operari(tmp_path, m
     assert res["bloqueja_alta"] is False
     assert len(res["documents_processats"]) == 2
 
-    # Verifica que els fitxers, metadades i alertes existeixen físicament al disc dur del client
-    arrel_empresa = tmp_path / f"disc_{empresa_id}"
-    dir_docs = arrel_empresa / "08_flota_i_operaris" / "operaris" / "documents_rrhh"
-    dir_operaris = arrel_empresa / "08_flota_i_operaris" / "operaris"
-    dir_alertes = arrel_empresa / "08_flota_i_operaris" / "operaris" / "alertes_rrhh"
+    # ADR-001 (Zero-Storage Hetzner): sense túnel actiu s'encua xifrat SVENC1: i es verifica HMAC
+    emp_transit = transit_dir / str(empresa_id)
+    assert emp_transit.is_dir()
+    meta_files = [json.loads(p.read_text(encoding="utf-8")) for p in emp_transit.glob("*.meta.json")]
+    docs_rrhh_metas = [m for m in meta_files if m.get("subcarpeta") == "08_flota_i_operaris/operaris/documents_rrhh"]
+    assert len(docs_rrhh_metas) >= 4  # 2 arxius binaris + 2 metadades doc_*.json
+    for bin_file in emp_transit.glob("*.bin"):
+        assert bin_file.read_bytes().startswith(b"SVENC1:")
 
-    fitxers_docs = list(dir_docs.glob("*"))
-    fitxers_draft = list(dir_operaris.glob("ocr_draft_*.json"))
-    fitxers_alertes = list(dir_alertes.glob("*.json"))
-    assert len(fitxers_docs) >= 4  # 2 arxius binaris + 2 metadades doc_*.json
-    assert len(fitxers_draft) >= 1
-    assert len(fitxers_alertes) >= 1
+    drafts = await SovereignStorageGateway.llegir_entitats_json(None, empresa_id, "operaris")  # type: ignore[arg-type]
+    assert len(drafts) >= 1
+    assert drafts[0]["nif"] == "41239876Z"
+    assert "CERTIFICAT_PRL" in drafts[0]["documents_pendents"]
 
-    contingut_draft = json.loads(fitxers_draft[0].read_text(encoding="utf-8"))
-    assert contingut_draft["nif"] == "41239876Z"
-    assert "CERTIFICAT_PRL" in contingut_draft["documents_pendents"]
+    alertes_inicials = await SovereignStorageGateway.llegir_entitats_json(None, empresa_id, "alertes_operaris")  # type: ignore[arg-type]
+    assert len(alertes_inicials) >= 1
 
-    # Verifica el càlcul d'alertes sobre l'entitat Usuari i la seva persistència al disc
+    # Verifica el càlcul d'alertes sobre l'entitat Usuari i la seva persistència sobirana
     avui = date.today()
     op = Usuari(
         id=uuid.uuid4(),
@@ -251,8 +254,11 @@ async def test_persistencia_disc_dur_client_i_calcul_alertes_operari(tmp_path, m
     assert "CERTIFICAT_PRL" in pendents_op
 
     await _persistir_alertes_operari_disc(None, empresa_id, op, alertes_op)  # type: ignore[arg-type]
-    fitxer_alerta_op = dir_alertes / f"alerta_operari_{op.id}_carnet_proper_caducar.json"
-    assert fitxer_alerta_op.exists()
+    alertes_desades = await SovereignStorageGateway.llegir_entitats_json(None, empresa_id, "alertes_operaris")  # type: ignore[arg-type]
+    assert any(
+        a.get("_sovereign_meta", {}).get("item_id") == f"alerta_operari_{op.id}_carnet_proper_caducar"
+        for a in alertes_desades
+    )
 
     # També comprova la retrocompatibilitat de processar_dni_ocr
     res_legacy = await processar_dni_ocr(dni_bytes, filename="dni_anna.md")

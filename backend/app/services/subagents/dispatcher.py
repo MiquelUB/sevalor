@@ -9,18 +9,12 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 from zoneinfo import ZoneInfo
 
-import httpx
 from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.core.network_utils import (
-    build_node_ia_headers,
-    get_candidate_ia_tunnel_urls,
-    is_private_or_loopback_url,
-    resolve_empresa_vault_token,
-)
+from app.core.network_utils import build_wss_tunnel_uri
 from app.models.models import ConsultaXatCopilot, Empresa, Usuari
 from app.services.sovereign_storage import SovereignStorageGateway
 from app.services.subagents.base import BaseSubagent
@@ -32,6 +26,14 @@ from app.services.subagents.subagent_logistica_estoc import SubagentLogisticaEst
 from app.services.subagents.subagent_ocr_vision import SubagentOcrVision
 from app.services.subagents.subagent_peritatge_camp import SubagentPeritatgeCamp
 from app.services.subagents.subagent_planificacio_equip import SubagentPlanificacioEquip
+from app.services.vault_tunnel import (
+    VaultTunnelError,
+    VaultTunnelOfflineError,
+    VaultTunnelRemoteError,
+    VaultTunnelTimeoutError,
+    empresa_target_key,
+    vault_tunnel_broker,
+)
 
 logger = logging.getLogger("copilot_dispatcher")
 
@@ -183,8 +185,7 @@ class CopilotDispatcher:
 
     async def _cridar_lm_studio_multi_round(
         self,
-        endpoint: str,
-        api_key: str,
+        target_key: str,
         model_name: str,
         system_content: str,
         pregunta: str,
@@ -196,19 +197,15 @@ class CopilotDispatcher:
         rol_usuari: str,
         usuari_id: uuid.UUID,
         historial: Optional[List[dict]] = None,
-        vault_token: Optional[str] = None,
     ) -> Tuple[Optional[str], Optional[str], Optional[dict], Optional[dict], List[dict], BaseSubagent]:
-        """Executa un bucle multi-round (fins a 3 rondes) amb LM Studio."""
+        """Executa un bucle multi-round (fins a 3 rondes) amb LM Studio local via Túnel WSS Únic."""
         messages: List[Dict[str, Any]] = [{"role": "system", "content": system_content}]
         if historial:
-            # Preservar només els últims 6 torns per memòria i context compacte
             for h in historial[-6:]:
                 if isinstance(h, dict) and "role" in h and "content" in h:
                     messages.append({"role": h["role"], "content": str(h["content"])})
 
         messages.append({"role": "user", "content": pregunta})
-
-        headers = build_node_ia_headers(api_key=api_key, vault_token=vault_token)
 
         current_messages = list(messages)
         last_tool_name: Optional[str] = None
@@ -219,120 +216,129 @@ class CopilotDispatcher:
 
         max_rounds = 3
         active_model = model_name
-        async with httpx.AsyncClient(timeout=httpx.Timeout(35.0, connect=5.0)) as client:
-            for round_idx in range(max_rounds):
-                payload: Dict[str, Any] = {
-                    "model": active_model,
-                    "messages": current_messages,
-                    "temperature": 0.2,
-                    "max_tokens": 450,
-                }
-                if combined_tools:
-                    payload["tools"] = combined_tools
-                    payload["tool_choice"] = "auto"
+        for round_idx in range(max_rounds):
+            payload: Dict[str, Any] = {
+                "model": active_model,
+                "messages": current_messages,
+                "temperature": 0.2,
+                "max_tokens": 450,
+            }
+            if combined_tools:
+                payload["tools"] = combined_tools
+                payload["tool_choice"] = "auto"
 
-                resp = await client.post(endpoint, json=payload, headers=headers)
-                if round_idx == 0 and resp.status_code in (400, 404):
+            try:
+                res_json = await vault_tunnel_broker.call_llm_chat(
+                    target_key, payload, timeout=120.0
+                )
+            except VaultTunnelRemoteError as exc:
+                if round_idx == 0 and exc.status_code in (400, 404):
+                    retried = False
                     try:
-                        models_url = endpoint.rsplit("/chat/completions", 1)[0] + "/models"
-                        m_resp = await client.get(models_url, headers=headers, timeout=3.0)
-                        if m_resp.status_code == 200:
-                            loaded = [
-                                m.get("id")
-                                for m in m_resp.json().get("data", [])
-                                if isinstance(m, dict) and m.get("id")
+                        m_res = await vault_tunnel_broker.call_llm_models(target_key, timeout=6.0)
+                        loaded = [
+                            m.get("id")
+                            for m in m_res.get("data", [])
+                            if isinstance(m, dict) and m.get("id")
+                        ]
+                        if loaded and active_model not in loaded:
+                            chat_models = [
+                                str(m) for m in loaded if "embed" not in str(m).lower()
                             ]
-                            if loaded and active_model not in loaded:
-                                chat_models = [
-                                    str(m) for m in loaded if "embed" not in str(m).lower()
-                                ]
-                                active_model = chat_models[0] if chat_models else str(loaded[0])
-                                payload["model"] = active_model
-                                resp = await client.post(endpoint, json=payload, headers=headers)
+                            active_model = chat_models[0] if chat_models else str(loaded[0])
+                            payload["model"] = active_model
+                            res_json = await vault_tunnel_broker.call_llm_chat(
+                                target_key, payload, timeout=120.0
+                            )
+                            retried = True
+                    except VaultTunnelRemoteError as retry_exc:
+                        if retry_exc.status_code == 400 and "tools" in payload:
+                            payload.pop("tools", None)
+                            payload.pop("tool_choice", None)
+                            res_json = await vault_tunnel_broker.call_llm_chat(
+                                target_key, payload, timeout=120.0
+                            )
+                            retried = True
+                        else:
+                            raise
                     except Exception:
                         pass
-                    if resp.status_code == 400 and "tools" in payload:
-                        payload.pop("tools", None)
-                        payload.pop("tool_choice", None)
-                        resp = await client.post(endpoint, json=payload, headers=headers)
+                    if not retried:
+                        if exc.status_code == 400 and "tools" in payload:
+                            payload.pop("tools", None)
+                            payload.pop("tool_choice", None)
+                            res_json = await vault_tunnel_broker.call_llm_chat(
+                                target_key, payload, timeout=120.0
+                            )
+                        else:
+                            raise
+                else:
+                    raise
 
-                if resp.status_code in (401, 403) or resp.status_code >= 500:
-                    raise httpx.HTTPStatusError(
-                        f"Node IA Local HTTP {resp.status_code}",
-                        request=resp.request,
-                        response=resp,
-                    )
-                if resp.status_code != 200:
-                    logger.warning(f"LM Studio status {resp.status_code} a ronda {round_idx}: {resp.text}")
-                    break
+            choices = res_json.get("choices", [])
+            if not choices:
+                break
 
-                res_json = resp.json()
-                choices = res_json.get("choices", [])
-                if not choices:
-                    break
+            msg = choices[0].get("message", {}) or {}
+            tool_calls = msg.get("tool_calls") or []
 
-                msg = choices[0].get("message", {}) or {}
-                tool_calls = msg.get("tool_calls") or []
+            if not tool_calls:
+                final_answer = str(msg.get("content") or "").strip()
+                break
 
-                if not tool_calls:
-                    # El model ha finalitzat la síntesi textual
-                    final_answer = str(msg.get("content") or "").strip()
-                    break
+            current_messages.append(msg)
 
-                # Afegir missatge de l'assistent amb la crida d'eina
-                current_messages.append(msg)
+            for tc in tool_calls:
+                fn_name = tc.get("function", {}).get("name")
+                args_str = tc.get("function", {}).get("arguments", "{}")
+                try:
+                    fn_args = json.loads(args_str) if isinstance(args_str, str) else args_str
+                except Exception:
+                    fn_args = {}
 
-                # Execució de cada eina cridada
-                for tc in tool_calls:
-                    fn_name = tc.get("function", {}).get("name")
-                    args_str = tc.get("function", {}).get("arguments", "{}")
-                    try:
-                        fn_args = json.loads(args_str) if isinstance(args_str, str) else args_str
-                    except Exception:
-                        fn_args = {}
+                target_subagent = tool_name_to_subagent.get(fn_name, primary_subagent)
+                active_subagent = target_subagent
 
-                    target_subagent = tool_name_to_subagent.get(fn_name, primary_subagent)
-                    active_subagent = target_subagent
+                tool_res = await target_subagent.execute_tool(
+                    fn_name,
+                    fn_args,
+                    db,
+                    empresa_id,
+                    caller_role=rol_usuari,
+                    caller_user_id=usuari_id,
+                )
 
-                    # Executar eina sota context RLS i autorització
-                    tool_res = await target_subagent.execute_tool(
-                        fn_name,
-                        fn_args,
-                        db,
-                        empresa_id,
-                        caller_role=rol_usuari,
-                        caller_user_id=usuari_id,
-                    )
+                last_tool_name = fn_name
+                last_tool_args = fn_args
+                last_tool_result = tool_res
 
-                    last_tool_name = fn_name
-                    last_tool_args = fn_args
-                    last_tool_result = tool_res
+                current_messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": tc.get("id", f"call_{round_idx}"),
+                        "name": fn_name,
+                        "content": json.dumps(tool_res, ensure_ascii=False),
+                    }
+                )
 
-                    current_messages.append(
-                        {
-                            "role": "tool",
-                            "tool_call_id": tc.get("id", f"call_{round_idx}"),
-                            "name": fn_name,
-                            "content": json.dumps(tool_res, ensure_ascii=False),
-                        }
-                    )
-
-            # Si s'ha cridat alguna eina però el model no ha sintetitzat en la darrera ronda
-            if not final_answer and last_tool_name:
-                payload_synth = {
-                    "model": active_model,
-                    "messages": current_messages,
-                    "temperature": 0.2,
-                    "max_tokens": 400,
-                }
-                resp_synth = await client.post(endpoint, json=payload_synth, headers=headers)
-                if resp_synth.status_code == 200:
-                    synth_json = resp_synth.json()
-                    synth_choices = synth_json.get("choices", [])
-                    if synth_choices:
-                        final_answer = str(
-                            (synth_choices[0].get("message") or {}).get("content") or ""
-                        ).strip()
+        if not final_answer and last_tool_name:
+            payload_synth: Dict[str, Any] = {
+                "model": active_model,
+                "messages": current_messages,
+                "temperature": 0.2,
+                "max_tokens": 400,
+            }
+            try:
+                synth_json = await vault_tunnel_broker.call_llm_chat(
+                    target_key, payload_synth, timeout=120.0
+                )
+                synth_choices = synth_json.get("choices", [])
+                if synth_choices:
+                    final_answer = str(
+                        (synth_choices[0].get("message") or {}).get("content") or ""
+                    ).strip()
+            except VaultTunnelError:
+                pass
 
         return final_answer, last_tool_name, last_tool_args, last_tool_result, [], active_subagent
 
@@ -381,18 +387,14 @@ class CopilotDispatcher:
                 detail="Consulta no autoritzada per política de rols de seguretat",
             )
 
-        # ── 2. Porta Estrica Zero-Storage / Túnel Obligatori (Principi V) ──────
+        # ── 2. Porta Estrica Zero-Storage / Túnel WSS Obligatori (Principi V) ──
         res_emp = await db.execute(select(Empresa).where(Empresa.id == empresa_id))
         empresa = res_emp.scalar_one_or_none()
         await SovereignStorageGateway.autocurar_config_tunel_empresa(db, empresa, commit=True)
-        raw_node_url = getattr(empresa, "node_ia_url", None) if empresa else None
-        raw_disc_url = getattr(empresa, "disc_dur_url", None) if empresa else None
-        node_url = raw_node_url.strip() if isinstance(raw_node_url, str) and raw_node_url.strip() else None
-        disc_url = raw_disc_url.strip() if isinstance(raw_disc_url, str) and raw_disc_url.strip() else None
         feature_on = bool(empresa and getattr(empresa, "feature_copilot_ia", False))
         node_on = bool(empresa and getattr(empresa, "node_ia_actiu", False))
 
-        if not empresa or not feature_on or not node_on or not (node_url or disc_url):
+        if not empresa or not feature_on or not node_on:
             if not empresa:
                 motiu = "EMPRESA_NO_TROBADA"
                 msg_detall = "Empresa no trobada per executar el Copilot IA local. Zero fallback a Hetzner."
@@ -402,28 +404,19 @@ class CopilotDispatcher:
                     "El mòdul Copilot IA (feature_copilot_ia) està desactivat a la llicència d'aquesta empresa. "
                     "Activa'l al panell de Superadmin. Zero fallback a Hetzner."
                 )
-            elif not (node_url or disc_url):
-                motiu = "TUNEL_NO_CONFIGURAT"
-                msg_detall = (
-                    "No hi ha cap URL d'ordinador dedicat o túnel desada per a aquesta empresa "
-                    "(node_ia_url=None, disc_dur_url=None). Configura-la i desa-la a Configuració > Ordinador Dedicat "
-                    "o a la fitxa de Superadmin. Zero fallback a Hetzner."
-                )
             else:
                 motiu = "NODE_IA_INACTIU"
                 msg_detall = (
                     "L'ordinador dedicat d'IA local està desactivat (node_ia_actiu=False). "
-                    "Activa l'interruptor i desa els paràmetres a Configuració > Ordinador Dedicat. Zero fallback a Hetzner."
+                    "Contacta amb l'administrador de Sevalor (Superadmin) per activar-lo. Zero fallback a Hetzner."
                 )
             logger.warning(
-                "Copilot 503 COPILOT_DESACTIVAT (%s) per empresa=%s (trobat=%s, feature_copilot_ia=%s, node_ia_actiu=%s, has_node_url=%s, has_disc_url=%s)",
+                "Copilot 503 COPILOT_DESACTIVAT (%s) per empresa=%s (trobat=%s, feature_copilot_ia=%s, node_ia_actiu=%s)",
                 motiu,
                 empresa_id,
                 bool(empresa),
                 feature_on,
                 node_on,
-                bool(node_url),
-                bool(disc_url),
             )
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -533,8 +526,8 @@ class CopilotDispatcher:
         if effective_company_prompt:
             system_content += f"DIRECTRIUS DE L'EMPRESA: {effective_company_prompt}\n"
 
-        # ── 6. Inferència Obligatòria amb Ordinador Local de l'Empresa ──────────
-        # NORMA CONSTITUCIONAL: Zero fallback a Hetzner. Si el túnel HTTP no respon -> 503.
+        # ── 6. Inferència Obligatòria amb Ordinador Local via Túnel WSS Únic ───
+        # NORMA CONSTITUCIONAL: Zero fallback a Hetzner. Si el túnel WSS o LM Studio no respon -> 503.
         es_actiu = True
         resposta_ia: Optional[str] = None
         tool_name: Optional[str] = None
@@ -542,130 +535,88 @@ class CopilotDispatcher:
         tool_result: Optional[dict] = None
         selected_subagent: BaseSubagent = primary_subagent
 
-        candidate_ia_urls = get_candidate_ia_tunnel_urls(node_url, disc_url)
-        if candidate_ia_urls:
-            model_name = getattr(settings, "LM_STUDIO_MODEL", "qwen2.5-vl-7b-instruct")
-            api_key = getattr(settings, "LM_STUDIO_API_KEY", "lm-studio")
-            vault_token = resolve_empresa_vault_token(empresa)
+        target_key = empresa_target_key(empresa_id)
+        if not await vault_tunnel_broker.is_online(target_key):
+            logger.warning(
+                "Copilot 503 NODE_IA_OFFLINE (TUNEL_OFFLINE) per empresa=%s: agent WSS no connectat.",
+                empresa_id,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={
+                    "code": "NODE_IA_OFFLINE",
+                    "motiu": "TUNEL_OFFLINE",
+                    "message": (
+                        "L'ordinador dedicat de l'empresa no està connectat al túnel WSS de Sevalor. "
+                        "Comprova que l'agent estigui encès. Zero fallback a Hetzner."
+                    ),
+                },
+            )
 
-            last_exc: Optional[Exception] = None
-            last_endpoint: str = candidate_ia_urls[0]
-            succeeded = False
-
-            for cand_url in candidate_ia_urls:
-                base_url = cand_url.rstrip("/")
-                if base_url.endswith("/v1/chat/completions"):
-                    endpoint = base_url
-                elif base_url.endswith("/v1"):
-                    endpoint = f"{base_url}/chat/completions"
-                else:
-                    endpoint = f"{base_url}/v1/chat/completions"
-                last_endpoint = endpoint
-
-                try:
-                    (
-                        resposta_ia,
-                        tool_name,
-                        tool_args,
-                        tool_result,
-                        _,
-                        selected_subagent,
-                    ) = await self._cridar_lm_studio_multi_round(
-                        endpoint=endpoint,
-                        api_key=api_key,
-                        model_name=model_name,
-                        system_content=system_content,
-                        pregunta=pregunta,
-                        combined_tools=combined_tools,
-                        tool_name_to_subagent=tool_name_to_subagent,
-                        primary_subagent=primary_subagent,
-                        db=db,
-                        empresa_id=empresa_id,
-                        rol_usuari=rol_usuari,
-                        usuari_id=usuari_id,
-                        historial=historial,
-                        vault_token=vault_token,
-                    )
-                    succeeded = True
-                    break
-                except HTTPException:
-                    raise
-                except httpx.HTTPStatusError as exc:
-                    body_snippet = ""
-                    try:
-                        body_snippet = (exc.response.text or "")[:200]
-                    except Exception:
-                        pass
-                    logger.warning(
-                        "Túnel Copilot/LM Studio HTTP %s a %s (empresa=%s): %s %s",
-                        exc.response.status_code if exc.response else "?",
-                        endpoint,
-                        empresa_id,
-                        exc,
-                        body_snippet,
-                    )
-                    last_exc = exc
-                    continue
-                except (httpx.TimeoutException, httpx.RequestError) as exc:
-                    logger.warning(
-                        "Túnel Copilot/LM Studio fora de línia a %s (empresa=%s): %s (%s)",
-                        endpoint,
-                        empresa_id,
-                        type(exc).__name__,
-                        exc,
-                    )
-                    last_exc = exc
-                    continue
-                except Exception as exc:
-                    logger.warning(
-                        "Error inesperat connectant amb LM Studio a %s (empresa=%s): %s",
-                        endpoint,
-                        empresa_id,
-                        exc,
-                    )
-                    last_exc = exc
-                    break
-
-            if not succeeded:
-                logger.warning(
-                    "Copilot 503 NODE_IA_OFFLINE per empresa=%s després de provar %d URL(s). Darrer endpoint=%s, error=%s",
-                    empresa_id,
-                    len(candidate_ia_urls),
-                    last_endpoint,
-                    last_exc,
-                )
-                is_auth_err = isinstance(last_exc, httpx.HTTPStatusError) and (
-                    last_exc.response is not None and last_exc.response.status_code in (401, 403)
-                )
-                totes_loopback = all(is_private_or_loopback_url(u) for u in candidate_ia_urls)
-                if is_auth_err:
-                    offline_msg = (
-                        "La passarel·la del túnel IA local ha rebutjat el Token Vault (HTTP 401/403). "
-                        "Verifica que SEVALOR_VAULT_SECRET al PC de la seu coincideixi amb el vault_token de l'empresa. "
-                        "Zero fallback a Hetzner."
-                    )
-                    offline_motiu = "TOKEN_INVALID"
-                elif totes_loopback:
-                    offline_msg = (
-                        f"El servidor de Sevalor no pot arribar a l'adreça local ({', '.join(candidate_ia_urls[:2])}). "
-                        "Si Sevalor corre al núvol (Hetzner), cal configurar una URL pública HTTPS de túnel "
-                        "(Cloudflare Tunnel cap al port 9001 de client_vault_agent.py o port 1234). Zero fallback a Hetzner."
-                    )
-                    offline_motiu = "LOOPBACK_INACCESSIBLE"
-                else:
-                    offline_msg = (
-                        "El node d'IA local de l'empresa no respon (túnel offline o timeout). Zero fallback a Hetzner."
-                    )
-                    offline_motiu = "TUNEL_OFFLINE"
-                raise HTTPException(
-                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                    detail={
-                        "code": "NODE_IA_OFFLINE",
-                        "motiu": offline_motiu,
-                        "urls_provades": candidate_ia_urls,
-                        "message": offline_msg,
-                    },
-                )
+        model_name = getattr(settings, "LM_STUDIO_MODEL", "qwen2.5-vl-7b-instruct")
+        try:
+            (
+                resposta_ia,
+                tool_name,
+                tool_args,
+                tool_result,
+                _,
+                selected_subagent,
+            ) = await self._cridar_lm_studio_multi_round(
+                target_key=target_key,
+                model_name=model_name,
+                system_content=system_content,
+                pregunta=pregunta,
+                combined_tools=combined_tools,
+                tool_name_to_subagent=tool_name_to_subagent,
+                primary_subagent=primary_subagent,
+                db=db,
+                empresa_id=empresa_id,
+                rol_usuari=rol_usuari,
+                usuari_id=usuari_id,
+                historial=historial,
+            )
+        except HTTPException:
+            raise
+        except VaultTunnelRemoteError as exc:
+            logger.warning(
+                "Copilot 503 NODE_IA_OFFLINE (%s) per empresa=%s: %s",
+                exc.code,
+                empresa_id,
+                exc.detail,
+            )
+            motiu_err = "LLM_OFFLINE" if exc.code == "LLM_OFFLINE" else exc.code
+            msg_err = (
+                "El PC de l'empresa està connectat, però LM Studio/Ollama local no respon a 127.0.0.1:1234. Zero fallback a Hetzner."
+                if exc.code == "LLM_OFFLINE"
+                else f"{exc.detail} Zero fallback a Hetzner."
+            )
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={
+                    "code": "NODE_IA_OFFLINE",
+                    "motiu": motiu_err,
+                    "message": msg_err,
+                },
+            ) from exc
+        except (VaultTunnelOfflineError, VaultTunnelTimeoutError, VaultTunnelError) as exc:
+            logger.warning(
+                "Copilot 503 NODE_IA_OFFLINE per empresa=%s (%s): %s",
+                empresa_id,
+                exc.code,
+                exc.detail,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={
+                    "code": "NODE_IA_OFFLINE",
+                    "motiu": "TIMEOUT" if isinstance(exc, VaultTunnelTimeoutError) else "TUNEL_OFFLINE",
+                    "message": (
+                        "L'ordinador dedicat de l'empresa no està connectat al túnel WSS de Sevalor "
+                        "o ha esgotat el temps d'espera. Zero fallback a Hetzner."
+                    ),
+                },
+            ) from exc
 
         # ── 6. Resolució Final i Grounding Fallback ─────────────────────────────
         enllacos: List[dict] = []
@@ -783,7 +734,7 @@ class CopilotDispatcher:
                     resposta=resposta,
                     vertical=vertical,
                     node_ia_actiu=es_actiu,
-                    node_ia_url=node_url,
+                    node_ia_url=build_wss_tunnel_uri(empresa_id),
                     temps_inferencia_ms=elapsed_ms,
                     enllacos_relacionats=enllacos,
                     es_error_timeout=es_timeout,

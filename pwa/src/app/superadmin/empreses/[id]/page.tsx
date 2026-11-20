@@ -215,14 +215,12 @@ export default function EmpresaDetailPage({ params }: { params: { id: string } }
   const [secundariHsl, setSecundariHsl] = useState("38 92% 50%");
   const [accentHsl, setAccentHsl] = useState("160 84% 39%");
 
-  // Feature flags
+  // Feature flags & Túnel Invers Natiu WSS (ADR-001)
   const [features, setFeatures] = useState({
     feature_copilot_ia: false,
     feature_flota: true,
     feature_planols: false,
     feature_telegram: true,
-    node_ia_url: "",
-    disc_dur_url: "",
     node_ia_actiu: false,
   });
   const [nodeIaExplicitlyDisabled, setNodeIaExplicitlyDisabled] = useState(false);
@@ -231,7 +229,14 @@ export default function EmpresaDetailPage({ params }: { params: { id: string } }
   const [nodeIaStatus, setNodeIaStatus] = useState<any>(null);
   const [discDurTesting, setDiscDurTesting] = useState(false);
   const [discDurStatus, setDiscDurStatus] = useState<any>(null);
+  const [tunnelLiveStatus, setTunnelLiveStatus] = useState<any>(null);
   const [vaultToken, setVaultToken] = useState<string>("");
+  const [comandaInstallWss, setComandaInstallWss] = useState<string>("");
+  const [tunnelServerUrl, setTunnelServerUrl] = useState<string>(
+    "https://sevalor-sevalor-backend.80opze.easypanel.host"
+  );
+  const [copiedWssCmd, setCopiedWssCmd] = useState<boolean>(false);
+  const [copiedWssTok, setCopiedWssTok] = useState<boolean>(false);
   const [rotatingToken, setRotatingToken] = useState(false);
   const [initializingDisk, setInitializingDisk] = useState(false);
   const [initDiskStatus, setInitDiskStatus] = useState<any>(null);
@@ -304,64 +309,63 @@ export default function EmpresaDetailPage({ params }: { params: { id: string } }
         if (data.primari_hsl) setPrimariHsl(data.primari_hsl);
         if (data.secundari_hsl) setSecundariHsl(data.secundari_hsl);
         if (data.accent_hsl) setAccentHsl(data.accent_hsl);
-        const loadedNodeUrl = (data.node_ia_url || "").trim();
-        const loadedDiscUrl = (data.disc_dur_url || "").trim();
         const loadedVaultTok = (data.vault_token || "").trim();
+        const loadedServerUrl =
+          (data.tunnel_server_url || "").trim() ||
+          "https://sevalor-sevalor-backend.80opze.easypanel.host";
         setFeatures({
           feature_copilot_ia: Boolean(data.feature_copilot_ia),
           feature_flota: Boolean(data.feature_flota),
           feature_planols: Boolean(data.feature_planols),
           feature_telegram: Boolean(data.feature_telegram),
-          node_ia_url: loadedNodeUrl,
-          disc_dur_url: loadedDiscUrl,
           node_ia_actiu: Boolean(data.node_ia_actiu),
         });
         setNodeIaExplicitlyDisabled(false);
         setVaultToken(loadedVaultTok);
+        setTunnelServerUrl(loadedServerUrl);
+        if (data.comanda_install_wss) {
+          setComandaInstallWss(data.comanda_install_wss);
+        } else if (loadedVaultTok) {
+          setComandaInstallWss(
+            `bash scripts/install_client_gateway.sh --server ${loadedServerUrl} --role EMPRESA --empresa-id ${actualId} --token ${loadedVaultTok} --disk-a /ruta/disc_principal --disk-b /ruta/disc_mirall --llm-url http://127.0.0.1:1234`
+          );
+        }
+        setTunnelLiveStatus({
+          tunnel_online: Boolean(data.tunnel_online),
+          tunnel_status: data.tunnel_status || (data.tunnel_online ? "ONLINE" : "OFFLINE"),
+          cua_transit_pendent: Number(data.cua_transit_pendent ?? 0),
+          agent_version: data.agent_version || null,
+          connected_at: data.connected_at || null,
+          last_pong_at: data.last_pong_at || null,
+        });
 
-        // Auto-verificació en carregar la fitxa perquè l'empresa es vegi connectada sempre en entrar
-        const targetIaProbe = loadedNodeUrl || loadedDiscUrl;
-        if (targetIaProbe) {
-          apiFetch<any>("/superadmin/tenants/verificar-node-ia", {
-            method: "POST",
-            body: JSON.stringify({
-              node_ia_url: targetIaProbe,
-              disc_dur_url: loadedDiscUrl || undefined,
-              empresa_id: actualId,
-              vault_token: loadedVaultTok || undefined,
-            }),
-          })
-            .then((resIa) => {
-              if (resIa) {
-                setNodeIaStatus(resIa);
-                if (resIa.status === "OK") {
-                  setFeatures((prev) => ({ ...prev, node_ia_actiu: true }));
-                }
+        // Consultar estat en viu del túnel WSS i sondes quan el túnel està connectat
+        apiFetch<any>(`/superadmin/tenants/${actualId}/tunnel-status`)
+          .then((tSt) => {
+            if (tSt) {
+              setTunnelLiveStatus(tSt);
+              if (tSt.tunnel_online) {
+                apiFetch<any>("/superadmin/tenants/verificar-node-ia", {
+                  method: "POST",
+                  body: JSON.stringify({ empresa_id: actualId }),
+                })
+                  .then((resIa) => {
+                    if (resIa) setNodeIaStatus(resIa);
+                  })
+                  .catch(() => {});
+
+                apiFetch<any>("/superadmin/tenants/verificar-disc-dur", {
+                  method: "POST",
+                  body: JSON.stringify({ empresa_id: actualId }),
+                })
+                  .then((resDisc) => {
+                    if (resDisc) setDiscDurStatus(resDisc);
+                  })
+                  .catch(() => {});
               }
-            })
-            .catch(() => {});
-        }
-        const targetDiscProbe = loadedDiscUrl || loadedNodeUrl;
-        if (targetDiscProbe && !targetDiscProbe.startsWith("Carpeta Local:")) {
-          apiFetch<any>("/superadmin/tenants/verificar-disc-dur", {
-            method: "POST",
-            body: JSON.stringify({
-              disc_dur_url: targetDiscProbe,
-              node_ia_url: loadedNodeUrl || targetDiscProbe,
-              empresa_id: actualId,
-              vault_token: loadedVaultTok || undefined,
-            }),
+            }
           })
-            .then((resDisc) => {
-              if (resDisc) {
-                setDiscDurStatus(resDisc);
-                if (resDisc.status === "OK") {
-                  setFeatures((prev) => ({ ...prev, node_ia_actiu: true }));
-                }
-              }
-            })
-            .catch(() => {});
-        }
+          .catch(() => {});
 
         // CRM fields
         const tBase = Number(data.tarifa_llicencia_base ?? 0);
@@ -402,19 +406,14 @@ export default function EmpresaDetailPage({ params }: { params: { id: string } }
     setErrorMessage(null);
     setSuccessMessage(null);
     try {
-      const teAlgunaUrlTunel = Boolean(
-        features.node_ia_url?.trim() || features.disc_dur_url?.trim()
-      );
       const nodeIaActiuFinal =
-        features.feature_copilot_ia && teAlgunaUrlTunel && !nodeIaExplicitlyDisabled
+        features.feature_copilot_ia && !nodeIaExplicitlyDisabled
           ? true
           : features.node_ia_actiu;
       const res: any = await apiFetch(`/superadmin/tenants/${params.id}/feature-flags`, {
         method: "PUT",
         body: JSON.stringify({
           ...features,
-          node_ia_url: features.node_ia_url?.trim() || "",
-          disc_dur_url: features.disc_dur_url?.trim() || "",
           node_ia_actiu: nodeIaActiuFinal,
           vault_token: vaultToken.trim() || undefined,
         }),
@@ -424,15 +423,16 @@ export default function EmpresaDetailPage({ params }: { params: { id: string } }
           ...prev,
           feature_copilot_ia: Boolean(res.feature_flags.copilot_ia),
           node_ia_actiu: Boolean(res.feature_flags.node_ia_actiu),
-          node_ia_url: res.feature_flags.node_ia_url || "",
-          disc_dur_url: res.feature_flags.disc_dur_url || "",
         }));
       }
+      if (res?.comanda_install_wss) {
+        setComandaInstallWss(res.comanda_install_wss);
+      }
       setSuccessMessage(
-        `Configuració de Copilot i Disc Dur desada a PostgreSQL (node_ia_actiu=${nodeIaActiuFinal ? "ACTIU" : "DESACTIVAT"}).`
+        `Configuració de Mòduls i Túnel WSS desada a PostgreSQL (node_ia_actiu=${nodeIaActiuFinal ? "ACTIU" : "DESACTIVAT"}).`
       );
     } catch (err: any) {
-      setErrorMessage(err.message || "Error en desar la configuració del Node IA i Disc Dur.");
+      setErrorMessage(err.message || "Error en desar la configuració del Node Sobirà WSS.");
     } finally {
       setSavingNodeIa(false);
     }
@@ -443,21 +443,15 @@ export default function EmpresaDetailPage({ params }: { params: { id: string } }
     setErrorMessage(null);
     setSuccessMessage(null);
     try {
-      // 1. Guardar Feature Flags, URLs del Node IA / Disc Dur i Vault Token PRIMER
-      // (mai bloquejat per incidències del disc Superadmin o altres blocs)
-      const teAlgunaUrlTunel = Boolean(
-        features.node_ia_url?.trim() || features.disc_dur_url?.trim()
-      );
+      // 1. Guardar Feature Flags i Vault Token PRIMER
       const nodeIaActiuFinal =
-        features.feature_copilot_ia && teAlgunaUrlTunel && !nodeIaExplicitlyDisabled
+        features.feature_copilot_ia && !nodeIaExplicitlyDisabled
           ? true
           : features.node_ia_actiu;
       await apiFetch(`/superadmin/tenants/${params.id}/feature-flags`, {
         method: "PUT",
         body: JSON.stringify({
           ...features,
-          node_ia_url: features.node_ia_url?.trim() || "",
-          disc_dur_url: features.disc_dur_url?.trim() || "",
           node_ia_actiu: nodeIaActiuFinal,
           vault_token: vaultToken.trim() || undefined,
         }),
@@ -622,86 +616,27 @@ export default function EmpresaDetailPage({ params }: { params: { id: string } }
   };
 
   const handleVerificarNodeIa = async () => {
-    const rawUrl = features.node_ia_url?.trim();
-    const rawDiscUrl = features.disc_dur_url?.trim();
-    if (!rawUrl && !rawDiscUrl) {
-      setErrorMessage("Introdueix l'adreça URL del Copilot local o túnel HTTPS abans de verificar.");
-      return;
-    }
     setNodeIaTesting(true);
     setNodeIaStatus(null);
     setErrorMessage(null);
-
-    const targetUrl = rawUrl || rawDiscUrl || "";
-    const base = targetUrl.replace(/\/+$/, "");
-    const isLocalClientUrl =
-      /^https?:\/\/(127\.0\.0\.1|localhost|192\.168\.|10\.|172\.(1[6-9]|2\d|3[0-1])\.)/i.test(base);
-
-    // 1. Sonda REAL des del servidor backend cap al túnel de l'empresa
     try {
-      const res = await apiFetch<any>("/superadmin/tenants/verificar-node-ia", {
-        method: "POST",
-        body: JSON.stringify({
-          node_ia_url: targetUrl,
-          disc_dur_url: rawDiscUrl || undefined,
-          empresa_id: empresaId,
-          vault_token: vaultToken.trim() || undefined,
+      const [tSt, res] = await Promise.all([
+        apiFetch<any>(`/superadmin/tenants/${empresaId}/tunnel-status`).catch(() => null),
+        apiFetch<any>("/superadmin/tenants/verificar-node-ia", {
+          method: "POST",
+          body: JSON.stringify({ empresa_id: empresaId }),
         }),
-      });
-      if (res.status === "OK") {
-        setNodeIaStatus(res);
-        if (!features.node_ia_actiu) {
-          setFeatures((prev) => ({ ...prev, node_ia_actiu: true }));
-        }
-        setNodeIaTesting(false);
-        return;
-      }
-
-      // 2. Si el backend no hi pot arribar i la URL és local, fer diagnòstic secundari al navegador
-      if (isLocalClientUrl) {
-        const candidateEndpoints = base.endsWith("/v1")
-          ? [`${base}/models`]
-          : [`${base}/v1/models`, `${base}/api/tags`];
-        for (const url of candidateEndpoints) {
-          try {
-            const ctrl = new AbortController();
-            const timer = setTimeout(() => ctrl.abort(), 2500);
-            const resp = await fetch(url, { method: "GET", mode: "cors", signal: ctrl.signal });
-            clearTimeout(timer);
-            if (resp.ok) {
-              let models: string[] = [];
-              try {
-                const data = await resp.json();
-                if (data && Array.isArray(data.data)) {
-                  models = data.data.map((m: any) => String(m.id || m.name)).filter(Boolean);
-                } else if (data && Array.isArray(data.models)) {
-                  models = data.models.map((m: any) => String(m.name || m.id)).filter(Boolean);
-                }
-              } catch {
-                // Ignorar error de parseig
-              }
-              setNodeIaStatus({
-                status: "ERROR",
-                motiu: "LOOPBACK_INACCESSIBLE_DES_DE_SERVIDOR",
-                missatge: `LM Studio respon al teu navegador (${models.join(", ") || "actiu"}), però el servidor de Sevalor NO pot arribar a ${base} sense túnel HTTPS públic (Cloudflare Tunnel cap al port 9001 o 1234).`,
-                models,
-                latencia_ms: null,
-              });
-              setNodeIaTesting(false);
-              return;
-            }
-          } catch {
-            // Següent endpoint
-          }
-        }
-      }
-
+      ]);
+      if (tSt) setTunnelLiveStatus(tSt);
       setNodeIaStatus(res);
+      if (res.status === "OK" && !features.node_ia_actiu) {
+        setFeatures((prev) => ({ ...prev, node_ia_actiu: true }));
+      }
     } catch (err: any) {
       setNodeIaStatus({
         status: "ERROR",
         motiu: "ERROR_XARXA",
-        missatge: err.message || "Error contactant amb el node d'IA.",
+        missatge: err.message || "Error comprovant el Copilot pel túnel WSS.",
       });
     } finally {
       setNodeIaTesting(false);
@@ -709,36 +644,27 @@ export default function EmpresaDetailPage({ params }: { params: { id: string } }
   };
 
   const handleVerificarDiscDur = async () => {
-    const rawDiscUrl = (features.disc_dur_url || features.node_ia_url || "").trim();
-    if (!rawDiscUrl || rawDiscUrl.startsWith("Carpeta Local:")) {
-      setErrorMessage(
-        "Introdueix l'adreça HTTP(S) de l'Agent Local del client (ex: https://node-empresa.projectexinoxano.cat)."
-      );
-      return;
-    }
     setDiscDurTesting(true);
     setDiscDurStatus(null);
     setErrorMessage(null);
-
     try {
-      const res = await apiFetch<any>("/superadmin/tenants/verificar-disc-dur", {
-        method: "POST",
-        body: JSON.stringify({
-          disc_dur_url: rawDiscUrl,
-          node_ia_url: features.node_ia_url?.trim() || rawDiscUrl,
-          empresa_id: empresaId,
-          vault_token: vaultToken.trim() || undefined,
+      const [tSt, res] = await Promise.all([
+        apiFetch<any>(`/superadmin/tenants/${empresaId}/tunnel-status`).catch(() => null),
+        apiFetch<any>("/superadmin/tenants/verificar-disc-dur", {
+          method: "POST",
+          body: JSON.stringify({ empresa_id: empresaId }),
         }),
-      });
+      ]);
+      if (tSt) setTunnelLiveStatus(tSt);
       setDiscDurStatus(res);
       if (res.status === "OK") {
-        setFeatures((prev) => ({ ...prev, disc_dur_url: rawDiscUrl, node_ia_actiu: true }));
+        setFeatures((prev) => ({ ...prev, node_ia_actiu: true }));
       }
     } catch (err: any) {
       setDiscDurStatus({
         status: "ERROR",
-        motiu: "NODE_OFFLINE",
-        missatge: err.message || "No s'ha pogut connectar amb l'Agent de Disc Dur del client.",
+        motiu: "TUNEL_OFFLINE",
+        missatge: err.message || "No s'ha pogut verificar el Disc Dur pel túnel WSS.",
       });
     } finally {
       setDiscDurTesting(false);
@@ -749,18 +675,24 @@ export default function EmpresaDetailPage({ params }: { params: { id: string } }
     setRotatingToken(true);
     setErrorMessage(null);
     try {
-      const res = await apiFetch<any>(`/superadmin/tenants/${params.id}/vault-token/rotate`, {
+      const res = await apiFetch<any>(`/superadmin/tenants/${params.id}/rotar-vault-token`, {
         method: "POST",
         body: JSON.stringify({}),
       });
       if (res?.vault_token) {
         setVaultToken(res.vault_token);
+        if (res.comanda_install_wss) {
+          setComandaInstallWss(res.comanda_install_wss);
+        }
+        setTunnelLiveStatus((prev: any) =>
+          prev ? { ...prev, tunnel_online: false, tunnel_status: "OFFLINE" } : prev
+        );
         setSuccessMessage(
-          "Nou Token de Disc Dur generat. Actualitza SEVALOR_VAULT_SECRET a l'agent local del client."
+          "Nou Token WSS generat i sessió anterior revocada (4401). Executa la nova comanda 1-clic al PC del client."
         );
       }
     } catch (err: any) {
-      setErrorMessage(err.message || "Error rotant el token del disc dur.");
+      setErrorMessage(err.message || "Error rotant el token del túnel WSS.");
     } finally {
       setRotatingToken(false);
     }
@@ -771,26 +703,26 @@ export default function EmpresaDetailPage({ params }: { params: { id: string } }
     setInitDiskStatus(null);
     setErrorMessage(null);
     try {
-      // Persistir primer les URLs i el vault_token actuals del formulari abans d'inicialitzar les carpetes i fitxers
       await apiFetch(`/superadmin/tenants/${params.id}/feature-flags`, {
         method: "PUT",
         body: JSON.stringify({
           ...features,
-          node_ia_actiu:
-            Boolean(features.node_ia_url?.trim() || features.disc_dur_url?.trim()) ||
-            features.node_ia_actiu,
+          node_ia_actiu: true,
           vault_token: vaultToken.trim() || undefined,
         }),
       });
-      const res = await apiFetch<any>(`/superadmin/tenants/${params.id}/inicialitzar-disc`, {
-        method: "POST",
-        body: JSON.stringify({}),
-      });
+      const [res, tSt] = await Promise.all([
+        apiFetch<any>(`/superadmin/tenants/${params.id}/inicialitzar-disc`, {
+          method: "POST",
+          body: JSON.stringify({}),
+        }),
+        apiFetch<any>(`/superadmin/tenants/${params.id}/tunnel-status`).catch(() => null),
+      ]);
       setInitDiskStatus(res);
+      if (tSt) setTunnelLiveStatus(tSt);
       setFeatures((prev) => ({
         ...prev,
-        node_ia_actiu:
-          Boolean(prev.node_ia_url?.trim() || prev.disc_dur_url?.trim()) || prev.node_ia_actiu,
+        node_ia_actiu: true,
       }));
     } catch (err: any) {
       setInitDiskStatus({
@@ -1939,7 +1871,7 @@ export default function EmpresaDetailPage({ params }: { params: { id: string } }
               <span>Tiquets d'Incidència CRM & Autodiagnòstic de l'Ordinador del Client</span>
             </h2>
             <p className="text-[11px] text-slate-500 mt-0.5">
-              En obrir un tiquet, el sistema comprova automàticament si l'ordinador central del client (<code>node_ia_url</code>) està apagat per advertir-ne immediatament. Es conserven permanentment per a auditoria.
+              En obrir un tiquet, el sistema comprova automàticament si l&apos;ordinador central del client (<code>wss-tunnel://{params.id}</code>) està apagat per advertir-ne immediatament. Es conserven permanentment per a auditoria.
             </p>
           </div>
         </div>
@@ -2558,10 +2490,7 @@ export default function EmpresaDetailPage({ params }: { params: { id: string } }
                   setFeatures((prev) => ({
                     ...prev,
                     feature_copilot_ia: checked,
-                    node_ia_actiu:
-                      checked && (prev.node_ia_url?.trim() || prev.disc_dur_url?.trim())
-                        ? true
-                        : prev.node_ia_actiu,
+                    node_ia_actiu: checked ? true : prev.node_ia_actiu,
                   }));
                 }}
                 className="w-4 h-4 mt-0.5 text-emerald-600 rounded"
@@ -2613,17 +2542,37 @@ export default function EmpresaDetailPage({ params }: { params: { id: string } }
           </div>
 
           <div className="pt-4 border-t border-slate-200 dark:border-slate-800 space-y-4">
-            <div className="flex items-center justify-between">
+            <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
                 <label className="text-xs font-bold text-slate-800 dark:text-slate-200 flex items-center gap-2">
                   <Cpu className="w-4 h-4 text-emerald-500" />
-                  <span>Ordinador Dedicat de l'Empresa (IA Local + Disc Dur Mestre de Plànols Històrics)</span>
+                  <span>Panell de Node Sobirà WSS — Ordinador Dedicat de l&apos;Empresa (ADR-001)</span>
                 </label>
-                <p className="text-[11px] text-slate-500 mt-1 max-w-2xl leading-relaxed">
-                  L'equip dedicat a la seu de l'empresa allotja la <strong>IA local (càlcul i memòria)</strong> i el <strong>disc dur mestre (plànols històrics i arxiu)</strong>. Hetzner Cloud només actua com a passarel·la en temps real amb Buffer Diari de les feines d'avui, eliminant costos desorbitats de servidors GPU i garantint sobirania de dades.
+                <p className="text-[11px] text-slate-500 mt-1 max-w-3xl leading-relaxed">
+                  Connexió sortint única per WebSocket segur (<code>wss-tunnel://{empresaId}</code>) des del PC del client cap a Hetzner (port 443). Zero ports entrants al router i zero Cloudflare Tunnel. Governa tant el <strong>Disc Dur Mestre (38 carpetes + mirall Disc B)</strong> com el <strong>Copilot IA Local (127.0.0.1:1234)</strong>.
                 </p>
               </div>
-              <div className="flex items-center gap-3 shrink-0 self-start mt-1">
+              <div className="flex items-center gap-3 shrink-0 self-start mt-1 flex-wrap">
+                <span
+                  className={`px-2.5 py-1 rounded-lg text-[11px] font-mono font-bold flex items-center gap-1.5 border ${
+                    tunnelLiveStatus?.tunnel_online
+                      ? "bg-emerald-50 dark:bg-emerald-950/70 text-emerald-700 dark:text-emerald-300 border-emerald-300 dark:border-emerald-800"
+                      : "bg-rose-50 dark:bg-rose-950/70 text-rose-700 dark:text-rose-300 border-rose-300 dark:border-rose-800"
+                  }`}
+                >
+                  {tunnelLiveStatus?.tunnel_online ? (
+                    <>
+                      <Wifi className="w-3.5 h-3.5 text-emerald-500" />
+                      <span>TÚNEL WSS CONNECTAT</span>
+                    </>
+                  ) : (
+                    <>
+                      <WifiOff className="w-3.5 h-3.5 text-rose-500" />
+                      <span>TÚNEL WSS DESCONNECTAT</span>
+                    </>
+                  )}
+                </span>
+
                 <label className="flex items-center gap-2 cursor-pointer text-xs">
                   <input
                     type="checkbox"
@@ -2635,106 +2584,89 @@ export default function EmpresaDetailPage({ params }: { params: { id: string } }
                     }}
                     className="w-4 h-4 text-emerald-600 rounded"
                   />
-                  <span className="font-semibold text-slate-700 dark:text-slate-300">Activat</span>
+                  <span className="font-semibold text-slate-700 dark:text-slate-300">Node IA Activat</span>
                 </label>
+
                 <button
                   type="button"
                   onClick={handleDesarNodeIa}
                   disabled={savingNodeIa}
                   className="px-3.5 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white text-xs font-mono font-bold flex items-center gap-1.5 shadow-sm transition-all cursor-pointer"
-                  title="Desa immediatament els interruptors de Copilot, les URLs de túnel i el Vault Token a PostgreSQL"
                 >
                   <Save className="w-3.5 h-3.5" />
-                  <span>{savingNodeIa ? "Desant..." : "Desar Node IA i Disc Dur"}</span>
+                  <span>{savingNodeIa ? "Desant..." : "Desar Configuració WSS"}</span>
                 </button>
               </div>
             </div>
 
             <div className="space-y-4">
-              {/* CAMP 1: ADREÇA DEL COPILOT LOCAL (LM STUDIO / OLLAMA) */}
-              <div className="p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-800/30 space-y-2">
-                <label className="block text-[11px] font-mono font-bold text-slate-700 dark:text-slate-300 flex items-center gap-1.5">
-                  <Cpu className="w-3.5 h-3.5 text-indigo-500" />
-                  <span>1. Adreça del Copilot Local (IA Local — LM Studio / Ollama)</span>
-                </label>
-                <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
-                  <input
-                    type="text"
-                    placeholder="Ex: http://127.0.0.1:1234 o http://192.168.1.100:1234"
-                    value={features.node_ia_url}
-                    onChange={(e) => {
-                      const val = e.target.value.trim();
-                      setFeatures((prev) => ({
-                        ...prev,
-                        node_ia_url: val,
-                        node_ia_actiu:
-                          val && !nodeIaExplicitlyDisabled ? true : prev.node_ia_actiu,
-                      }));
-                      if (nodeIaStatus) setNodeIaStatus(null);
-                    }}
-                    className="flex-1 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-white text-xs rounded-xl p-2.5 font-mono focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none"
-                  />
+              {/* TARGETA D'IDENTITAT I TELEMETRIA DEL TÚNEL WSS */}
+              <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-800/30 space-y-3 font-mono text-xs">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                  <div className="p-2.5 rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800">
+                    <span className="text-[10px] text-slate-400 block uppercase">Canal Exclusiu WSS</span>
+                    <code className="text-[11px] font-bold text-emerald-600 dark:text-emerald-400 break-all">
+                      wss-tunnel://{empresaId}
+                    </code>
+                  </div>
+                  <div className="p-2.5 rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800">
+                    <span className="text-[10px] text-slate-400 block uppercase">Servidor Passarel·la</span>
+                    <code className="text-[11px] font-bold text-slate-800 dark:text-slate-200 break-all">
+                      {tunnelServerUrl}
+                    </code>
+                  </div>
+                  <div className="p-2.5 rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800">
+                    <span className="text-[10px] text-slate-400 block uppercase">Cua Trànsit Xifrada (SVENC1:)</span>
+                    <span className="text-[11px] font-bold text-slate-800 dark:text-slate-200">
+                      {tunnelLiveStatus?.cua_transit_pendent ?? 0} fitxers pendents
+                    </span>
+                  </div>
+                  <div className="p-2.5 rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800">
+                    <span className="text-[10px] text-slate-400 block uppercase">Versió Agent Connectat</span>
+                    <span className="text-[11px] font-bold text-slate-800 dark:text-slate-200">
+                      {tunnelLiveStatus?.agent_version || "—"}
+                    </span>
+                  </div>
+                </div>
+
+                {/* ACCIONS DE VERIFICACIÓ EN VIU DEL TÚNEL WSS */}
+                <div className="flex flex-wrap items-center gap-2 pt-1">
+                  <button
+                    type="button"
+                    onClick={handleVerificarDiscDur}
+                    disabled={discDurTesting}
+                    className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white text-xs font-mono font-bold flex items-center gap-1.5 shadow-sm transition-all cursor-pointer"
+                  >
+                    <HardDrive className={`w-3.5 h-3.5 ${discDurTesting ? "animate-spin" : ""}`} />
+                    <span>{discDurTesting ? "Comprovant Disc..." : "Comprovar Disc Dur en Viu (Roundtrip WSS)"}</span>
+                  </button>
+
                   <button
                     type="button"
                     onClick={handleVerificarNodeIa}
-                    disabled={nodeIaTesting || (!features.node_ia_url?.trim() && !features.disc_dur_url?.trim())}
-                    className="px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-300 dark:disabled:bg-slate-800 disabled:cursor-not-allowed text-white text-xs font-mono font-bold flex items-center justify-center gap-1.5 shadow-sm transition-all cursor-pointer shrink-0"
-                    title="Verifica la connectivitat directa des de la plataforma amb el Copilot local"
+                    disabled={nodeIaTesting}
+                    className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-xs font-mono font-bold flex items-center gap-1.5 shadow-sm transition-all cursor-pointer"
                   >
                     <Zap className={`w-3.5 h-3.5 ${nodeIaTesting ? "animate-spin" : ""}`} />
-                    <span>{nodeIaTesting ? "Comprovant..." : "Provar Connexió IA"}</span>
+                    <span>{nodeIaTesting ? "Comprovant Copilot..." : "Comprovar Copilot IA en Viu (WSS)"}</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handleInicialitzarDisc}
+                    disabled={initializingDisk}
+                    className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-white text-xs font-mono font-bold flex items-center gap-1.5 shadow-sm transition-all cursor-pointer"
+                  >
+                    <FolderOpen className={`w-3.5 h-3.5 ${initializingDisk ? "animate-spin" : ""}`} />
+                    <span>{initializingDisk ? "Sincronitzant..." : "Inicialitzar 38 Carpetes i Drenar Cua"}</span>
                   </button>
                 </div>
-                <p className="text-[10px] text-slate-500 dark:text-slate-400">
-                  La verificació comprova la connectivitat real des del servidor backend cap al túnel del client (en producció Hetzner cal una URL pública HTTPS com <code className="px-1 py-0.5 rounded bg-slate-200 dark:bg-slate-700">https://node-empresa.projectexinoxano.cat</code>).
-                </p>
-              </div>
 
-              {/* CAMP 2: ADREÇA O CARPETA DEL DISC DUR DEDICAT */}
-              <div className="p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-800/30 space-y-2">
-                <label className="block text-[11px] font-mono font-bold text-slate-700 dark:text-slate-300 flex items-center gap-1.5">
-                  <HardDrive className="w-3.5 h-3.5 text-emerald-500" />
-                  <span>2. URL de l'Agent HTTP de Disc Dur Dedicat (Opció A+ / Túnel)</span>
-                </label>
-                <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
-                  <input
-                    type="text"
-                    placeholder="Ex: http://127.0.0.1:9001 o https://node-empresa.projectexinoxano.cat"
-                    value={features.disc_dur_url}
-                    onChange={(e) => {
-                      const val = e.target.value;
-                      setFeatures((prev) => ({
-                        ...prev,
-                        disc_dur_url: val,
-                        node_ia_actiu:
-                          val.trim() && !nodeIaExplicitlyDisabled ? true : prev.node_ia_actiu,
-                      }));
-                      if (discDurStatus) setDiscDurStatus(null);
-                    }}
-                    className="flex-1 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-white text-xs rounded-xl p-2.5 font-mono focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 outline-none"
-                  />
-                  <div className="flex items-center gap-2 shrink-0">
-                    <button
-                      type="button"
-                      onClick={handleVerificarDiscDur}
-                      disabled={discDurTesting || (!features.disc_dur_url?.trim() && !features.node_ia_url?.trim())}
-                      className="px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-300 dark:disabled:bg-slate-800 disabled:cursor-not-allowed text-white text-xs font-mono font-bold flex items-center justify-center gap-1.5 shadow-sm transition-all cursor-pointer"
-                      title="Verifica la connectivitat del disc dur dedicat i repositori d'arxius"
-                    >
-                      <HardDrive className={`w-3.5 h-3.5 ${discDurTesting ? "animate-spin" : ""}`} />
-                      <span>{discDurTesting ? "Comprovant..." : "Provar Disc Dur Dedicat"}</span>
-                    </button>
-                  </div>
-                </div>
-                <p className="text-[10px] text-slate-500 dark:text-slate-400">
-                  Indica la URL de l'Agent HTTP Local (Opció A+, ex: http://127.0.0.1:9001 o túnel https://node-empresa.projectexinoxano.cat) o ruta física muntada.
-                </p>
-
-                {/* Token Sobirà de Disc Dur (SEVALOR_VAULT_SECRET) + Re-inicialització */}
-                <div className="pt-2 border-t border-slate-200 dark:border-slate-700/70 space-y-2">
+                {/* TOKEN D'AUTENTICACIÓ WSS + ROTACIÓ */}
+                <div className="pt-3 border-t border-slate-200 dark:border-slate-700/70 space-y-2">
                   <label className="block text-[10px] font-mono font-bold text-slate-600 dark:text-slate-400 flex items-center gap-1.5 uppercase tracking-wider">
                     <KeyRound className="w-3.5 h-3.5 text-amber-500" />
-                    <span>Token Autenticació Agent Disc Dur (SEVALOR_VAULT_SECRET)</span>
+                    <span>Token Criptogràfic del Túnel WSS (X-Vault-Token exclusiu d&apos;empresa)</span>
                   </label>
                   <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
                     <input
@@ -2747,55 +2679,76 @@ export default function EmpresaDetailPage({ params }: { params: { id: string } }
                     <div className="flex items-center gap-1.5 shrink-0">
                       <button
                         type="button"
-                        onClick={() => vaultToken && navigator.clipboard.writeText(vaultToken)}
+                        onClick={() => {
+                          if (!vaultToken) return;
+                          navigator.clipboard.writeText(vaultToken);
+                          setCopiedWssTok(true);
+                          setTimeout(() => setCopiedWssTok(false), 2500);
+                        }}
                         disabled={!vaultToken}
                         className="px-3 py-2 rounded-xl bg-slate-700 hover:bg-slate-600 disabled:opacity-40 text-white text-xs font-mono font-bold flex items-center gap-1 cursor-pointer"
-                        title="Copiar Vault Token"
                       >
                         <Copy className="w-3.5 h-3.5" />
-                        <span>Copiar</span>
+                        <span>{copiedWssTok ? "Copiat!" : "Copiar Token"}</span>
                       </button>
                       <button
                         type="button"
                         onClick={handleRotateVaultToken}
                         disabled={rotatingToken}
                         className="px-3 py-2 rounded-xl bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white text-xs font-mono font-bold flex items-center gap-1 cursor-pointer"
-                        title="Generar i desar un nou Vault Token exclusiu per a aquest client"
+                        title="Genera un nou token i revoca a l'instant la sessió WSS activa (4401)"
                       >
                         <RefreshCw className={`w-3.5 h-3.5 ${rotatingToken ? "animate-spin" : ""}`} />
-                        <span>{rotatingToken ? "Rotant..." : "Rotar Token"}</span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={handleInicialitzarDisc}
-                        disabled={initializingDisk}
-                        className="px-3 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-xs font-mono font-bold flex items-center gap-1 cursor-pointer"
-                        title="Crea carpetes oficials, fitxers base i drena cua de trànsit pendent"
-                      >
-                        <HardDrive className={`w-3.5 h-3.5 ${initializingDisk ? "animate-spin" : ""}`} />
-                        <span>{initializingDisk ? "Sincronitzant..." : "Inicialitzar / Sincronitzar Disc"}</span>
+                        <span>{rotatingToken ? "Rotant..." : "Rotar Token i Revocar Sessió"}</span>
                       </button>
                     </div>
                   </div>
-                  {initDiskStatus && (
-                    <div
-                      className={`p-2.5 rounded-lg border text-[11px] font-mono ${
-                        initDiskStatus.status === "ERROR"
-                          ? "bg-rose-50 dark:bg-rose-950/60 border-rose-300 text-rose-800 dark:text-rose-200"
-                          : "bg-emerald-50 dark:bg-emerald-950/60 border-emerald-300 text-emerald-800 dark:text-emerald-200"
-                      }`}
-                    >
-                      <strong>{initDiskStatus.status}:</strong> {initDiskStatus.missatge}
-                      {initDiskStatus.drenatge && (
-                        <span>
-                          {" "}
-                          (Cua drenada: {initDiskStatus.drenatge.enviats || 0} enviats,{" "}
-                          {initDiskStatus.drenatge.pendents || 0} pendents)
-                        </span>
-                      )}
-                    </div>
-                  )}
                 </div>
+
+                {/* COMANDA D'INSTAL·LACIÓ 1-CLIC AUTO-GENERADA */}
+                {comandaInstallWss && (
+                  <div className="pt-3 border-t border-slate-200 dark:border-slate-700/70 space-y-2">
+                    <div className="flex items-center justify-between gap-2 flex-wrap">
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-700 dark:text-emerald-400">
+                        Comanda d&apos;Instal·lació 1-Clic al PC de l&apos;Empresa (systemd + WSS Sortint):
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          navigator.clipboard.writeText(comandaInstallWss);
+                          setCopiedWssCmd(true);
+                          setTimeout(() => setCopiedWssCmd(false), 2500);
+                        }}
+                        className="px-3 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-[11px] font-bold flex items-center gap-1 cursor-pointer shadow-sm"
+                      >
+                        <Copy className="w-3.5 h-3.5" />
+                        <span>{copiedWssCmd ? "Comanda Copiada!" : "Copiar Comanda 1-Clic"}</span>
+                      </button>
+                    </div>
+                    <pre className="p-3 rounded-xl bg-slate-950 text-emerald-300 border border-slate-800 text-[11px] overflow-x-auto whitespace-pre-wrap break-all select-all">
+                      {comandaInstallWss}
+                    </pre>
+                  </div>
+                )}
+
+                {initDiskStatus && (
+                  <div
+                    className={`p-2.5 rounded-lg border text-[11px] font-mono ${
+                      initDiskStatus.status === "ERROR"
+                        ? "bg-rose-50 dark:bg-rose-950/60 border-rose-300 text-rose-800 dark:text-rose-200"
+                        : "bg-emerald-50 dark:bg-emerald-950/60 border-emerald-300 text-emerald-800 dark:text-emerald-200"
+                    }`}
+                  >
+                    <strong>{initDiskStatus.status}:</strong> {initDiskStatus.missatge}
+                    {initDiskStatus.drenatge && (
+                      <span>
+                        {" "}
+                        (Cua drenada: {initDiskStatus.drenatge.enviats || 0} enviats,{" "}
+                        {initDiskStatus.drenatge.pendents || 0} pendents)
+                      </span>
+                    )}
+                  </div>
+                )}
               </div>
 
               {/* Caixes de diagnòstic en viu (Doble Validació: IA + Disc Dur) */}
@@ -2881,11 +2834,14 @@ export default function EmpresaDetailPage({ params }: { params: { id: string } }
                     {discDurStatus.status === "OK" && discDurStatus.endpoint_resolt && (
                       <div className="pt-1.5 border-t border-emerald-200 dark:border-emerald-800/60 text-[10px] text-emerald-700 dark:text-emerald-300 space-y-0.5">
                         <div>
-                          • Sonda resolta a: <code>{discDurStatus.endpoint_resolt}</code> (Codi HTTP {discDurStatus.codi_http})
+                          • Canal Túnel WSS: <code>{discDurStatus.endpoint_resolt}</code>
                         </div>
                         {discDurStatus.disc_a_lliure_gb !== null && discDurStatus.disc_a_lliure_gb !== undefined && (
                           <div>
-                            • Espai lliure al Disc Principal: <strong>{discDurStatus.disc_a_lliure_gb} GB</strong>
+                            • Espai lliure Disc A: <strong>{discDurStatus.disc_a_lliure_gb} GB</strong>
+                            {discDurStatus.disc_b_lliure_gb !== null && discDurStatus.disc_b_lliure_gb !== undefined && (
+                              <> • Mirall Disc B: <strong>{discDurStatus.disc_b_lliure_gb} GB</strong></>
+                            )}
                             {discDurStatus.roundtrip_escriptura && " • Prova Escriptura/Lectura/Esborrat OK"}
                           </div>
                         )}

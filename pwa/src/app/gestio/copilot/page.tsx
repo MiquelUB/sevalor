@@ -395,12 +395,6 @@ export default function CopilotIAPage() {
             <RefreshCw className={`w-3.5 h-3.5 ${carregantInicial ? "animate-spin" : ""}`} />
             <span>Comprovar Node</span>
           </button>
-          <Link
-            href="/gestio/configuracio"
-            className="px-3 py-1.5 rounded-xl bg-surface-container border border-outline-variant/40 text-xs font-bold text-primary hover:bg-surface-container-high"
-          >
-            Configuració Túnel
-          </Link>
         </div>
       </div>
 

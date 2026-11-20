@@ -37,18 +37,23 @@ flowchart TB
         WorkerPeriodic["Celery Beat (OTs Contractes, Informe Setmanal Boss 8:00)"]
     end
 
-    subgraph Persistence["Emmagatzematge Sobirà Europeu (Hetzner CPX21)"]
-        PostgresDB[("PostgreSQL 16 + PostGIS<br/>• RLS Multi-Tenant<br/>• RLS Hard: economics_boss_only")]
-        SovereignFS["Disc Local Sobirà (/data i /docs)<br/>• Xifratge en repòs AES-256<br/>• Zero Cloud Públic"]
+    subgraph Persistence["Hetzner Cloud UE (Passarel·la Cega Zero-Storage) + Túnel Invers Natiu WSS"]
+        PostgresDB[("PostgreSQL 16 + PostGIS<br/>• RLS Multi-Tenant (només routing + HMAC)<br/>• RLS Hard: economics_boss_only")]
+        TunnelBroker["VaultTunnelBroker (WSS natiu port 443)<br/>• WS /api/v1/vault-tunnel/connect<br/>• Pont Redis RPC (Celery / Bot)<br/>• Cua trànsit efímera SVENC1: (auto-unlink)"]
+        ClientNodes["PCs Dedicats (Empresa A/B... + Superadmin)<br/>• Disc Dur Exclusiu (38 / 20 carpetes + Mirall B)<br/>• LM Studio / Ollama local (127.0.0.1:1234)<br/>• Zero túnel HTTP/HTML entrant · Zero Cloudflare"]
     end
 
     Clients --> ReverseProxy --> TenantResolver --> RBACGuard --> APIRouters
     APIRouters --> PostgresDB
     APIRouters --> RedisBroker
+    APIRouters --> TunnelBroker
     RedisBroker --> WorkerCritical & WorkerDocuments & WorkerMedia & WorkerPeriodic
     WorkerCritical & WorkerDocuments & WorkerMedia & WorkerPeriodic --> PostgresDB
-    WorkerDocuments & WorkerMedia & WorkerCritical --> SovereignFS
+    WorkerDocuments & WorkerMedia & WorkerCritical --> TunnelBroker
+    ClientNodes -- "WSS sortint (empresa_id + vault_token)" --> TunnelBroker
 ```
+
+> **Decisió Arquitectònica Obligatòria (ADR-001 — Zero Dualitat):** El **túnel HTTP/HTML entrant** (`http://127.0.0.1:9001`, `host.docker.internal`, ports oberts al router, `bridge_lm_studio.py`), els **túnels manuals de tercers per empresa (Cloudflare Tunnel)** i els fallbacks `LOCAL_FS` a Hetzner **NO són una opció** i queden prohibits. L'única opció arquitectònica adoptada és el **Túnel Invers Natiu WSS** (`WS /api/v1/vault-tunnel/connect`), que resol l'escalabilitat SaaS sense configuració manual per client, la sobirania 100% UE (dades i fitxers exclusivament als discos durs de cada empresa i del Superadmin), el pas transparent de NAT/IP dinàmica, l'aïllament estricte 1 Empresa = 1 Copilot + 1 Disc Dur, la reconnexió automàtica amb drenatge de cua xifrada i l'eliminació de la dualitat entre tests i producció. Detall complet a [docs/ARQUITECTURA_TUNEL_SOBIRA_WSS.md](docs/ARQUITECTURA_TUNEL_SOBIRA_WSS.md).
 
 ---
 

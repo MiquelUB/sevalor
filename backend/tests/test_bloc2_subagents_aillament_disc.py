@@ -121,48 +121,48 @@ async def test_bloc2_hmac_anti_barreja_local_fs_i_http_vault(admin_session, tmp_
     assert ok_a["trobat"] is True
     assert len(ok_a["documents"]) == 1
 
-    # Verificació HTTP_VAULT: simulem resposta barrejada del vault HTTP
-    emp_http = uuid.uuid4()
+    # Verificació WSS_TUNNEL: injectem fitxers barrejats físicament al disc de l'agent WSS
+    from tests.wss_test_helpers import live_empresa_wss_context
+
+    emp_wss = uuid.uuid4()
+    tok_wss = f"svlt_hmac_wss_{uuid.uuid4().hex[:12]}"
+    disc_wss = tmp_path / "Disc_WSS_HMAC"
     admin_session.add(
         Empresa(
-            id=emp_http,
-            nom="Empresa HTTP",
+            id=emp_wss,
+            nom="Empresa WSS HMAC",
             nif="B" + uuid.uuid4().hex[:8].upper(),
-            subdomini="http-" + uuid.uuid4().hex[:5],
+            subdomini="wsshmac-" + uuid.uuid4().hex[:5],
             pla_subscripcio="ENTERPRISE",
             estat_pagament="ACTIU",
-            disc_dur_url="http://127.0.0.1:9901",
-            vault_token="svlt_test_token_1234",
+            disc_dur_url=f"wss-tunnel://{emp_wss}",
+            node_ia_url=f"wss-tunnel://{emp_wss}",
+            vault_token=tok_wss,
             node_ia_actiu=True,
             feature_copilot_ia=True,
         )
     )
     await admin_session.flush()
 
-    valid_http = {
-        "id": "art_http_ok",
-        "nom": "Bombeta Valid HTTP",
-        "_sovereign_meta": {
-            "empresa_id": str(emp_http),
-            "categoria": "magatzem_articles",
-            "subcarpeta": "03_magatzem/articles_i_estoc",
-            "item_id": "art_http_ok",
-            "hmac_tenant": SovereignStorageGateway._sign_meta(
-                emp_http, "magatzem_articles", "03_magatzem/articles_i_estoc", "art_http_ok"
-            ),
-        },
-    }
-    mixed_http = [valid_http, raw_b, forged_zero, unsigned]
+    async with live_empresa_wss_context(emp_wss, tok_wss, disc_wss, start_llm=False):
+        await SovereignStorageGateway.desar_entitat_json(
+            admin_session,
+            emp_wss,
+            "magatzem_articles",
+            "art_wss_ok",
+            {"id": "art_wss_ok", "nom": "Bombeta Valid WSS"},
+        )
+        # Injectem fitxers intrusos directament al disc físic de l'agent WSS
+        art_dir = disc_wss / "03_magatzem/articles_i_estoc"
+        (art_dir / "intrus_b.json").write_text(json.dumps(raw_b), encoding="utf-8")
+        (art_dir / "forged_zero.json").write_text(json.dumps(forged_zero), encoding="utf-8")
+        (art_dir / "unsigned.json").write_text(json.dumps(unsigned), encoding="utf-8")
 
-    async def _mock_get(self: Any, url: str, **kwargs: Any) -> httpx.Response:
-        return httpx.Response(200, json=mixed_http, request=httpx.Request("GET", url))
-
-    monkeypatch.setattr(httpx.AsyncClient, "get", _mock_get)
-    llegits_http = await SovereignStorageGateway.llegir_entitats_json(
-        admin_session, emp_http, "magatzem_articles"
-    )
-    assert len(llegits_http) == 1
-    assert llegits_http[0]["id"] == "art_http_ok"
+        llegits_wss = await SovereignStorageGateway.llegir_entitats_json(
+            admin_session, emp_wss, "magatzem_articles"
+        )
+        assert len(llegits_wss) == 1
+        assert llegits_wss[0]["id"] == "art_wss_ok"
 
 
 @pytest.mark.asyncio
@@ -491,16 +491,16 @@ async def test_bloc2_503_zero_fallback_i_xat_amb_prompt_i_feedback_disc(
     admin_session, tmp_path: Path, monkeypatch
 ):
     """
-    Verifica:
+    Zero Mock (WSS):
     1) node_ia_actiu=False -> HTTP 503 COPILOT_DESACTIVAT (zero fallback a Hetzner).
-    2) node_ia_actiu=True + túnel HTTP offline -> HTTP 503 NODE_IA_OFFLINE.
-    3) node_ia_actiu=True + túnel HTTP actiu -> injecta 09_copilot_ia/prompt_sistema/system_prompt.txt,
-       executa tool contra disc dur de l'empresa i desa aprenentatge a copilot_feedback.
+    2) node_ia_actiu=True + túnel WSS offline -> HTTP 503 NODE_IA_OFFLINE.
+    3) node_ia_actiu=True + túnel WSS actiu -> injecta 09_copilot_ia/prompt_sistema/system_prompt.txt,
+       executa tool contra disc dur de l'empresa i desa aprenentatge a copilot_feedback amb HMAC.
     """
+    from tests.wss_test_helpers import live_empresa_wss_context
+
     emp_off = uuid.uuid4()
     boss_off = uuid.uuid4()
-    disc_off = tmp_path / "Disc_Off"
-    disc_off.mkdir()
     admin_session.add(
         Empresa(
             id=emp_off,
@@ -509,8 +509,8 @@ async def test_bloc2_503_zero_fallback_i_xat_amb_prompt_i_feedback_disc(
             subdomini="off-" + uuid.uuid4().hex[:5],
             pla_subscripcio="PRO",
             estat_pagament="ACTIU",
-            disc_dur_url=str(disc_off),
-            node_ia_url="http://127.0.0.1:59999",
+            disc_dur_url=f"wss-tunnel://{emp_off}",
+            node_ia_url=f"wss-tunnel://{emp_off}",
             node_ia_actiu=False,
             feature_copilot_ia=True,
         )
@@ -529,8 +529,6 @@ async def test_bloc2_503_zero_fallback_i_xat_amb_prompt_i_feedback_disc(
 
     emp_dead_tunnel = uuid.uuid4()
     boss_dead = uuid.uuid4()
-    disc_dead = tmp_path / "Disc_Dead"
-    disc_dead.mkdir()
     admin_session.add(
         Empresa(
             id=emp_dead_tunnel,
@@ -539,8 +537,8 @@ async def test_bloc2_503_zero_fallback_i_xat_amb_prompt_i_feedback_disc(
             subdomini="dead-" + uuid.uuid4().hex[:5],
             pla_subscripcio="PRO",
             estat_pagament="ACTIU",
-            disc_dur_url=str(disc_dead),
-            node_ia_url="http://127.0.0.1:59999",
+            disc_dur_url=f"wss-tunnel://{emp_dead_tunnel}",
+            node_ia_url=f"wss-tunnel://{emp_dead_tunnel}",
             node_ia_actiu=True,
             feature_copilot_ia=True,
         )
@@ -560,7 +558,7 @@ async def test_bloc2_503_zero_fallback_i_xat_amb_prompt_i_feedback_disc(
     emp_on = uuid.uuid4()
     boss_on = uuid.uuid4()
     disc_on = tmp_path / "Disc_On"
-    disc_on.mkdir()
+    tok_wss_on = f"svlt_bloc2_on_{uuid.uuid4().hex[:12]}"
     admin_session.add(
         Empresa(
             id=emp_on,
@@ -569,8 +567,9 @@ async def test_bloc2_503_zero_fallback_i_xat_amb_prompt_i_feedback_disc(
             subdomini="live-" + uuid.uuid4().hex[:5],
             pla_subscripcio="ENTERPRISE",
             estat_pagament="ACTIU",
-            disc_dur_url=str(disc_on),
-            node_ia_url="http://127.0.0.1:18999",
+            disc_dur_url=f"wss-tunnel://{emp_on}",
+            node_ia_url=f"wss-tunnel://{emp_on}",
+            vault_token=tok_wss_on,
             node_ia_actiu=True,
             feature_copilot_ia=True,
         )
@@ -589,32 +588,49 @@ async def test_bloc2_503_zero_fallback_i_xat_amb_prompt_i_feedback_disc(
     )
     await admin_session.flush()
 
-    await SovereignStorageGateway.desar_entitat_json(
-        admin_session,
-        emp_on,
-        "operaris",
-        boss_on,
-        {"id": str(boss_on), "nom": "Maria", "cognoms": "Sobirana", "rol": "BOSS"},
-    )
-    await SovereignStorageGateway.desar_entitat_json(
-        admin_session,
-        emp_on,
-        "magatzem_articles",
-        "art_live",
-        {"id": "art_live", "nom": "Vàlvula Motor 2 polzades", "referencia_inventari": "VLV-2P", "estoc_disponible": 42.0},
-    )
-    await SovereignStorageGateway.pujar_fitxer_binari(
-        admin_session,
-        emp_on,
-        "copilot_prompt",
-        "system_prompt.txt",
-        b"INSTRUCCIO SECRETA DEL CLIENT: Prioritza sempre les valvules de llauto.",
-        "text/plain; charset=utf-8",
-    )
-
     tok_off = _token(boss_off, emp_off, "BOSS")
     tok_dead = _token(boss_dead, emp_dead_tunnel, "BOSS")
     tok_on = _token(boss_on, emp_on, "BOSS")
+
+    captured_payloads: List[Dict[str, Any]] = []
+    round_counter = {"n": 0}
+
+    def _reply_builder(payload: Dict[str, Any]) -> Dict[str, Any]:
+        captured_payloads.append(payload)
+        round_counter["n"] += 1
+        if round_counter["n"] == 1:
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "tool_calls": [
+                                {
+                                    "id": "call_1",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "get_real_stock",
+                                        "arguments": json.dumps({"article_ref": "Vàlvula Motor"}),
+                                    },
+                                }
+                            ],
+                        }
+                    }
+                ]
+            }
+        if round_counter["n"] == 2:
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": "Maria, al magatzem hi consten 42 unitats de Vàlvula Motor 2 polzades.",
+                        }
+                    }
+                ]
+            }
+        # Ronda 3: resposta amb content=None per validar fallback determinista segur
+        return {"choices": [{"message": {"role": "assistant", "content": None, "tool_calls": None}}]}
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
         res_off = await ac.post(
@@ -633,117 +649,66 @@ async def test_bloc2_503_zero_fallback_i_xat_amb_prompt_i_feedback_disc(
         assert res_dead.status_code == 503
         assert res_dead.json()["detail"]["code"] == "NODE_IA_OFFLINE"
 
-        captured_payloads: List[Dict[str, Any]] = []
-        round_counter = {"n": 0}
-        orig_post = httpx.AsyncClient.post
-
-        async def _mock_post(self: Any, url: Any, **kwargs: Any) -> httpx.Response:
-            if "127.0.0.1:18999" not in str(url):
-                return await orig_post(self, url, **kwargs)
-            payload = kwargs.get("json") or {}
-            captured_payloads.append(payload)
-            round_counter["n"] += 1
-            if round_counter["n"] == 1:
-                body = {
-                    "choices": [
-                        {
-                            "message": {
-                                "role": "assistant",
-                                "tool_calls": [
-                                    {
-                                        "id": "call_1",
-                                        "type": "function",
-                                        "function": {
-                                            "name": "get_real_stock",
-                                            "arguments": json.dumps({"article_ref": "Vàlvula Motor"}),
-                                        },
-                                    }
-                                ],
-                            }
-                        }
-                    ]
-                }
-            else:
-                body = {
-                    "choices": [
-                        {
-                            "message": {
-                                "role": "assistant",
-                                "content": "Maria, al magatzem hi consten 42 unitats de Vàlvula Motor 2 polzades.",
-                            }
-                        }
-                    ]
-                }
-            return httpx.Response(200, json=body, request=httpx.Request("POST", str(url)))
-
-        monkeypatch.setattr(httpx.AsyncClient, "post", _mock_post)
-        res_ok = await ac.post(
-            "/api/v1/gestio/copilot/xat",
-            json={"pregunta": "Quant d'estoc ens queda de Vàlvula Motor?"},
-            headers={"Authorization": f"Bearer {tok_on}", "X-Empresa-ID": str(emp_on)},
-        )
-        assert res_ok.status_code == 200, res_ok.text
-        data_ok = res_ok.json()
-        assert data_ok["tool_utilitzada"] == "get_real_stock"
-        assert data_ok["tool_resultat"]["total_disponible"] == pytest.approx(42.0)
-        assert "42" in data_ok["resposta"]
-
-        # Verificar que s'ha injectat el system_prompt.txt del disc i el nom Maria Sobirana
-        assert len(captured_payloads) >= 2
-        sys_msg = captured_payloads[0]["messages"][0]["content"]
-        assert "INSTRUCCIO SECRETA DEL CLIENT" in sys_msg
-        assert "Maria Sobirana" in sys_msg
-
-        # Verificar persistència de l'aprenentatge a 09_copilot_ia/autoaprenentatge/converses_i_feedback amb HMAC
-        feedbacks = await SovereignStorageGateway.llegir_entitats_json(
-            admin_session, emp_on, "copilot_feedback"
-        )
-        assert len(feedbacks) >= 1
-        assert any("Vàlvula Motor" in (fb.get("pregunta") or "") for fb in feedbacks)
-        assert feedbacks[0]["_sovereign_meta"]["hmac_tenant"]
-
-        # Verificar recuperació automàtica de model carregat (/v1/models) + content=None segur
-        orig_get = httpx.AsyncClient.get
-
-        async def _mock_get_models(self: Any, url: Any, **kwargs: Any) -> httpx.Response:
-            if "127.0.0.1:18999/v1/models" in str(url):
-                return httpx.Response(
-                    200,
-                    json={"data": [{"id": "custom-loaded-model"}]},
-                    request=httpx.Request("GET", str(url)),
-                )
-            return await orig_get(self, url, **kwargs)
-
-        seen_models: List[str] = []
-
-        async def _mock_post_fallback(self: Any, url: Any, **kwargs: Any) -> httpx.Response:
-            if "127.0.0.1:18999" not in str(url):
-                return await orig_post(self, url, **kwargs)
-            payload = kwargs.get("json") or {}
-            model = str(payload.get("model") or "")
-            seen_models.append(model)
-            if model != "custom-loaded-model":
-                return httpx.Response(
-                    404,
-                    json={"error": {"message": "Model not found"}},
-                    request=httpx.Request("POST", str(url)),
-                )
-            return httpx.Response(
-                200,
-                json={"choices": [{"message": {"role": "assistant", "content": None, "tool_calls": None}}]},
-                request=httpx.Request("POST", str(url)),
+        async with live_empresa_wss_context(
+            emp_on,
+            tok_wss_on,
+            disc_on,
+            model_name="custom-loaded-model",
+            reply_builder=_reply_builder,
+        ):
+            await SovereignStorageGateway.desar_entitat_json(
+                admin_session,
+                emp_on,
+                "operaris",
+                boss_on,
+                {"id": str(boss_on), "nom": "Maria", "cognoms": "Sobirana", "rol": "BOSS"},
+            )
+            await SovereignStorageGateway.desar_entitat_json(
+                admin_session,
+                emp_on,
+                "magatzem_articles",
+                "art_live",
+                {"id": "art_live", "nom": "Vàlvula Motor 2 polzades", "referencia_inventari": "VLV-2P", "estoc_disponible": 42.0},
+            )
+            await SovereignStorageGateway.pujar_fitxer_binari(
+                admin_session,
+                emp_on,
+                "copilot_prompt",
+                "system_prompt.txt",
+                b"INSTRUCCIO SECRETA DEL CLIENT: Prioritza sempre les valvules de llauto.",
+                "text/plain; charset=utf-8",
             )
 
-        monkeypatch.setattr(httpx.AsyncClient, "get", _mock_get_models)
-        monkeypatch.setattr(httpx.AsyncClient, "post", _mock_post_fallback)
-        res_null_content = await ac.post(
-            "/api/v1/gestio/copilot/xat",
-            json={"pregunta": "Quin estoc tenim de Vàlvula Motor?"},
-            headers={"Authorization": f"Bearer {tok_on}", "X-Empresa-ID": str(emp_on)},
-        )
-        assert res_null_content.status_code == 200, res_null_content.text
-        assert "custom-loaded-model" in seen_models
-        assert "42" in res_null_content.json()["resposta"]
+            res_ok = await ac.post(
+                "/api/v1/gestio/copilot/xat",
+                json={"pregunta": "Quant d'estoc ens queda de Vàlvula Motor?"},
+                headers={"Authorization": f"Bearer {tok_on}", "X-Empresa-ID": str(emp_on)},
+            )
+            assert res_ok.status_code == 200, res_ok.text
+            data_ok = res_ok.json()
+            assert data_ok["tool_utilitzada"] == "get_real_stock"
+            assert data_ok["tool_resultat"]["total_disponible"] == pytest.approx(42.0)
+            assert "42" in data_ok["resposta"]
+
+            assert len(captured_payloads) >= 2
+            sys_msg = captured_payloads[0]["messages"][0]["content"]
+            assert "INSTRUCCIO SECRETA DEL CLIENT" in sys_msg
+            assert "Maria Sobirana" in sys_msg
+
+            feedbacks = await SovereignStorageGateway.llegir_entitats_json(
+                admin_session, emp_on, "copilot_feedback"
+            )
+            assert len(feedbacks) >= 1
+            assert any("Vàlvula Motor" in (fb.get("pregunta") or "") for fb in feedbacks)
+            assert feedbacks[0]["_sovereign_meta"]["hmac_tenant"]
+
+            res_null_content = await ac.post(
+                "/api/v1/gestio/copilot/xat",
+                json={"pregunta": "Quin estoc tenim de Vàlvula Motor?"},
+                headers={"Authorization": f"Bearer {tok_on}", "X-Empresa-ID": str(emp_on)},
+            )
+            assert res_null_content.status_code == 200, res_null_content.text
+            assert "42" in res_null_content.json()["resposta"]
 
 
 @pytest.mark.asyncio
@@ -751,113 +716,66 @@ async def test_bloc2_fallback_de_node_ia_local_a_tunel_disc_dur_i_prioritat_dock
     admin_session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """
-    Verifica:
-    1) Dins Docker (/.dockerenv), si node_ia_url és loopback i disc_dur_url és públic,
-       get_candidate_ia_tunnel_urls prioritza el túnel públic disc_dur_url.
-    2) Si node_ia_url falla per connexió refusada però disc_dur_url respon amb /v1/chat/completions
-       i valida X-Vault-Token, /gestio/copilot/xat resol 200 OK via disc_dur_url.
+    ADR-001 (WSS-only):
+    1) Les funcions antigues de pont Docker HTTP han estat eliminades de network_utils
+       i resoldre_url_tunel_ia prioritza sempre wss-tunnel://.
+    2) /gestio/copilot/xat i /gestio/copilot/ia-status resolen 200 OK sobre el Túnel Invers WSS únic.
     """
-    import os
-    import threading
-    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    import app.core.network_utils as net_utils
+    from tests.wss_test_helpers import live_empresa_wss_context
 
-    from app.core.network_utils import get_candidate_ia_tunnel_urls
+    for removed_fn in (
+        "get_docker_host_gateways",
+        "get_candidate_node_urls",
+        "get_candidate_ia_tunnel_urls",
+        "resolve_effective_node_url",
+        "is_private_or_loopback_url",
+    ):
+        assert not hasattr(net_utils, removed_fn), f"{removed_fn} hauria d'estar eliminada (ADR-001)"
 
-    orig_exists = os.path.exists
-    monkeypatch.setattr(os.path, "exists", lambda p: True if p == "/.dockerenv" else orig_exists(p))
-    cands = get_candidate_ia_tunnel_urls("http://127.0.0.1:1234", "https://node.empresa.example")
-    assert cands[0] == "https://node.empresa.example"
-    monkeypatch.undo()
+    wss_uri = net_utils.build_wss_tunnel_uri("empresa-test-1")
+    assert net_utils.is_wss_tunnel_uri(wss_uri) is True
+    assert net_utils.resoldre_url_tunel_ia("http://127.0.0.1:1234", wss_uri) == wss_uri
 
     vault_secret = "svlt_fallback_secret_987"
-    seen_tokens: List[str] = []
-
-    class _VaultIaHandler(BaseHTTPRequestHandler):
-        def log_message(self, format: str, *args: Any) -> None:
-            return
-
-        def do_GET(self) -> None:
-            if self.headers.get("X-Vault-Token") != vault_secret:
-                self.send_response(403)
-                self.end_headers()
-                return
-            if self.path.startswith("/entitats/"):
-                body = b"[]"
-                self.send_response(200)
-                self.send_header("Content-Type", "application/json")
-                self.send_header("Content-Length", str(len(body)))
-                self.end_headers()
-                self.wfile.write(body)
-            elif self.path.startswith("/v1/models"):
-                body = json.dumps({"data": [{"id": "qwen-vault-proxy"}]}).encode()
-                self.send_response(200)
-                self.send_header("Content-Type", "application/json")
-                self.send_header("Content-Length", str(len(body)))
-                self.end_headers()
-                self.wfile.write(body)
-            else:
-                self.send_response(404)
-                self.end_headers()
-
-        def do_POST(self) -> None:
-            tok = self.headers.get("X-Vault-Token") or ""
-            seen_tokens.append(tok)
-            if tok != vault_secret:
-                self.send_response(403)
-                self.end_headers()
-                return
-            length = int(self.headers.get("Content-Length", "0"))
-            _ = self.rfile.read(length) if length > 0 else b""
-            if self.path == "/v1/chat/completions":
-                body = json.dumps(
-                    {"choices": [{"message": {"role": "assistant", "content": "Resposta via túnel Vault OK"}}]}
-                ).encode()
-                self.send_response(200)
-                self.send_header("Content-Type", "application/json")
-                self.send_header("Content-Length", str(len(body)))
-                self.end_headers()
-                self.wfile.write(body)
-            else:
-                self.send_response(404)
-                self.end_headers()
-
-    srv = ThreadingHTTPServer(("127.0.0.1", 0), _VaultIaHandler)
-    port = srv.server_address[1]
-    thread = threading.Thread(target=srv.serve_forever, daemon=True)
-    thread.start()
-
-    try:
-        emp_id = uuid.uuid4()
-        boss_id = uuid.uuid4()
-        admin_session.add(
-            Empresa(
-                id=emp_id,
-                nom="Empresa Fallback Tunel SL",
-                nif="B" + uuid.uuid4().hex[:8].upper(),
-                subdomini="fbk-" + uuid.uuid4().hex[:5],
-                pla_subscripcio="ENTERPRISE",
-                estat_pagament="ACTIU",
-                node_ia_url="http://127.0.0.1:59998",
-                disc_dur_url=f"http://127.0.0.1:{port}",
-                vault_token=vault_secret,
-                node_ia_actiu=True,
-                feature_copilot_ia=True,
-            )
+    emp_id = uuid.uuid4()
+    boss_id = uuid.uuid4()
+    admin_session.add(
+        Empresa(
+            id=emp_id,
+            nom="Empresa Tunel WSS SL",
+            nif="B" + uuid.uuid4().hex[:8].upper(),
+            subdomini="fbk-" + uuid.uuid4().hex[:5],
+            pla_subscripcio="ENTERPRISE",
+            estat_pagament="ACTIU",
+            node_ia_url=f"wss-tunnel://{emp_id}",
+            disc_dur_url=f"wss-tunnel://{emp_id}",
+            vault_token=vault_secret,
+            node_ia_actiu=True,
+            feature_copilot_ia=True,
         )
-        admin_session.add(
-            Usuari(
-                id=boss_id,
-                empresa_id=emp_id,
-                nom="Boss",
-                cognoms="Fallback",
-                nif="FBK-" + uuid.uuid4().hex[:4],
-                rol="BOSS",
-                estat="ACTIU",
-            )
+    )
+    admin_session.add(
+        Usuari(
+            id=boss_id,
+            empresa_id=emp_id,
+            nom="Boss",
+            cognoms="Fallback",
+            nif="FBK-" + uuid.uuid4().hex[:4],
+            rol="BOSS",
+            estat="ACTIU",
         )
-        await admin_session.commit()
+    )
+    await admin_session.flush()
 
-        tok = _token(boss_id, emp_id, "BOSS")
+    tok = _token(boss_id, emp_id, "BOSS")
+    async with live_empresa_wss_context(
+        emp_id,
+        vault_secret,
+        tmp_path / "disc_fbk",
+        model_name="qwen-vault-proxy",
+        default_reply="Resposta via túnel Vault OK",
+    ):
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
             res = await ac.post(
                 "/api/v1/gestio/copilot/xat",
@@ -866,7 +784,6 @@ async def test_bloc2_fallback_de_node_ia_local_a_tunel_disc_dur_i_prioritat_dock
             )
             assert res.status_code == 200, res.text
             assert "Resposta via túnel Vault OK" in res.json()["resposta"]
-            assert vault_secret in seen_tokens
 
             st = await ac.get(
                 "/api/v1/gestio/copilot/ia-status",
@@ -874,6 +791,3 @@ async def test_bloc2_fallback_de_node_ia_local_a_tunel_disc_dur_i_prioritat_dock
             )
             assert st.status_code == 200, st.text
             assert st.json()["estat"] == "ONLINE"
-    finally:
-        srv.shutdown()
-        srv.server_close()

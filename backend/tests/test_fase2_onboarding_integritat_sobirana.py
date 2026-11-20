@@ -183,102 +183,39 @@ async def test_onboarding_integritat_dades_i_persistencia_local_fs(headers, db_s
 @pytest.mark.asyncio
 async def test_onboarding_integritat_i_persistencia_http_vault(headers, db_session, tmp_path):
     """
-    Verifica l'onboarding de Fase 2 en mode HTTP_VAULT real (Opció A+):
-    - disc_dur_url apunta a un Agent HTTP Local real aixecat sobre Uvicorn TCP
-    - Es valida que les crides PUT es fan amb el header X-Vault-Token = svlt_...
-    - Es valida la persistència de fitxers reals sense mocks prohibits
+    ADR-001 (Migració WSS): Verifica l'onboarding sense URL HTTP externa i persistència física
+    al disc del client quan el seu `SovereignWssAgent` connecta pel Túnel Invers WSS.
     """
+    from tests.wss_test_helpers import live_empresa_wss_context, wait_for
+
     rnd = uuid.uuid4().hex[:6]
     cif_empresa = f"B{uuid.uuid4().int % 10000000:07d}A"
     sub_slug = f"sevalornode-{rnd}"
     secret_token = f"svlt_{rnd}_sovereign_token"
-    recorded_puts = []
 
-    vapp = FastAPI()
-    vault_root = tmp_path / f"vault_http_{rnd}"
-    vault_root.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "rao_social": f"Sevalor Node WSS {rnd} SL",
+        "nif": cif_empresa,
+        "adreca": "Carrer Major 50, Tortosa",
+        "subdomini": sub_slug,
+        "vertical": "HYDROPRO",
+        "pla_subscripcio": "PRO",
+        "boss_nif": "39887766K",
+        "boss_nom": "Carles",
+        "boss_cognoms": "Fabra",
+        "boss_email": f"carles_{rnd}@sevalornode.cat",
+        "boss_telefon": "+34677889900",
+        "vault_token": secret_token,
+    }
 
-    @vapp.get("/health")
-    async def _health():
-        return {"status": "OK", "vault_root": str(vault_root), "disc_a_lliure_gb": 50.0}
-
-    @vapp.post("/admin/inicialitzar-ruta")
-    async def _init_ruta(x_vault_token: str | None = Header(default=None, alias="X-Vault-Token")):
-        if x_vault_token != secret_token:
-            raise HTTPException(status_code=403)
-        return {"status": "OK", "carpetes_count": 38}
-
-    @vapp.put("/entitats/{subcarpeta:path}/{item_id}")
-    async def _put_ent(
-        subcarpeta: str,
-        item_id: str,
-        request: Request,
-        x_vault_token: str | None = Header(default=None, alias="X-Vault-Token"),
-    ):
-        if x_vault_token != secret_token:
-            raise HTTPException(status_code=403)
-        body = json.loads((await request.body()).decode("utf-8"))
-        full_url = str(request.url)
-        recorded_puts.append((full_url, dict(request.headers), body))
-        dest = vault_root / subcarpeta
-        dest.mkdir(parents=True, exist_ok=True)
-        (dest / f"{item_id}.json").write_text(json.dumps(body), encoding="utf-8")
-        return {"status": "SAVED"}
-
-    @vapp.get("/entitats/{subcarpeta:path}")
-    async def _list_ent(subcarpeta: str, x_vault_token: str | None = Header(default=None, alias="X-Vault-Token")):
-        if x_vault_token != secret_token:
-            raise HTTPException(status_code=403)
-        return []
-
-    @vapp.delete("/entitats/{subcarpeta:path}/{item_id}")
-    async def _del_ent(subcarpeta: str, item_id: str, x_vault_token: str | None = Header(default=None, alias="X-Vault-Token")):
-        if x_vault_token != secret_token:
-            raise HTTPException(status_code=403)
-        return {"status": "OK"}
-
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(("127.0.0.1", 0))
-        port = int(s.getsockname()[1])
-    srv = uvicorn.Server(uvicorn.Config(vapp, host="127.0.0.1", port=port, log_level="error"))
-    thr = threading.Thread(target=srv.run, daemon=True)
-    thr.start()
-
-    try:
-        deadline = time.time() + 6.0
-        while time.time() < deadline:
-            try:
-                if httpx.get(f"http://127.0.0.1:{port}/health", timeout=0.3).status_code == 200:
-                    break
-            except Exception:
-                time.sleep(0.05)
-
-        vault_base = f"http://127.0.0.1:{port}"
-        payload = {
-            "rao_social": f"Sevalor Node HTTP {rnd} SL",
-            "nif": cif_empresa,
-            "adreca": "Carrer Major 50, Tortosa",
-            "subdomini": sub_slug,
-            "vertical": "HYDROPRO",
-            "pla_subscripcio": "PRO",
-            "boss_nif": "39887766K",
-            "boss_nom": "Carles",
-            "boss_cognoms": "Fabra",
-            "boss_email": f"carles_{rnd}@sevalornode.cat",
-            "boss_telefon": "+34677889900",
-            "disc_dur_url": vault_base,
-            "vault_token": secret_token,
-        }
-
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-            res = await ac.post("/api/v1/superadmin/tenants/onboarding", json=payload, headers=headers)
-            assert res.status_code == 201, f"Error: {res.status_code} - {res.text}"
-            data = res.json()
-            assert data["status"] == "CREATED"
-            empresa_id = uuid.UUID(data["tenant"]["id"])
-    finally:
-        srv.should_exit = True
-        thr.join(timeout=2.0)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        res = await ac.post("/api/v1/superadmin/tenants/onboarding", json=payload, headers=headers)
+        assert res.status_code == 201, f"Error: {res.status_code} - {res.text}"
+        data = res.json()
+        assert data["status"] == "CREATED"
+        empresa_id = uuid.UUID(data["tenant"]["id"])
+        assert data["tenant"]["disc_dur_url"] == f"wss-tunnel://{empresa_id}"
+        assert secret_token in data["comanda_install_wss"]
 
     # Comprovem el token generat a BD
     res_emp = await db_session.execute(select(Empresa).where(Empresa.id == empresa_id))
@@ -287,14 +224,17 @@ async def test_onboarding_integritat_i_persistencia_http_vault(headers, db_sessi
     assert emp_db.vault_token == secret_token
     assert emp_db.telegram_webhook_secret is None
 
-    # Comprovem que s'han fet les crides PUT a l'agent local amb el token correcte (excloent _healthcheck_)
-    onboarding_puts = [p for p in recorded_puts if "_healthcheck_" not in p[0]]
-    assert len(onboarding_puts) >= 2  # empresa i boss
-    urls = [p[0] for p in onboarding_puts]
+    # Connectem l'agent WSS real i verifiquem drenatge físic de empresa.json i boss.json
+    vault_root = tmp_path / f"vault_wss_{rnd}"
     subcarpeta_cfg = MAPA_CARPETES_CLIENT["configuracio"]
-    assert any(f"{subcarpeta_cfg}/empresa" in u for u in urls)
-    assert any(f"{subcarpeta_cfg}/boss" in u for u in urls)
+    async with live_empresa_wss_context(empresa_id, secret_token, vault_root, start_llm=False):
+        emp_file = vault_root / subcarpeta_cfg / "empresa.json"
+        boss_file = vault_root / subcarpeta_cfg / "boss.json"
+        await wait_for(lambda: emp_file.exists() and boss_file.exists(), timeout=8.0)
 
-    for _url, hdrs, body in onboarding_puts:
-        assert hdrs.get("x-vault-token") == secret_token
-        assert "_sovereign_meta" in body
+        emp_body = json.loads(emp_file.read_text(encoding="utf-8"))
+        boss_body = json.loads(boss_file.read_text(encoding="utf-8"))
+        assert "_sovereign_meta" in emp_body
+        assert emp_body["adreca"] == "Carrer Major 50, Tortosa"
+        assert "_sovereign_meta" in boss_body
+        assert boss_body["nom"] == "Carles"

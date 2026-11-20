@@ -1,65 +1,78 @@
 #!/usr/bin/env bash
-# Instal·lador de Producció de la Passarel·la Sobirana de Sevalor Suite (Disc Dur + Proxy Copilot IA)
-# Apte per a qualsevol empresa client amb ordinador dedicat Linux (systemd).
+# Instal·lador 1-Clic de l'Agent Sobirà WSS de Sevalor Suite (Disc Dur + Copilot IA Local)
+# ADR-001 (Fase 2): Connexió SORTINT WSS port 443 cap al backend de Hetzner.
+# ZERO Cloudflare Tunnel, ZERO ports entrants oberts, ZERO Uvicorn local.
 #
-# Ús recomanat:
+# Ús EMPRESA:
 #   bash scripts/install_client_gateway.sh \
-#     --token svlt_... \
+#     --server https://sevalor-sevalor-backend.80opze.easypanel.host \
+#     --role EMPRESA \
+#     --empresa-id <UUID_EMPRESA> \
+#     --token <svlt_...> \
 #     --disk-a /mnt/disc_principal/sevalor_docs \
 #     --disk-b /mnt/disc_mirall/sevalor_backup \
-#     --llm-url http://127.0.0.1:1234 \
-#     --tunnel-token <CLOUDFLARE_TUNNEL_TOKEN>
+#     --llm-url http://127.0.0.1:1234
+#
+# Ús SUPERADMIN:
+#   bash scripts/install_client_gateway.sh \
+#     --server https://sevalor-sevalor-backend.80opze.easypanel.host \
+#     --role SUPERADMIN \
+#     --token <SUPERADMIN_VAULT_SECRET> \
+#     --disk-a /media/akaun/Project_1/Sevalor_Superadmin_docs \
+#     --llm-url http://127.0.0.1:1234
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 AGENT_SRC="${SCRIPT_DIR}/client_vault_agent.py"
 
-VAULT_TOKEN="${SEVALOR_VAULT_SECRET:-}"
+SERVER_URL="${SEVALOR_SERVER_URL:-https://sevalor-sevalor-backend.80opze.easypanel.host}"
 VAULT_ROLE="${SEVALOR_VAULT_ROLE:-EMPRESA}"
+EMPRESA_ID="${SEVALOR_EMPRESA_ID:-}"
+VAULT_TOKEN="${SEVALOR_VAULT_SECRET:-}"
 DISK_A="${SEVALOR_VAULT_PATH_A:-}"
 DISK_B="${SEVALOR_VAULT_PATH_B:-}"
 LLM_URL="${SEVALOR_LOCAL_LLM_URL:-http://127.0.0.1:1234}"
-PORT="${PORT:-}"
-PORT_EXPLICIT=0
-if [[ -n "${PORT}" ]]; then
-  PORT_EXPLICIT=1
-fi
-HOST="${HOST:-127.0.0.1}"
 INSTALL_DIR=""
-TUNNEL_TOKEN="${CLOUDFLARE_TUNNEL_TOKEN:-}"
 ENABLE_SYSTEMD=1
 
 usage() {
   cat <<'EOF'
-Ús: install_client_gateway.sh --token <svlt_...> --disk-a <ruta_A> [opcions]
+Ús: install_client_gateway.sh --token <token> --disk-a <ruta_A> [--empresa-id <uuid>] [opcions]
 
 Opcions obligatòries:
-  --token <token>         Token únic de passarel·la (vault_token de l'empresa o SUPERADMIN_VAULT_SECRET)
+  --token <token>         Token únic del túnel (vault_token de l'empresa o SUPERADMIN_VAULT_SECRET)
   --disk-a <ruta>         Carpeta del Disc Dur Primari A (ex. /mnt/empresa/docs)
+  --empresa-id <uuid>     UUID de l'empresa (obligatori si --role EMPRESA; prohibit si SUPERADMIN)
 
 Opcions recomanades:
+  --server <url>          URL pública del backend Sevalor (defecte: https://sevalor-sevalor-backend.80opze.easypanel.host)
   --role <EMPRESA|SUPERADMIN>
-                          Perfil del node (defecte: EMPRESA -> port 9001; SUPERADMIN -> port 9002)
+                          Perfil del node (defecte: EMPRESA -> 38 carpetes; SUPERADMIN -> 20 carpetes)
   --disk-b <ruta>         Carpeta del Disc Secundari B mirall (defecte: <disk-a>_backup_B)
   --llm-url <url>         URL del motor IA local LM Studio/Ollama (defecte: http://127.0.0.1:1234)
-  --tunnel-token <tok>    Token d'un Cloudflare Tunnel persistent (recomanat en producció)
-  --port <port>           Port local de la passarel·la (defecte: 9001 EMPRESA, 9002 SUPERADMIN)
-  --host <ip>             IP d'escolta (defecte: 127.0.0.1; usa 0.0.0.0 sense túnel)
   --install-dir <ruta>    Directori d'instal·lació de l'agent i venv
-  --no-systemd            Prepara venv i .env sense registrar serveis systemd
+  --no-systemd            Prepara venv, carpetes i .env sense registrar servei systemd
   -h, --help              Mostra aquesta ajuda
 EOF
 }
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --token)
-      VAULT_TOKEN="${2:-}"
+    --server)
+      SERVER_URL="${2:-}"
       shift 2
       ;;
     --role)
       VAULT_ROLE="${2:-}"
+      shift 2
+      ;;
+    --empresa-id)
+      EMPRESA_ID="${2:-}"
+      shift 2
+      ;;
+    --token)
+      VAULT_TOKEN="${2:-}"
       shift 2
       ;;
     --disk-a)
@@ -74,21 +87,8 @@ while [[ $# -gt 0 ]]; do
       LLM_URL="${2:-}"
       shift 2
       ;;
-    --port)
-      PORT="${2:-}"
-      PORT_EXPLICIT=1
-      shift 2
-      ;;
-    --host)
-      HOST="${2:-}"
-      shift 2
-      ;;
     --install-dir)
       INSTALL_DIR="${2:-}"
-      shift 2
-      ;;
-    --tunnel-token)
-      TUNNEL_TOKEN="${2:-}"
       shift 2
       ;;
     --no-systemd)
@@ -100,7 +100,7 @@ while [[ $# -gt 0 ]]; do
       exit 0
       ;;
     *)
-      echo "Opció desconeguda: $1" >&2
+      echo "Opció desconeguda o prohibida per ADR-001: $1" >&2
       usage
       exit 2
       ;;
@@ -113,18 +113,27 @@ if [[ "${VAULT_ROLE}" != "EMPRESA" && "${VAULT_ROLE}" != "SUPERADMIN" ]]; then
   exit 2
 fi
 
-if [[ "${PORT_EXPLICIT}" -eq 0 || -z "${PORT}" ]]; then
-  if [[ "${VAULT_ROLE}" == "SUPERADMIN" ]]; then
-    PORT="9002"
-  else
-    PORT="9001"
-  fi
-fi
-
-if [[ -z "${VAULT_TOKEN}" || -z "${DISK_A}" ]]; then
-  echo "ERROR: Cal indicar --token i --disk-a." >&2
+if [[ -z "${VAULT_TOKEN}" || -z "${DISK_A}" || -z "${SERVER_URL}" ]]; then
+  echo "ERROR: Cal indicar --token, --disk-a i --server." >&2
   usage
   exit 2
+fi
+
+if [[ "${VAULT_ROLE}" == "EMPRESA" ]]; then
+  if [[ -z "${EMPRESA_ID}" ]]; then
+    echo "ERROR: Cal indicar --empresa-id <UUID> quan --role és EMPRESA." >&2
+    usage
+    exit 2
+  fi
+  if [[ ! "${EMPRESA_ID}" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]]; then
+    echo "ERROR: --empresa-id ha de ser un UUID vàlid (rebut: ${EMPRESA_ID})." >&2
+    exit 2
+  fi
+else
+  if [[ -n "${EMPRESA_ID}" ]]; then
+    echo "ERROR: --empresa-id no es pot utilitzar amb --role SUPERADMIN." >&2
+    exit 2
+  fi
 fi
 
 if [[ ! -f "${AGENT_SRC}" ]]; then
@@ -139,12 +148,10 @@ fi
 if [[ "${VAULT_ROLE}" == "SUPERADMIN" ]]; then
   ENV_BASENAME="vault-superadmin.env"
   SERVICE_AGENT="sevalor-superadmin-vault-agent"
-  SERVICE_TUNNEL="sevalor-superadmin-vault-tunnel"
   DEFAULT_SUBDIR="sevalor-superadmin-gateway"
 else
   ENV_BASENAME="vault-agent.env"
   SERVICE_AGENT="sevalor-vault-agent"
-  SERVICE_TUNNEL="sevalor-vault-tunnel"
   DEFAULT_SUBDIR="sevalor-gateway"
 fi
 
@@ -165,7 +172,7 @@ echo "[1/5] Preparant directoris del disc dur sobirà (${VAULT_ROLE})..."
 mkdir -p "${DISK_A}" "${DISK_B}" "${INSTALL_DIR}" "${ENV_DIR}"
 chmod 700 "${ENV_DIR}"
 
-echo "[2/5] Instal·lant client_vault_agent.py i dependències Python a ${VENV_DIR}..."
+echo "[2/5] Instal·lant client_vault_agent.py i dependències WSS lleugeres a ${VENV_DIR}..."
 cp "${AGENT_SRC}" "${INSTALL_DIR}/client_vault_agent.py"
 
 if ! command -v python3 >/dev/null 2>&1; then
@@ -178,37 +185,29 @@ if [[ ! -d "${VENV_DIR}" ]]; then
 fi
 
 "${VENV_DIR}/bin/pip" install --quiet --upgrade pip
-"${VENV_DIR}/bin/pip" install --quiet "fastapi>=0.110.0" "uvicorn[standard]>=0.29.0" "httpx>=0.27.0" "python-multipart>=0.0.9"
+"${VENV_DIR}/bin/pip" install --quiet "websockets>=13.0" "httpx>=0.27.0"
 
 echo "[3/5] Desant configuració segura a ${ENV_FILE} (permisos 600)..."
 umask 077
 {
+  printf 'SEVALOR_SERVER_URL=%s\n' "${SERVER_URL}"
   printf 'SEVALOR_VAULT_ROLE=%s\n' "${VAULT_ROLE}"
+  if [[ -n "${EMPRESA_ID}" ]]; then
+    printf 'SEVALOR_EMPRESA_ID=%s\n' "${EMPRESA_ID}"
+  fi
   printf 'SEVALOR_VAULT_SECRET=%s\n' "${VAULT_TOKEN}"
   printf 'SEVALOR_VAULT_PATH_A=%s\n' "${DISK_A}"
   printf 'SEVALOR_VAULT_PATH_B=%s\n' "${DISK_B}"
   printf 'SEVALOR_LOCAL_LLM_URL=%s\n' "${LLM_URL}"
-  printf 'HOST=%s\n' "${HOST}"
-  printf 'PORT=%s\n' "${PORT}"
-  if [[ -n "${TUNNEL_TOKEN}" ]]; then
-    printf 'TUNNEL_TOKEN=%s\n' "${TUNNEL_TOKEN}"
-  fi
 } > "${ENV_FILE}"
 chmod 600 "${ENV_FILE}"
 
 echo "[4/5] Verificant l'agent i la inicialització de carpetes (${VAULT_ROLE})..."
-SEVALOR_VAULT_ROLE="${VAULT_ROLE}" \
-SEVALOR_VAULT_PATH_A="${DISK_A}" \
-SEVALOR_VAULT_PATH_B="${DISK_B}" \
-SEVALOR_VAULT_SECRET="${VAULT_TOKEN}" \
-SEVALOR_INSTALL_DIR="${INSTALL_DIR}" \
-"${VENV_DIR}/bin/python" - <<'PY'
-import os, sys
-sys.path.insert(0, os.environ["SEVALOR_INSTALL_DIR"])
-import client_vault_agent as cva
-creades = cva.inicialitzar_estructura_disc()
-print(f"Carpetes inicialitzades ({cva.VAULT_ROLE}): {len(creades)} a {os.environ['SEVALOR_VAULT_PATH_A']}")
-PY
+set -a
+# shellcheck disable=SC1090
+source "${ENV_FILE}"
+set +a
+"${VENV_DIR}/bin/python" "${INSTALL_DIR}/client_vault_agent.py" --init-only
 
 if [[ "${ENABLE_SYSTEMD}" -eq 0 ]]; then
   echo "[5/5] Mode --no-systemd actiu. Arrencada manual:"
@@ -222,7 +221,7 @@ if ! command -v systemctl >/dev/null 2>&1; then
   exit 0
 fi
 
-echo "[5/5] Registrant serveis systemd (${SERVICE_MODE} - ${SERVICE_AGENT})..."
+echo "[5/5] Registrant servei systemd (${SERVICE_MODE} - ${SERVICE_AGENT})..."
 if [[ "${SERVICE_MODE}" == "system" ]]; then
   UNIT_DIR="/etc/systemd/system"
   SYSTEMCTL=(systemctl)
@@ -234,7 +233,7 @@ fi
 
 cat > "${UNIT_DIR}/${SERVICE_AGENT}.service" <<EOF
 [Unit]
-Description=Sevalor ${VAULT_ROLE} Sovereign Gateway (Disc Dur + Proxy Copilot IA)
+Description=Sevalor ${VAULT_ROLE} Sovereign WSS Agent (Disc Dur + Copilot IA Local)
 After=network-online.target
 Wants=network-online.target
 
@@ -242,7 +241,7 @@ Wants=network-online.target
 Type=simple
 WorkingDirectory=${INSTALL_DIR}
 EnvironmentFile=${ENV_FILE}
-ExecStart=${VENV_DIR}/bin/uvicorn client_vault_agent:app --host ${HOST} --port ${PORT}
+ExecStart=${VENV_DIR}/bin/python ${INSTALL_DIR}/client_vault_agent.py
 Restart=always
 RestartSec=3
 
@@ -250,51 +249,10 @@ RestartSec=3
 WantedBy=default.target
 EOF
 
-if [[ -n "${TUNNEL_TOKEN}" ]]; then
-  CF_BIN="$(command -v cloudflared || true)"
-  if [[ -z "${CF_BIN}" ]]; then
-    CF_BIN="${INSTALL_DIR}/cloudflared"
-    if [[ ! -x "${CF_BIN}" ]]; then
-      echo "Descarregant cloudflared a ${CF_BIN}..."
-      ARCH="$(uname -m)"
-      case "${ARCH}" in
-        x86_64|amd64) CF_ARCH="amd64" ;;
-        aarch64|arm64) CF_ARCH="arm64" ;;
-        *)
-          echo "ERROR: Arquitectura no suportada automàticament per cloudflared: ${ARCH}" >&2
-          exit 1
-          ;;
-      esac
-      curl -fsSL "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${CF_ARCH}" -o "${CF_BIN}"
-      chmod 755 "${CF_BIN}"
-    fi
-  fi
-
-  cat > "${UNIT_DIR}/${SERVICE_TUNNEL}.service" <<EOF
-[Unit]
-Description=Sevalor Cloudflare Tunnel cap a Passarel·la ${VAULT_ROLE} (127.0.0.1:${PORT})
-After=network-online.target ${SERVICE_AGENT}.service
-Requires=${SERVICE_AGENT}.service
-
-[Service]
-Type=simple
-EnvironmentFile=${ENV_FILE}
-ExecStart=${CF_BIN} tunnel --no-autoupdate run
-Restart=always
-RestartSec=5
-
-[Install]
-WantedBy=default.target
-EOF
-fi
-
 "${SYSTEMCTL[@]}" daemon-reload
 "${SYSTEMCTL[@]}" enable --now "${SERVICE_AGENT}.service"
-if [[ -n "${TUNNEL_TOKEN}" ]]; then
-  "${SYSTEMCTL[@]}" enable --now "${SERVICE_TUNNEL}.service"
-fi
 
-echo "✅ Passarel·la Sevalor (${VAULT_ROLE}) instal·lada i activa a http://${HOST}:${PORT}"
+echo "✅ Agent Sobirà WSS Sevalor (${VAULT_ROLE}) instal·lat i connectant a ${SERVER_URL} (zero ports entrants)."
 if [[ "${SERVICE_MODE}" == "user" ]]; then
   echo "Consell producció: executa 'sudo loginctl enable-linger ${USER}' perquè el servei segueixi actiu sense sessió oberta."
 fi

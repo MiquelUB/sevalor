@@ -68,6 +68,7 @@ from app.api.v1.superadmin.crm_prospeccio import router as crm_prospeccio_router
 from app.api.v1.superadmin.empreses import router as empreses_router
 from app.api.v1.superadmin.tenants import router as tenants_router
 from app.api.v1.telemetria import router as telemetria_router
+from app.api.v1.vault_tunnel import router as vault_tunnel_router
 from app.api.v1.webhooks.telegram import router as telegram_webhook_router
 from app.api.v1.workers import router as workers_router
 from app.core.config import settings
@@ -310,6 +311,7 @@ app.add_middleware(
 
 
 app.include_router(health_router, prefix=settings.API_V1_STR)
+app.include_router(vault_tunnel_router, prefix=settings.API_V1_STR)
 
 app.include_router(tenants_router, prefix=settings.API_V1_STR)
 app.include_router(empreses_router, prefix=settings.API_V1_STR)

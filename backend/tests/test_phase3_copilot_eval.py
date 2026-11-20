@@ -31,6 +31,7 @@ from app.models.models import (
 )
 from app.services.sovereign_storage import SovereignStorageGateway
 from app.workers.tasks import transcriure_audio_task
+from tests.wss_test_helpers import live_empresa_wss_context
 
 
 def generar_token(usuari_id: uuid.UUID, empresa_id: uuid.UUID, rol: str) -> str:
@@ -56,7 +57,8 @@ async def test_f3_01_tool_calling_stock_real(admin_session, boss_token, tmp_path
     decoded = jwt.decode(token_jwt, options={"verify_signature": False})
     usuari_id = uuid.UUID(decoded["sub"])
 
-    # 1. Crear entorn de negoci amb disc sobirà
+    # 1. Crear entorn de negoci amb disc sobirà via WSS
+    vault_token = f"svlt_p3_01_{uuid.uuid4().hex[:12]}"
     empresa = Empresa(
         id=empresa_id,
         nom="Instal·lacions Vallès SL",
@@ -65,8 +67,9 @@ async def test_f3_01_tool_calling_stock_real(admin_session, boss_token, tmp_path
         pla_subscripcio="ENTERPRISE",
         estat_pagament="ACTIU",
         vertical="SEVALOR",
-        disc_dur_url=str(tmp_path),
-        node_ia_url=str(tmp_path),
+        disc_dur_url=f"wss-tunnel://{empresa_id}",
+        node_ia_url=f"wss-tunnel://{empresa_id}",
+        vault_token=vault_token,
         node_ia_actiu=True,
         feature_copilot_ia=True,
     )
@@ -85,40 +88,41 @@ async def test_f3_01_tool_calling_stock_real(admin_session, boss_token, tmp_path
     admin_session.add(usuari)
     await admin_session.flush()
 
-    art_id = uuid.uuid4()
-    await SovereignStorageGateway.desar_entitat_json(
-        admin_session,
-        empresa_id,
-        "magatzem_articles",
-        art_id,
-        {
-            "id": str(art_id),
-            "referencia_inventari": "CAB-6MM-NEGRE",
-            "nom": "Cable 6mm²",
-            "familia": "ELECTRICITAT",
-            "unitat_mesura": "METRES",
-            "preu_cost": 1.85,
-            "preu_venda": 3.50,
-            "estoc_minim": 50.0,
-            "estoc_optim": 500.0,
-            "quantitat_fisica": 327.0,
-            "quantitat_virtual_reservada": 0.0,
-            "actiu": True,
-        },
-    )
-
     headers = {
         "Authorization": f"Bearer {token_jwt}",
         "X-Empresa-ID": str(empresa_id),
     }
 
-    # 2. Executar la crida a l'agent Copilot
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-        res = await ac.post(
-            "/api/v1/gestio/copilot/xat",
-            json={"pregunta": "Quant de stock ens queda de Cable 6mm²?"},
-            headers=headers,
+    async with live_empresa_wss_context(empresa_id, vault_token, tmp_path, default_reply=""):
+        art_id = uuid.uuid4()
+        await SovereignStorageGateway.desar_entitat_json(
+            admin_session,
+            empresa_id,
+            "magatzem_articles",
+            art_id,
+            {
+                "id": str(art_id),
+                "referencia_inventari": "CAB-6MM-NEGRE",
+                "nom": "Cable 6mm²",
+                "familia": "ELECTRICITAT",
+                "unitat_mesura": "METRES",
+                "preu_cost": 1.85,
+                "preu_venda": 3.50,
+                "estoc_minim": 50.0,
+                "estoc_optim": 500.0,
+                "quantitat_fisica": 327.0,
+                "quantitat_virtual_reservada": 0.0,
+                "actiu": True,
+            },
         )
+
+        # 2. Executar la crida a l'agent Copilot
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+            res = await ac.post(
+                "/api/v1/gestio/copilot/xat",
+                json={"pregunta": "Quant de stock ens queda de Cable 6mm²?"},
+                headers=headers,
+            )
 
     assert res.status_code == 200, f"Error en la consulta: {res.text}"
     data = res.json()
@@ -153,6 +157,7 @@ async def test_f3_02_tool_calling_vehicle_proper(admin_session, boss_token, tmp_
     decoded = jwt.decode(token_jwt, options={"verify_signature": False})
     usuari_id = uuid.UUID(decoded["sub"])
 
+    vault_token = f"svlt_p3_02_{uuid.uuid4().hex[:12]}"
     empresa = Empresa(
         id=empresa_id,
         nom="Transports i Serveis SL",
@@ -161,8 +166,9 @@ async def test_f3_02_tool_calling_vehicle_proper(admin_session, boss_token, tmp_
         pla_subscripcio="ENTERPRISE",
         estat_pagament="ACTIU",
         vertical="SEVALOR",
-        disc_dur_url=str(tmp_path),
-        node_ia_url=str(tmp_path),
+        disc_dur_url=f"wss-tunnel://{empresa_id}",
+        node_ia_url=f"wss-tunnel://{empresa_id}",
+        vault_token=vault_token,
         node_ia_actiu=True,
         feature_copilot_ia=True,
     )
@@ -241,69 +247,70 @@ async def test_f3_02_tool_calling_vehicle_proper(admin_session, boss_token, tmp_
     admin_session.add(ot_b)
     await admin_session.flush()
 
-    for v in (vehicle_a, vehicle_b):
-        await SovereignStorageGateway.desar_entitat_json(
-            admin_session,
-            empresa_id,
-            "vehicles",
-            v.id,
-            {
-                "id": str(v.id),
-                "matricula": v.matricula,
-                "marca": v.marca,
-                "model": v.model,
-                "tipus": v.tipus,
-                "estat": v.estat,
-            },
-        )
-    for o in (ot_a, ot_b):
-        await SovereignStorageGateway.desar_entitat_json(
-            admin_session,
-            empresa_id,
-            "ots_actives",
-            o.id,
-            {
-                "id": str(o.id),
-                "codi": o.codi,
-                "client_id": str(o.client_id),
-                "titol": o.titol,
-                "adreca": o.adreca,
-                "estat": o.estat,
-                "vehicle_id": str(o.vehicle_id),
-            },
-        )
-
     headers = {
         "Authorization": f"Bearer {token_jwt}",
         "X-Empresa-ID": str(empresa_id),
     }
 
-    # 1. Comprovar l'endpoint dedicat de flota propers
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-        res_flota = await ac.get(
-            "/api/v1/gestio/flota/propers?lat=41.3850&lng=2.1730&limit=5",
-            headers=headers,
-        )
-        assert res_flota.status_code == 200
-        propers = res_flota.json()
-        assert len(propers) >= 2
-        assert propers[0]["matricula"] == "1111-AAA"
-        assert propers[0]["distancia_km"] < 1.0
-        assert propers[1]["matricula"] == "2222-BBB"
-        assert propers[1]["distancia_km"] > 20.0
+    async with live_empresa_wss_context(empresa_id, vault_token, tmp_path, default_reply=""):
+        for v in (vehicle_a, vehicle_b):
+            await SovereignStorageGateway.desar_entitat_json(
+                admin_session,
+                empresa_id,
+                "vehicles",
+                v.id,
+                {
+                    "id": str(v.id),
+                    "matricula": v.matricula,
+                    "marca": v.marca,
+                    "model": v.model,
+                    "tipus": v.tipus,
+                    "estat": v.estat,
+                },
+            )
+        for o in (ot_a, ot_b):
+            await SovereignStorageGateway.desar_entitat_json(
+                admin_session,
+                empresa_id,
+                "ots_actives",
+                o.id,
+                {
+                    "id": str(o.id),
+                    "codi": o.codi,
+                    "client_id": str(o.client_id),
+                    "titol": o.titol,
+                    "adreca": o.adreca,
+                    "estat": o.estat,
+                    "vehicle_id": str(o.vehicle_id),
+                },
+            )
 
-        # 2. Comprovar el Copilot Xat amb Tool Calling
-        res_xat = await ac.post(
-            "/api/v1/gestio/copilot/xat",
-            json={"pregunta": "Quin vehicle està més a prop de l'obra a 41.3850, 2.1730?"},
-            headers=headers,
-        )
-        assert res_xat.status_code == 200
-        data_xat = res_xat.json()
+        # 1. Comprovar l'endpoint dedicat de flota propers
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+            res_flota = await ac.get(
+                "/api/v1/gestio/flota/propers?lat=41.3850&lng=2.1730&limit=5",
+                headers=headers,
+            )
+            assert res_flota.status_code == 200
+            propers = res_flota.json()
+            assert len(propers) >= 2
+            assert propers[0]["matricula"] == "1111-AAA"
+            assert propers[0]["distancia_km"] < 1.0
+            assert propers[1]["matricula"] == "2222-BBB"
+            assert propers[1]["distancia_km"] > 20.0
 
-        assert data_xat["tool_utilitzada"] == "get_closest_vehicle"
-        assert "1111-AAA" in data_xat["resposta"]
-        assert data_xat["tool_resultat"]["vehicle_mes_proper"]["matricula"] == "1111-AAA"
+            # 2. Comprovar el Copilot Xat amb Tool Calling
+            res_xat = await ac.post(
+                "/api/v1/gestio/copilot/xat",
+                json={"pregunta": "Quin vehicle està més a prop de l'obra a 41.3850, 2.1730?"},
+                headers=headers,
+            )
+            assert res_xat.status_code == 200
+            data_xat = res_xat.json()
+
+            assert data_xat["tool_utilitzada"] == "get_closest_vehicle"
+            assert "1111-AAA" in data_xat["resposta"]
+            assert data_xat["tool_resultat"]["vehicle_mes_proper"]["matricula"] == "1111-AAA"
 
     # 3. Validar auditoria a la BD
     stmt_log = select(ConsultaXatCopilot).where(

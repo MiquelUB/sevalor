@@ -24,7 +24,10 @@
   5. `celery_worker` + `celery_beat`: Procesamiento en segundo plano (PDFs con ReportLab, OCR, webhooks).
   6. `bot` (aiogram 3.x): Servicio asíncrono para el canal de Telegram con el cliente final.
   7. `nginx`: Reverse Proxy con SSL automático (Let's Encrypt), cabeceras CSP y filtrado.
-- **Almacenamiento de Archivos:** **Memoria interna de la empresa y servidor Hetzner Cloud en Alemania** (volúmenes en disco local del servidor bajo `/data/<empresa_id>/...` y `/docs/<empresa_id>/...`, con copias de seguridad semanales automáticas cada domingo; eliminación total de AWS S3 para estricto cumplimiento del RGPD y soberanía de datos).
+- **Almacenamiento de Archivos y Conectividad Soberana (Zero-Storage Hetzner + Túnel Invers Natiu WSS):**
+  - **Soberanía de Discos Duros:** Toda la información operativa y archivos de cada empresa viven **exclusivamente en el disco duro dedicado de la empresa** (38 carpetas oficiales + espejo Disc B), y los del propietario del SaaS en el **disco duro dedicado de Superadmin** (20 carpetas + espejo Disc B). **Hetzner Cloud (Alemania, UE)** actúa únicamente como pasarela ciega Zero-Storage, motor mínimo de autenticación/RLS pseudonimizado y cola de tránsito efímera cifrada (`SVENC1:`) con `unlink` inmediato al drenar. Eliminación total de AWS S3 y de cualquier almacenamiento en nubes públicas foráneas.
+  - **PROHIBICIÓN TAXATIVA DEL TÚNEL HTTP/HTML ENTRANTE (NO ES UNA OPCIÓN):** Queda prohibido el túnel HTTP/HTML entrante (`http://127.0.0.1:9001`, `host.docker.internal`, puertos abiertos en el router del cliente, `bridge_lm_studio.py`), los túneles manuales externos por empresa (Cloudflare Tunnel, ngrok), la dualidad `http://` + `wss://` y cualquier fallback silencioso `LOCAL_FS` en Hetzner.
+  - **ÚNICA OPCIÓN AUTORIZADA — TÚNEL INVERSO NATIVO WSS (`WS /api/v1/vault-tunnel/connect`):** Cada PC de empresa y el PC de Superadmin ejecutan `client_vault_agent.py` como cliente **WSS saliente por puerto 443** hacia FastAPI en Hetzner (autenticado con `empresa_id` + `vault_token` o `SUPERADMIN_VAULT_SECRET`, con broker multi-tenant aislado y puente cross-process vía Redis 7 para Celery/Bot). Resuelve: escalabilidad SaaS real (0 túneles Cloudflare/DNS por cliente), 100% soberanía UE, paso automático de NAT/CGNAT/IP dinámica sin abrir puertos, aislamiento estricto por empresa (1 Empresa = 1 Copilot + 1 Disco Duro), reconexión automática con drenaje cifrado y paridad total entre tests y producción. Ver [docs/ARQUITECTURA_TUNEL_SOBIRA_WSS.md](docs/ARQUITECTURA_TUNEL_SOBIRA_WSS.md).
 
 ---
 
@@ -116,6 +119,12 @@
 4. **Respeto a las Fases del SDD:**
    - Prohibido saltar a una nueva fase o escribir código si la fase previa no ha sido validada explícitamente por el usuario.
    - Todo cambio en el código debe estar respaldado por su tarea (`tasks.md`) y su especificación (`spec.md`).
+5. **ZERO TÚNEL HTTP/HTML ENTRANTE Y ZERO DUALIDAD (MANDATORIO — ADR-001):**
+   - **El túnel HTTP/HTML entrante y Cloudflare Tunnel por empresa NO son una opción.** Prohibido mantener rutas duales (`http://...` + `wss://...`), puentes TCP locales (`bridge_lm_studio.py`) o fallbacks silenciosos `LOCAL_FS` en Hetzner.
+   - Tanto el Copilot IA local como la lectura/escritura de los discos duros de empresa y de Superadmin operan **exclusivamente** mediante el **Túnel Inverso Nativo WSS** (`WS /api/v1/vault-tunnel/connect`) en todos los entornos (tests, local y producción Hetzner). Ver [docs/ARQUITECTURA_TUNEL_SOBIRA_WSS.md](../../../docs/ARQUITECTURA_TUNEL_SOBIRA_WSS.md).
+5. **ZERO TÚNEL HTTP/HTML ENTRANTE Y ZERO DUALIDAD (MANDATORIO — ADR-001):**
+   - **El túnel HTTP/HTML entrante y Cloudflare Tunnel por empresa NO son una opción.** Prohibido mantener rutas duales (`http://...` + `wss://...`), puentes TCP locales (`bridge_lm_studio.py`) o fallbacks silenciosos `LOCAL_FS` en Hetzner.
+   - Tanto el Copilot IA local como la lectura/escritura de los discos duros de empresa y de Superadmin operan **exclusivamente** mediante el **Túnel Inverso Nativo WSS** (`WS /api/v1/vault-tunnel/connect`) en todos los entornos (tests, local y producción Hetzner). Ver [docs/ARQUITECTURA_TUNEL_SOBIRA_WSS.md](docs/ARQUITECTURA_TUNEL_SOBIRA_WSS.md).
 
 ---
 

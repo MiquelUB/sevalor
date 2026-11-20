@@ -20,11 +20,18 @@ graph TD
     Bot -->|Internal API / Redis FSM| Backend
 
     Backend -->|Async Engine / RLS| DB[(PostgreSQL 16 + PostGIS)]
-    Backend -->|Broker / Cache / Rate Limit| Redis[(Redis 7)]
+    Backend -->|Broker / Cache / RPC WSS| Redis[(Redis 7)]
     CeleryWorker[Celery Workers] -->|Tasques en segon pla| Redis
     CeleryBeat[Celery Beat] -->|Cron / Outbox AEAT| Redis
     CeleryWorker --> DB
+    AgentEmpresa[PC Dedicat Empresa\nDisc 38 carpetes + LM Studio] -->|WSS sortint port 443\nempresa_id + vault_token| Backend
+    AgentSuperadmin[PC Superadmin\nDisc 20 carpetes + LM Studio] -->|WSS sortint port 443\nSUPERADMIN + secret| Backend
 ```
+
+> **Sobirania de Dades i Connectivitat (ADR-001 — Zero Dualitat):**
+> - **El túnel HTTP/HTML entrant (`http://127.0.0.1:9001`, `host.docker.internal`, ports oberts al router, `bridge_lm_studio.py`), els túnels manuals Cloudflare per empresa i qualsevol fallback `LOCAL_FS` a Hetzner NO són una opció.**
+> - **Opció adoptada:** **Túnel Invers Natiu per WebSocket (`WSS` sortint port 443)** integrat dins de FastAPI (`WS /api/v1/vault-tunnel/connect`) + `scripts/client_vault_agent.py`.
+> - **Problemes que resol:** escalabilitat SaaS sense configurar túnels/DNS per client, 100% sobirania UE (tots els arxius i dades de negoci viuen exclusivament al disc dur de cada empresa i del Superadmin; Hetzner és passarel·la cega Zero-Storage amb cua efímera xifrada `SVENC1:`), travessa NAT/IP dinàmica sense obrir ports, aïllament estricte 1 Empresa = 1 Copilot + 1 Disc Dur, reconnexió automàtica resilient i paritat real entre tests i producció. Detall complet a [docs/ARQUITECTURA_TUNEL_SOBIRA_WSS.md](docs/ARQUITECTURA_TUNEL_SOBIRA_WSS.md).
 
 ---
 

@@ -72,15 +72,6 @@ export default function CopilotWidget({ isMobile = false }: { isMobile?: boolean
     };
 
     loadCopilotState();
-    const handleNodeIaUpdated = () => loadCopilotState();
-    if (typeof window !== "undefined") {
-      window.addEventListener("sevalor:node-ia-updated", handleNodeIaUpdated);
-    }
-    return () => {
-      if (typeof window !== "undefined") {
-        window.removeEventListener("sevalor:node-ia-updated", handleNodeIaUpdated);
-      }
-    };
   }, [pathname, isAuthPage, isMobile]);
 
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {

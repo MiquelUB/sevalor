@@ -376,12 +376,16 @@ export default function EmpresesPage() {
                         <div className="text-[10px] text-slate-400 flex items-center justify-center gap-1 mt-0.5">
                           <Cpu className="w-3 h-3" />
                           <span>
-                            PC Client:{" "}
-                            {t.node_ia_url || (t as any).disc_dur_url
+                            Túnel WSS:{" "}
+                            {(t as any).tunnel_online !== undefined
+                              ? (t as any).tunnel_online
+                                ? "🟢 CONNECTAT"
+                                : "🔴 DESCONNECTAT"
+                              : t.node_ia_url || (t as any).disc_dur_url
                               ? t.node_ia_actiu
-                                ? "🟢 ONLINE"
-                                : "🔴 APAGAT"
-                              : "⚪ No config."}
+                                ? "🟢 ACTIU"
+                                : "🔴 INACTIU"
+                              : "⚪ Pendent"}
                           </span>
                         </div>
                       </td>

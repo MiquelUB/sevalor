@@ -1,11 +1,21 @@
-import os
 import uuid
+
 import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.main import app
+
 from app.api.v1.gestio.operaris import hash_pin
-from app.models.models import Empresa, Usuari, Client, OrdreTreball, FullaPicking, LiniaPicking, Article
+from app.main import app
+from app.models.models import (
+    Article,
+    Client,
+    Empresa,
+    FullaPicking,
+    LiniaPicking,
+    OrdreTreball,
+    Usuari,
+)
+
 
 @pytest.fixture
 async def operari_f1_setup(admin_session: AsyncSession):
@@ -137,8 +147,22 @@ async def test_f1_01_incidencia_multipart_i_buit(operari_f1_setup):
         res = await client.post("/operari/incidencies", data=data, files=files, headers=headers)
         assert res.status_code == 201, f"Error creant incidència: {res.text}"
         res_data = res.json()
+        from app.services.sovereign_storage import SovereignStorageGateway
+
         assert res_data["audio_path"] is not None
-        assert os.path.exists(res_data["audio_path"])
+        assert res_data["audio_path"].startswith(
+            f"transit://{setup['empresa_id']}/07_incidencies/audios_veu/"
+        )
+        transit_bin = SovereignStorageGateway._trobar_fitxer_transit(
+            setup["empresa_id"], res_data["audio_path"]
+        )
+        assert transit_bin is not None and transit_bin.is_file()
+        raw_enc = transit_bin.read_bytes()
+        assert raw_enc.startswith(b"SVENC1:")
+        assert (
+            SovereignStorageGateway._decrypt_transit_payload(setup["empresa_id"], raw_enc)
+            == b"AUDIO_SAMPLE_DATA_BINARY"
+        )
         assert res_data["ambit"] == "TASCA"
         assert res_data["estat"] == "VERMELL"
 

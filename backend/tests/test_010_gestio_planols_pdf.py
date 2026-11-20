@@ -1,4 +1,3 @@
-import os
 import uuid
 from unittest.mock import patch
 
@@ -41,10 +40,19 @@ async def test_generar_pdf_planol(admin_session, headers, boss_token):
     admin_session.add(planol)
     await admin_session.flush()
 
+    from app.services.sovereign_storage import SovereignStorageGateway
     from app.workers.tasks import generar_informe_planol_pdf
+
     res_worker = generar_informe_planol_pdf(str(planol_id), empresa_id)
     assert res_worker["status"] == "SUCCESS"
-    assert os.path.exists(res_worker["path"])
+    assert res_worker["path"].startswith(f"transit://{empresa_id}/05_planols/informes_exportats/")
+    assert res_worker["path"].endswith(".pdf")
+    transit_bin = SovereignStorageGateway._trobar_fitxer_transit(empresa_id, res_worker["path"])
+    assert transit_bin is not None and transit_bin.is_file()
+    raw_enc = transit_bin.read_bytes()
+    assert raw_enc.startswith(b"SVENC1:")
+    raw_pdf = SovereignStorageGateway._decrypt_transit_payload(empresa_id, raw_enc)
+    assert raw_pdf.startswith(b"%PDF")
 
     with patch('app.api.v1.gestio.planols.generar_informe_planol_pdf.delay') as mock_delay:
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:

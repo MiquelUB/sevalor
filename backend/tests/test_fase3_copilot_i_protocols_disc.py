@@ -186,16 +186,25 @@ async def test_protocols_interns_i_system_prompt_disc_client(
     assert len(fitxers_protocols) >= 1
     assert any("amiant" in f.read_text(encoding="utf-8") for f in fitxers_protocols)
 
-    # 2. Configurar System Prompt de l'Agent Copilot
+    # 2. Verificar que /gestio/configuracio/node-ia està eliminat (exclusiu Superadmin)
+    #    i que system_prompt.txt es persisteix al disc de l'empresa via SovereignStorageGateway
     prompt_personalitzat = "Ets el Copilot de Fontaners del Maresme. Prioritza sempre el compliment del Codi Tècnic de l'Edificació (CTE-DB-HS)."
-    payload_config = {
-        "node_ia_actiu": True,
-        "node_ia_url": "http://192.168.1.100:1234",
-        "disc_dur_url": str(disc_empresa),
-        "agent_prompt_system": prompt_personalitzat,
-    }
-    resp_conf = await async_client.put("/gestio/configuracio/node-ia", json=payload_config)
-    assert resp_conf.status_code == 200, resp_conf.text
+    resp_conf = await async_client.put(
+        "/gestio/configuracio/node-ia",
+        json={"node_ia_actiu": True, "agent_prompt_system": prompt_personalitzat},
+    )
+    assert resp_conf.status_code == 404, resp_conf.text
+
+    from app.services.sovereign_storage import SovereignStorageGateway
+
+    await SovereignStorageGateway.pujar_fitxer_binari(
+        db=admin_session,
+        empresa_id=empresa_id,
+        categoria="copilot_prompt",
+        nom_fitxer="system_prompt.txt",
+        content=prompt_personalitzat.encode("utf-8"),
+        content_type="text/plain; charset=utf-8",
+    )
 
     fitxer_prompt = disc_empresa / "09_copilot_ia" / "prompt_sistema" / "system_prompt.txt"
     assert fitxer_prompt.exists(), f"Fitxer de prompt no trobat a {fitxer_prompt}"

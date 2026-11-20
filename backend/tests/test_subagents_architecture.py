@@ -18,6 +18,7 @@ from app.core.config import settings
 from app.main import app
 from app.models.models import Empresa, Usuari
 from app.services.sovereign_storage import SovereignStorageGateway
+from tests.wss_test_helpers import live_empresa_wss_context
 from app.services.subagents import (
     CopilotDispatcher,
     SubagentAuditoriaMarge,
@@ -101,6 +102,7 @@ async def test_subagents_rbac_double_barrier(admin_session, tmp_path: Path):
     enginyer_id = uuid.uuid4()
     operari_id = uuid.uuid4()
 
+    vault_token = f"svlt_subrbac_{uuid.uuid4().hex[:12]}"
     admin_session.add(
         Empresa(
             id=empresa_id,
@@ -109,8 +111,9 @@ async def test_subagents_rbac_double_barrier(admin_session, tmp_path: Path):
             subdomini="sec-" + uuid.uuid4().hex[:5],
             pla_subscripcio="ENTERPRISE",
             estat_pagament="ACTIU",
-            disc_dur_url=str(tmp_path),
-            node_ia_url=str(tmp_path),
+            disc_dur_url=f"wss-tunnel://{empresa_id}",
+            node_ia_url=f"wss-tunnel://{empresa_id}",
+            vault_token=vault_token,
             node_ia_actiu=True,
             feature_copilot_ia=True,
         )
@@ -154,34 +157,35 @@ async def test_subagents_rbac_double_barrier(admin_session, tmp_path: Path):
     token_enginyer = generar_token(enginyer_id, empresa_id, "ENGINYER")
     token_operari = generar_token(operari_id, empresa_id, "OPERARI")
 
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-        # 1. Operari bloquejat
-        res_op = await ac.post(
-            "/api/v1/gestio/copilot/xat",
-            json={"pregunta": "Hola, quin és l'estoc?"},
-            headers={"Authorization": f"Bearer {token_operari}"},
-        )
-        assert res_op.status_code == 403
+    async with live_empresa_wss_context(empresa_id, vault_token, tmp_path, default_reply=""):
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+            # 1. Operari bloquejat
+            res_op = await ac.post(
+                "/api/v1/gestio/copilot/xat",
+                json={"pregunta": "Hola, quin és l'estoc?"},
+                headers={"Authorization": f"Bearer {token_operari}"},
+            )
+            assert res_op.status_code == 403
 
-        # 2. Enginyer bloquejat en consulta financera
-        res_eng_fin = await ac.post(
-            "/api/v1/gestio/copilot/xat",
-            json={"pregunta": "Quin és el marge brut global i la facturacio total?"},
-            headers={"Authorization": f"Bearer {token_enginyer}"},
-        )
-        assert res_eng_fin.status_code == 403
-        assert "no autoritzada" in res_eng_fin.json()["detail"]
+            # 2. Enginyer bloquejat en consulta financera
+            res_eng_fin = await ac.post(
+                "/api/v1/gestio/copilot/xat",
+                json={"pregunta": "Quin és el marge brut global i la facturacio total?"},
+                headers={"Authorization": f"Bearer {token_enginyer}"},
+            )
+            assert res_eng_fin.status_code == 403
+            assert "no autoritzada" in res_eng_fin.json()["detail"]
 
-        # 3. Boss autoritzat en consulta financera
-        res_boss_fin = await ac.post(
-            "/api/v1/gestio/copilot/xat",
-            json={"pregunta": "Quants diners tenim no facturats aquest mes?"},
-            headers={"Authorization": f"Bearer {token_boss}"},
-        )
-        assert res_boss_fin.status_code == 200
-        data_boss = res_boss_fin.json()
-        assert data_boss["subagent_utilitzat"] == "subagent_auditoria_marge"
-        assert "resposta" in data_boss
+            # 3. Boss autoritzat en consulta financera
+            res_boss_fin = await ac.post(
+                "/api/v1/gestio/copilot/xat",
+                json={"pregunta": "Quants diners tenim no facturats aquest mes?"},
+                headers={"Authorization": f"Bearer {token_boss}"},
+            )
+            assert res_boss_fin.status_code == 200
+            data_boss = res_boss_fin.json()
+            assert data_boss["subagent_utilitzat"] == "subagent_auditoria_marge"
+            assert "resposta" in data_boss
 
 
 @pytest.mark.asyncio
@@ -192,6 +196,7 @@ async def test_subagent_logistica_and_flota_execution(admin_session, boss_token,
     decoded = jwt.decode(token_jwt, options={"verify_signature": False})
     usuari_id = uuid.UUID(decoded["sub"])
 
+    vault_token = f"svlt_sublog_{uuid.uuid4().hex[:12]}"
     empresa = Empresa(
         id=empresa_id,
         nom="MultiAgent Logistics Tenant",
@@ -199,8 +204,9 @@ async def test_subagent_logistica_and_flota_execution(admin_session, boss_token,
         subdomini="malog-" + uuid.uuid4().hex[:5],
         pla_subscripcio="ENTERPRISE",
         estat_pagament="ACTIU",
-        disc_dur_url=str(tmp_path),
-        node_ia_url=str(tmp_path),
+        disc_dur_url=f"wss-tunnel://{empresa_id}",
+        node_ia_url=f"wss-tunnel://{empresa_id}",
+        vault_token=vault_token,
         node_ia_actiu=True,
         feature_copilot_ia=True,
     )
@@ -219,67 +225,68 @@ async def test_subagent_logistica_and_flota_execution(admin_session, boss_token,
     )
     await admin_session.flush()
 
-    art_id = uuid.uuid4()
-    veh_id = uuid.uuid4()
-    await SovereignStorageGateway.desar_entitat_json(
-        admin_session,
-        empresa_id,
-        "magatzem_articles",
-        art_id,
-        {
-            "id": str(art_id),
-            "referencia_inventari": "TUB-PE-100",
-            "nom": "Tub Polietilè 100mm",
-            "familia": "REG",
-            "unitat_mesura": "METRES",
-            "preu_cost": 4.20,
-            "preu_venda": 8.50,
-            "estoc_minim": 20.0,
-            "estoc_optim": 100.0,
-            "quantitat_fisica": 150.0,
-            "quantitat_virtual_reservada": 10.0,
-            "actiu": True,
-        },
-    )
-    await SovereignStorageGateway.desar_entitat_json(
-        admin_session,
-        empresa_id,
-        "vehicles",
-        veh_id,
-        {
-            "id": str(veh_id),
-            "matricula": "5566-BBB",
-            "marca": "Renault",
-            "model": "Master",
-            "tipus": "FURGONETA",
-            "estat": "OPERATIU",
-            "odometre_acumulat": 45000,
-        },
-    )
-
     headers = {"Authorization": f"Bearer {token_jwt}"}
 
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-        # Test Estoc
-        res_estoc = await ac.post(
-            "/api/v1/gestio/copilot/xat",
-            json={"pregunta": "Quin és l'estoc de Tub Polietilè 100mm?"},
-            headers=headers,
+    async with live_empresa_wss_context(empresa_id, vault_token, tmp_path, default_reply=""):
+        art_id = uuid.uuid4()
+        veh_id = uuid.uuid4()
+        await SovereignStorageGateway.desar_entitat_json(
+            admin_session,
+            empresa_id,
+            "magatzem_articles",
+            art_id,
+            {
+                "id": str(art_id),
+                "referencia_inventari": "TUB-PE-100",
+                "nom": "Tub Polietilè 100mm",
+                "familia": "REG",
+                "unitat_mesura": "METRES",
+                "preu_cost": 4.20,
+                "preu_venda": 8.50,
+                "estoc_minim": 20.0,
+                "estoc_optim": 100.0,
+                "quantitat_fisica": 150.0,
+                "quantitat_virtual_reservada": 10.0,
+                "actiu": True,
+            },
         )
-        assert res_estoc.status_code == 200
-        data_estoc = res_estoc.json()
-        assert data_estoc["subagent_utilitzat"] == "subagent_logistica_estoc"
-        assert data_estoc["tool_utilitzada"] == "get_real_stock"
-        assert "140" in data_estoc["resposta"]  # 150 física - 10 reservada = 140 disponible
+        await SovereignStorageGateway.desar_entitat_json(
+            admin_session,
+            empresa_id,
+            "vehicles",
+            veh_id,
+            {
+                "id": str(veh_id),
+                "matricula": "5566-BBB",
+                "marca": "Renault",
+                "model": "Master",
+                "tipus": "FURGONETA",
+                "estat": "OPERATIU",
+                "odometre_acumulat": 45000,
+            },
+        )
 
-        # Test Vehicle
-        res_veh = await ac.post(
-            "/api/v1/gestio/copilot/xat",
-            json={"pregunta": "Quines dades té el vehicle amb matrícula 5566-BBB?"},
-            headers=headers,
-        )
-        assert res_veh.status_code == 200
-        data_veh = res_veh.json()
-        assert data_veh["subagent_utilitzat"] == "subagent_flota_despatx"
-        assert data_veh["tool_utilitzada"] == "get_vehicle_info"
-        assert "Renault" in data_veh["resposta"]
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+            # Test Estoc
+            res_estoc = await ac.post(
+                "/api/v1/gestio/copilot/xat",
+                json={"pregunta": "Quin és l'estoc de Tub Polietilè 100mm?"},
+                headers=headers,
+            )
+            assert res_estoc.status_code == 200
+            data_estoc = res_estoc.json()
+            assert data_estoc["subagent_utilitzat"] == "subagent_logistica_estoc"
+            assert data_estoc["tool_utilitzada"] == "get_real_stock"
+            assert "140" in data_estoc["resposta"]  # 150 física - 10 reservada = 140 disponible
+
+            # Test Vehicle
+            res_veh = await ac.post(
+                "/api/v1/gestio/copilot/xat",
+                json={"pregunta": "Quines dades té el vehicle amb matrícula 5566-BBB?"},
+                headers=headers,
+            )
+            assert res_veh.status_code == 200
+            data_veh = res_veh.json()
+            assert data_veh["subagent_utilitzat"] == "subagent_flota_despatx"
+            assert data_veh["tool_utilitzada"] == "get_vehicle_info"
+            assert "Renault" in data_veh["resposta"]

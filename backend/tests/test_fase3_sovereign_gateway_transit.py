@@ -1,20 +1,22 @@
 import json
 import uuid
 from pathlib import Path
-from unittest.mock import patch
 
-import httpx
 import pytest
-from httpx import Response
 
 from app.models.models import Empresa
 from app.services.sovereign_storage import SovereignStorageGateway
 from app.workers.tasks import crear_directoris_sobirans
+from tests.wss_test_helpers import live_empresa_wss_context, wait_for
 
 
 @pytest.mark.asyncio
-async def test_resoldre_desti_disc_elimina_fallback_hardcoded(db_session, tmp_path: Path):
-    """Verifica que una empresa anomenada Sevalormante NO utilitza el fallback de /media/akaun."""
+async def test_resoldre_desti_disc_elimina_fallback_hardcoded(db_session, tmp_path: Path, monkeypatch):
+    """ADR-001 (Fase 0): Sense disc_dur_url NO hi ha fallback silenciós a /tmp/sevalor_client_disks ni /data/disc_*; encua a OFFLINE_TRANSIT xifrat SVENC1:."""
+    transit_dir = tmp_path / "sevalor_transit_fase0"
+    monkeypatch.setenv("SOVEREIGN_TRANSIT_QUEUE_DIR", str(transit_dir))
+    monkeypatch.setattr(SovereignStorageGateway, "TRANSIT_QUEUE_DIR", transit_dir)
+
     emp_id = uuid.uuid4()
     emp = Empresa(
         id=emp_id,
@@ -26,10 +28,27 @@ async def test_resoldre_desti_disc_elimina_fallback_hardcoded(db_session, tmp_pa
     db_session.add(emp)
     await db_session.flush()
 
-    mode, base_target, secret = await SovereignStorageGateway.resoldre_desti_disc_empresa(db_session, emp_id)
-    assert mode == "LOCAL_FS"
+    mode, base_target, _ = await SovereignStorageGateway.resoldre_desti_disc_empresa(db_session, emp_id)
+    assert mode == "OFFLINE_TRANSIT"
+    assert base_target == f"wss-tunnel://{emp_id}"
     assert "/media/akaun" not in base_target
-    assert f"disc_{emp.subdomini}" in base_target
+    assert "/tmp/sevalor_client_disks" not in base_target
+    assert not Path(f"/tmp/sevalor_client_disks/disc_{emp.subdomini}").exists()
+
+    # Escriure entitat sense disc configurat NO escriu text pla a Hetzner; xifra SVENC1: a la cua de trànsit
+    ref = await SovereignStorageGateway.desar_entitat_json(
+        db=db_session,
+        empresa_id=emp_id,
+        categoria="clients",
+        item_id="cli_fase0",
+        dades={"nom": "Client Zero Storage"},
+    )
+    assert ref == f"transit://{emp_id}/01_clients/fitxes/cli_fase0"
+    bin_files = list((transit_dir / str(emp_id)).glob("*.bin"))
+    assert len(bin_files) == 1
+    raw_bin = bin_files[0].read_bytes()
+    assert raw_bin.startswith(b"SVENC1:")
+    assert b"Client Zero Storage" not in raw_bin
 
 
 @pytest.mark.asyncio
@@ -52,10 +71,10 @@ async def test_crear_directoris_sobirans_zero_fugides_hetzner(tmp_path: Path, mo
 @pytest.mark.asyncio
 async def test_cua_transit_temporal_i_auto_purga_immediata(db_session, tmp_path: Path, monkeypatch):
     """
-    Verifica que:
-    1. Si l'Agent HTTP del client està apagat (RequestError), es genera paquet a la cua de trànsit.
+    Zero Mock (WSS):
+    1. Si l'agent WSS del client està offline, es genera paquet xifrat SVENC1: a la cua de trànsit.
     2. Retorna ruta transit://...
-    3. Quan l'agent torna a respondre 200 OK, drenar_cua_transit_empresa purga immediatament els fitxers temporals.
+    3. Quan l'agent WSS real connecta, els fitxers es drenen al disc físic del client i es purguen de Hetzner.
     """
     transit_dir = tmp_path / "sevalor_transit_queue"
     monkeypatch.setenv("SOVEREIGN_TRANSIT_QUEUE_DIR", str(transit_dir))
@@ -68,27 +87,24 @@ async def test_cua_transit_temporal_i_auto_purga_immediata(db_session, tmp_path:
         nom="Empresa Transit Test SL",
         nif=f"B{uuid.uuid4().int % 10000000:07d}A",
         subdomini=f"transittest-{emp_id.hex[:6]}",
-        disc_dur_url="http://node-offline.local:9001",
-        telegram_webhook_secret=vault_token,
+        disc_dur_url=f"wss-tunnel://{emp_id}",
+        node_ia_url=f"wss-tunnel://{emp_id}",
+        vault_token=vault_token,
     )
     db_session.add(emp)
     await db_session.flush()
 
-    # 1. Intent de desar entitat amb node desconnectat -> Ha d'encuar a trànsit
+    # 1. Intent de desar entitat amb node WSS desconnectat -> Ha d'encuar xifrat SVENC1:
     entitat_id = f"cli_{uuid.uuid4().hex[:6]}"
     dades = {"nom": "Client de Camp", "nif": "12345678Z"}
 
-    def offline_put(*args, **kwargs):
-        raise httpx.ConnectError("Connection refused: node apagat")
-
-    with patch.object(httpx.AsyncClient, "put", side_effect=offline_put):
-        transit_ref = await SovereignStorageGateway.desar_entitat_json(
-            db=db_session,
-            empresa_id=emp_id,
-            categoria="clients",
-            item_id=entitat_id,
-            dades=dades,
-        )
+    transit_ref = await SovereignStorageGateway.desar_entitat_json(
+        db=db_session,
+        empresa_id=emp_id,
+        categoria="clients",
+        item_id=entitat_id,
+        dades=dades,
+    )
 
     assert transit_ref.startswith(f"transit://{emp_id}/01_clients/fitxes/{entitat_id}")
 
@@ -104,21 +120,14 @@ async def test_cua_transit_temporal_i_auto_purga_immediata(db_session, tmp_path:
     assert meta_content["subcarpeta"] == "01_clients/fitxes"
     assert meta_content["identificador"] == entitat_id
 
-    # 2. Node torna a estar en línia -> Drenar cua amb auto-purga immediata
-    recorded_drains = []
-
-    async def online_put(self, url, *args, **kwargs):
-        recorded_drains.append((str(url), kwargs.get("headers", {}), kwargs.get("content", b"")))
-        return Response(status_code=200, json={"status": "SAVED"})
-
-    with patch.object(httpx.AsyncClient, "put", new=online_put):
+    # 2. Agent WSS real torna a estar en línia -> auto-drenatge i auto-purga immediata
+    disk_a = tmp_path / "disk_transit_a"
+    async with live_empresa_wss_context(emp_id, vault_token, disk_a, start_llm=False):
+        target_file = disk_a / "01_clients" / "fitxes" / f"{entitat_id}.json"
+        await wait_for(lambda: target_file.exists(), timeout=8.0)
         stats = await SovereignStorageGateway.drenar_cua_transit_empresa(db_session, emp_id)
-
-    assert stats["enviats"] == 1
-    assert stats["pendents"] == 0
-    assert len(recorded_drains) == 1
-    assert recorded_drains[0][1].get("X-Vault-Token") == vault_token
-    assert f"01_clients/fitxes/{entitat_id}" in recorded_drains[0][0]
-
-    # Auto-purga: els fitxers temporals i la carpeta d'empresa han d'haver desaparegut completament
-    assert not emp_transit_folder.exists()
+        assert stats["pendents"] == 0
+        assert not emp_transit_folder.exists()
+        saved = json.loads(target_file.read_text(encoding="utf-8"))
+        assert saved["nom"] == "Client de Camp"
+        assert saved["nif"] == "12345678Z"

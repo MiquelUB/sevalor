@@ -277,8 +277,11 @@ async def test_cross_03_coherencia_pressupost_telegram_copilot(admin_session, bo
     TEST-CROSS-03: Coherència Pressupost -> Telegram -> Copilot.
     Un pressupost aprovat via Telegram ha de reflectir-se viu al Copilot d'agent.
     """
+    from tests.wss_test_helpers import live_empresa_wss_context
+
     token_jwt, empresa_id_str = boss_token
     empresa_id = uuid.UUID(empresa_id_str)
+    vault_token = f"svlt_cross3_{uuid.uuid4().hex[:12]}"
 
     empresa = Empresa(
         id=empresa_id,
@@ -288,8 +291,9 @@ async def test_cross_03_coherencia_pressupost_telegram_copilot(admin_session, bo
         pla_subscripcio="ENTERPRISE",
         estat_pagament="ACTIU",
         vertical="SEVALOR",
-        disc_dur_url=str(tmp_path),
-        node_ia_url=str(tmp_path),
+        disc_dur_url=f"wss-tunnel://{empresa_id}",
+        node_ia_url=f"wss-tunnel://{empresa_id}",
+        vault_token=vault_token,
         node_ia_actiu=True,
         feature_copilot_ia=True,
     )
@@ -333,46 +337,47 @@ async def test_cross_03_coherencia_pressupost_telegram_copilot(admin_session, bo
     admin_session.add(pressupost)
     await admin_session.flush()
 
-    await SovereignStorageGateway.desar_entitat_json(
-        admin_session,
-        empresa_id,
-        "clients",
-        client.id,
-        {
-            "id": str(client.id),
-            "codi": client.codi,
-            "rao_social": client.rao_social,
-            "nif": client.nif,
-            "telegram_chat_id": chat_id,
-        },
-    )
-
-    # 1. Aprovar via Telegram Webhook
-    payload_tg = {
-        "callback_query": {
-            "id": "cbq_cross_01",
-            "message": {"chat": {"id": chat_id}},
-            "data": f"aprovar_pressupost:{pressupost.id}",
-        }
-    }
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-        res_tg = await ac.post("/api/v1/webhooks/telegram", json=payload_tg)
-        assert res_tg.status_code == 200
-
-        # 2. Consultar l'estat via API oficial de pressupostos
-        headers = {"Authorization": f"Bearer {token_jwt}", "X-Empresa-ID": str(empresa_id)}
-        res_press = await ac.get(f"/api/v1/gestio/pressupostos/{pressupost.id}", headers=headers)
-        assert res_press.status_code == 200
-        assert res_press.json()["estat"] == "APROVAT"
-
-        # 3. Consultar l'historial del client al Copilot
-        res_copilot = await ac.post(
-            "/api/v1/gestio/copilot/xat",
-            json={"pregunta": "Historial i fitxa 360 del client Masnou Residencial"},
-            headers=headers,
+    async with live_empresa_wss_context(empresa_id, vault_token, tmp_path, default_reply=""):
+        await SovereignStorageGateway.desar_entitat_json(
+            admin_session,
+            empresa_id,
+            "clients",
+            client.id,
+            {
+                "id": str(client.id),
+                "codi": client.codi,
+                "rao_social": client.rao_social,
+                "nif": client.nif,
+                "telegram_chat_id": chat_id,
+            },
         )
-        assert res_copilot.status_code == 200
-        assert res_copilot.json()["tool_utilitzada"] == "get_client_history"
+
+        # 1. Aprovar via Telegram Webhook
+        payload_tg = {
+            "callback_query": {
+                "id": "cbq_cross_01",
+                "message": {"chat": {"id": chat_id}},
+                "data": f"aprovar_pressupost:{pressupost.id}",
+            }
+        }
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+            res_tg = await ac.post("/api/v1/webhooks/telegram", json=payload_tg)
+            assert res_tg.status_code == 200
+
+            # 2. Consultar l'estat via API oficial de pressupostos
+            headers = {"Authorization": f"Bearer {token_jwt}", "X-Empresa-ID": str(empresa_id)}
+            res_press = await ac.get(f"/api/v1/gestio/pressupostos/{pressupost.id}", headers=headers)
+            assert res_press.status_code == 200
+            assert res_press.json()["estat"] == "APROVAT"
+
+            # 3. Consultar l'historial del client al Copilot
+            res_copilot = await ac.post(
+                "/api/v1/gestio/copilot/xat",
+                json={"pregunta": "Historial i fitxa 360 del client Masnou Residencial"},
+                headers=headers,
+            )
+            assert res_copilot.status_code == 200
+            assert res_copilot.json()["tool_utilitzada"] == "get_client_history"
 
 
 @pytest.mark.asyncio
@@ -384,8 +389,11 @@ async def test_cross_04_consistencia_estoc_magatzem_picking_copilot(admin_sessio
     Estoc disponible viu calculat: 500 - 120 = 380 unitats.
     L'agent Copilot ha de respondre exactament 380 unitats disponibles.
     """
+    from tests.wss_test_helpers import live_empresa_wss_context
+
     token_jwt, empresa_id_str = boss_token
     empresa_id = uuid.UUID(empresa_id_str)
+    vault_token = f"svlt_cross4_{uuid.uuid4().hex[:12]}"
 
     empresa = Empresa(
         id=empresa_id,
@@ -395,8 +403,9 @@ async def test_cross_04_consistencia_estoc_magatzem_picking_copilot(admin_sessio
         pla_subscripcio="ENTERPRISE",
         estat_pagament="ACTIU",
         vertical="SEVALOR",
-        disc_dur_url=str(tmp_path),
-        node_ia_url=str(tmp_path),
+        disc_dur_url=f"wss-tunnel://{empresa_id}",
+        node_ia_url=f"wss-tunnel://{empresa_id}",
+        vault_token=vault_token,
         node_ia_actiu=True,
         feature_copilot_ia=True,
     )
@@ -449,40 +458,41 @@ async def test_cross_04_consistencia_estoc_magatzem_picking_copilot(admin_sessio
     admin_session.add(estoc)
     await admin_session.flush()
 
-    await SovereignStorageGateway.desar_entitat_json(
-        admin_session,
-        empresa_id,
-        "magatzem_articles",
-        article.id,
-        {
-            "id": str(article.id),
-            "referencia_inventari": article.referencia_inventari,
-            "nom": article.nom,
-            "familia": article.familia,
-            "unitat_mesura": article.unitat_mesura,
-            "estoc_minim": 20.0,
-            "estoc_optim": 600.0,
-            "quantitat_fisica": 500.0,
-            "quantitat_virtual_reservada": 120.0,
-            "actiu": True,
-        },
-    )
-
     headers = {"Authorization": f"Bearer {token_jwt}", "X-Empresa-ID": str(empresa_id)}
 
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-        res = await ac.post(
-            "/api/v1/gestio/copilot/xat",
-            json={"pregunta": "Quant d'estoc real ens queda d'Electrovàlvula 24V?"},
-            headers=headers,
+    async with live_empresa_wss_context(empresa_id, vault_token, tmp_path, default_reply=""):
+        await SovereignStorageGateway.desar_entitat_json(
+            admin_session,
+            empresa_id,
+            "magatzem_articles",
+            article.id,
+            {
+                "id": str(article.id),
+                "referencia_inventari": article.referencia_inventari,
+                "nom": article.nom,
+                "familia": article.familia,
+                "unitat_mesura": article.unitat_mesura,
+                "estoc_minim": 20.0,
+                "estoc_optim": 600.0,
+                "quantitat_fisica": 500.0,
+                "quantitat_virtual_reservada": 120.0,
+                "actiu": True,
+            },
         )
 
-        assert res.status_code == 200
-        data = res.json()
-        assert data["tool_utilitzada"] == "get_real_stock"
-        # 500 - 120 = 380
-        assert data["tool_resultat"]["total_disponible"] == 380.0
-        assert "380" in data["resposta"]
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+            res = await ac.post(
+                "/api/v1/gestio/copilot/xat",
+                json={"pregunta": "Quant d'estoc real ens queda d'Electrovàlvula 24V?"},
+                headers=headers,
+            )
+
+            assert res.status_code == 200
+            data = res.json()
+            assert data["tool_utilitzada"] == "get_real_stock"
+            # 500 - 120 = 380
+            assert data["tool_resultat"]["total_disponible"] == 380.0
+            assert "380" in data["resposta"]
 
 
 @pytest.mark.asyncio

@@ -124,17 +124,7 @@ export default function SuperadminTenantOnboardingPage() {
   const [vertical, setVertical] = useState<string>("");
   const [magatzemFamilies, setMagatzemFamilies] = useState<string>("");
   const [agentPrompt, setAgentPrompt] = useState<string>("");
-  const [nodeIaUrl, setNodeIaUrl] = useState<string>("");
-  const [discDurUrl, setDiscDurUrl] = useState<string>("");
   const [vaultToken, setVaultToken] = useState<string>("");
-  const [nodeIaTesting, setNodeIaTesting] = useState<boolean>(false);
-  const [nodeIaStatus, setNodeIaStatus] = useState<{
-    status: "OK" | "ERROR";
-    motiu?: string;
-    missatge?: string;
-    models?: string[];
-    latencia_ms?: number | null;
-  } | null>(null);
   const [bossNif, setBossNif] = useState<string>("");
   const [bossNom, setBossNom] = useState<string>("");
   const [bossCognoms, setBossCognoms] = useState<string>("");
@@ -208,8 +198,15 @@ export default function SuperadminTenantOnboardingPage() {
   const [provisioning, setProvisioning] = useState<boolean>(false);
   const [provisionedSuccess, setProvisionedSuccess] = useState<boolean>(false);
   const [invitationUrl, setInvitationUrl] = useState<string | null>(null);
+  const [provisionedTenantId, setProvisionedTenantId] = useState<string | null>(null);
   const [provisionedVaultToken, setProvisionedVaultToken] = useState<string | null>(null);
   const [provisionedVaultSync, setProvisionedVaultSync] = useState<any>(null);
+  const [provisionedInstallCommand, setProvisionedInstallCommand] = useState<string | null>(null);
+  const [provisionedTunnelServerUrl, setProvisionedTunnelServerUrl] = useState<string>(
+    "https://sevalor-sevalor-backend.80opze.easypanel.host"
+  );
+  const [copiedCommand, setCopiedCommand] = useState<boolean>(false);
+  const [copiedToken, setCopiedToken] = useState<boolean>(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   useEffect(() => {
@@ -282,36 +279,6 @@ export default function SuperadminTenantOnboardingPage() {
     }
   };
 
-  const handleVerificarNodeIa = async () => {
-    const targetUrl = nodeIaUrl.trim() || discDurUrl.trim();
-    if (!targetUrl) {
-      setErrorMessage("Introdueix l'adreça URL del node dedicat d'IA o de la passarel·la del client.");
-      return;
-    }
-    setNodeIaTesting(true);
-    setNodeIaStatus(null);
-    setErrorMessage(null);
-    try {
-      const res = await apiFetch<any>("/superadmin/tenants/verificar-node-ia", {
-        method: "POST",
-        body: JSON.stringify({
-          node_ia_url: targetUrl,
-          disc_dur_url: discDurUrl.trim() || undefined,
-          vault_token: vaultToken.trim() || undefined,
-        }),
-      });
-      setNodeIaStatus(res);
-    } catch (err: any) {
-      setNodeIaStatus({
-        status: "ERROR",
-        motiu: "ERROR_XARXA",
-        missatge: err.message || "Error contactant amb el node d'IA.",
-      });
-    } finally {
-      setNodeIaTesting(false);
-    }
-  };
-
   const handleExecuteDryRun = async () => {
     setDryRunRunning(true);
     setDryRunSuccess(null);
@@ -336,12 +303,6 @@ export default function SuperadminTenantOnboardingPage() {
         setDryRunRunning(false);
         setDryRunSuccess(false);
         setErrorMessage("El prompt de sistema de Copilot (agent_prompt_system) és obligatori quan la IA està activada.");
-        return;
-      }
-      if (!nodeIaUrl.trim() && !discDurUrl.trim()) {
-        setDryRunRunning(false);
-        setDryRunSuccess(false);
-        setErrorMessage("Cal indicar l'adreça URL del node d'IA dedicat o del disc dur quan la IA està activada.");
         return;
       }
     }
@@ -369,15 +330,17 @@ export default function SuperadminTenantOnboardingPage() {
     setDnsResult(null);
     setDryRunSuccess(null);
     setErrorMessage(null);
-    setNodeIaUrl("");
-    setDiscDurUrl("");
     setVaultToken("");
-    setNodeIaTesting(false);
-    setNodeIaStatus(null);
     setAgentPrompt("");
     setEstatInicial("TRIAL");
     setPlaSubscripcio("PRO");
     setQuotaOperaris(10);
+    setProvisionedSuccess(false);
+    setInvitationUrl(null);
+    setProvisionedTenantId(null);
+    setProvisionedVaultToken(null);
+    setProvisionedVaultSync(null);
+    setProvisionedInstallCommand(null);
     handleClearLogo();
     setPasActual(1);
   };
@@ -390,24 +353,14 @@ export default function SuperadminTenantOnboardingPage() {
         throw new Error("Cal omplir Raó Social, CIF d'empresa, DNI/NIE del Gerent, Nom, Cognoms i Email.");
       }
 
-      if (estatInicial === "ACTIU" && !nodeIaUrl.trim() && !discDurUrl.trim()) {
-        throw new Error(
-          "Per donar d'alta una empresa en estat ACTIU cal configurar un túnel funcional cap al seu disc dur dedicat."
-        );
-      }
-
       if (featureFlags.copilot_ia) {
         if (!agentPrompt.trim() || agentPrompt.trim().length < 5) {
           throw new Error("El prompt de sistema de Copilot (agent_prompt_system) és obligatori quan la IA està activada.");
-        }
-        if (!nodeIaUrl.trim() && !discDurUrl.trim()) {
-          throw new Error("Cal indicar l'adreça URL del node d'IA dedicat o de la passarel·la quan la IA està activada.");
         }
       }
 
       const slugFinal = slugCalculat;
       const dominiCustomFinal = dominiCustomNet || undefined;
-      const urlNodeUnificat = discDurUrl.trim() || nodeIaUrl.trim() || undefined;
 
       const data = await apiFetch<any>("/superadmin/tenants/onboarding", {
         method: "POST",
@@ -421,8 +374,6 @@ export default function SuperadminTenantOnboardingPage() {
           vertical: vertical.trim() || "Manteniment i Serveis Tècnics",
           magatzem_families_default: magatzemFamilies.trim() || undefined,
           agent_prompt_system: featureFlags.copilot_ia ? agentPrompt.trim() : undefined,
-          node_ia_url: featureFlags.copilot_ia ? (nodeIaUrl.trim() || urlNodeUnificat) : undefined,
-          disc_dur_url: discDurUrl.trim() || undefined,
           vault_token: vaultToken.trim() || undefined,
           estat_inicial: estatInicial,
           pla_subscripcio: plaSubscripcio,
@@ -442,7 +393,6 @@ export default function SuperadminTenantOnboardingPage() {
         }),
       });
 
-      // Si s'ha seleccionat un fitxer de logo, assegurem també la pujada al seu endpoint sobirà
       if (logoFile && data?.tenant?.id) {
         try {
           const fd = new FormData();
@@ -456,11 +406,27 @@ export default function SuperadminTenantOnboardingPage() {
         }
       }
 
+      const createdId = data?.tenant?.id || null;
+      const createdToken = data?.tenant?.vault_token || null;
+      const serverUrl =
+        data?.tunnel_server_url ||
+        data?.tenant?.tunnel_server_url ||
+        "https://sevalor-sevalor-backend.80opze.easypanel.host";
+      const installCmd =
+        data?.comanda_install_wss ||
+        data?.tenant?.comanda_install_wss ||
+        (createdId && createdToken
+          ? `bash scripts/install_client_gateway.sh --server ${serverUrl} --role EMPRESA --empresa-id ${createdId} --token ${createdToken} --disk-a /ruta/disc_principal --disk-b /ruta/disc_mirall --llm-url http://127.0.0.1:1234`
+          : null);
+
       setProvisionedSuccess(true);
+      setProvisionedTenantId(createdId);
       const hostAcceso = dominiCustomFinal || `${slugFinal}.projectexinoxano.cat`;
       setInvitationUrl(data?.tenant?.enllac_activacio_2fa || `https://${hostAcceso}/activacio`);
-      setProvisionedVaultToken(data?.tenant?.vault_token || null);
+      setProvisionedVaultToken(createdToken);
       setProvisionedVaultSync(data?.vault_sync || null);
+      setProvisionedInstallCommand(installCmd);
+      setProvisionedTunnelServerUrl(serverUrl);
     } catch (err: any) {
       setErrorMessage(err.message || "Error durant el provisionament del tenant.");
     } finally {
@@ -1200,35 +1166,28 @@ export default function SuperadminTenantOnboardingPage() {
               </div>
             </div>
 
-            {/* SECCIÓ PASSAREL·LA DE DISC DUR SOBIRÀ (SEMPRE VISIBLE) */}
+            {/* SECCIÓ TÚNEL INVERS NATIU WSS (ADR-001 — ZERO PORTS ENTRANTS) */}
             <div className="pt-3 border-t border-slate-200 dark:border-slate-800 space-y-3">
-              <div className="p-4 rounded-xl border border-emerald-200 dark:border-emerald-900 bg-emerald-50/40 dark:bg-emerald-950/25 space-y-2.5">
+              <div className="p-4 rounded-xl border border-emerald-200 dark:border-emerald-900 bg-emerald-50/40 dark:bg-emerald-950/25 space-y-3">
                 <div className="flex items-center justify-between flex-wrap gap-2">
                   <span className="text-xs font-bold text-emerald-900 dark:text-emerald-200 flex items-center gap-1.5">
                     <HardDrive className="w-4 h-4 text-emerald-600" />
-                    <span>Passarel·la Client: Disc Dur Sobirà &amp; Proxy Unificat (Opció A+)</span>
+                    <span>Túnel Invers Natiu WSS: Disc Dur Sobirà (38 Carpetes) &amp; Copilot IA Local (ADR-001)</span>
                   </span>
                   <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-emerald-200 dark:bg-emerald-900 text-emerald-800 dark:text-emerald-200 font-bold">
-                    Zero Mock · Client Disk
+                    WSS Sortint Port 443 · Zero Cloudflare
                   </span>
                 </div>
-                <p className="text-[11px] text-slate-600 dark:text-slate-400">
-                  URL HTTPS del túnel de l&apos;ordinador dedicat de l&apos;empresa (executant <code>client_vault_agent.py</code> al port 9001). Gestiona tant l&apos;arxiu de documents com el proxy segur <code>/v1/*</code> cap al Copilot local.
+                <p className="text-[11px] text-slate-600 dark:text-slate-400 leading-relaxed">
+                  Ja no cal configurar cap URL externa ni obrir ports al router del client. En donar d&apos;alta l&apos;empresa, Sevalor assigna automàticament el canal <code>wss-tunnel://&lt;empresa_id&gt;</code> i genera la <strong>comanda d&apos;instal·lació 1-clic</strong>. En l&apos;instant que el PC del client es connecta pel túnel WSS, s&apos;auto-inicialitzen les <strong>38 carpetes + mirall Disc B</strong> i es drenen <code>empresa.json</code>, <code>boss.json</code> i <code>system_prompt.txt</code>.
                 </p>
-                <input
-                  type="text"
-                  placeholder="ex: https://disc-empresa.projectexinoxano.cat o http://127.0.0.1:9001"
-                  value={discDurUrl}
-                  onChange={(e) => setDiscDurUrl(e.target.value)}
-                  className="w-full p-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 font-mono text-xs font-bold"
-                />
                 <div className="pt-1">
                   <label className="block text-[11px] font-bold text-emerald-900 dark:text-emerald-200 mb-1">
-                    Token Segur del Disc Dur (<code>SEVALOR_VAULT_SECRET</code> opcional — si es deixa buit se&apos;n genera un de nou exclusiu)
+                    Token Criptogràfic del Túnel WSS (<code>vault_token</code> opcional — si es deixa buit se&apos;n genera un d&apos;exclusiu <code>svlt_...</code>)
                   </label>
                   <input
                     type="text"
-                    placeholder="ex: svlt_... (deixa buit per generar un token criptogràfic nou)"
+                    placeholder="Deixa buit per generar automàticament un token criptogràfic svlt_..."
                     value={vaultToken}
                     onChange={(e) => setVaultToken(e.target.value)}
                     className="w-full p-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 font-mono text-xs font-bold"
@@ -1240,79 +1199,29 @@ export default function SuperadminTenantOnboardingPage() {
             {/* SECCIÓ DEDICADA A COPILOT IA (NOMÉS SI ESTÀ ACTIVAT) */}
             {featureFlags.copilot_ia && (
               <div className="pt-3 border-t border-slate-200 dark:border-slate-800 space-y-4">
-                <div className="p-4 rounded-xl border border-indigo-200 dark:border-indigo-900 bg-indigo-50/50 dark:bg-indigo-950/30 space-y-3">
+                <div className="p-4 rounded-xl border border-indigo-200 dark:border-indigo-900 bg-indigo-50/50 dark:bg-indigo-950/30 space-y-2">
                   <div className="flex items-center justify-between flex-wrap gap-2">
                     <span className="text-xs font-bold text-indigo-900 dark:text-indigo-200 flex items-center gap-1.5">
                       <Cpu className="w-4 h-4 text-indigo-600" />
-                      <span>Node d&apos;IA Dedicat del Client (LM Studio / Ollama o Passarel·la Unificada)</span>
+                      <span>Copilot IA Local Unificat pel Túnel Invers WSS (127.0.0.1:1234 del PC del Client)</span>
                     </span>
                     <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-indigo-200 dark:bg-indigo-900 text-indigo-800 dark:text-indigo-200 font-bold">
-                      Sobirania de Dades &amp; RGPD
+                      Sobirania 100% UE &amp; RGPD
                     </span>
                   </div>
-
                   <p className="text-[11px] text-slate-600 dark:text-slate-400">
-                    Si el Copilot passa pel mateix túnel de la passarel·la (<code>client_vault_agent.py</code>), pots deixar-ho buit i s&apos;unificarà automàticament amb l&apos;URL del Disc Dur Sobirà, o bé indicar una URL específica per al node d&apos;IA.
+                    L&apos;agent <code>client_vault_agent.py</code> del PC del client connecta localment amb LM Studio / Ollama (<code>http://127.0.0.1:1234</code>) i multiplexa les consultes del Copilot pel mateix túnel WSS sortint, sense exposar mai el motor d&apos;IA a Internet.
                   </p>
-
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="text"
-                      placeholder="https://disc-empresa.projectexinoxano.cat o http://192.168.1.100:1234"
-                      value={nodeIaUrl}
-                      onChange={(e) => setNodeIaUrl(e.target.value)}
-                      className="flex-1 p-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 font-mono text-xs font-bold"
-                    />
-                    <button
-                      type="button"
-                      onClick={handleVerificarNodeIa}
-                      disabled={nodeIaTesting}
-                      className="px-3.5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-mono font-bold flex items-center gap-1.5 shadow transition-colors shrink-0"
-                    >
-                      <Activity className={`w-3.5 h-3.5 ${nodeIaTesting ? "animate-spin" : ""}`} />
-                      <span>{nodeIaTesting ? "Comprovant..." : "Provar Connexió Node IA"}</span>
-                    </button>
-                  </div>
-
-                  {/* Badge & Caixa de diagnòstic viu */}
-                  {nodeIaStatus && (
-                    <div
-                      className={`p-3 rounded-xl border text-xs font-mono space-y-1 ${
-                        nodeIaStatus.status === "OK"
-                          ? "bg-emerald-50 dark:bg-emerald-950/60 border-emerald-300 text-emerald-900 dark:text-emerald-200"
-                          : "bg-rose-50 dark:bg-rose-950/60 border-rose-300 text-rose-900 dark:text-rose-200"
-                      }`}
-                    >
-                      <div className="flex items-center gap-2 font-bold">
-                        {nodeIaStatus.status === "OK" ? (
-                          <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-                        ) : (
-                          <AlertTriangle className="w-4 h-4 text-rose-600" />
-                        )}
-                        <span>
-                          {nodeIaStatus.status === "OK"
-                            ? `🟢 Connexió Correcta (${nodeIaStatus.latencia_ms} ms)`
-                            : `🔴 Error de Connexió [${nodeIaStatus.motiu || "ERROR"}]`}
-                        </span>
-                      </div>
-                      <p className="text-[11px] font-sans">{nodeIaStatus.missatge}</p>
-                      {nodeIaStatus.models && nodeIaStatus.models.length > 0 && (
-                        <div className="text-[10px] text-emerald-700 dark:text-emerald-300 pt-0.5">
-                          Models detectats al node: {nodeIaStatus.models.slice(0, 5).join(", ")}
-                        </div>
-                      )}
-                    </div>
-                  )}
                 </div>
 
                 {/* PROMPT DE SISTEMA MANDATORI */}
                 <div className="space-y-1.5">
                   <div className="flex items-center justify-between">
                     <label className="block text-xs font-bold text-slate-700 dark:text-slate-300">
-                      Prompt de Sistema d'Agents &amp; Copilot (Obligatori amb IA activa) *
+                      Prompt de Sistema d&apos;Agents &amp; Copilot (Obligatori amb IA activa) *
                     </label>
                     <span className="text-[10px] font-mono text-emerald-600 dark:text-emerald-400 font-bold">
-                      Mandatori per a l'alta
+                      Es desarà a 09_copilot_ia/prompt_sistema/system_prompt.txt
                     </span>
                   </div>
                   <textarea
@@ -1323,7 +1232,7 @@ export default function SuperadminTenantOnboardingPage() {
                     className="w-full p-3 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs font-mono font-medium focus:outline-none focus:border-indigo-600"
                   />
                   <p className="text-[11px] text-slate-500">
-                    Aquest prompt governarà els subagents d'aquesta empresa. Si la casella Copilot IA està marcada, és estrictament necessari emplenar aquest camp abans de finalitzar l'onboarding.
+                    Aquest prompt governarà els 8 subagents d&apos;aquesta empresa i s&apos;escriurà automàticament al disc dur de l&apos;empresa en connectar-se pel túnel WSS.
                   </p>
                 </div>
               </div>
@@ -1382,10 +1291,10 @@ export default function SuperadminTenantOnboardingPage() {
               </div>
 
               {provisionedVaultToken && (
-                <div className="bg-white dark:bg-slate-900 p-3.5 rounded-lg border border-emerald-300 dark:border-emerald-800 space-y-2 text-xs font-mono">
-                  <div className="flex items-center justify-between gap-2">
+                <div className="bg-white dark:bg-slate-900 p-4 rounded-xl border border-emerald-300 dark:border-emerald-800 space-y-3 text-xs font-mono">
+                  <div className="flex items-center justify-between gap-2 flex-wrap">
                     <span className="font-bold text-emerald-800 dark:text-emerald-300 uppercase text-[10px] tracking-wider">
-                      Token Segur del Disc Dur (SEVALOR_VAULT_SECRET)
+                      Credencials del Túnel Invers Natiu WSS (wss-tunnel://{provisionedTenantId})
                     </span>
                     {provisionedVaultSync?.status && (
                       <span
@@ -1396,34 +1305,75 @@ export default function SuperadminTenantOnboardingPage() {
                         }`}
                       >
                         {provisionedVaultSync.status === "SYNCED"
-                          ? "Disc Inicialitzat"
-                          : provisionedVaultSync.status}
+                          ? "Disc Inicialitzat en Viu"
+                          : "Auto-Bootstrap Preparat (Cua SVENC1:)"}
                       </span>
                     )}
                   </div>
-                  <div className="flex items-center justify-between gap-2 bg-slate-50 dark:bg-slate-950 p-2 rounded border border-slate-200 dark:border-slate-800">
-                    <code className="truncate text-slate-900 dark:text-slate-100 select-all">
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[11px]">
+                    <div className="p-2 rounded bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800">
+                      <span className="text-slate-400 block text-[10px]">UUID Empresa (--empresa-id)</span>
+                      <code className="font-bold text-slate-900 dark:text-slate-100 select-all">
+                        {provisionedTenantId || "—"}
+                      </code>
+                    </div>
+                    <div className="p-2 rounded bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800">
+                      <span className="text-slate-400 block text-[10px]">Servidor WSS (--server)</span>
+                      <code className="font-bold text-emerald-700 dark:text-emerald-400 select-all break-all">
+                        {provisionedTunnelServerUrl}
+                      </code>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center justify-between gap-2 bg-slate-50 dark:bg-slate-950 p-2.5 rounded-lg border border-slate-200 dark:border-slate-800">
+                    <code className="truncate text-slate-900 dark:text-slate-100 select-all font-bold">
                       {provisionedVaultToken}
                     </code>
                     <button
                       type="button"
-                      onClick={() => navigator.clipboard.writeText(provisionedVaultToken)}
+                      onClick={() => {
+                        navigator.clipboard.writeText(provisionedVaultToken);
+                        setCopiedToken(true);
+                        setTimeout(() => setCopiedToken(false), 2500);
+                      }}
                       className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-white rounded text-[11px] font-bold shrink-0 flex items-center gap-1"
                     >
                       <Copy className="w-3.5 h-3.5" />
-                      <span>Copiar Token</span>
+                      <span>{copiedToken ? "Token Copiat!" : "Copiar Token"}</span>
                     </button>
                   </div>
-                  <div className="space-y-1 text-[10px] text-slate-600 dark:text-slate-400">
-                    <div>
-                      <span>Instal·lació producció a l&apos;equip dedicat del client: </span>
-                      <code className="bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded select-all block mt-1">
-                        bash scripts/install_client_gateway.sh --token {provisionedVaultToken} --disk-a /ruta/disc_principal --disk-b /ruta/disc_mirall
-                      </code>
+
+                  {provisionedInstallCommand && (
+                    <div className="space-y-1.5 pt-1">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-[11px] font-bold text-slate-700 dark:text-slate-300">
+                          Comanda d&apos;Instal·lació 1-Clic al PC de l&apos;Empresa (systemd + WSS sortint):
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            navigator.clipboard.writeText(provisionedInstallCommand);
+                            setCopiedCommand(true);
+                            setTimeout(() => setCopiedCommand(false), 2500);
+                          }}
+                          className="px-3 py-1 bg-emerald-600 hover:bg-emerald-500 text-white rounded text-[11px] font-bold shrink-0 flex items-center gap-1 shadow-sm"
+                        >
+                          <Copy className="w-3.5 h-3.5" />
+                          <span>{copiedCommand ? "Comanda Copiada!" : "Copiar Comanda 1-Clic"}</span>
+                        </button>
+                      </div>
+                      <pre className="bg-slate-950 text-emerald-300 p-3 rounded-lg text-[11px] overflow-x-auto whitespace-pre-wrap break-all select-all border border-slate-800">
+                        {provisionedInstallCommand}
+                      </pre>
+                      <p className="text-[11px] font-sans text-slate-600 dark:text-slate-400">
+                        En executar aquesta comanda al PC del client, el servei <code>systemd</code> es connectarà pel port 443 cap a Hetzner i crearà automàticament les <strong>38 carpetes + mirall Disc B</strong> i les fitxes <code>empresa.json</code>, <code>boss.json</code> i <code>system_prompt.txt</code>.
+                      </p>
                     </div>
-                  </div>
+                  )}
+
                   {provisionedVaultSync?.missatge && (
-                    <p className="text-[11px] font-sans text-amber-800 dark:text-amber-300">
+                    <p className="text-[11px] font-sans text-emerald-800 dark:text-emerald-300">
                       {provisionedVaultSync.missatge}
                     </p>
                   )}

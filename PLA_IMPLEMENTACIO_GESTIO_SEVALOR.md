@@ -1,19 +1,36 @@
 # Pla d'Implementació Integral (Arquitectura Zero-Storage Total) — Túnel Copilot, Disc de Superadmin, Disc d'Empresa, Subagents Sobirans, `/gestio` i Tests per Bloc
 
-> **Normativa obligatòria:** [AGENTS.md](file:///media/akaun/Project_1/SEVALOR/AGENTS.md), [constitution.md](file:///media/akaun/Project_1/SEVALOR/constitution.md), [AUDITORIA_GESTIO_SEVALOR.md](file:///media/akaun/Project_1/SEVALOR/AUDITORIA_GESTIO_SEVALOR.md) i [Auditoria_i_Normativa_Tests_Backend.md](file:///media/akaun/Project_1/SEVALOR/sevalor_AgentV2/docs/sdd_sevalor_legacy/Auditoria_i_Normativa_Tests_Backend.md).  
+> **Normativa obligatòria:** [AGENTS.md](file:///media/akaun/Project_1/SEVALOR/AGENTS.md), [constitution.md](file:///media/akaun/Project_1/SEVALOR/constitution.md), [ADR-001 Túnel Sobirà WSS](file:///media/akaun/Project_1/SEVALOR/docs/ARQUITECTURA_TUNEL_SOBIRA_WSS.md), [AUDITORIA_GESTIO_SEVALOR.md](file:///media/akaun/Project_1/SEVALOR/AUDITORIA_GESTIO_SEVALOR.md) i [Auditoria_i_Normativa_Tests_Backend.md](file:///media/akaun/Project_1/SEVALOR/sevalor_AgentV2/docs/sdd_sevalor_legacy/Auditoria_i_Normativa_Tests_Backend.md).  
 > **Skills obligatòries abans de tocar codi:** `supabase-postgres-best-practices`, `security-and-hardening`, `security-review`, `frontend-design`, `systematic-debugging`.
+
+> [!IMPORTANT]
+> **ACTUALITZACIÓ ARQUITECTÒNICA OBLIGATÒRIA (2026-11-20 — ADR-001, ZERO DUALITAT):**  
+> **El túnel HTTP/HTML entrant (`http://127.0.0.1:9001`, `http://host.docker.internal:9001`, `http://host.docker.internal:9002`, `bridge_lm_studio.py`, Cloudflare Tunnel per empresa i qualsevol fallback `LOCAL_FS` a Hetzner) NO ÉS UNA OPCIÓ i queda formalment descartat i prohibit.**  
+> Mantenir dualitat entre HTTP entrant i WebSocket genera errors, falsos positius als tests i trenca l'escalabilitat i la sobirania UE del SaaS.
+>
+> **Opció adoptada en exclusiva (tots els entorns: producció Hetzner, local i tests):** **Túnel Invers Natiu per WebSocket (`WSS` sortint per port 443)** des de `client_vault_agent.py` a cada PC d'empresa i del Superadmin cap a `WS /api/v1/vault-tunnel/connect` dins del propi FastAPI de Hetzner, amb broker multi-tenant aïllat (`VaultTunnelBroker`) i pont cross-process via Redis 7 per a Celery/Bot.
+>
+> **Problemes concrets que resol obligatòriament:**
+> 1. Escalabilitat SaaS real (1 a 1.000+ empreses sense crear túnels Cloudflare ni subdominis manuals per client).
+> 2. Sobirania total dels discos durs (les dades i fitxers de cada empresa viuen exclusivament al seu disc dur local, i les del Superadmin al seu; zero retenció a Hetzner).
+> 3. Travessar NAT, CGNAT, tallafocs i IPs dinàmiques d'oficina sense obrir cap port entrant al router del client.
+> 4. Aïllament infranquejable 1 Empresa = 1 Copilot IA local exclusiu (`127.0.0.1:1234` intern del seu PC) + 1 Disc Dur exclusiu (38 carpetes + mirall B).
+> 5. Connexió persistent i auto-reconnexió resilient (sense desactivar-se en canviar de pàgina) amb auto-drenatge i `unlink` immediat de la cua xifrada `SVENC1:`.
+> 6. Paritat 100% real entre tests i producció (desmuntant primer tot el túnel HTTP antic abans d'implantar el WSS únic).  
+>
+> Els fragments del Bloc 0 i Bloc 1 d'aquest document que feien referència a `:9001`/`:9002` HTTP, `bridge_lm_studio.py` o `HTTP_VAULT` queden **substituïts** per [docs/ARQUITECTURA_TUNEL_SOBIRA_WSS.md](file:///media/akaun/Project_1/SEVALOR/docs/ARQUITECTURA_TUNEL_SOBIRA_WSS.md).
 
 ---
 
-## Principi Arquitectònic Rector (Hetzner = Passarel·la Cega Zero-Storage)
+## Principi Arquitectònic Rector (Hetzner = Passarel·la Cega Zero-Storage + Túnel Invers Natiu WSS)
 
 Per garantir la màxima rendibilitat del SaaS i el compliment estricte de la protecció de dades:
-1. **Servidor Hetzner (Passarel·la Cega i Buffer Efímer Xifrat):**
-   - **Només conserva de forma permanent:** `empresa_id`, `subdomini`/`domini_custom`, colors HSL de marca, flags de funcionalitat (`feature_*`, `estat_pagament`), punters de túnel (`node_ia_url`, `disc_dur_url`, `vault_token`), i credencials mínimes d'accés pseudonimitzades (`usuari_id`, `empresa_id`, `rol`, índexs HMAC cecs de login `email_hmac`/`ident_hmac`, `password_hash`, `pin_hash`, `secret_2fa`).
+1. **Servidor Hetzner (Passarel·la Cega, Broker WSS i Buffer Efímer Xifrat):**
+   - **Només conserva de forma permanent:** `empresa_id`, `subdomini`/`domini_custom`, colors HSL de marca, flags de funcionalitat (`feature_*`, `estat_pagament`), identificador de canal WSS (`wss-tunnel://<empresa_id>`, `vault_token`), i credencials mínimes d'accés pseudonimitzades (`usuari_id`, `empresa_id`, `rol`, índexs HMAC cecs de login `email_hmac`/`ident_hmac`, `password_hash`, `pin_hash`, `secret_2fa`).
    - **Zero dades de negoci, zero PII en text pla, zero facturació SaaS B2B, zero CRM, zero rascador de prospecció.**
-   - Quan l'operari (`/operari`) no té cobertura, desa al mòbil xifrat amb **AES-GCM 256 (IndexedDB)**; en recuperar cobertura, ho envia a Hetzner. Si el PC de l'empresa té el túnel actiu, Hetzner ho reenvia al moment sense desar res al disc; si el PC està apagat, ho reté xifrat amb **`SVENC1:`** a `transit_queue/<empresa_id>` i executa **`unlink` + purga immediata** tan bon punt es bolca al disc dur de l'empresa.
-2. **Disc Dur Dedicat de cada Empresa** (ex: `/media/akaun/Project_1/Sevalormante_docs` via túnel `:9001`): Emmagatzema el 100% de les dades operatives en **38 carpetes oficials** (`01_clients` fins a `11_configuracio_i_backups`) i alimenta en exclusiva els **8 Subagents del Copilot**.
-3. **Disc Dur Dedicat del Superadmin** (al teu ordinador: `/media/akaun/Project_1/Sevalor_Superadmin_docs` via túnel `:9002` + mirall B): Emmagatzema el **CRM comercial, rascador de prospecció, facturació B2B SaaS, correu/suport i fitxes completes de clients del SaaS** en **20 carpetes oficials**.
+   - Quan l'operari (`/operari`) no té cobertura, desa al mòbil xifrat amb **AES-GCM 256 (IndexedDB)**; en recuperar cobertura, ho envia a Hetzner. Si el PC de l'empresa té el túnel **WSS** actiu, Hetzner ho reenvia al moment sense desar res al disc; si el PC està apagat, ho reté xifrat amb **`SVENC1:`** a `transit_queue/<empresa_id>` i executa **`unlink` + purga immediata** tan bon punt el PC es reconnecta pel WSS i drena el paquet al seu disc dur.
+2. **Disc Dur Dedicat de cada Empresa** (ex: `/media/akaun/Project_1/Sevalormante_docs` via **túnel invers WSS sortint** amb `empresa_id` + `vault_token`): Emmagatzema el 100% de les dades operatives en **38 carpetes oficials** (`01_clients` fins a `11_configuracio_i_backups`) + mirall B i alimenta en exclusiva els **8 Subagents del Copilot** mitjançant el LM Studio local del propi PC.
+3. **Disc Dur Dedicat del Superadmin** (al teu ordinador: `/media/akaun/Project_1/Sevalor_Superadmin_docs` via **túnel invers WSS sortint** amb `role=SUPERADMIN` + `SUPERADMIN_VAULT_SECRET` + mirall B): Emmagatzema el **CRM comercial, rascador de prospecció, facturació B2B SaaS, correu/suport i fitxes completes de clients del SaaS** en **20 carpetes oficials**.
 
 ---
 

@@ -40,27 +40,40 @@ El mòdul d'Infraestructura Sobirana i Superadmin assegura l'execució multi-inq
 +-------------------------------+                                           +-------------------------------+
 |    PostgreSQL 16 Engine       |                                           |     Redis 7 & Celery 5.3      |
 |  - Schema public (RLS Active) |                                           |  - Broker & Token Blacklist   |
-|  - Schema superadmin_telemetry|                                           |  - Asynchronous Queues        |
-|  - Connection Pool (asyncpg)  |                                           |    (docs, periodic, media)    |
+|  - Schema superadmin_telemetry|                                           |  - RPC Cross-Process Túnel WSS|
+|  - Només routing/HMAC (Zero-  |                                           |  - Asynchronous Queues        |
+|    Storage de negoci)         |                                           |    (docs, periodic, media)    |
 +-------------------------------+                                           +-------------------------------+
              |                                                                            |
-             v                                                                            v
-+-------------------------------+                                           +-------------------------------+
-|   Local Sovereign Storage     |                                           |    Local AI Node (CPU-Only)   |
-|   /data/<empresa_id>/...      |                                           |    Faster-Whisper INT8        |
-|   /docs/<empresa_id>/...      |                                           |    Ollama / LM Studio         |
-+-------------------------------+                                           +-------------------------------+
+             +------------------------------------+---------------------------------------+
+                                                  v
+                         +----------------------------------------------------+
+                         |       VaultTunnelBroker (WSS Natiu Port 443)       |
+                         |       WS /api/v1/vault-tunnel/connect              |
+                         |  - Zero Túnel HTTP/HTML entrant · Zero Cloudflare  |
+                         |  - Cua Trànsit Xifrada SVENC1: (auto-unlink)       |
+                         +----------------------------------------------------+
+                                  ^                                   ^
+            (WSS sortint,         |                                   |  (WSS sortint,
+             empresa_id+token)    |                                   |   SUPERADMIN+secret)
++-----------------------------------------+                 +-----------------------------------------+
+|   PC Dedicat de Cada Empresa (NAT/LAN)  |                 |       PC Propietari Superadmin          |
+|   • Disc Dur Exclusiu (38 carpetes + B) |                 |   • Disc Dur Superadmin (20 carpetes+B) |
+|   • LM Studio / Ollama local (:1234)    |                 |   • LM Studio local (:1234)             |
++-----------------------------------------+                 +-----------------------------------------+
 ```
+
+> **Decisió Arquitectònica Obligatòria (ADR-001 — Zero Dualitat):** El **túnel HTTP/HTML entrant** (`http://127.0.0.1:9001`, `host.docker.internal`, ports oberts al router, `bridge_lm_studio.py`), els **túnels manuals de tercers per empresa (Cloudflare Tunnel)** i qualsevol fallback silenciós `LOCAL_FS` a Hetzner **NO són una opció**. Totes les empreses i Superadmin connecten els seus discos durs exclusius i el seu Copilot local únicament pel **Túnel Invers Natiu WSS** (`WS /api/v1/vault-tunnel/connect`), resolent l'escalabilitat SaaS (0 túnels/DNS per client), la sobirania 100% UE, el pas automàtic de NAT/IP dinàmica, l'aïllament per empresa, la persistència real d'arxius als discos dels clients i la paritat total entre proves i producció. Vegeu [ADR-001](../../docs/ARQUITECTURA_TUNEL_SOBIRA_WSS.md).
 
 ### Pila Tecnològica i Dependències Principals
 - **Llenguatge & Versió**: Python 3.12 (Backend), TypeScript 5.4 / Node.js 20+ (Frontend).
-- **Framework Web Backend**: FastAPI 0.110+, Starlette, Pydantic v2.
+- **Framework Web Backend**: FastAPI 0.110+, Starlette, Pydantic v2, WebSockets natius (`uvicorn[standard]`).
 - **Accés a Base de Dades**: SQLAlchemy 2.0 (Async ORM), asyncpg 0.29+.
-- **Base de Dades**: PostgreSQL 16 amb Row Level Security (RLS) mandatori sota `FORCE ROW LEVEL SECURITY`.
-- **Missatgeria & Cues**: Redis 7.2 (Broker, Caching i Llista Negra de Tokens) + Celery 5.3 + Celery Beat.
+- **Base de Dades**: PostgreSQL 16 amb Row Level Security (RLS) mandatori sota `FORCE ROW LEVEL SECURITY` (Zero-Storage de dades de negoci).
+- **Missatgeria, Cues i Pont WSS**: Redis 7.2 (Broker, Caching, Llista Negra de Tokens i RPC cross-process per al túnel WSS) + Celery 5.3 + Celery Beat.
 - **Frontend**: Next.js 14 (App Router), Tailwind CSS, Lucide React, Disseny d'alta densitat tipus Twenty CRM.
-- **Inferència d'IA Sobirana**: Node Hetzner CPX21 CPU-only (3 vCPUs, 4GB RAM), Faster-Whisper INT8, sense dependència de GPU ni sortida de dades cap a núvols forans.
-- **Emmagatzematge Local**: Discs NVMe locals a `/data` i `/docs`, rebutjant taxativament AWS S3 o núvols públics.
+- **Inferència d'IA Sobirana**: Exclusivament a l'ordinador dedicat local de cada empresa (LM Studio / Ollama a `127.0.0.1:1234` intern del PC client), accessible únicament a través del seu túnel invers WSS exclusiu. **Zero fallback a Hetzner.**
+- **Emmagatzematge Sobirà de Discos Durs**: Exclusivament al disc dur físic de cada empresa (38 carpetes + mirall B) i al disc dur de Superadmin (20 carpetes + mirall B) via Túnel Invers Natiu WSS. Hetzner només manté una cua de trànsit efímera xifrada (`SVENC1:`) amb `unlink` immediat en drenar, rebutjant taxativament AWS S3, Cloudflare o retenció permanent a Hetzner.
 
 ---
 

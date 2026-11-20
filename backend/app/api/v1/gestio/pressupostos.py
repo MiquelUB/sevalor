@@ -783,16 +783,10 @@ async def generar_pressupost_ia(
 
     res_emp = await db.execute(select(Empresa).where(Empresa.id == empresa_id))
     empresa = res_emp.scalar_one_or_none()
-    node_url = (empresa.node_ia_url or "").strip() if empresa and empresa.node_ia_url else ""
-    disc_url = (
-        getattr(empresa, "disc_dur_url", None) or ""
-    ).strip() if empresa else ""
-
     if (
         not empresa
         or not getattr(empresa, "feature_copilot_ia", False)
         or not getattr(empresa, "node_ia_actiu", False)
-        or not (node_url or disc_url)
     ):
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -844,10 +838,10 @@ async def generar_pressupost_ia(
     ]
 
     llm_summary: Optional[str] = None
-    effective_ia_url = node_url or (disc_url if disc_url.startswith(("http://", "https://")) else "")
-    if effective_ia_url.startswith(("http://", "https://")):
-        from app.api.v1.gestio.copilot import cridar_lm_studio
+    from app.api.v1.gestio.copilot import cridar_lm_studio
+    from app.services.vault_tunnel import empresa_target_key, vault_tunnel_broker
 
+    if await vault_tunnel_broker.is_online(empresa_target_key(empresa_id)):
         context_str = (
             f"Articles coincidents al catàleg del disc: {len(linies)}. "
             f"Feines històriques similars: {len(hist_match)}."
@@ -857,16 +851,23 @@ async def generar_pressupost_ia(
             vertical=empresa.vertical or "SEVALOR",
             context_addicional=context_str,
             empresa=empresa,
-            node_ia_url=effective_ia_url,
         )
         if llm_summary is None:
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail={
                     "code": "NODE_IA_OFFLINE",
-                    "message": "El túnel Copilot / Node IA local no respon. Zero fallback a Hetzner.",
+                    "message": "El PC de l'empresa està connectat, però LM Studio/Ollama local no respon a 127.0.0.1:1234. Zero fallback a Hetzner.",
                 },
             )
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "NODE_IA_OFFLINE",
+                "message": "L'ordinador dedicat de l'empresa no està connectat al túnel WSS de Sevalor. Zero fallback a Hetzner.",
+            },
+        )
 
     if not linies:
         te_preus_reals = False

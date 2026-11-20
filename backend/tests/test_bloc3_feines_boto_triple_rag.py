@@ -507,8 +507,11 @@ async def test_bloc3_pressupost_ia_boto_triple_503_vs_200_i_rag(
     """
     _, empresa_id = boss_token
     emp_uuid = uuid.UUID(empresa_id)
+    from tests.wss_test_helpers import live_empresa_wss_context
+
     disc_root = tmp_path / "disc_ia_rag"
     inicialitzar_arbre_carpetes_disc(disc_root)
+    vault_token = f"svlt_bloc3_{uuid.uuid4().hex[:12]}"
 
     emp = Empresa(
         id=emp_uuid,
@@ -517,7 +520,9 @@ async def test_bloc3_pressupost_ia_boto_triple_503_vs_200_i_rag(
         subdomini="iarag-" + uuid.uuid4().hex[:5],
         pla_subscripcio="ENTERPRISE",
         estat_pagament="ACTIU",
-        disc_dur_url=str(disc_root),
+        disc_dur_url=f"wss-tunnel://{emp_uuid}",
+        node_ia_url=f"wss-tunnel://{emp_uuid}",
+        vault_token=vault_token,
         feature_copilot_ia=True,
         node_ia_actiu=False,
     )
@@ -557,9 +562,8 @@ async def test_bloc3_pressupost_ia_boto_triple_503_vs_200_i_rag(
         )
         assert res_503.status_code == 503
 
-        # Activem node_ia_actiu però amb URL morta -> 503 NODE_IA_OFFLINE
+        # Activem node_ia_actiu però túnel WSS desconnectat -> 503 NODE_IA_OFFLINE
         emp.node_ia_actiu = True
-        emp.node_ia_url = "http://127.0.0.1:59999"
         await admin_session.commit()
 
         me_on = await ac.get("/api/v1/auth/me", headers=headers)
@@ -572,62 +576,60 @@ async def test_bloc3_pressupost_ia_boto_triple_503_vs_200_i_rag(
         )
         assert res_offline.status_code == 503
 
-        # Amb catàleg real al disc i sense endpoint remot caigut (LOCAL_FS actiu) -> 200 PENDENT_AUDITORIA
-        emp.node_ia_url = str(disc_root)
-        await admin_session.commit()
+        # Amb Túnel WSS real connectat + catàleg real al disc -> 200 PENDENT_AUDITORIA
+        async with live_empresa_wss_context(emp_uuid, vault_token, disc_root):
+            await SovereignStorageGateway.desar_entitat_json(
+                db=admin_session,
+                empresa_id=emp_uuid,
+                categoria="magatzem_articles",
+                item_id="art-bomba-1",
+                dades={
+                    "nom": "Bomba Submergible Grundfos SP",
+                    "referencia_inventari": "BMB-SP5",
+                    "preu_venda": 640.0,
+                },
+            )
 
-        await SovereignStorageGateway.desar_entitat_json(
-            db=admin_session,
-            empresa_id=emp_uuid,
-            categoria="magatzem_articles",
-            item_id="art-bomba-1",
-            dades={
-                "nom": "Bomba Submergible Grundfos SP",
-                "referencia_inventari": "BMB-SP5",
-                "preu_venda": 640.0,
-            },
-        )
+            res_200 = await ac.post(
+                "/api/v1/gestio/pressupostos/generar-ia?prompt=Subministrament%20bomba%20submergible",
+                headers=headers,
+            )
+            assert res_200.status_code == 200, res_200.text
+            data_200 = res_200.json()
+            assert data_200["status"] == "PENDENT_AUDITORIA"
+            assert data_200["draft"]["total_estimat"] == 640.0
+            assert (
+                disc_root / "04_factures" / "prefactures_i_pressupostos" / f"draft_{data_200['id']}.json"
+            ).is_file()
 
-        res_200 = await ac.post(
-            "/api/v1/gestio/pressupostos/generar-ia?prompt=Subministrament%20bomba%20submergible",
-            headers=headers,
-        )
-        assert res_200.status_code == 200, res_200.text
-        data_200 = res_200.json()
-        assert data_200["status"] == "PENDENT_AUDITORIA"
-        assert data_200["draft"]["total_estimat"] == 640.0
-        assert (
-            disc_root / "04_factures" / "prefactures_i_pressupostos" / f"draft_{data_200['id']}.json"
-        ).is_file()
+            # Mateixa petició amb rol ENGINYER oculta els preus
+            res_eng = await ac.post(
+                "/api/v1/gestio/pressupostos/generar-ia?prompt=Subministrament%20bomba%20submergible",
+                headers=eng_headers,
+            )
+            assert res_eng.status_code == 200
+            assert res_eng.json()["draft"]["total_estimat"] is None
+            assert res_eng.json()["draft"]["linies"][0]["preu_unitari"] is None
 
-        # Mateixa petició amb rol ENGINYER oculta els preus
-        res_eng = await ac.post(
-            "/api/v1/gestio/pressupostos/generar-ia?prompt=Subministrament%20bomba%20submergible",
-            headers=eng_headers,
-        )
-        assert res_eng.status_code == 200
-        assert res_eng.json()["draft"]["total_estimat"] is None
-        assert res_eng.json()["draft"]["linies"][0]["preu_unitari"] is None
+            # 3. RAG document via alias PWA {titol, contingut, tags}
+            res_rag = await ac.post(
+                "/api/v1/gestio/copilot/rag/document",
+                json={
+                    "titol": "Protocol Purga Bombes Submergibles",
+                    "contingut": "1. Tancar clau de pas.\n2. Purgar aire superior abans d'arrencar.",
+                    "tags": "bomba,purga,reg",
+                },
+                headers=headers,
+            )
+            assert res_rag.status_code == 201, res_rag.text
+            doc_id = res_rag.json()["id"]
+            rag_file = disc_root / "10_protocols_i_manuals" / "procediments_interns" / f"{doc_id}.json"
+            assert rag_file.is_file()
+            assert json.loads(rag_file.read_text(encoding="utf-8"))["titol"] == "Protocol Purga Bombes Submergibles"
 
-        # 3. RAG document via alias PWA {titol, contingut, tags}
-        res_rag = await ac.post(
-            "/api/v1/gestio/copilot/rag/document",
-            json={
-                "titol": "Protocol Purga Bombes Submergibles",
-                "contingut": "1. Tancar clau de pas.\n2. Purgar aire superior abans d'arrencar.",
-                "tags": "bomba,purga,reg",
-            },
-            headers=headers,
-        )
-        assert res_rag.status_code == 201, res_rag.text
-        doc_id = res_rag.json()["id"]
-        rag_file = disc_root / "10_protocols_i_manuals" / "procediments_interns" / f"{doc_id}.json"
-        assert rag_file.is_file()
-        assert json.loads(rag_file.read_text(encoding="utf-8"))["titol"] == "Protocol Purga Bombes Submergibles"
-
-        res_rag_list = await ac.get("/api/v1/gestio/copilot/rag/document", headers=headers)
-        assert res_rag_list.status_code == 200
-        assert any(d["id"] == doc_id for d in res_rag_list.json())
+            res_rag_list = await ac.get("/api/v1/gestio/copilot/rag/document", headers=headers)
+            assert res_rag_list.status_code == 200
+            assert any(d["id"] == doc_id for d in res_rag_list.json())
 
 
 @pytest.mark.asyncio

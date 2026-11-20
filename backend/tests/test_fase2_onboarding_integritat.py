@@ -9,15 +9,18 @@ from httpx import AsyncClient
 from sqlalchemy import select
 
 from app.core.config import settings
+from app.core.db import set_tenant_context
 from app.core.security import blind_email, blind_nif
 from app.models.models import Empresa, Usuari
+from app.services.vault_tunnel import empresa_target_key, vault_tunnel_broker
+from tests.wss_test_helpers import LiveUvicornServer, RunningWssAgent, wait_for
 
 
 @pytest.mark.asyncio
 async def test_onboarding_persistencia_100_i_fitxers_inicials_disc(
     async_client: AsyncClient, db_session, tmp_path: Path
 ):
-    """Comprova que l'alta desa adreça, DNI del Boss separat, nom/cognoms compostos, telèfon null si buit, i escriu empresa.json, boss.json i system_prompt.txt al disc."""
+    """Comprova que l'alta desa adreça, DNI del Boss separat, nom/cognoms compostos, telèfon null si buit, i escriu empresa.json, boss.json i system_prompt.txt al disc via Túnel Invers Natiu WSS."""
     sa_token = jwt.encode(
         {
             "sub": "00000000-0000-0000-0000-000000000000",
@@ -43,8 +46,6 @@ async def test_onboarding_persistencia_100_i_fitxers_inicials_disc(
         "subdomini": slug,
         "vertical": "Manteniment Integral",
         "pla_subscripcio": "ENTERPRISE",
-        "disc_dur_url": str(disc_client),
-        "node_ia_url": str(disc_client),
         "agent_prompt_system": "Ets el Copilot tècnic de Sevalormante.",
         "boss_nif": dni_boss,
         "boss_nom": "Joan Josep",
@@ -61,10 +62,14 @@ async def test_onboarding_persistencia_100_i_fitxers_inicials_disc(
     )
     assert resp.status_code == 201, resp.text
     tenant = resp.json()["tenant"]
+    emp_uuid = uuid.UUID(tenant["id"])
     assert tenant["domini_complet"] == f"{slug}.projectexinoxano.cat"
+    assert tenant["disc_dur_url"] == f"wss-tunnel://{emp_uuid}"
+    assert tenant["node_ia_url"] == f"wss-tunnel://{emp_uuid}"
 
+    await set_tenant_context(db_session, None, is_superadmin=True)
     emp_db = (
-        await db_session.execute(select(Empresa).where(Empresa.id == uuid.UUID(tenant["id"])))
+        await db_session.execute(select(Empresa).where(Empresa.id == emp_uuid))
     ).scalar_one()
     boss_db = (
         await db_session.execute(select(Usuari).where(Usuari.empresa_id == emp_db.id))
@@ -76,7 +81,7 @@ async def test_onboarding_persistencia_100_i_fitxers_inicials_disc(
     assert emp_db.nif == blind_nif(cif_empresa)
     assert emp_db.agent_prompt_system is None
     assert emp_db.pla_subscripcio == "ENTERPRISE"
-    assert emp_db.disc_dur_url == str(disc_client)
+    assert emp_db.disc_dur_url == f"wss-tunnel://{emp_uuid}"
     assert emp_db.vault_token is not None
     assert emp_db.vault_token.startswith("svlt_")
     assert emp_db.telegram_webhook_secret is None
@@ -88,10 +93,26 @@ async def test_onboarding_persistencia_100_i_fitxers_inicials_disc(
     assert boss_db.email == blind_email(f"jjrovira_{slug}@sevalormante.cat")
     assert boss_db.telefon is None
 
-    # Verificar que les carpetes del disc contenen les dades reals des del minut 1
+    # En connectar el PC del client via Túnel WSS, es creen les 38 carpetes i es drenen empresa.json, boss.json i system_prompt.txt
     fitxa_empresa = disc_client / "11_configuracio_i_backups/identitat_camaleo/empresa.json"
     fitxa_boss = disc_client / f"08_flota_i_operaris/operaris/{boss_db.id}.json"
     prompt_file = disc_client / "09_copilot_ia/prompt_sistema/system_prompt.txt"
+
+    try:
+        async with LiveUvicornServer() as server:
+            async with RunningWssAgent(
+                server.http_url,
+                role="EMPRESA",
+                token=emp_db.vault_token,
+                empresa_id=str(emp_uuid),
+                disk_a=disc_client,
+            ):
+                await wait_for(
+                    lambda: fitxa_empresa.is_file() and fitxa_boss.is_file() and prompt_file.is_file(),
+                    timeout=8.0,
+                )
+    finally:
+        await vault_tunnel_broker.disconnect(empresa_target_key(emp_uuid))
 
     assert fitxa_empresa.is_file()
     assert fitxa_boss.is_file()

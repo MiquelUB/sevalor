@@ -2,7 +2,6 @@ import os
 import uuid
 from typing import Any, Dict, List
 
-import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
@@ -10,10 +9,14 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db_with_tenant_context
-from app.core.network_utils import resolve_effective_node_url
 from app.core.security import require_roles
 from app.models.models import CapaAnotacio, CapaVectorial, Empresa, PlanolBase
 from app.services.sovereign_storage import SovereignStorageGateway
+from app.services.vault_tunnel import (
+    VaultTunnelError,
+    empresa_target_key,
+    vault_tunnel_broker,
+)
 
 router = APIRouter(
     prefix="/operari/planols",
@@ -331,7 +334,7 @@ async def consultar_planol_arxiu_extern_empresa(
         "Avisa a administració perquè encenguin l'equip central."
     )
 
-    if not emp or not emp.node_ia_actiu or not (emp.node_ia_url or emp.disc_dur_url):
+    if not emp or not emp.node_ia_actiu:
         return JSONResponse(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             content={
@@ -343,38 +346,39 @@ async def consultar_planol_arxiu_extern_empresa(
             },
         )
 
-    remote_url = emp.node_ia_url or emp.disc_dur_url
-    if remote_url and (remote_url.startswith("http://") or remote_url.startswith("https://")):
-        raw_url = remote_url.rstrip("/")
-        effective_url = resolve_effective_node_url(raw_url) or raw_url
-        base_url = effective_url.rstrip("/")
+    # 1. Consulta en viu via Túnel Invers Sobirà WSS (única via autoritzada en producció — ADR-001)
+    target_key = empresa_target_key(emp.id)
+    if await vault_tunnel_broker.is_online(target_key):
         try:
-            async with httpx.AsyncClient(timeout=2.0) as client:
-                for cand in [
-                    f"{base_url}/docs/planols/{ref_query}",
-                    f"{base_url}/fitxers/05_planols_i_enginyeria/{ref_query}",
-                ]:
-                    resp = await client.get(cand)
-                    if resp.status_code == 200:
-                        return resp.json()
-        except Exception:
+            existeix = await SovereignStorageGateway.existeix_fitxer_categoria(
+                db, emp.id, "planols", ref_query
+            )
+            if existeix:
+                return {
+                    "status": "ok",
+                    "fitxer": ref_query,
+                    "ruta": f"vault://{emp.id}/05_planols_i_enginyeria/{ref_query}",
+                    "mode": "WSS_TUNNEL",
+                }
+            llista = await vault_tunnel_broker.json_get_list(
+                target_key,
+                "05_planols_i_enginyeria",
+            )
+            return {
+                "status": "ok",
+                "items": llista[:20],
+                "mode": "WSS_TUNNEL",
+            }
+        except VaultTunnelError:
             pass
 
-        return JSONResponse(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            content={
-                "code": "NODE_EMPRESA_OFFLINE",
-                "detail": {
-                    "code": "NODE_EMPRESA_OFFLINE",
-                    "message": msg_offline,
-                },
-            },
-        )
-
-    # Si té disc local físic muntat (/media/..., /mnt/...)
+    # 2. Suport exclusiu per a tests locals sense Docker (ruta explícita /tmp/...)
     disc_local = emp.disc_dur_url
-    if disc_local and (
-        disc_local.startswith("/") or (len(disc_local) > 2 and disc_local[1] == ":")
+    if (
+        os.getenv("TESTING") == "1"
+        and not os.path.exists("/.dockerenv")
+        and disc_local
+        and disc_local.startswith("/")
     ):
         import glob
 

@@ -16,10 +16,10 @@ import zipfile
 from datetime import datetime, timezone
 from typing import Any
 
-import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.services.sovereign_storage import SovereignStorageGateway
+from app.services.vault_tunnel import VaultTunnelError, vault_tunnel_broker
 
 logger = logging.getLogger("backup_service")
 
@@ -33,19 +33,32 @@ async def executar_backup_sobira_empresa(
     empresa_id: str,
     ruta_desti_local: str | None = None,
 ) -> dict[str, Any]:
-    """Executa còpia de seguretat sobirana: remota al Vault del client o fallback local."""
-    mode, target, secret = await SovereignStorageGateway.resoldre_desti_disc_empresa(db, empresa_id)
-    if mode == "HTTP_VAULT":
-        headers = {"X-Vault-Token": secret} if secret else {}
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            resp = await client.post(
-                f"{target}/backups/tancament-jornada",
-                headers=headers,
-                json={"empresa_id": empresa_id},
+    """Executa còpia de seguretat sobirana al disc del client via Túnel WSS Únic (ADR-001)."""
+    mode, target, _ = await SovereignStorageGateway.resoldre_desti_disc_empresa(db, empresa_id)
+    if mode == "WSS_TUNNEL":
+        try:
+            vault_resp = await vault_tunnel_broker.call(
+                target,
+                "backup_daily",
+                {"empresa_id": str(empresa_id)},
+                timeout=60.0,
             )
-        if resp.status_code < 400:
-            return {"estat": "COMPLETAT", "mode": "HTTP_VAULT", "vault_response": resp.json()}
-        raise RuntimeError(f"Vault backup HTTP {resp.status_code}: {resp.text}")
+            zip_path = str(vault_resp.get("zip_path") or "")
+            return {
+                "status": str(vault_resp.get("status") or "OK"),
+                "estat": "COMPLETAT",
+                "mode": "WSS_TUNNEL",
+                "backup_file": os.path.basename(zip_path) if zip_path else "",
+                "zip_path": zip_path,
+                "sha256": vault_resp.get("sha256"),
+                "disc_utilitzat": vault_resp.get("disc_utilitzat"),
+                "vault_response": vault_resp,
+            }
+        except VaultTunnelError as exc:
+            raise RuntimeError(f"Vault WSS backup error ({exc.code}): {exc.detail}") from exc
+
+    if mode == "OFFLINE_TRANSIT" and not ruta_desti_local:
+        raise RuntimeError("El PC dedicat de l'empresa no està connectat al túnel WSS per executar el backup.")
 
     desti = ruta_desti_local or os.path.join(target, "11_configuracio_i_backups", "backups_locals")
     return executar_backup_empresa(empresa_id, desti)

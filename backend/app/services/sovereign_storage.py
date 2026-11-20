@@ -17,17 +17,29 @@ import secrets
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple, cast
+from typing import Any, Dict, List, Optional, Tuple
 
-import httpx
 from fastapi import HTTPException, status
-from fastapi.responses import FileResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, Response
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.core.network_utils import get_candidate_node_urls, resolve_effective_node_url
+from app.core.network_utils import (
+    build_wss_tunnel_uri,
+    is_wss_tunnel_uri,
+    resolve_empresa_vault_token,
+)
 from app.models.models import Empresa
+from app.services.vault_tunnel import (
+    SUPERADMIN_TARGET_KEY,
+    VaultTunnelError,
+    VaultTunnelOfflineError,
+    VaultTunnelRemoteError,
+    VaultTunnelTimeoutError,
+    empresa_target_key,
+    vault_tunnel_broker,
+)
 
 logger = logging.getLogger("sevalor.sovereign_storage")
 
@@ -323,69 +335,53 @@ class SovereignStorageGateway:
     ) -> Tuple[str, str, Optional[str]]:
         """
         Obté la destinació del disc dur exclusiu configurat per a l'empresa.
-        Retorna: (mode: 'LOCAL_FS' | 'HTTP_VAULT', base_target: str, secret: Optional[str])
+        Retorna: (mode: 'WSS_TUNNEL' | 'OFFLINE_TRANSIT' | 'LOCAL_FS', base_target: str, secret: Optional[str]).
+
+        ADR-001 (Fase 3 — Túnel WSS Únic, Zero Dualitat):
+        - Eliminat definitivament `HTTP_VAULT` i qualsevol fallback silenciós a Hetzner.
+        - Si el túnel WSS de l'empresa (`empresa:<uuid>`) està connectat -> `WSS_TUNNEL`.
+        - Si està desconnectat -> `OFFLINE_TRANSIT` (cua xifrada `SVENC1:` amb drenatge automàtic).
         """
         emp_uuid = uuid.UUID(str(empresa_id))
-        emp = None
+        target_key = empresa_target_key(emp_uuid)
+
+        # 1. Únic transport sobirà en producció i proves WSS: Túnel Invers Natiu WSS
+        if await vault_tunnel_broker.is_online(target_key):
+            return ("WSS_TUNNEL", target_key, None)
+
+        # 2. En mode TESTING fora de Docker, permet ruta física explícita per a unit tests antics (fins Fase 5)
+        if os.getenv("TESTING") == "1" and not os.path.exists("/.dockerenv"):
+            emp = None
+            if db is not None:
+                res = await db.execute(select(Empresa).where(Empresa.id == emp_uuid))
+                emp = res.scalars().first()
+            raw_disc = (getattr(emp, "disc_dur_url", None) or "").strip() if emp else ""
+            if (
+                raw_disc
+                and not is_wss_tunnel_uri(raw_disc)
+                and not raw_disc.startswith(("http://", "https://", "Carpeta Local:"))
+                and ":1234" not in raw_disc
+                and raw_disc.startswith("/")
+            ):
+                inicialitzar_arbre_carpetes_disc(raw_disc)
+                return ("LOCAL_FS", str(Path(raw_disc).resolve()), None)
+
+        secret: Optional[str] = None
         if db is not None:
             res = await db.execute(select(Empresa).where(Empresa.id == emp_uuid))
-            emp = res.scalars().first()
+            emp_off = res.scalars().first()
+            if emp_off is not None:
+                secret = resolve_empresa_vault_token(emp_off)
 
-        base_vaults = os.getenv("CLIENT_DISKS_MOUNT_ROOT")
-        if not base_vaults:
-            if os.path.exists("/data") and os.access("/data", os.W_OK):
-                base_vaults = "/data"
-            else:
-                base_vaults = os.getenv("CLIENT_DISKS_MOUNT_ROOT", "/tmp/sevalor_client_disks")
+        return ("OFFLINE_TRANSIT", build_wss_tunnel_uri(emp_uuid), secret)
 
-        if not emp:
-            fitxa_sa = await SovereignStorageGateway.recuperar_fitxa_superadmin_empresa(emp_uuid)
-            raw_sa_disc = str(fitxa_sa.get("disc_dur_url") or "").strip()
-            sa_tok = str(fitxa_sa.get("vault_token") or "").strip() or None
-            if raw_sa_disc and ":1234" not in raw_sa_disc and not raw_sa_disc.startswith("Carpeta Local:"):
-                if raw_sa_disc.startswith(("http://", "https://")):
-                    eff = resolve_effective_node_url(raw_sa_disc) or raw_sa_disc
-                    return (
-                        "HTTP_VAULT",
-                        eff.rstrip("/"),
-                        sa_tok or os.getenv("SEVALOR_VAULT_SECRET", "sevalor-vault-secret-token"),
-                    )
-                inicialitzar_arbre_carpetes_disc(raw_sa_disc)
-                return ("LOCAL_FS", str(Path(raw_sa_disc).resolve()), None)
-            raw_disc = os.path.join(base_vaults, f"disc_{emp_uuid}")
-            inicialitzar_arbre_carpetes_disc(raw_disc)
-            return ("LOCAL_FS", str(Path(raw_disc).resolve()), None)
-
-        await SovereignStorageGateway.autocurar_config_tunel_empresa(db, emp, commit=False)
-
-        raw_disc = (getattr(emp, "disc_dur_url", None) or "").strip()
-        if raw_disc.startswith("Carpeta Local:"):
-            raw_disc = ""
-
-        # Només descartem si apunta directament al port per defecte de LM Studio (:1234) sense Agent Vault (:9001 o túnel)
-        if ":1234" in raw_disc:
-            raw_disc = ""
-
-        if not raw_disc:
-            raw_disc = os.path.join(base_vaults, f"disc_{emp.subdomini or str(emp.id)}")
-
-        if raw_disc.startswith("http://") or raw_disc.startswith("https://"):
-            effective = resolve_effective_node_url(raw_disc) or raw_disc
-            vault_tok = getattr(emp, "vault_token", None)
-            legacy_tg_tok = getattr(emp, "telegram_webhook_secret", None)
-            secret = (
-                vault_tok
-                or (
-                    legacy_tg_tok
-                    if legacy_tg_tok and str(legacy_tg_tok).startswith("svlt_")
-                    else None
-                )
-                or os.getenv("SEVALOR_VAULT_SECRET", "sevalor-vault-secret-token")
-            )
-            return ("HTTP_VAULT", effective.rstrip("/"), secret)
-
-        inicialitzar_arbre_carpetes_disc(raw_disc)
-        return ("LOCAL_FS", str(Path(raw_disc).resolve()), None)
+    @classmethod
+    def comptar_cua_transit_empresa(cls, empresa_id: str | uuid.UUID) -> int:
+        """Retorna el nombre de paquets xifrats `SVENC1:` pendents de drenar per a una empresa."""
+        emp_dir = (cls._get_transit_queue_dir() / str(empresa_id)).resolve()
+        if not emp_dir.exists():
+            return 0
+        return len(list(emp_dir.glob("*.meta.json")))
 
     @classmethod
     def _encuar_paquet_transit(
@@ -419,71 +415,75 @@ class SovereignStorageGateway:
 
     @classmethod
     async def drenar_cua_transit_empresa(
-        cls, db: AsyncSession, empresa_id: str | uuid.UUID
+        cls, db: Optional[AsyncSession], empresa_id: str | uuid.UUID
     ) -> Dict[str, int]:
-        """Envia tots els paquets retinguts a l'Agent HTTP del client i els esborra immediatament d'Hetzner."""
+        """Envia tots els paquets xifrats `SVENC1:` pel túnel WSS de l'empresa i els purga (`unlink`) de Hetzner."""
         emp_dir = (cls._get_transit_queue_dir() / str(empresa_id)).resolve()
         if not emp_dir.exists():
             return {"enviats": 0, "pendents": 0}
 
-        mode, base_target, secret = await cls.resoldre_desti_disc_empresa(db, empresa_id)
-        if mode != "HTTP_VAULT":
-            return {"enviats": 0, "pendents": 0}
+        target_key = empresa_target_key(empresa_id)
+        if not await vault_tunnel_broker.is_online(target_key):
+            pendents_actuals = len(list(emp_dir.glob("*.meta.json")))
+            return {"enviats": 0, "pendents": pendents_actuals}
 
         enviats = 0
         pendents = 0
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            for meta_file in sorted(emp_dir.glob("*.meta.json")):
-                bin_file = emp_dir / meta_file.name.replace(".meta.json", ".bin")
-                if not bin_file.exists():
-                    meta_file.unlink(missing_ok=True)
-                    continue
-                meta = json.loads(meta_file.read_text(encoding="utf-8"))
-                raw_bytes = cls._decrypt_transit_payload(empresa_id, bin_file.read_bytes())
-                try:
-                    if meta["tipus"] == "JSON":
-                        url = f"{base_target}/entitats/{meta['subcarpeta']}/{meta['identificador']}"
-                        resp = await client.put(
-                            url,
-                            content=raw_bytes,
-                            headers={
-                                "Content-Type": "application/json",
-                                "X-Vault-Token": secret or "",
-                            },
-                        )
-                    else:
-                        url = f"{base_target}/fitxers/{meta['subcarpeta']}"
-                        resp = await client.post(
-                            url,
-                            files={"fitxer": (meta["identificador"], raw_bytes, meta["content_type"])},
-                            data={"nom_desti": meta["identificador"]},
-                            headers={"X-Vault-Token": secret or ""},
-                        )
-                    if resp.status_code < 400:
-                        # Auto-purga immediata al servidor Hetzner
-                        bin_file.unlink(missing_ok=True)
-                        meta_file.unlink(missing_ok=True)
-                        enviats += 1
-                    else:
-                        logger.warning(
-                            "Rebutjat drenatge de trànsit per %s (%s): HTTP %s - %s",
-                            empresa_id,
-                            meta.get("identificador"),
-                            resp.status_code,
-                            resp.text[:200],
-                        )
-                        pendents += 1
-                except httpx.RequestError:
-                    pendents += 1
-                    break
+        for meta_file in sorted(emp_dir.glob("*.meta.json")):
+            bin_file = emp_dir / meta_file.name.replace(".meta.json", ".bin")
+            if not bin_file.exists():
+                meta_file.unlink(missing_ok=True)
+                continue
+            meta = json.loads(meta_file.read_text(encoding="utf-8"))
+            raw_bytes = cls._decrypt_transit_payload(empresa_id, bin_file.read_bytes())
+            try:
+                if meta["tipus"] == "JSON":
+                    content_obj = json.loads(raw_bytes.decode("utf-8"))
+                    await vault_tunnel_broker.json_put(
+                        target_key,
+                        subcarpeta=str(meta["subcarpeta"]),
+                        item_id=str(meta["identificador"]),
+                        content=content_obj if isinstance(content_obj, dict) else {"value": content_obj},
+                        timeout=15.0,
+                    )
+                else:
+                    await vault_tunnel_broker.file_put(
+                        target_key,
+                        subcarpeta=str(meta["subcarpeta"]),
+                        filename=str(meta["identificador"]),
+                        content_bytes=raw_bytes,
+                        content_type=str(meta.get("content_type") or "application/octet-stream"),
+                        timeout=30.0,
+                    )
+                # Auto-purga immediata al servidor Hetzner (Zero-Storage)
+                bin_file.unlink(missing_ok=True)
+                meta_file.unlink(missing_ok=True)
+                enviats += 1
+            except (VaultTunnelOfflineError, VaultTunnelTimeoutError) as exc:
+                logger.warning(
+                    "Túnel WSS caigut durant drenatge de trànsit per %s: %s", empresa_id, exc
+                )
+                pendents += 1
+                break
+            except Exception as exc:
+                logger.warning(
+                    "Rebutjat drenatge de trànsit per %s (%s): %s",
+                    empresa_id,
+                    meta.get("identificador"),
+                    exc,
+                )
+                pendents += 1
 
         if emp_dir.exists() and not any(emp_dir.iterdir()):
-            emp_dir.rmdir()
+            try:
+                emp_dir.rmdir()
+            except OSError:
+                pass
         return {"enviats": enviats, "pendents": pendents}
 
     @classmethod
     async def drenar_totes_cues_transit(cls, db: AsyncSession) -> Dict[str, int]:
-        """Recorre totes les empreses amb paquets pendents en cua de trànsit i els sincronitza."""
+        """Recorre totes les empreses amb paquets pendents en cua de trànsit i els sincronitza via WSS."""
         root = cls._get_transit_queue_dir()
         if not root.exists():
             return {"empreses": 0, "enviats": 0, "pendents": 0}
@@ -503,82 +503,96 @@ class SovereignStorageGateway:
             total_pendents += res.get("pendents", 0)
         return {"empreses": total_empreses, "enviats": total_enviats, "pendents": total_pendents}
 
-    @staticmethod
-    async def verificar_roundtrip_http_vault(base_url: str, secret: Optional[str]) -> Dict[str, Any]:
-        """Comprova salut, proxy IA opcional i prova real d'escriptura->lectura->esborrat contra client_vault_agent.py."""
+    @classmethod
+    async def verificar_roundtrip_wss(cls, empresa_id: str | uuid.UUID) -> Dict[str, Any]:
+        """Comprova salut en viu, models LLM locals i prova real R/W/D sobre el túnel WSS de l'empresa."""
+        target_key = empresa_target_key(empresa_id)
+        cua_pendent = cls.comptar_cua_transit_empresa(empresa_id)
+        if not await vault_tunnel_broker.is_online(target_key):
+            return {
+                "ok": False,
+                "motiu": "TUNEL_OFFLINE",
+                "codi_http": 503,
+                "cua_transit_pendent": cua_pendent,
+                "missatge": (
+                    "L'ordinador dedicat de l'empresa no està connectat al túnel WSS de Sevalor. "
+                    "Comprova que l'agent sobirà estigui encès."
+                ),
+            }
+
         probe_id = f"_healthcheck_{uuid.uuid4().hex[:8]}"
-        headers = {"X-Vault-Token": secret or ""}
-        ia_proxy_ok = False
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            health_resp = await client.get(f"{base_url}/health")
-            if health_resp.status_code != 200:
-                return {
-                    "ok": False,
-                    "motiu": "ENDPOINT_NO_TROBAT" if health_resp.status_code == 404 else "HTTP_ERROR",
-                    "codi_http": health_resp.status_code,
-                    "missatge": f"L'agent del disc ha respost HTTP {health_resp.status_code} a /health.",
-                }
-            try:
-                health_json = health_resp.json()
-            except Exception:
-                health_json = {}
-
-            try:
-                ia_resp = await client.get(f"{base_url}/v1/models", headers=headers)
-                ia_proxy_ok = ia_resp.status_code == 200
-            except Exception:
-                ia_proxy_ok = False
-
-            put_url = f"{base_url}/entitats/11_configuracio_i_backups/identitat_camaleo/{probe_id}"
-            put_resp = await client.put(
-                put_url,
-                json={"probe": True, "ts": datetime.now(timezone.utc).isoformat()},
-                headers=headers,
+        sub_cfg = MAPA_CARPETES_CLIENT["configuracio"]
+        try:
+            health_json = await vault_tunnel_broker.health(target_key, timeout=8.0)
+            await vault_tunnel_broker.json_put(
+                target_key,
+                subcarpeta=sub_cfg,
+                item_id=probe_id,
+                content={"probe": True, "ts": datetime.now(timezone.utc).isoformat()},
+                timeout=8.0,
             )
-            if put_resp.status_code in (401, 403):
-                return {
-                    "ok": False,
-                    "motiu": "TOKEN_INVALID",
-                    "codi_http": put_resp.status_code,
-                    "missatge": (
-                        "L'agent de disc dur ha rebutjat el Token Vault (HTTP 403). "
-                        "Assegura't que SEVALOR_VAULT_SECRET a l'ordinador del client coincideixi amb el vault_token de l'empresa."
-                    ),
-                }
-            if put_resp.status_code == 404:
-                return {
-                    "ok": False,
-                    "motiu": "ENDPOINT_NO_TROBAT",
-                    "codi_http": 404,
-                    "missatge": "La URL respon a /health però no implementa /entitats (no és client_vault_agent.py v2).",
-                }
-            if put_resp.status_code >= 400:
-                return {
-                    "ok": False,
-                    "motiu": "ERROR_ESCRIPTURA_DISC",
-                    "codi_http": put_resp.status_code,
-                    "missatge": f"Error escrivint prova al disc del client: HTTP {put_resp.status_code} ({put_resp.text[:160]}).",
-                }
-
-            list_resp = await client.get(
-                f"{base_url}/entitats/11_configuracio_i_backups/identitat_camaleo",
-                headers=headers,
-            )
-            readable = list_resp.status_code == 200
-            await client.delete(put_url, headers=headers)
+            items = await vault_tunnel_broker.json_get_list(target_key, sub_cfg, timeout=8.0)
+            await vault_tunnel_broker.json_delete(target_key, sub_cfg, probe_id, timeout=8.0)
+            readable = isinstance(items, list)
             if not readable:
                 return {
                     "ok": False,
                     "motiu": "ERROR_LECTURA_DISC",
-                    "codi_http": list_resp.status_code,
-                    "missatge": f"S'ha pogut escriure però no llegir el fitxer de prova (HTTP {list_resp.status_code}).",
+                    "codi_http": 502,
+                    "cua_transit_pendent": cua_pendent,
+                    "missatge": "S'ha pogut escriure però no llegir el fitxer de prova al disc del client.",
                 }
+            models = health_json.get("models") if isinstance(health_json.get("models"), list) else []
+            ia_proxy_ok = bool(health_json.get("llm_online", False))
+            if not ia_proxy_ok:
+                try:
+                    m_res = await vault_tunnel_broker.call_llm_models(target_key, timeout=5.0)
+                    raw_models = m_res.get("data") if isinstance(m_res, dict) else []
+                    if isinstance(raw_models, list):
+                        models = [
+                            str(m.get("id") or m.get("name"))
+                            for m in raw_models
+                            if isinstance(m, dict) and (m.get("id") or m.get("name"))
+                        ]
+                        ia_proxy_ok = True
+                except Exception:
+                    ia_proxy_ok = False
             return {
                 "ok": True,
                 "codi_http": 200,
+                "latencia_ms": health_json.get("latencia_ms"),
                 "ia_proxy_ok": ia_proxy_ok,
+                "models": models,
                 "vault_root": health_json.get("vault_root"),
                 "disc_a_lliure_gb": health_json.get("disc_a_lliure_gb"),
+                "disc_b_lliure_gb": health_json.get("disc_b_lliure_gb"),
+                "carpetes_count": health_json.get("carpetes_count", 38),
+                "agent_version": health_json.get("agent_version"),
+                "cua_transit_pendent": cua_pendent,
+            }
+        except VaultTunnelOfflineError:
+            return {
+                "ok": False,
+                "motiu": "TUNEL_OFFLINE",
+                "codi_http": 503,
+                "cua_transit_pendent": cua_pendent,
+                "missatge": "El túnel WSS de l'empresa s'ha desconnectat durant la verificació.",
+            }
+        except VaultTunnelTimeoutError:
+            return {
+                "ok": False,
+                "motiu": "TIMEOUT",
+                "codi_http": 504,
+                "cua_transit_pendent": cua_pendent,
+                "missatge": "Temps d'espera esgotat verificant el disc dur de l'empresa pel túnel WSS.",
+            }
+        except VaultTunnelError as exc:
+            return {
+                "ok": False,
+                "motiu": exc.code,
+                "codi_http": exc.status_code,
+                "cua_transit_pendent": cua_pendent,
+                "missatge": exc.detail,
             }
 
     @classmethod
@@ -699,30 +713,31 @@ class SovereignStorageGateway:
                 json.dump(payload_complet, f, ensure_ascii=False, indent=2, default=str)
             return str(file_path)
 
-        # Mode HTTP_VAULT (Túnel cap a l'Agent Local del Client)
-        url = f"{base_target}/entitats/{subcarpeta}/{id_net}"
         payload_bytes = json.dumps(payload_complet, ensure_ascii=False, indent=2, default=str).encode("utf-8")
+
+        if mode == "OFFLINE_TRANSIT":
+            return cls._encuar_paquet_transit(
+                empresa_id=empresa_id,
+                tipus="JSON",
+                subcarpeta=subcarpeta,
+                identificador=id_net,
+                payload_bytes=payload_bytes,
+                content_type="application/json",
+            )
+
+        # Mode WSS_TUNNEL (Túnel Invers Natiu WSS cap al PC de l'empresa)
         try:
-            async with httpx.AsyncClient(timeout=3.0) as client:
-                resp = await client.put(
-                    url,
-                    content=payload_bytes,
-                    headers={
-                        "Content-Type": "application/json",
-                        "X-Vault-Token": secret or "",
-                    },
-                )
-                if resp.status_code in (401, 403):
-                    raise HTTPException(
-                        status_code=resp.status_code,
-                        detail="Token Vault rebutjat per l'agent del disc dur (HTTP 403). Verifica SEVALOR_VAULT_SECRET.",
-                    )
-                if resp.status_code >= 400:
-                    raise HTTPException(status_code=resp.status_code, detail=resp.text)
-                return f"vault://{subcarpeta}/{id_net}.json"
-        except httpx.RequestError as exc:
+            await vault_tunnel_broker.json_put(
+                base_target,
+                subcarpeta=subcarpeta,
+                item_id=id_net,
+                content=payload_complet,
+                timeout=12.0,
+            )
+            return f"vault://{subcarpeta}/{id_net}.json"
+        except (VaultTunnelOfflineError, VaultTunnelTimeoutError) as exc:
             logger.warning(
-                "Disc dur remot de %s desconnectat (%s). Encurant a cua de trànsit temporal...",
+                "Túnel WSS de %s desconnectat (%s). Encuant a cua de trànsit xifrada SVENC1:...",
                 empresa_id,
                 exc,
             )
@@ -741,6 +756,39 @@ class SovereignStorageGateway:
             except Exception:
                 pass
             return transit_ref
+        except VaultTunnelRemoteError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+    @classmethod
+    async def esborrar_entitat_json(
+        cls,
+        db: AsyncSession,
+        empresa_id: str | uuid.UUID,
+        categoria: str,
+        item_id: str | uuid.UUID,
+    ) -> bool:
+        """Esborra una fitxa JSON del disc dur exclusiu de l'empresa via WSS."""
+        subcarpeta = MAPA_CARPETES_CLIENT.get(categoria, categoria)
+        id_net = sanititzar_nom(str(item_id))
+        mode, base_target, _ = await cls.resoldre_desti_disc_empresa(db, empresa_id)
+
+        if mode == "LOCAL_FS":
+            folder = (Path(base_target) / subcarpeta).resolve()
+            fp = (folder / f"{id_net}.json").resolve()
+            if fp.is_file() and fp.is_relative_to(folder):
+                fp.unlink()
+                return True
+            return False
+
+        if mode == "OFFLINE_TRANSIT":
+            return False
+
+        try:
+            return await vault_tunnel_broker.json_delete(
+                base_target, subcarpeta=subcarpeta, item_id=id_net, timeout=10.0
+            )
+        except VaultTunnelError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
     @classmethod
     async def llegir_entitats_json(
@@ -766,41 +814,46 @@ class SovereignStorageGateway:
                     continue
             return cls._filtrar_entitats_verificades(empresa_id, categoria, subcarpeta, registres)
 
-        candidates = get_candidate_node_urls(base_target) or [base_target.rstrip("/")]
-        last_exc: Optional[Exception] = None
-        async with httpx.AsyncClient(timeout=8.0) as client:
-            for cand_base in candidates:
-                url = f"{cand_base.rstrip('/')}/entitats/{subcarpeta}"
+        if mode == "OFFLINE_TRANSIT":
+            emp_dir = (cls._get_transit_queue_dir() / str(empresa_id)).resolve()
+            if not emp_dir.exists():
+                return []
+            by_id: Dict[str, Dict[str, Any]] = {}
+            for meta_file in sorted(emp_dir.glob("*.meta.json")):
                 try:
-                    resp = await client.get(url, headers={"X-Vault-Token": secret or ""})
-                    if resp.status_code in (401, 403):
-                        raise HTTPException(
-                            status_code=resp.status_code,
-                            detail="Token Vault rebutjat per l'agent del disc dur (HTTP 403).",
-                        )
-                    if resp.status_code == 200:
-                        raw_data = resp.json()
-                        return cls._filtrar_entitats_verificades(
-                            empresa_id, categoria, subcarpeta, raw_data
-                        )
-                    return []
-                except httpx.RequestError as exc:
-                    last_exc = exc
+                    meta = json.loads(meta_file.read_text(encoding="utf-8"))
+                    if meta.get("tipus") != "JSON" or meta.get("subcarpeta") != subcarpeta:
+                        continue
+                    bin_file = emp_dir / meta_file.name.replace(".meta.json", ".bin")
+                    if not bin_file.is_file():
+                        continue
+                    raw = cls._decrypt_transit_payload(empresa_id, bin_file.read_bytes())
+                    parsed = json.loads(raw.decode("utf-8"))
+                    if isinstance(parsed, dict):
+                        by_id[str(meta.get("identificador") or meta_file.name)] = parsed
+                except Exception:
                     continue
+            return cls._filtrar_entitats_verificades(
+                empresa_id, categoria, subcarpeta, list(reversed(list(by_id.values())))
+            )
 
-        logger.warning(
-            "Disc dur dedicat HTTP_VAULT offline per empresa=%s (%s): %s",
-            empresa_id,
-            candidates,
-            last_exc,
-        )
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail={
-                "code": "NODE_EMPRESA_OFFLINE",
-                "message": "El disc dur dedicat de l'empresa no respon.",
-            },
-        )
+        # Mode WSS_TUNNEL
+        try:
+            raw_data = await vault_tunnel_broker.json_get_list(
+                base_target, subcarpeta=subcarpeta, timeout=12.0
+            )
+            return cls._filtrar_entitats_verificades(empresa_id, categoria, subcarpeta, raw_data)
+        except (VaultTunnelOfflineError, VaultTunnelTimeoutError) as exc:
+            logger.warning("Túnel WSS offline llegint entitats per empresa=%s: %s", empresa_id, exc)
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={
+                    "code": "NODE_EMPRESA_OFFLINE",
+                    "message": "El disc dur dedicat de l'empresa no està connectat al túnel WSS.",
+                },
+            ) from exc
+        except VaultTunnelRemoteError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
     @classmethod
     async def llegir_text_fitxer(
@@ -828,14 +881,24 @@ class SovereignStorageGateway:
             except OSError:
                 return None
 
-        url = f"{base_target}/fitxers/{subcarpeta}/{nom_net}"
+        if mode == "OFFLINE_TRANSIT":
+            transit_bin = cls._trobar_fitxer_transit(
+                empresa_id, f"transit://{empresa_id}/{subcarpeta}/{nom_net}"
+            )
+            if transit_bin and transit_bin.is_file():
+                try:
+                    raw = cls._decrypt_transit_payload(empresa_id, transit_bin.read_bytes())
+                    return raw.decode("utf-8", errors="replace")
+                except Exception:
+                    return None
+            return None
+
         try:
-            async with httpx.AsyncClient(timeout=5.0) as client:
-                resp = await client.get(url, headers={"X-Vault-Token": secret or ""})
-                if resp.status_code == 200:
-                    return resp.content.decode("utf-8", errors="replace")
-                return None
-        except httpx.RequestError:
+            raw_bytes, _ = await vault_tunnel_broker.file_get(
+                base_target, rel_path=f"{subcarpeta}/{nom_net}", timeout=10.0
+            )
+            return raw_bytes.decode("utf-8", errors="replace")
+        except VaultTunnelError:
             return None
 
     @classmethod
@@ -865,29 +928,30 @@ class SovereignStorageGateway:
             dest_file.write_bytes(content)
             return str(dest_file)
 
-        # Mode HTTP_VAULT (Agent Local al PC del client)
-        url = f"{base_target}/fitxers/{subcarpeta}"
+        if mode == "OFFLINE_TRANSIT":
+            return cls._encuar_paquet_transit(
+                empresa_id=empresa_id,
+                tipus="BINARY",
+                subcarpeta=subcarpeta,
+                identificador=nom_net,
+                payload_bytes=content,
+                content_type=content_type,
+            )
+
+        # Mode WSS_TUNNEL (Agent Sobirà WSS al PC del client)
         try:
-            async with httpx.AsyncClient(timeout=5.0) as client:
-                files = {"fitxer": (nom_net, content, content_type)}
-                data = {"nom_desti": nom_net}
-                resp = await client.post(
-                    url,
-                    files=files,
-                    data=data,
-                    headers={"X-Vault-Token": secret or ""},
-                )
-                if resp.status_code in (401, 403):
-                    raise HTTPException(
-                        status_code=resp.status_code,
-                        detail="Token Vault rebutjat per l'agent del disc dur (HTTP 403). Verifica SEVALOR_VAULT_SECRET.",
-                    )
-                if resp.status_code >= 400:
-                    raise HTTPException(status_code=resp.status_code, detail=resp.text)
-                return f"vault://{subcarpeta}/{nom_net}"
-        except httpx.RequestError as exc:
+            await vault_tunnel_broker.file_put(
+                base_target,
+                subcarpeta=subcarpeta,
+                filename=nom_net,
+                content_bytes=content,
+                content_type=content_type,
+                timeout=30.0,
+            )
+            return f"vault://{subcarpeta}/{nom_net}"
+        except (VaultTunnelOfflineError, VaultTunnelTimeoutError) as exc:
             logger.warning(
-                "Agent HTTP del client %s desconnectat (%s). Encurant fitxer %s a cua de trànsit...",
+                "Túnel WSS del client %s desconnectat (%s). Encuant fitxer %s a cua de trànsit SVENC1:...",
                 empresa_id,
                 exc,
                 nom_net,
@@ -907,6 +971,8 @@ class SovereignStorageGateway:
             except Exception:
                 pass
             return transit_ref
+        except VaultTunnelRemoteError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
     @classmethod
     def _trobar_fitxer_transit(
@@ -954,19 +1020,27 @@ class SovereignStorageGateway:
         if real_path and real_path.is_file():
             return real_path.read_bytes(), real_path.name
 
-        mode, base_target, secret = await cls.resoldre_desti_disc_empresa(db, empresa_id)
-        if mode == "HTTP_VAULT":
+        mode, base_target, _ = await cls.resoldre_desti_disc_empresa(db, empresa_id)
+        if mode == "WSS_TUNNEL":
             rel_path = fitxer_path.replace("vault://", "").replace("transit://", "").lstrip("/")
             if rel_path.startswith(str(empresa_id) + "/"):
                 rel_path = rel_path[len(str(empresa_id)) + 1 :]
-            url = f"{base_target}/fitxers/{rel_path}"
             try:
-                async with httpx.AsyncClient(timeout=15.0) as client:
-                    resp = await client.get(url, headers={"X-Vault-Token": secret or ""})
-                    if resp.status_code == 200:
-                        return resp.content, os.path.basename(rel_path)
-            except httpx.RequestError:
-                pass
+                return await vault_tunnel_broker.file_get(base_target, rel_path=rel_path, timeout=30.0)
+            except VaultTunnelRemoteError as exc:
+                if exc.status_code == 404:
+                    raise HTTPException(
+                        status_code=404, detail="Fitxer no trobat al disc dur de l'empresa."
+                    ) from exc
+                raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+            except (VaultTunnelOfflineError, VaultTunnelTimeoutError) as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail={
+                        "code": "NODE_EMPRESA_OFFLINE",
+                        "message": "El disc dur dedicat de l'empresa no està connectat al túnel WSS.",
+                    },
+                ) from exc
 
         raise HTTPException(status_code=404, detail="Fitxer no trobat al disc dur de l'empresa.")
 
@@ -991,12 +1065,18 @@ class SovereignStorageGateway:
             target = (Path(base_target) / subcarpeta / nom_net).resolve()
             return target.is_file()
 
-        url = f"{base_target}/fitxers/{subcarpeta}/{nom_net}"
+        if mode == "OFFLINE_TRANSIT":
+            found = cls._trobar_fitxer_transit(
+                empresa_id, f"transit://{empresa_id}/{subcarpeta}/{nom_net}"
+            )
+            return bool(found and found.is_file())
+
         try:
-            async with httpx.AsyncClient(timeout=5.0) as client:
-                resp = await client.get(url, headers={"X-Vault-Token": secret or ""})
-                return resp.status_code == 200
-        except httpx.RequestError:
+            await vault_tunnel_broker.file_get(
+                base_target, rel_path=f"{subcarpeta}/{nom_net}", timeout=8.0
+            )
+            return True
+        except VaultTunnelError:
             return False
 
     @classmethod
@@ -1020,7 +1100,6 @@ class SovereignStorageGateway:
             return direct_path.resolve()
 
         emp_str = str(empresa_id)
-        emp_uuid = uuid.UUID(emp_str)
         filename = os.path.basename(raw_clean.replace("vault://", "").replace("transit://", ""))
         rel_path = raw_clean.replace("vault://", "").lstrip("/")
 
@@ -1030,23 +1109,12 @@ class SovereignStorageGateway:
             if found_transit is not None:
                 return found_transit
 
-        # 3. Exploració exhaustiva dels discos de l'empresa
-        subdom = None
-        if db is not None:
-            emp_obj = (await db.execute(select(Empresa).where(Empresa.id == emp_uuid))).scalars().first()
-            if emp_obj:
-                subdom = emp_obj.subdomini
-
+        # 3. Només resol camí físic local si l'empresa té un punt de muntatge LOCAL_FS explícit (mai Hetzner /tmp ni /data)
         mode, base_target, _ = await cls.resoldre_desti_disc_empresa(db, empresa_id)
+        if mode != "LOCAL_FS":
+            return None
 
-        candidate_roots = [
-            Path(base_target),
-            Path(f"/data/disc_{subdom}") if subdom else None,
-            Path(f"/data/disc_{emp_str}"),
-            Path(f"/data/{emp_str}"),
-            Path(f"/tmp/sevalor_client_disks/disc_{subdom}") if subdom else None,
-            Path(f"/tmp/sevalor_client_disks/disc_{emp_str}"),
-        ]
+        candidate_roots = [Path(base_target)]
 
         for root in candidate_roots:
             if not root or not root.exists():
@@ -1098,30 +1166,32 @@ class SovereignStorageGateway:
                 content_disposition_type=disposition,
             )
 
-        # Si no s'ha trobat localment (o el paquet transit:// ja ha estat drenat cap al Vault remot)
+        # Si no s'ha trobat localment (o el paquet transit:// ja ha estat drenat cap al PC via WSS)
         if fitxer_path.startswith("vault://") or fitxer_path.startswith("transit://"):
-            mode, base_target, secret = await cls.resoldre_desti_disc_empresa(db, empresa_id)
-            if mode == "HTTP_VAULT":
+            mode, base_target, _ = await cls.resoldre_desti_disc_empresa(db, empresa_id)
+            if mode == "WSS_TUNNEL":
                 rel_path = fitxer_path.replace("vault://", "").replace("transit://", "").lstrip("/")
                 if rel_path.startswith(str(empresa_id) + "/"):
                     rel_path = rel_path[len(str(empresa_id)) + 1 :]
-                url = f"{base_target}/fitxers/{rel_path}"
-
-                async def _streamer() -> AsyncGenerator[bytes, None]:
-                    async with httpx.AsyncClient(timeout=30.0) as client:
-                        async with client.stream(
-                            "GET", url, headers={"X-Vault-Token": secret or ""}
-                        ) as resp:
-                            if resp.status_code >= 400:
-                                raise HTTPException(
-                                    status_code=404, detail="Fitxer no trobat al disc del client."
-                                )
-                            async for chunk in resp.aiter_bytes(chunk_size=65536):
-                                yield chunk
-
-                filename = os.path.basename(rel_path)
-                return StreamingResponse(
-                    _streamer(),
+                try:
+                    raw_bytes, filename = await vault_tunnel_broker.file_get(
+                        base_target, rel_path=rel_path, timeout=30.0
+                    )
+                except VaultTunnelRemoteError as exc:
+                    raise HTTPException(
+                        status_code=404 if exc.status_code == 404 else exc.status_code,
+                        detail="Fitxer no trobat al disc del client.",
+                    ) from exc
+                except (VaultTunnelOfflineError, VaultTunnelTimeoutError) as exc:
+                    raise HTTPException(
+                        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                        detail={
+                            "code": "NODE_EMPRESA_OFFLINE",
+                            "message": "El disc dur dedicat de l'empresa no està connectat al túnel WSS.",
+                        },
+                    ) from exc
+                return Response(
+                    content=raw_bytes,
                     media_type=media_type,
                     headers={"Content-Disposition": f'{disposition}; filename="{filename}"'},
                 )
@@ -1374,6 +1444,21 @@ class SovereignStorageGateway:
                 real_old.replace(dest_file)
             return str(dest_file)
 
+        if mode == "WSS_TUNNEL" and old_path.startswith("vault://"):
+            subcarpeta = MAPA_CARPETES_CLIENT.get(categoria, categoria)
+            old_rel = old_path.replace("vault://", "").lstrip("/")
+            try:
+                res = await vault_tunnel_broker.file_rename(
+                    base_target,
+                    old_rel_path=old_rel,
+                    new_subcarpeta=subcarpeta,
+                    new_filename=nom_net,
+                    timeout=15.0,
+                )
+                return f"vault://{res.get('rel_path') or f'{subcarpeta}/{nom_net}'}"
+            except VaultTunnelError:
+                pass
+
         raw_bytes, _ = await cls.obtenir_bytes_fitxer(db, empresa_id, old_path)
         return await cls.pujar_fitxer_binari(
             db=db,
@@ -1384,9 +1469,44 @@ class SovereignStorageGateway:
             content_type=content_type,
         )
 
+    @classmethod
+    async def esborrar_fitxer_binari(
+        cls,
+        db: AsyncSession,
+        empresa_id: str | uuid.UUID,
+        fitxer_path: str,
+    ) -> bool:
+        """Elimina un fitxer binari del disc dur del client (WSS_TUNNEL o cua transit://)."""
+        if not fitxer_path:
+            return False
+        transit_bin = cls._trobar_fitxer_transit(empresa_id, fitxer_path)
+        if transit_bin and transit_bin.is_file():
+            meta_file = transit_bin.with_name(transit_bin.name.replace(".bin", ".meta.json"))
+            transit_bin.unlink(missing_ok=True)
+            meta_file.unlink(missing_ok=True)
+            return True
+
+        mode, base_target, _ = await cls.resoldre_desti_disc_empresa(db, empresa_id)
+        if mode == "LOCAL_FS":
+            real_p = await cls.resoldre_fitxer_real_path(db, empresa_id, fitxer_path)
+            if real_p and real_p.is_file() and real_p.is_relative_to(Path(base_target).resolve()):
+                real_p.unlink()
+                return True
+            return False
+
+        if mode == "WSS_TUNNEL":
+            rel_path = fitxer_path.replace("vault://", "").replace("transit://", "").lstrip("/")
+            if rel_path.startswith(str(empresa_id) + "/"):
+                rel_path = rel_path[len(str(empresa_id)) + 1 :]
+            try:
+                return await vault_tunnel_broker.file_delete(base_target, rel_path=rel_path, timeout=10.0)
+            except VaultTunnelError:
+                return False
+        return False
+
 
 class SuperadminStorageGateway:
-    """Passarel·la exclusiva del propietari SaaS cap al seu disc dur dedicat (/media/akaun/Project_1/Sevalor_Superadmin_docs)."""
+    """Passarel·la exclusiva del propietari SaaS cap al seu disc dur dedicat via Túnel WSS Únic (ADR-001)."""
 
     MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 
@@ -1399,85 +1519,34 @@ class SuperadminStorageGateway:
         return folder
 
     @staticmethod
-    def _resolve_target() -> Tuple[str, str, Optional[str]]:
-        url = (
-            os.getenv("SUPERADMIN_VAULT_URL", "").strip()
-            or str(getattr(settings, "SUPERADMIN_VAULT_URL", "") or "").strip()
-            or "http://host.docker.internal:9002"
-        )
-        secret = (
-            os.getenv("SUPERADMIN_VAULT_SECRET", "").strip()
-            or str(getattr(settings, "SUPERADMIN_VAULT_SECRET", "") or "").strip()
-        )
-        if url.startswith(("http://", "https://")):
-            if not secret:
-                local_default = Path("/media/akaun/Project_1/Sevalor_Superadmin_docs")
-                if not os.path.exists("/.dockerenv") and local_default.is_dir():
-                    return ("LOCAL_FS", str(local_default.resolve()), None)
-                raise HTTPException(
-                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                    detail="SUPERADMIN_VAULT_SECRET no configurat per accedir al túnel del Disc Superadmin.",
-                )
-            effective = resolve_effective_node_url(url) or url
-            return ("HTTP_VAULT", effective.rstrip("/"), secret)
-        if os.path.exists("/.dockerenv"):
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="Zero-Storage: dins de Docker cal utilitzar un túnel HTTP/HTTPS cap al Disc Superadmin.",
-            )
-        return ("LOCAL_FS", str(Path(url).resolve()), None)
+    async def _resolve_target() -> Tuple[str, str]:
+        """Resol el destí del Disc Superadmin: sempre `WSS_TUNNEL` (`superadmin`) en producció."""
+        if await vault_tunnel_broker.is_online(SUPERADMIN_TARGET_KEY):
+            return ("WSS_TUNNEL", SUPERADMIN_TARGET_KEY)
 
-    @classmethod
-    async def _http_request(
-        cls,
-        base_target: str,
-        secret: Optional[str],
-        method: str,
-        rel_url: str,
-        *,
-        timeout: float = 8.0,
-        offline_detail: Any = "El Disc Dur de Superadmin no respon.",
-        **request_kwargs: Any,
-    ) -> httpx.Response:
-        """Executa una petició HTTP autenticada provant les URLs candidates del túnel Superadmin."""
-        candidates = get_candidate_node_urls(base_target) or [base_target.rstrip("/")]
-        last_exc: Optional[Exception] = None
-        req_headers = {"X-Vault-Token": secret or "", **request_kwargs.pop("headers", {})}
-        async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
-            for base in candidates:
-                url = f"{base.rstrip('/')}/{rel_url.lstrip('/')}"
-                try:
-                    resp = await client.request(
-                        method=method,
-                        url=url,
-                        headers=req_headers,
-                        **request_kwargs,
-                    )
-                    if resp.status_code in (401, 403):
-                        raise HTTPException(
-                            status_code=resp.status_code,
-                            detail="Token rebutjat per la passarel·la del Disc Superadmin.",
-                        )
-                    return resp
-                except httpx.RequestError as exc:
-                    last_exc = exc
-                    continue
+        # Només en entorn de tests unitaris (TESTING=1 fora de Docker) permet carpeta temporal local
+        if os.getenv("TESTING") == "1" and not os.path.exists("/.dockerenv"):
+            test_path = os.getenv("SUPERADMIN_VAULT_URL", "").strip()
+            if test_path and test_path.startswith("/"):
+                return ("LOCAL_FS", str(Path(test_path).resolve()))
 
-        logger.warning("Passarel·la Superadmin desconnectada (%s): %s", rel_url, last_exc)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=offline_detail,
+            detail={
+                "code": "NODE_SUPERADMIN_OFFLINE",
+                "message": "El Disc Dur dedicat de Superadmin no està connectat al túnel WSS de Sevalor.",
+            },
         )
 
     @classmethod
     async def inicialitzar_rutes_superadmin(cls, ruta_personalitzada: Optional[str] = None) -> Dict[str, Any]:
-        """Crea les 20 carpetes oficials del Superadmin (en LOCAL_FS fora d'Hetzner o via túnel POST /admin/inicialitzar-ruta)."""
-        if ruta_personalitzada and not ruta_personalitzada.startswith(("http://", "https://")):
-            if os.path.exists("/.dockerenv"):
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Zero-Storage: dins de Docker no es permet crear rutes locals de Superadmin sense túnel HTTP.",
-                )
+        """Crea les 20 carpetes oficials del Superadmin via túnel WSS `superadmin`."""
+        if (
+            ruta_personalitzada
+            and ruta_personalitzada.startswith("/")
+            and os.getenv("TESTING") == "1"
+            and not os.path.exists("/.dockerenv")
+        ):
             creades = inicialitzar_arbre_carpetes_superadmin(ruta_personalitzada)
             return {
                 "mode": "LOCAL_FS",
@@ -1486,19 +1555,7 @@ class SuperadminStorageGateway:
                 "carpetes": creades,
             }
 
-        secret: Optional[str]
-        if ruta_personalitzada and ruta_personalitzada.startswith(("http://", "https://")):
-            secret = os.getenv("SUPERADMIN_VAULT_SECRET", "").strip()
-            if not secret:
-                raise HTTPException(
-                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                    detail="SUPERADMIN_VAULT_SECRET no configurat per connectar al túnel del Disc Superadmin.",
-                )
-            mode = "HTTP_VAULT"
-            base_target = (resolve_effective_node_url(ruta_personalitzada) or ruta_personalitzada).rstrip("/")
-        else:
-            mode, base_target, secret = cls._resolve_target()
-
+        mode, base_target = await cls._resolve_target()
         if mode == "LOCAL_FS":
             creades = inicialitzar_arbre_carpetes_superadmin(base_target)
             return {
@@ -1508,20 +1565,14 @@ class SuperadminStorageGateway:
                 "carpetes": creades,
             }
 
-        resp = await cls._http_request(
-            base_target,
-            secret,
-            "POST",
-            "/admin/inicialitzar-ruta",
-            timeout=8.0,
-            offline_detail="La passarel·la del Disc Dur de Superadmin no respon.",
-        )
-        if resp.status_code >= 400:
+        try:
+            res = await vault_tunnel_broker.init_folders(base_target, timeout=15.0)
+            return {"mode": "WSS_TUNNEL", **res}
+        except VaultTunnelError as exc:
             raise HTTPException(
-                status_code=resp.status_code,
-                detail="Error inicialitzant carpetes al Disc Dur de Superadmin.",
-            )
-        return cast(Dict[str, Any], resp.json())
+                status_code=exc.status_code,
+                detail={"code": exc.code, "message": exc.detail},
+            ) from exc
 
     @classmethod
     async def desar_entitat_json(
@@ -1533,7 +1584,7 @@ class SuperadminStorageGateway:
         """Desa un registre JSON (CRM, Rascador, Facturació SaaS B2B, Fitxes Tenants) al Disc del Superadmin."""
         subcarpeta = MAPA_CARPETES_SUPERADMIN.get(categoria, categoria)
         id_net = sanititzar_nom(str(item_id))
-        mode, base_target, secret = cls._resolve_target()
+        mode, base_target = await cls._resolve_target()
 
         payload_complet: Dict[str, Any] = {
             **dades,
@@ -1556,25 +1607,22 @@ class SuperadminStorageGateway:
                 json.dump(payload_complet, f, ensure_ascii=False, indent=2, default=str)
             return str(file_path)
 
-        payload_bytes = json.dumps(payload_complet, ensure_ascii=False, indent=2, default=str).encode("utf-8")
-        resp = await cls._http_request(
-            base_target,
-            secret,
-            "PUT",
-            f"/entitats/{subcarpeta}/{id_net}",
-            timeout=5.0,
-            headers={"Content-Type": "application/json"},
-            content=payload_bytes,
-        )
-        if resp.status_code >= 400:
-            raise HTTPException(status_code=resp.status_code, detail="Error escrivint al Disc Superadmin.")
-        return f"superadmin-vault://{subcarpeta}/{id_net}.json"
+        try:
+            await vault_tunnel_broker.json_put(
+                base_target, subcarpeta=subcarpeta, item_id=id_net, content=payload_complet, timeout=10.0
+            )
+            return f"superadmin-vault://{subcarpeta}/{id_net}.json"
+        except VaultTunnelError as exc:
+            raise HTTPException(
+                status_code=exc.status_code,
+                detail={"code": exc.code, "message": exc.detail},
+            ) from exc
 
     @classmethod
     async def llegir_entitats_json(cls, categoria: str) -> List[Dict[str, Any]]:
         """Llegeix totes les fitxes JSON d'una carpeta del Disc del Superadmin."""
         subcarpeta = MAPA_CARPETES_SUPERADMIN.get(categoria, categoria)
-        mode, base_target, secret = cls._resolve_target()
+        mode, base_target = await cls._resolve_target()
 
         if mode == "LOCAL_FS":
             folder = cls._resoldre_carpeta_local(base_target, subcarpeta)
@@ -1592,28 +1640,20 @@ class SuperadminStorageGateway:
                     continue
             return registres
 
-        resp = await cls._http_request(
-            base_target,
-            secret,
-            "GET",
-            f"/entitats/{subcarpeta}",
-            timeout=8.0,
-            offline_detail={
-                "code": "NODE_SUPERADMIN_OFFLINE",
-                "message": "El disc dur dedicat del Superadmin no respon.",
-            },
-        )
-        if resp.status_code == 200:
-            raw_data = resp.json()
-            return cast(List[Dict[str, Any]], raw_data) if isinstance(raw_data, list) else []
-        return []
+        try:
+            return await vault_tunnel_broker.json_get_list(base_target, subcarpeta=subcarpeta, timeout=12.0)
+        except VaultTunnelError as exc:
+            raise HTTPException(
+                status_code=exc.status_code,
+                detail={"code": "NODE_SUPERADMIN_OFFLINE" if exc.status_code == 503 else exc.code, "message": exc.detail},
+            ) from exc
 
     @classmethod
     async def eliminar_entitat_json(cls, categoria: str, item_id: str | uuid.UUID) -> bool:
         """Elimina una fitxa JSON del Disc del Superadmin amb validació estricta de ruta."""
         subcarpeta = MAPA_CARPETES_SUPERADMIN.get(categoria, categoria)
         id_net = sanititzar_nom(str(item_id))
-        mode, base_target, secret = cls._resolve_target()
+        mode, base_target = await cls._resolve_target()
 
         if mode == "LOCAL_FS":
             folder = cls._resoldre_carpeta_local(base_target, subcarpeta)
@@ -1623,14 +1663,15 @@ class SuperadminStorageGateway:
                 return True
             return False
 
-        resp = await cls._http_request(
-            base_target,
-            secret,
-            "DELETE",
-            f"/entitats/{subcarpeta}/{id_net}",
-            timeout=5.0,
-        )
-        return resp.status_code < 400
+        try:
+            return await vault_tunnel_broker.json_delete(
+                base_target, subcarpeta=subcarpeta, item_id=id_net, timeout=10.0
+            )
+        except VaultTunnelError as exc:
+            raise HTTPException(
+                status_code=exc.status_code,
+                detail={"code": exc.code, "message": exc.detail},
+            ) from exc
 
     @classmethod
     async def pujar_fitxer_binari(
@@ -1648,7 +1689,7 @@ class SuperadminStorageGateway:
             )
         subcarpeta = MAPA_CARPETES_SUPERADMIN.get(categoria, categoria)
         nom_net = sanititzar_nom(nom_fitxer)
-        mode, base_target, secret = cls._resolve_target()
+        mode, base_target = await cls._resolve_target()
 
         if mode == "LOCAL_FS":
             folder = cls._resoldre_carpeta_local(base_target, subcarpeta)
@@ -1659,25 +1700,28 @@ class SuperadminStorageGateway:
             dest_file.write_bytes(content)
             return str(dest_file)
 
-        resp = await cls._http_request(
-            base_target,
-            secret,
-            "POST",
-            f"/fitxers/{subcarpeta}",
-            timeout=10.0,
-            files={"fitxer": (nom_net, content, content_type)},
-            data={"nom_desti": nom_net},
-        )
-        if resp.status_code >= 400:
-            raise HTTPException(status_code=resp.status_code, detail="Error pujant fitxer al Disc Superadmin.")
-        return f"superadmin-vault://{subcarpeta}/{nom_net}"
+        try:
+            await vault_tunnel_broker.file_put(
+                base_target,
+                subcarpeta=subcarpeta,
+                filename=nom_net,
+                content_bytes=content,
+                content_type=content_type,
+                timeout=30.0,
+            )
+            return f"superadmin-vault://{subcarpeta}/{nom_net}"
+        except VaultTunnelError as exc:
+            raise HTTPException(
+                status_code=exc.status_code,
+                detail={"code": exc.code, "message": exc.detail},
+            ) from exc
 
     @classmethod
     async def obtenir_bytes_fitxer(cls, fitxer_path: str) -> Tuple[bytes, str]:
         """Recupera els bytes d'un fitxer emmagatzemat al Disc del Superadmin."""
         if not fitxer_path:
             raise HTTPException(status_code=404, detail="Ruta de fitxer Superadmin buida.")
-        mode, base_target, secret = cls._resolve_target()
+        mode, base_target = await cls._resolve_target()
 
         clean = fitxer_path.replace("superadmin-vault://", "").replace("file://", "").strip()
         if mode == "LOCAL_FS":
@@ -1689,13 +1733,14 @@ class SuperadminStorageGateway:
             return target.read_bytes(), target.name
 
         rel_path = clean.lstrip("/")
-        resp = await cls._http_request(
-            base_target,
-            secret,
-            "GET",
-            f"/fitxers/{rel_path}",
-            timeout=15.0,
-        )
-        if resp.status_code == 200:
-            return resp.content, os.path.basename(rel_path)
-        raise HTTPException(status_code=404, detail="Fitxer no trobat al Disc del Superadmin.")
+        try:
+            return await vault_tunnel_broker.file_get(base_target, rel_path=rel_path, timeout=30.0)
+        except VaultTunnelRemoteError as exc:
+            if exc.status_code == 404:
+                raise HTTPException(status_code=404, detail="Fitxer no trobat al Disc del Superadmin.") from exc
+            raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+        except VaultTunnelError as exc:
+            raise HTTPException(
+                status_code=exc.status_code,
+                detail={"code": "NODE_SUPERADMIN_OFFLINE", "message": exc.detail},
+            ) from exc

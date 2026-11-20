@@ -8,6 +8,7 @@ from httpx import ASGITransport, AsyncClient
 from app.main import app
 from app.models.models import Empresa, Usuari
 from app.services.sovereign_storage import SovereignStorageGateway
+from tests.wss_test_helpers import live_empresa_wss_context
 
 
 @pytest.mark.asyncio
@@ -15,6 +16,7 @@ async def test_copilot_xat(admin_session, headers, boss_token, tmp_path: Path):
     token_jwt, empresa_id = boss_token
     boss_nif = "B" + str(uuid.uuid4())[:8].upper()
     emp_uuid = uuid.UUID(empresa_id)
+    vault_token = f"svlt_copxat_{uuid.uuid4().hex[:12]}"
 
     decoded = jwt.decode(token_jwt, options={"verify_signature": False})
 
@@ -25,74 +27,73 @@ async def test_copilot_xat(admin_session, headers, boss_token, tmp_path: Path):
         subdomini="copi-" + str(uuid.uuid4())[:5],
         pla_subscripcio="STARTER",
         estat_pagament="ACTIU",
-        disc_dur_url=str(tmp_path),
-        node_ia_url=str(tmp_path),
+        disc_dur_url=f"wss-tunnel://{emp_uuid}",
+        node_ia_url=f"wss-tunnel://{emp_uuid}",
+        vault_token=vault_token,
         node_ia_actiu=True,
         feature_copilot_ia=True,
     ))
     admin_session.add(Usuari(id=uuid.UUID(decoded["sub"]), empresa_id=emp_uuid, nom="Boss", cognoms="Boss", nif="BOSS1", rol="BOSS", estat="ACTIU"))
     await admin_session.flush()
 
-    await SovereignStorageGateway.desar_entitat_json(
-        admin_session,
-        emp_uuid,
-        "protocols_interns",
-        "faq_rebt",
-        {
-            "id": "faq_rebt",
-            "pregunta": "Manual d'Instal·lació de Quadres Elèctrics",
-            "resposta": "Protocol: Verificar sempre el diferencial de 30mA abans d'iniciar el cablejat del quadre. Rebt-2024.",
-            "paraules_clau": "electricitat, quadre, rebt",
-            "actiu": True,
-        },
-    )
+    async with live_empresa_wss_context(emp_uuid, vault_token, tmp_path, default_reply=""):
+        await SovereignStorageGateway.desar_entitat_json(
+            admin_session,
+            emp_uuid,
+            "protocols_interns",
+            "faq_rebt",
+            {
+                "id": "faq_rebt",
+                "pregunta": "Manual d'Instal·lació de Quadres Elèctrics",
+                "resposta": "Protocol: Verificar sempre el diferencial de 30mA abans d'iniciar el cablejat del quadre. Rebt-2024.",
+                "paraules_clau": "electricitat, quadre, rebt",
+                "actiu": True,
+            },
+        )
 
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-        # Pregunta 1: RAG
-        res = await ac.post("/api/v1/gestio/copilot/xat", json={"pregunta": "Quin és el procediment o protocol per instal·lar un quadre?"}, headers=headers)
-        assert res.status_code == 200
-        data = res.json()
-        assert "resposta" in data
-        assert "30mA" in data["resposta"] or "rebt" in data["resposta"].lower() or len(data["resposta"]) > 10
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+            # Pregunta 1: RAG
+            res = await ac.post("/api/v1/gestio/copilot/xat", json={"pregunta": "Quin és el procediment o protocol per instal·lar un quadre?"}, headers=headers)
+            assert res.status_code == 200
+            data = res.json()
+            assert "resposta" in data
+            assert "30mA" in data["resposta"] or "rebt" in data["resposta"].lower() or len(data["resposta"]) > 10
 
-        # Pregunta 2: General/Lògica
-        res2 = await ac.post("/api/v1/gestio/copilot/xat", json={"pregunta": "Fes un resum de les feines a fer avui."}, headers=headers)
-        assert res2.status_code == 200
-        data2 = res2.json()
-        assert "resposta" in data2
+            # Pregunta 2: General/Lògica
+            res2 = await ac.post("/api/v1/gestio/copilot/xat", json={"pregunta": "Fes un resum de les feines a fer avui."}, headers=headers)
+            assert res2.status_code == 200
+            data2 = res2.json()
+            assert "resposta" in data2
 
-        # Pregunta 3: Validació sense context
-        res3 = await ac.post("/api/v1/gestio/copilot/xat", json={"pregunta": "Qui ets?"}, headers=headers)
-        assert res3.status_code == 200
-        data3 = res3.json()
-        assert "resposta" in data3
-        # In a simulated testing environment without real model API keys, the fallback RAG response might be returned.
-        # We assert that the response is at least not empty instead of hardcoding expected hallucinated strings.
-        assert len(data3["resposta"]) > 10
+            # Pregunta 3: Validació sense context
+            res3 = await ac.post("/api/v1/gestio/copilot/xat", json={"pregunta": "Qui ets?"}, headers=headers)
+            assert res3.status_code == 200
+            data3 = res3.json()
+            assert "resposta" in data3
+            assert len(data3["resposta"]) > 10
 
-        # Pregunta 4: Múltiples missatges (historial simulat)
-        historial = [
-            {"role": "user", "content": "Quins clients tenim a Barcelona?"},
-            {"role": "assistant", "content": "Actualment teniu 2 clients a Barcelona: Client A i Client B."},
-            {"role": "user", "content": "D'acord, prepara un pressupost per al Client A de 500 euros per reparació."}
-        ]
-        res4 = await ac.post("/api/v1/gestio/copilot/xat", json={"pregunta": historial[-1]["content"], "historial": historial[:-1]}, headers=headers)
-        assert res4.status_code == 200
-        data4 = res4.json()
-        assert "resposta" in data4
-        # El bot hauria d'entendre que parlem de Barcelona i Client A
-        assert len(data4["resposta"]) > 10
+            # Pregunta 4: Múltiples missatges (historial)
+            historial = [
+                {"role": "user", "content": "Quins clients tenim a Barcelona?"},
+                {"role": "assistant", "content": "Actualment teniu 2 clients a Barcelona: Client A i Client B."},
+                {"role": "user", "content": "D'acord, prepara un pressupost per al Client A de 500 euros per reparació."}
+            ]
+            res4 = await ac.post("/api/v1/gestio/copilot/xat", json={"pregunta": historial[-1]["content"], "historial": historial[:-1]}, headers=headers)
+            assert res4.status_code == 200
+            data4 = res4.json()
+            assert "resposta" in data4
+            assert len(data4["resposta"]) > 10
 
-        # Verificacions estructurals
-        for r in [res, res2, res3, res4]:
-            assert "error" not in r.json() or not r.json()["error"]
+            # Verificacions estructurals
+            for r in [res, res2, res3, res4]:
+                assert "error" not in r.json() or not r.json()["error"]
 
-        # Verificació de connectivitat amb el node d'IA local (/ia-status)
-        res_status = await ac.get("/api/v1/gestio/copilot/ia-status", headers=headers)
-        assert res_status.status_code == 200
-        data_status = res_status.json()
-        assert data_status["estat"] in ("ONLINE", "OFFLINE")
-        assert "url" in data_status
+            # Verificació de connectivitat amb el node d'IA local (/ia-status)
+            res_status = await ac.get("/api/v1/gestio/copilot/ia-status", headers=headers)
+            assert res_status.status_code == 200
+            data_status = res_status.json()
+            assert data_status["estat"] in ("ONLINE", "OFFLINE")
+            assert "url" in data_status
 
 
 @pytest.mark.asyncio

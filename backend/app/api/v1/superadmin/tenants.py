@@ -15,7 +15,6 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 import bcrypt
-import httpx
 import jwt
 from fastapi import APIRouter, Body, Depends, HTTPException, Request, status
 from fastapi.responses import FileResponse, StreamingResponse
@@ -26,10 +25,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.core.db import get_db_with_tenant_context
 from app.core.network_utils import (
-    build_node_ia_headers,
-    get_candidate_ia_tunnel_urls,
-    get_candidate_node_urls,
-    is_private_or_loopback_url,
+    build_wss_tunnel_uri,
+    extract_wss_tunnel_target,
+    get_public_tunnel_server_url,
+    is_wss_tunnel_uri,
 )
 from app.core.security import blind_email, blind_nif, blind_telefon, require_roles
 from app.models.models import (
@@ -48,6 +47,14 @@ from app.services.sovereign_storage import (
     SovereignStorageGateway,
     SuperadminStorageGateway,
     inicialitzar_arbre_carpetes_disc,
+)
+from app.services.vault_tunnel import (
+    VaultTunnelError,
+    VaultTunnelOfflineError,
+    VaultTunnelRemoteError,
+    VaultTunnelTimeoutError,
+    empresa_target_key,
+    vault_tunnel_broker,
 )
 
 logger = logging.getLogger("superadmin.tenants")
@@ -176,7 +183,7 @@ class OnboardingTenantRequest(BaseModel):
 
 
 class VerificarNodeIaRequest(BaseModel):
-    node_ia_url: str = Field(..., min_length=5, max_length=255)
+    node_ia_url: Optional[str] = Field(None, max_length=255)
     disc_dur_url: Optional[str] = Field(None, max_length=255)
     empresa_id: Optional[str] = None
     vault_token: Optional[str] = Field(None, min_length=1, max_length=255)
@@ -257,106 +264,48 @@ class InicialitzarDiscSuperadminRequest(BaseModel):
     ruta_personalitzada: Optional[str] = Field(None, max_length=500)
 
 
-async def _inicialitzar_carpetes_tunel_empresa(
-    tunel_url: str,
+def generar_comanda_install_wss(
+    empresa_id: str,
     vault_token: str,
-    *,
-    exigir_ia_proxy: bool = False,
-    node_ia_url_extra: Optional[str] = None,
-) -> Dict[str, Any]:
-    """Verifica el túnel HTTP/local d'empresa, valida /v1/models si cal Copilot i crea les 38 carpetes."""
-    clean_url = tunel_url.strip()
-    if not clean_url.startswith(("http://", "https://")):
-        creades = inicialitzar_arbre_carpetes_disc(clean_url)
-        return {
-            "ok": True,
-            "url_efectiva": clean_url,
-            "ia_proxy_ok": False,
-            "carpetes_creades": len(creades),
-        }
-
-    candidates = get_candidate_node_urls(clean_url) or [clean_url.rstrip("/")]
-    first_http_motiu: Optional[str] = None
-    first_http_msg: Optional[str] = None
-    last_motiu = "CONNEXIO_FALLIDA"
-    last_msg = "No s'ha pogut connectar amb el túnel del disc dur de l'empresa."
-
-    for base in candidates:
-        try:
-            check_res = await SovereignStorageGateway.verificar_roundtrip_http_vault(base, vault_token)
-            if not check_res.get("ok"):
-                motiu_cur = str(check_res.get("motiu") or "HTTP_ERROR")
-                msg_cur = str(check_res.get("missatge") or last_msg)
-                if not first_http_motiu:
-                    first_http_motiu = motiu_cur
-                    first_http_msg = msg_cur
-                last_motiu = motiu_cur
-                last_msg = msg_cur
-                if motiu_cur in ("TOKEN_INVALID", "ENDPOINT_NO_TROBAT"):
-                    break
-                continue
-
-            async with httpx.AsyncClient(timeout=8.0, follow_redirects=False) as client:
-                init_resp = await client.post(
-                    f"{base}/admin/inicialitzar-ruta",
-                    headers={"X-Vault-Token": vault_token},
-                )
-                if init_resp.status_code >= 400:
-                    raise HTTPException(
-                        status_code=status.HTTP_502_BAD_GATEWAY,
-                        detail=f"El túnel ha rebutjat la creació d'estructura de carpetes (HTTP {init_resp.status_code}).",
-                    )
-                init_json = init_resp.json() if init_resp.content else {}
-
-            ia_proxy_ok = bool(check_res.get("ia_proxy_ok", False))
-            if exigir_ia_proxy and not ia_proxy_ok and node_ia_url_extra:
-                ia_bases = get_candidate_node_urls(node_ia_url_extra) or [node_ia_url_extra.rstrip("/")]
-                probe_headers = build_node_ia_headers(vault_token=vault_token)
-                async with httpx.AsyncClient(timeout=4.0, follow_redirects=False) as client:
-                    for ia_base in ia_bases:
-                        test_urls = (
-                            [f"{ia_base}/models"]
-                            if ia_base.endswith("/v1")
-                            else [f"{ia_base}/v1/models", f"{ia_base}/models"]
-                        )
-                        for url_probe in test_urls:
-                            try:
-                                r_ia = await client.get(url_probe, headers=probe_headers)
-                                if r_ia.status_code == 200:
-                                    ia_proxy_ok = True
-                                    break
-                            except httpx.RequestError:
-                                continue
-                        if ia_proxy_ok:
-                            break
-
-            if exigir_ia_proxy and not ia_proxy_ok:
-                raise HTTPException(
-                    status_code=status.HTTP_502_BAD_GATEWAY,
-                    detail="El túnel del disc dur respon, però el proxy del Copilot IA local (/v1/models) no respon.",
-                )
-
-            return {
-                "ok": True,
-                "url_efectiva": base,
-                "ia_proxy_ok": ia_proxy_ok,
-                "carpetes_creades": int(
-                    init_json.get("carpetes_count") or init_json.get("total_carpetes") or 38
-                ),
-            }
-        except HTTPException:
-            raise
-        except httpx.RequestError as exc:
-            last_motiu = "CONNEXIO_REBUTJADA"
-            last_msg = f"Error de connexió amb el túnel {base}: {exc}"
-            continue
-
-    final_motiu = first_http_motiu or last_motiu
-    final_msg = first_http_msg or last_msg
-    raise HTTPException(
-        status_code=status.HTTP_502_BAD_GATEWAY,
-        detail=f"El túnel funcional de disc dur ha fallat ({final_motiu}): {final_msg}",
+    role: str = "EMPRESA",
+) -> str:
+    """Genera la comanda 1-clic oficial per instal·lar l'agent WSS sobirà al PC dedicat."""
+    server_url = get_public_tunnel_server_url()
+    role_norm = (role or "EMPRESA").strip().upper()
+    if role_norm == "SUPERADMIN":
+        return (
+            f"bash scripts/install_client_gateway.sh "
+            f'--server "{server_url}" '
+            f"--role SUPERADMIN "
+            f'--token "{vault_token}" '
+            f"--disk-a /ruta/disc_superadmin_principal "
+            f"--disk-b /ruta/disc_superadmin_mirall "
+            f"--llm-url http://127.0.0.1:1234"
+        )
+    return (
+        f"bash scripts/install_client_gateway.sh "
+        f'--server "{server_url}" '
+        f"--role EMPRESA "
+        f'--empresa-id "{empresa_id}" '
+        f'--token "{vault_token}" '
+        f"--disk-a /ruta/disc_empresa_principal "
+        f"--disk-b /ruta/disc_empresa_mirall "
+        f"--llm-url http://127.0.0.1:1234"
     )
+
+
+def _es_ruta_local_test_permesa(raw_url: Optional[str]) -> bool:
+    """Permet rutes locals explícites només sota TESTING=1 fora de Docker (mai en producció)."""
+    if os.getenv("TESTING") != "1" or os.path.exists("/.dockerenv"):
+        return False
+    val = (raw_url or "").strip()
+    return bool(val and val.startswith("/"))
+
+
+def _es_url_http_prohibida(raw_url: Optional[str]) -> bool:
+    """Detecta URLs HTTP/HTTPS entrants prohibides per ADR-001 (Zero Duality)."""
+    val = (raw_url or "").strip().lower()
+    return val.startswith(("http://", "https://"))
 
 
 async def _carregar_mapes_superadmin_tenants() -> tuple[Dict[str, Dict[str, Any]], Dict[str, Dict[str, Any]]]:
@@ -591,166 +540,143 @@ async def verificar_dns_domini(
     }
 
 
-async def _resolver_vault_secret_verificacio(
-    db: AsyncSession,
-    empresa_id: Optional[str],
-    explicit_token: Optional[str],
-) -> Optional[str]:
-    """Resol el vault_token per provar connexions contra la passarel·la del client."""
-    vault_secret = explicit_token.strip() if (explicit_token and explicit_token.strip()) else None
-    if not vault_secret and empresa_id:
-        emp = await _resolve_empresa(db, empresa_id)
-        if emp:
-            vault_secret = getattr(emp, "vault_token", None) or (
-                emp.telegram_webhook_secret
-                if getattr(emp, "telegram_webhook_secret", None)
-                and str(emp.telegram_webhook_secret).startswith("svlt_")
-                else None
-            )
-    if not vault_secret:
-        vault_secret = os.getenv("SEVALOR_VAULT_SECRET") or None
-    return vault_secret
-
-
 @router.post("/verificar-node-ia", response_model=Dict[str, Any])
 async def verificar_node_ia(
     payload: VerificarNodeIaRequest,
     db: AsyncSession = Depends(get_db_with_tenant_context),
     claims: Dict[str, Any] = Depends(require_roles(["SUPERADMIN"])),
 ) -> Dict[str, Any]:
-    """Verifica en viu la connectivitat amb el node dedicat d'IA (LM Studio / Ollama o proxy passarel·la)."""
-    raw_url = payload.node_ia_url.strip()
-    if not (raw_url.startswith("http://") or raw_url.startswith("https://")):
+    """Verifica en viu la connectivitat amb el node dedicat d'IA via Túnel Invers WSS (ADR-001)."""
+    raw_url = (payload.node_ia_url or payload.disc_dur_url or "").strip()
+    emp_ref = (payload.empresa_id or "").strip() or (
+        extract_wss_tunnel_target(raw_url) if raw_url else None
+    )
+
+    if not emp_ref and _es_url_http_prohibida(raw_url):
         return {
             "status": "ERROR",
-            "motiu": "URL_INVALIDA",
-            "missatge": "L'adreça URL ha de començar per http:// o https:// (ex: http://192.168.1.100:1234)",
+            "motiu": "TUNEL_HTTP_PROHIBIT",
+            "missatge": (
+                "El túnel HTTP/HTML entrant està prohibit per arquitectura (ADR-001). "
+                "L'ordinador dedicat de l'empresa es connecta per Túnel Invers WSS sortint; "
+                "proporciona empresa_id per verificar el node d'IA en viu."
+            ),
             "models": [],
             "latencia_ms": None,
+            "tunnel_online": False,
+            "llm_online": False,
         }
 
-    vault_secret = await _resolver_vault_secret_verificacio(
-        db=db,
-        empresa_id=payload.empresa_id,
-        explicit_token=payload.vault_token,
-    )
-    probe_headers = build_node_ia_headers(vault_token=vault_secret)
+    emp_target = await _resolve_empresa(db, emp_ref) if emp_ref else None
+    if not emp_target:
+        return {
+            "status": "ERROR",
+            "motiu": "EMPRESA_NO_TROBADA",
+            "missatge": "Cal indicar una empresa vàlida (empresa_id o wss-tunnel://<uuid>) per verificar el seu node d'IA.",
+            "models": [],
+            "latencia_ms": None,
+            "tunnel_online": False,
+            "llm_online": False,
+        }
 
-    raw_disc = payload.disc_dur_url.strip() if payload.disc_dur_url and payload.disc_dur_url.strip() else None
-    candidate_bases = get_candidate_ia_tunnel_urls(raw_url, raw_disc) or get_candidate_node_urls(raw_url)
-    if not candidate_bases:
-        candidate_bases = [raw_url.rstrip("/")]
+    target_key = empresa_target_key(emp_target.id)
+    tunnel_uri = build_wss_tunnel_uri(emp_target.id)
+    if not await vault_tunnel_broker.is_online(target_key):
+        return {
+            "status": "ERROR",
+            "motiu": "TUNEL_OFFLINE",
+            "missatge": (
+                "El Túnel Invers WSS de l'empresa no està connectat. "
+                "Comprova que el PC dedicat està encès i executant client_vault_agent.py."
+            ),
+            "models": [],
+            "latencia_ms": None,
+            "url_efectiva": tunnel_uri,
+            "tunnel_online": False,
+            "llm_online": False,
+        }
 
-    start = time.perf_counter()
-    last_error_motiu = "CONNEXIO_FALLIDA"
-    last_error_msg = "No s'ha pogut establir connexió amb el node d'IA."
+    t0 = time.perf_counter()
+    try:
+        res_models = await vault_tunnel_broker.call_llm_models(target_key, timeout=8.0)
+        latencia = int((time.perf_counter() - t0) * 1000)
+        models: List[str] = []
+        data_list = res_models.get("data")
+        if isinstance(data_list, list):
+            for item in data_list:
+                if isinstance(item, dict) and (item.get("id") or item.get("name")):
+                    models.append(str(item.get("id") or item.get("name")))
+                elif isinstance(item, str) and item:
+                    models.append(item)
+        models_raw = res_models.get("models")
+        if isinstance(models_raw, list):
+            for item in models_raw:
+                if isinstance(item, dict) and (item.get("name") or item.get("id")):
+                    val = str(item.get("name") or item.get("id"))
+                    if val not in models:
+                        models.append(val)
+                elif isinstance(item, str) and item and item not in models:
+                    models.append(item)
 
-    async with httpx.AsyncClient(timeout=4.0) as client:
-        for base in candidate_bases:
-            test_urls = (
-                [f"{base}/models"]
-                if base.endswith("/v1")
-                else [f"{base}/v1/models", f"{base}/api/tags", f"{base}/models"]
-            )
-            for url in test_urls:
-                try:
-                    t0 = time.perf_counter()
-                    resp = await client.get(url, headers=probe_headers)
-                    latencia = int((time.perf_counter() - t0) * 1000)
-                    if resp.status_code == 200:
-                        models: List[str] = []
-                        try:
-                            data = resp.json()
-                            if isinstance(data, dict):
-                                if "data" in data and isinstance(data["data"], list):
-                                    models = [
-                                        str(m.get("id") or m.get("name"))
-                                        for m in data["data"]
-                                        if isinstance(m, dict) and (m.get("id") or m.get("name"))
-                                    ]
-                                elif "models" in data and isinstance(data["models"], list):
-                                    models = [
-                                        str(m.get("name") or m.get("id"))
-                                        for m in data["models"]
-                                        if isinstance(m, dict) and (m.get("name") or m.get("id"))
-                                    ]
-                        except Exception:
-                            pass
-                        if payload.empresa_id:
-                            emp_target = await _resolve_empresa(db, payload.empresa_id)
-                            if emp_target:
-                                emp_target.node_ia_url = raw_url
-                                if raw_disc:
-                                    emp_target.disc_dur_url = raw_disc
-                                if payload.vault_token and payload.vault_token.strip():
-                                    emp_target.vault_token = payload.vault_token.strip()
-                                emp_target.node_ia_actiu = True
-                                emp_target.updated_at = datetime.now(timezone.utc)
-                                await db.commit()
-                                await SovereignStorageGateway.sincronitzar_vincle_client_vault_empresa(
-                                    db, emp_target
-                                )
-                        return {
-                            "status": "OK",
-                            "motiu": "CONNEXIO_ESTABLERTA",
-                            "missatge": f"Connexió establerta correctament amb el node d'IA dedicat ({latencia} ms).",
-                            "models": models,
-                            "latencia_ms": latencia,
-                            "url_efectiva": base,
-                            "node_ia_actiu": True,
-                        }
-                    elif resp.status_code in (401, 403):
-                        return {
-                            "status": "ERROR",
-                            "motiu": "TOKEN_INVALID",
-                            "missatge": (
-                                "La passarel·la ha rebutjat el Token Vault (HTTP 403). "
-                                "Verifica que SEVALOR_VAULT_SECRET al PC client coincideixi amb el vault_token de l'empresa."
-                            ),
-                            "models": [],
-                            "latencia_ms": latencia,
-                            "codi_http": resp.status_code,
-                        }
-                    else:
-                        last_error_motiu = "HTTP_ERROR"
-                        last_error_msg = (
-                            f"El servei ha respost amb codi d'error HTTP {resp.status_code}."
-                        )
-                except (httpx.ConnectTimeout, httpx.ReadTimeout):
-                    last_error_motiu = "TIMEOUT"
-                    last_error_msg = (
-                        "Temps d'espera esgotat (4s). Comprova que l'ordinador dedicat està encès "
-                        "i que el tallafocs permet el port d'entrada."
-                    )
-                    break
-                except httpx.ConnectError:
-                    last_error_motiu = "PORT_TANCAT"
-                    last_error_msg = (
-                        "Connexió rebutjada. El port està tancat o el servei d'IA (LM Studio / Ollama) "
-                        "no està en marxa a la IP/port indicats."
-                    )
-                    break
-                except Exception as e:
-                    last_error_motiu = "ERROR_XARXA"
-                    last_error_msg = f"Error de xarxa: {str(e)}"
+        if not _es_ruta_local_test_permesa(emp_target.disc_dur_url):
+            emp_target.disc_dur_url = tunnel_uri
+        emp_target.node_ia_url = tunnel_uri
+        if payload.vault_token and payload.vault_token.strip():
+            emp_target.vault_token = payload.vault_token.strip()
+        emp_target.node_ia_actiu = True
+        emp_target.updated_at = datetime.now(timezone.utc)
+        await db.commit()
+        await SovereignStorageGateway.sincronitzar_vincle_client_vault_empresa(db, emp_target)
 
-    total_latency = int((time.perf_counter() - start) * 1000)
-    totes_loopback = all(is_private_or_loopback_url(u) for u in candidate_bases)
-    if totes_loopback and last_error_motiu in ("PORT_TANCAT", "TIMEOUT", "CONNEXIO_FALLIDA"):
-        last_error_msg = (
-            f"El servidor de Sevalor no pot connectar amb l'adreça local ({', '.join(candidate_bases[:2])}). "
-            "Si Sevalor corre al núvol (Hetzner), cal configurar una URL pública HTTPS de túnel "
-            "(Cloudflare Tunnel cap al port 9001 de client_vault_agent.py o port 1234)."
-        )
-    return {
-        "status": "ERROR",
-        "motiu": last_error_motiu,
-        "missatge": last_error_msg,
-        "models": [],
-        "urls_provades": candidate_bases,
-        "totes_loopback": totes_loopback,
-        "latencia_ms": total_latency,
-    }
+        return {
+            "status": "OK",
+            "motiu": "CONNEXIO_ESTABLERTA",
+            "missatge": (
+                f"Connexió WSS establerta correctament amb el node d'IA dedicat "
+                f"({len(models)} models detectats, {latencia} ms)."
+            ),
+            "models": models,
+            "latencia_ms": latencia,
+            "url_efectiva": tunnel_uri,
+            "tunnel_online": True,
+            "llm_online": True,
+            "node_ia_actiu": True,
+        }
+    except VaultTunnelOfflineError as exc:
+        return {
+            "status": "ERROR",
+            "motiu": "TUNEL_OFFLINE",
+            "missatge": str(exc),
+            "models": [],
+            "latencia_ms": int((time.perf_counter() - t0) * 1000),
+            "url_efectiva": tunnel_uri,
+            "tunnel_online": False,
+            "llm_online": False,
+        }
+    except VaultTunnelTimeoutError:
+        return {
+            "status": "ERROR",
+            "motiu": "TIMEOUT",
+            "missatge": "Temps d'espera esgotat consultant LM Studio / Ollama a través del Túnel WSS.",
+            "models": [],
+            "latencia_ms": int((time.perf_counter() - t0) * 1000),
+            "url_efectiva": tunnel_uri,
+            "tunnel_online": True,
+            "llm_online": False,
+        }
+    except (VaultTunnelRemoteError, VaultTunnelError) as exc:
+        return {
+            "status": "ERROR",
+            "motiu": "LLM_OFFLINE" if exc.code in ("LLM_OFFLINE", "LLM_ERROR") else exc.code,
+            "missatge": (
+                f"El Túnel WSS està connectat, però LM Studio / Ollama no respon localment: {exc}"
+            ),
+            "models": [],
+            "latencia_ms": int((time.perf_counter() - t0) * 1000),
+            "url_efectiva": tunnel_uri,
+            "tunnel_online": True,
+            "llm_online": False,
+        }
 
 
 @router.post("/verificar-disc-dur", response_model=Dict[str, Any])
@@ -759,22 +685,17 @@ async def verificar_disc_dur(
     db: AsyncSession = Depends(get_db_with_tenant_context),
     claims: Dict[str, Any] = Depends(require_roles(["SUPERADMIN"])),
 ) -> Dict[str, Any]:
-    """Verifica en viu la connectivitat real (escriptura->lectura->esborrat) amb el disc dur dedicat."""
+    """Verifica en viu el roundtrip real (escriptura->lectura->esborrat) al disc dur via Túnel WSS."""
     raw_url = (payload.disc_dur_url or payload.node_ia_url or "").strip()
-    if not raw_url:
-        return {
-            "status": "ERROR",
-            "motiu": "URL_INVALIDA",
-            "missatge": "Cal indicar l'adreça o carpeta del disc dur dedicat.",
-            "latencia_ms": None,
-        }
 
-    # Suport per a ruta local física al disc dur (ex. /media/..., /mnt/..., /data/...)
-    if raw_url.startswith("/") or (len(raw_url) > 2 and raw_url[1] == ":"):
+    # Suport exclusiu per a tests unitaris locals (TESTING=1 fora de Docker)
+    if _es_ruta_local_test_permesa(raw_url):
         t0 = time.perf_counter()
         os.makedirs(raw_url, exist_ok=True)
         creades = inicialitzar_arbre_carpetes_disc(raw_url)
-        probe_path = os.path.join(raw_url, "11_configuracio_i_backups", "identitat_camaleo", "_healthcheck_probe.tmp")
+        probe_path = os.path.join(
+            raw_url, "11_configuracio_i_backups", "identitat_camaleo", "_healthcheck_probe.tmp"
+        )
         try:
             with open(probe_path, "w", encoding="utf-8") as f:
                 f.write("ok")
@@ -788,14 +709,6 @@ async def verificar_disc_dur(
                 "missatge": f"No s'ha pogut escriure al directori local '{raw_url}': {exc}",
                 "latencia_ms": int((time.perf_counter() - t0) * 1000),
             }
-
-        mount_root = os.getenv("CLIENT_DISKS_MOUNT_ROOT")
-        en_docker = os.path.exists("/.dockerenv")
-        ruta_efimera = bool(
-            en_docker
-            and not (mount_root and os.path.abspath(raw_url).startswith(os.path.abspath(mount_root)))
-            and not os.path.abspath(raw_url).startswith("/data/")
-        )
         lat = int((time.perf_counter() - t0) * 1000)
         if payload.empresa_id:
             emp_local = await _resolve_empresa(db, payload.empresa_id)
@@ -812,112 +725,92 @@ async def verificar_disc_dur(
         return {
             "status": "OK",
             "motiu": "DISC_OPERATIU",
-            "missatge": (
-                f"Directori operatiu ({len(creades)} carpetes, {lat} ms). ATENCIÓ: ruta local dins contenidor Docker sense Agent HTTP; en producció usa l'URL http(s) de client_vault_agent.py."
-                if ruta_efimera
-                else f"Disc dur del client operatiu amb estructura sobirana inicialitzada ({len(creades)} carpetes, {lat} ms)."
-            ),
+            "missatge": f"Disc dur de test local operatiu ({len(creades)} carpetes, {lat} ms).",
             "endpoint_resolt": raw_url,
-            "tipus_resposta": "Carpeta de Disc Dur Dedicat",
+            "tipus_resposta": "Carpeta Local de Test (TESTING=1)",
             "codi_http": 200,
             "latencia_ms": lat,
             "url_efectiva": raw_url,
             "carpetes_creades": len(creades),
-            "avis_docker_efimer": ruta_efimera,
+            "roundtrip_escriptura": True,
             "node_ia_actiu": True,
         }
 
-    if not (raw_url.startswith("http://") or raw_url.startswith("https://")):
+    emp_ref = (payload.empresa_id or "").strip() or (
+        extract_wss_tunnel_target(raw_url) if raw_url else None
+    )
+    if not emp_ref and _es_url_http_prohibida(raw_url):
         return {
             "status": "ERROR",
-            "motiu": "URL_INVALIDA",
-            "missatge": "L'adreça del disc dur ha de començar per http://, https:// o seleccionar una carpeta local muntada.",
+            "motiu": "TUNEL_HTTP_PROHIBIT",
+            "missatge": (
+                "El túnel HTTP/HTML entrant està prohibit per arquitectura (ADR-001). "
+                "L'agent del disc dur de l'empresa opera exclusivament pel Túnel Invers WSS; "
+                "proporciona empresa_id per executar el roundtrip de verificació."
+            ),
             "latencia_ms": None,
+            "tunnel_online": False,
         }
 
-    vault_secret = await _resolver_vault_secret_verificacio(
-        db=db,
-        empresa_id=payload.empresa_id,
-        explicit_token=payload.vault_token,
-    )
-    if not vault_secret:
-        vault_secret = "sevalor-vault-secret-token"
+    emp_target = await _resolve_empresa(db, emp_ref) if emp_ref else None
+    if not emp_target:
+        return {
+            "status": "ERROR",
+            "motiu": "EMPRESA_NO_TROBADA",
+            "missatge": "Cal indicar una empresa vàlida (empresa_id o wss-tunnel://<uuid>) per verificar el seu disc dur.",
+            "latencia_ms": None,
+            "tunnel_online": False,
+        }
 
-    candidate_bases = get_candidate_node_urls(raw_url)
-    if not candidate_bases:
-        candidate_bases = [raw_url.rstrip("/")]
+    tunnel_uri = build_wss_tunnel_uri(emp_target.id)
+    check_res = await SovereignStorageGateway.verificar_roundtrip_wss(emp_target.id)
+    if check_res.get("ok"):
+        if not _es_ruta_local_test_permesa(emp_target.disc_dur_url):
+            emp_target.disc_dur_url = tunnel_uri
+        if not emp_target.node_ia_url or is_wss_tunnel_uri(emp_target.node_ia_url):
+            emp_target.node_ia_url = tunnel_uri
+        if payload.vault_token and payload.vault_token.strip():
+            emp_target.vault_token = payload.vault_token.strip()
+        emp_target.node_ia_actiu = True
+        emp_target.updated_at = datetime.now(timezone.utc)
+        await db.commit()
+        await SovereignStorageGateway.sincronitzar_vincle_client_vault_empresa(db, emp_target)
 
-    start = time.perf_counter()
-    last_error_motiu = "CONNEXIO_FALLIDA"
-    last_error_msg = "No s'ha pogut establir connexió amb el disc dur dedicat de l'empresa."
-    last_codi_http: Optional[int] = None
+        return {
+            "status": "OK",
+            "motiu": "DISC_OPERATIU",
+            "missatge": (
+                f"Túnel Sobirà WSS operatiu i roundtrip real d'escriptura/lectura/esborrat verificat "
+                f"({check_res.get('latencia_ms', 0)} ms)."
+            ),
+            "endpoint_resolt": tunnel_uri,
+            "tipus_resposta": "Túnel Invers Sobirà WSS",
+            "codi_http": 200,
+            "latencia_ms": check_res.get("latencia_ms"),
+            "url_efectiva": tunnel_uri,
+            "tunnel_online": True,
+            "ia_proxy_ok": check_res.get("ia_proxy_ok", False),
+            "models": check_res.get("models", []),
+            "vault_root": check_res.get("vault_root"),
+            "disc_a_lliure_gb": check_res.get("disc_a_lliure_gb"),
+            "disc_b_lliure_gb": check_res.get("disc_b_lliure_gb"),
+            "carpetes_count": check_res.get("carpetes_count", 38),
+            "cua_transit_pendent": check_res.get("cua_transit_pendent", 0),
+            "roundtrip_escriptura": True,
+            "node_ia_actiu": True,
+        }
 
-    for base in candidate_bases:
-        try:
-            t0 = time.perf_counter()
-            check_res = await SovereignStorageGateway.verificar_roundtrip_http_vault(base, vault_secret)
-            latencia = int((time.perf_counter() - t0) * 1000)
-            if check_res.get("ok"):
-                if payload.empresa_id:
-                    emp_target = await _resolve_empresa(db, payload.empresa_id)
-                    if emp_target:
-                        emp_target.disc_dur_url = raw_url
-                        if payload.node_ia_url and payload.node_ia_url.strip():
-                            emp_target.node_ia_url = payload.node_ia_url.strip()
-                        if payload.vault_token and payload.vault_token.strip():
-                            emp_target.vault_token = payload.vault_token.strip()
-                        emp_target.node_ia_actiu = True
-                        emp_target.updated_at = datetime.now(timezone.utc)
-                        await db.commit()
-                        await SovereignStorageGateway.sincronitzar_vincle_client_vault_empresa(
-                            db, emp_target
-                        )
-                return {
-                    "status": "OK",
-                    "motiu": "DISC_OPERATIU",
-                    "missatge": (
-                        f"Connexió i prova real d'escriptura/lectura verificades al disc dur del client ({latencia} ms)."
-                    ),
-                    "endpoint_resolt": f"{base}/entitats",
-                    "tipus_resposta": "Agent HTTP Sobirà (Opció A+)",
-                    "codi_http": 200,
-                    "latencia_ms": latencia,
-                    "url_efectiva": base,
-                    "ia_proxy_ok": check_res.get("ia_proxy_ok", False),
-                    "vault_root": check_res.get("vault_root"),
-                    "disc_a_lliure_gb": check_res.get("disc_a_lliure_gb"),
-                    "roundtrip_escriptura": True,
-                    "node_ia_actiu": True,
-                }
-            last_error_motiu = str(check_res.get("motiu") or "HTTP_ERROR")
-            last_error_msg = str(check_res.get("missatge") or last_error_msg)
-            last_codi_http = check_res.get("codi_http")
-            if last_error_motiu in ("TOKEN_INVALID", "ENDPOINT_NO_TROBAT"):
-                break
-        except (httpx.ConnectTimeout, httpx.ReadTimeout):
-            last_error_motiu = "TIMEOUT"
-            last_error_msg = (
-                "Temps d'espera esgotat. Comprova que l'ordinador dedicat està encès "
-                "i que client_vault_agent.py o el túnel Cloudflare estan actius."
-            )
-            break
-        except httpx.ConnectError:
-            last_error_motiu = "PORT_TANCAT"
-            last_error_msg = (
-                "Connexió rebutjada. El port està tancat o client_vault_agent.py "
-                "no està en marxa a la URL indicada."
-            )
-        except Exception as e:
-            last_error_motiu = "ERROR_XARXA"
-            last_error_msg = f"Error de xarxa en accedir al disc dur: {str(e)}"
-
-    total_latency = int((time.perf_counter() - start) * 1000)
     return {
         "status": "ERROR",
-        "motiu": last_error_motiu,
-        "missatge": last_error_msg,
-        "codi_http": last_codi_http,
-        "latencia_ms": total_latency,
+        "motiu": str(check_res.get("motiu") or "TUNEL_OFFLINE"),
+        "missatge": str(
+            check_res.get("missatge")
+            or "El Túnel Invers WSS de l'empresa no està connectat."
+        ),
+        "url_efectiva": tunnel_uri,
+        "tunnel_online": False,
+        "cua_transit_pendent": check_res.get("cua_transit_pendent", 0),
+        "latencia_ms": check_res.get("latencia_ms"),
     }
 
 
@@ -1079,6 +972,12 @@ async def llistar_tenants(
                 "node_ia_actiu": bool(emp.node_ia_actiu or fitxa.get("node_ia_actiu", False)),
                 "node_ia_url": emp.node_ia_url or fitxa.get("node_ia_url"),
                 "disc_dur_url": getattr(emp, "disc_dur_url", None) or fitxa.get("disc_dur_url"),
+                "tunnel_online": await vault_tunnel_broker.is_online(empresa_target_key(emp.id)),
+                "tunnel_status": (
+                    "ONLINE"
+                    if await vault_tunnel_broker.is_online(empresa_target_key(emp.id))
+                    else "OFFLINE"
+                ),
                 "feature_copilot_ia": bool(emp.feature_copilot_ia),
                 "feature_flota": bool(emp.feature_flota),
                 "feature_planols": bool(emp.feature_planols),
@@ -1256,26 +1155,42 @@ async def crear_nou_tenant(
     copilot_actiu = (
         bool(payload.feature_flags.get("copilot_ia", False)) if payload.feature_flags else False
     )
-    node_ia_url_final = (
-        payload.node_ia_url.strip() if (payload.node_ia_url and copilot_actiu) else None
-    )
+    raw_node_ia = (payload.node_ia_url or "").strip() or None
+    raw_disc_dur = (payload.disc_dur_url or "").strip() or None
+
+    for candidate_raw in (raw_disc_dur, raw_node_ia):
+        if candidate_raw and candidate_raw.startswith("Carpeta Local:"):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    "El format 'Carpeta Local:' no és vàlid. "
+                    "L'empresa s'enllaça automàticament mitjançant el Túnel Invers WSS."
+                ),
+            )
+        if _es_url_http_prohibida(candidate_raw):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    "Les adreces HTTP/HTTPS entrants estan prohibides per arquitectura (ADR-001). "
+                    "Deixa disc_dur_url i node_ia_url buits per assignar automàticament el Túnel Invers WSS "
+                    "i obtenir la comanda d'instal·lació 1-clic per al PC dedicat del client."
+                ),
+            )
+
     agent_prompt_final = (
         payload.agent_prompt_system.strip()
         if (payload.agent_prompt_system and copilot_actiu)
         else None
     )
-    # Unificació d'URL del Node Local (Opció A+): si disc_dur_url no s'especifica però node_ia_url sí, s'unifiquen
-    disc_dur_url_final = (
-        payload.disc_dur_url.strip()
-        if payload.disc_dur_url and payload.disc_dur_url.strip()
-        else (node_ia_url_final if node_ia_url_final else None)
-    )
-    if disc_dur_url_final and disc_dur_url_final.startswith("Carpeta Local:"):
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="El format 'Carpeta Local:' no és vàlid. Indica la URL de l'Agent HTTP Local (ex: https://node-empresa.projectexinoxano.cat) o ruta física muntada.",
-        )
 
+    tunnel_uri_default = build_wss_tunnel_uri(nou_id)
+    if _es_ruta_local_test_permesa(raw_disc_dur):
+        disc_dur_url_final = raw_disc_dur
+        inicialitzar_arbre_carpetes_disc(disc_dur_url_final)  # type: ignore[arg-type]
+    else:
+        disc_dur_url_final = tunnel_uri_default
+
+    node_ia_url_final = tunnel_uri_default
     vault_token_unic = (
         payload.vault_token.strip()
         if payload.vault_token and payload.vault_token.strip()
@@ -1287,25 +1202,6 @@ async def crear_nou_tenant(
         if payload.boss_telefon and payload.boss_telefon.strip()
         else None
     )
-    tunel_url_final = (disc_dur_url_final or node_ia_url_final or "").strip()
-    estat_inicial_norm = (payload.estat_inicial or "ACTIU").strip().upper()
-    if estat_inicial_norm == "ACTIU" and not tunel_url_final:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=(
-                "Per donar d'alta una empresa ACTIU cal configurar i verificar un túnel "
-                "funcional cap al disc dur dedicat de l'empresa (disc_dur_url / node_ia_url)."
-            ),
-        )
-
-    tunel_verificat: Optional[Dict[str, Any]] = None
-    if tunel_url_final:
-        tunel_verificat = await _inicialitzar_carpetes_tunel_empresa(
-            tunel_url_final,
-            vault_token_unic,
-            exigir_ia_proxy=copilot_actiu,
-            node_ia_url_extra=node_ia_url_final if node_ia_url_final != tunel_url_final else None,
-        )
 
     boss_user_id = uuid.uuid4()
     rao_social_real = payload.rao_social.strip()
@@ -1313,7 +1209,7 @@ async def crear_nou_tenant(
     boss_nom_real = payload.boss_nom.strip()
     boss_cognoms_real = payload.boss_cognoms.strip()
 
-    node_ia_actiu_inicial = bool(node_ia_url_final or disc_dur_url_final)
+    node_ia_actiu_inicial = True
 
     # Persistència sobirana del perfil comercial i client_vault al Disc Dur del Superadmin (abans del commit SQL)
     fitxa_superadmin = {
@@ -1524,10 +1420,11 @@ async def crear_nou_tenant(
         vault_sync = {
             "status": "QUEUED" if tots_transit else "SYNCED",
             "files": rutes_init,
-            "carpetes_creades": tunel_verificat.get("carpetes_creades") if tunel_verificat else None,
-            "ia_proxy_ok": tunel_verificat.get("ia_proxy_ok") if tunel_verificat else None,
+            "carpetes_creades": 38 if not tots_transit else 0,
+            "ia_proxy_ok": None,
             "missatge": (
-                "Agent de disc offline durant l'alta; fitxers inicials encuats a cua de trànsit per sincronització automàtica."
+                "Fitxes inicials encuades xifrades (SVENC1). En l'instant que el PC dedicat executi la comanda 1-clic, "
+                "es crearan automàticament les 38 carpetes i es drenarà la cua al disc del client."
                 if tots_transit
                 else "Fitxa empresa, Boss i prompt desats al disc sobirà des del minut 1."
             ),
@@ -1546,17 +1443,11 @@ async def crear_nou_tenant(
         }
 
     emp_id_str = str(nou_id)
-
-    if not tunel_url_final:
-        try:
-            from app.workers.tasks import crear_directoris_sobirans_task  # type: ignore
-
-            crear_directoris_sobirans_task.delay(emp_id_str)
-            logger.info("Tasca Celery encuada per crear directoris sobirans de %s", emp_id_str)
-        except Exception as e:
-            logger.warning("No s'ha pogut encuar la tasca Celery: %s", e)
-
-    import jwt
+    tunnel_server_url = get_public_tunnel_server_url()
+    comanda_install_wss = generar_comanda_install_wss(
+        emp_id_str, vault_token_unic, role="EMPRESA"
+    )
+    tunnel_online_ara = await vault_tunnel_broker.is_online(empresa_target_key(nou_id))
 
     expire = datetime.now(timezone.utc) + timedelta(hours=24)
     payload_jwt = {
@@ -1589,8 +1480,15 @@ async def crear_nou_tenant(
             "disc_dur_url": getattr(nova_empresa, "disc_dur_url", None),
             "vault_token": vault_token_unic,
             "node_ia_actiu": nova_empresa.node_ia_actiu,
+            "tunnel_online": tunnel_online_ara,
+            "tunnel_status": "ONLINE" if tunnel_online_ara else "OFFLINE",
+            "tunnel_server_url": tunnel_server_url,
+            "comanda_install_wss": comanda_install_wss,
             "logotip_path": nova_empresa.logotip_path,
         },
+        "tunnel_server_url": tunnel_server_url,
+        "comanda_install_wss": comanda_install_wss,
+        "tunnel_online": tunnel_online_ara,
         "vault_sync": vault_sync,
         "easypanel": easypanel_res,
     }
@@ -1734,6 +1632,23 @@ async def obtenir_tenant(
     nif_real = str(fitxa.get("nif") or emp.nif)
     adreca_real = fitxa.get("adreca", emp.adreca)
 
+    vault_token_actual = getattr(emp, "vault_token", None) or (
+        emp.telegram_webhook_secret
+        if getattr(emp, "telegram_webhook_secret", None)
+        and str(emp.telegram_webhook_secret).startswith("svlt_")
+        else None
+    )
+    target_key = empresa_target_key(emp.id)
+    tunnel_info = await vault_tunnel_broker.get_status(target_key)
+    tunnel_online = bool(tunnel_info.get("online"))
+    cua_pendent = SovereignStorageGateway.comptar_cua_transit_empresa(emp.id)
+    tunnel_server_url = get_public_tunnel_server_url()
+    comanda_install = (
+        generar_comanda_install_wss(str(emp.id), vault_token_actual, role="EMPRESA")
+        if vault_token_actual
+        else None
+    )
+
     return {
         "id": str(emp.id),
         "nom": nom_real,
@@ -1773,14 +1688,15 @@ async def obtenir_tenant(
         "feature_telegram": bool(emp.feature_telegram),
         "node_ia_url": emp.node_ia_url,
         "disc_dur_url": getattr(emp, "disc_dur_url", None),
-        "vault_token": getattr(emp, "vault_token", None)
-        or (
-            emp.telegram_webhook_secret
-            if getattr(emp, "telegram_webhook_secret", None)
-            and str(emp.telegram_webhook_secret).startswith("svlt_")
-            else None
-        ),
+        "vault_token": vault_token_actual,
         "node_ia_actiu": bool(emp.node_ia_actiu),
+        "tunnel_online": tunnel_online,
+        "tunnel_status": "ONLINE" if tunnel_online else "OFFLINE",
+        "tunnel_uri": build_wss_tunnel_uri(emp.id),
+        "tunnel_server_url": tunnel_server_url,
+        "comanda_install_wss": comanda_install,
+        "cua_transit_pendent": cua_pendent,
+        "tunnel_meta": tunnel_info,
         "features": {
             "copilot_ia": bool(emp.feature_copilot_ia),
             "flota_avancada": bool(emp.feature_flota),
@@ -1794,6 +1710,46 @@ async def obtenir_tenant(
         "favicon_path": emp.favicon_path,
         "data_alta": emp.created_at.isoformat() if emp.created_at else None,
         "created_at": emp.created_at.isoformat() if emp.created_at else None,
+    }
+
+
+@router.get("/{empresa_id}/tunnel-status", response_model=Dict[str, Any])
+async def obtenir_tunnel_status_tenant(
+    empresa_id: str,
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+    claims: Dict[str, Any] = Depends(require_roles(["SUPERADMIN"])),
+) -> Dict[str, Any]:
+    """Retorna l'estat en temps real del Túnel Invers WSS de l'empresa, cua de trànsit i comanda 1-clic."""
+    emp = await _resolve_empresa(db, empresa_id)
+    if not emp:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant no trobat.")
+
+    if not getattr(emp, "vault_token", None):
+        emp.vault_token = f"svlt_{secrets.token_urlsafe(24)}"
+        await db.commit()
+
+    target_key = empresa_target_key(emp.id)
+    info = await vault_tunnel_broker.get_status(target_key)
+    online = bool(info.get("online"))
+    cua_pendent = SovereignStorageGateway.comptar_cua_transit_empresa(emp.id)
+    tunnel_server_url = get_public_tunnel_server_url()
+
+    return {
+        "empresa_id": str(emp.id),
+        "tunnel_online": online,
+        "tunnel_status": "ONLINE" if online else "OFFLINE",
+        "tunnel_uri": build_wss_tunnel_uri(emp.id),
+        "tunnel_server_url": tunnel_server_url,
+        "agent_version": info.get("agent_version") if online else None,
+        "connected_at": info.get("connected_at") if online else None,
+        "last_seen_at": info.get("last_seen_at") if online else None,
+        "health": info.get("health") if online else None,
+        "cua_transit_pendent": cua_pendent,
+        "feature_copilot_ia": bool(emp.feature_copilot_ia),
+        "node_ia_actiu": bool(emp.node_ia_actiu),
+        "comanda_install_wss": generar_comanda_install_wss(
+            str(emp.id), emp.vault_token or "", role="EMPRESA"
+        ),
     }
 
 
@@ -1838,6 +1794,11 @@ async def canviar_estat_tenant(
 
         if nou_estat in ("SUSPES_PAGAMENT", "HIBERNANT", "BAIXA_OFFBOARDING", "ELIMINAT"):
             await blacklist_tenant(empresa_id, nou_estat)
+            await vault_tunnel_broker.disconnect(
+                empresa_target_key(emp_uuid),
+                code=4403,
+                reason=f"Tenant {nou_estat}",
+            )
         elif nou_estat in ("ACTIU", "TRIAL"):
             await unblacklist_tenant(empresa_id)
     except Exception as exc:
@@ -2261,17 +2222,34 @@ async def update_feature_flags(
     if not empresa:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Empresa no trobada.")
 
+    for candidate_raw in (payload.node_ia_url, payload.disc_dur_url):
+        if _es_url_http_prohibida(candidate_raw):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    "Les adreces HTTP/HTTPS entrants estan prohibides per arquitectura (ADR-001). "
+                    "L'empresa utilitza el Túnel Invers WSS (wss-tunnel://<uuid>)."
+                ),
+            )
+
+    tunnel_uri_default = build_wss_tunnel_uri(empresa.id)
     empresa.feature_copilot_ia = payload.feature_copilot_ia
     empresa.feature_flota = payload.feature_flota
     empresa.feature_planols = payload.feature_planols
     empresa.feature_telegram = payload.feature_telegram
     if payload.node_ia_url is not None:
-        empresa.node_ia_url = payload.node_ia_url.strip() if payload.node_ia_url else None
+        clean_node = payload.node_ia_url.strip()
+        empresa.node_ia_url = clean_node if clean_node else tunnel_uri_default
+    elif not empresa.node_ia_url:
+        empresa.node_ia_url = tunnel_uri_default
     if payload.disc_dur_url is not None:
-        empresa.disc_dur_url = payload.disc_dur_url.strip() if payload.disc_dur_url else None
+        clean_disc = payload.disc_dur_url.strip()
+        empresa.disc_dur_url = clean_disc if clean_disc else tunnel_uri_default
+    elif not getattr(empresa, "disc_dur_url", None):
+        empresa.disc_dur_url = tunnel_uri_default
     if payload.node_ia_actiu is not None:
         empresa.node_ia_actiu = payload.node_ia_actiu
-    elif empresa.feature_copilot_ia and (empresa.node_ia_url or getattr(empresa, "disc_dur_url", None)):
+    elif empresa.feature_copilot_ia:
         empresa.node_ia_actiu = True
     if payload.vault_token is not None:
         empresa.vault_token = payload.vault_token.strip() if payload.vault_token else None
@@ -2297,13 +2275,14 @@ async def update_feature_flags(
 
 
 @router.post("/{empresa_id}/vault-token/rotate", response_model=Dict[str, Any])
+@router.post("/{empresa_id}/rotar-vault-token", response_model=Dict[str, Any])
 async def rotar_vault_token(
     empresa_id: str,
     payload: Optional[RotateVaultTokenRequest] = None,
     db: AsyncSession = Depends(get_db_with_tenant_context),
     claims: Dict[str, Any] = Depends(require_roles(["SUPERADMIN"])),
 ) -> Dict[str, Any]:
-    """Genera o actualitza el token dedicat del Disc Dur Sobirà (independent de Telegram)."""
+    """Rota el token dedicat del Túnel WSS Sobirà, revoca qualsevol sessió activa i retorna la comanda 1-clic."""
     empresa = await _resolve_empresa(db, empresa_id)
     if not empresa:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Empresa no trobada.")
@@ -2318,10 +2297,22 @@ async def rotar_vault_token(
     await db.commit()
     await SovereignStorageGateway.sincronitzar_vincle_client_vault_empresa(db, empresa)
 
+    sessio_tancada = await vault_tunnel_broker.disconnect(
+        empresa_target_key(empresa.id),
+        code=4401,
+        reason="Token rotated",
+    )
+    tunnel_server_url = get_public_tunnel_server_url()
+
     return {
         "status": "OK",
         "empresa_id": str(empresa.id),
         "vault_token": nou_token,
+        "sessio_anterior_tancada": sessio_tancada,
+        "tunnel_server_url": tunnel_server_url,
+        "comanda_install_wss": generar_comanda_install_wss(
+            str(empresa.id), nou_token, role="EMPRESA"
+        ),
     }
 
 
@@ -2331,7 +2322,7 @@ async def inicialitzar_disc_empresa(
     db: AsyncSession = Depends(get_db_with_tenant_context),
     claims: Dict[str, Any] = Depends(require_roles(["SUPERADMIN"])),
 ) -> Dict[str, Any]:
-    """Crea l'estructura de carpetes al túnel/disc del client, bolca fitxes reals i drena cua de trànsit."""
+    """Crea l'estructura de 38 carpetes via Túnel WSS, bolca fitxes reals i drena cua de trànsit SVENC1."""
     empresa = await _resolve_empresa(db, empresa_id)
     if not empresa:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Empresa no trobada.")
@@ -2373,28 +2364,23 @@ async def inicialitzar_disc_empresa(
     )
 
     carpetes_inicialitzades: Optional[int] = None
-    tunel_url = (getattr(empresa, "disc_dur_url", None) or empresa.node_ia_url or "").strip()
-    if tunel_url.startswith(("http://", "https://")):
-        for base in get_candidate_node_urls(tunel_url) or [tunel_url.rstrip("/")]:
-            try:
-                async with httpx.AsyncClient(timeout=8.0, follow_redirects=False) as client:
-                    init_resp = await client.post(
-                        f"{base}/admin/inicialitzar-ruta",
-                        headers={"X-Vault-Token": empresa.vault_token or ""},
-                    )
-                if init_resp.status_code in (401, 403):
-                    raise HTTPException(
-                        status_code=init_resp.status_code,
-                        detail="Token Vault rebutjat pel túnel d'empresa.",
-                    )
-                if init_resp.status_code == 200:
-                    data_init = init_resp.json() if init_resp.content else {}
-                    carpetes_inicialitzades = int(data_init.get("total_carpetes", 38))
-                    break
-            except httpx.RequestError:
-                continue
-    elif tunel_url:
-        carpetes_inicialitzades = len(inicialitzar_arbre_carpetes_disc(tunel_url))
+    target_key = empresa_target_key(empresa.id)
+    tunnel_online = await vault_tunnel_broker.is_online(target_key)
+    if tunnel_online:
+        try:
+            init_res = await vault_tunnel_broker.init_folders(target_key)
+            carpetes_inicialitzades = int(
+                init_res.get("total_carpetes") or init_res.get("carpetes_count") or 38
+            )
+        except VaultTunnelError as exc:
+            logger.warning(
+                "Error inicialitzant carpetes WSS per empresa %s: %s", empresa.id, exc
+            )
+            tunnel_online = False
+    elif _es_ruta_local_test_permesa(getattr(empresa, "disc_dur_url", None)):
+        carpetes_inicialitzades = len(
+            inicialitzar_arbre_carpetes_disc(str(empresa.disc_dur_url))
+        )
 
     rutes = await SovereignStorageGateway.inicialitzar_dades_onboarding_empresa(
         db=db,
@@ -2405,19 +2391,27 @@ async def inicialitzar_disc_empresa(
     )
     drain_stats = await SovereignStorageGateway.drenar_cua_transit_empresa(db, empresa.id)
     tots_transit = any(str(v).startswith("transit://") for v in rutes.values())
+    cua_pendent = SovereignStorageGateway.comptar_cua_transit_empresa(empresa.id)
+    comanda_install = generar_comanda_install_wss(
+        str(empresa.id), empresa.vault_token or "", role="EMPRESA"
+    )
 
     return {
         "status": "QUEUED" if tots_transit else "SYNCED",
         "empresa_id": str(empresa.id),
         "vault_token": empresa.vault_token,
+        "tunnel_online": tunnel_online,
+        "tunnel_status": "ONLINE" if tunnel_online else "OFFLINE",
         "carpetes_inicialitzades": carpetes_inicialitzades,
+        "cua_transit_pendent": cua_pendent,
+        "comanda_install_wss": comanda_install,
         "files": rutes,
         "transit_drain": drain_stats,
         "drenatge": drain_stats,
         "missatge": (
-            "Disc offline temporalment: fitxers encuats xifrats (SVENC1) per a drenatge automàtic."
+            "Túnel WSS offline temporalment: fitxers encuats xifrats (SVENC1) per a drenatge automàtic en connectar l'agent."
             if tots_transit
-            else f"Estructura ({carpetes_inicialitzades or 38} carpetes) i fitxes base sincronitzades al disc de l'empresa."
+            else f"Estructura ({carpetes_inicialitzades or 38} carpetes) i fitxes base sincronitzades al disc de l'empresa via WSS."
         ),
     }
 

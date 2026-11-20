@@ -4,7 +4,6 @@ import React, { useState, useEffect } from "react";
 import { useGestio } from "@/lib/gestio-context";
 import { apiFetch } from "@/lib/api";
 import {
-  Palette,
   Users,
   Clock,
   Send,
@@ -13,31 +12,24 @@ import {
   ShieldCheck,
   CheckCircle2,
   AlertTriangle,
-  Upload,
   RefreshCw,
   QrCode,
   Lock,
   Plus,
   Trash2,
-  Eye,
-  Sliders,
-  Sparkles,
-  Building,
   Info,
   Check,
   X,
   Radio,
   ExternalLink,
-  Cpu,
-  Server,
   KeyRound,
   Copy,
   Mail,
   DollarSign,
 } from "lucide-react";
 
-// Tipus de pestanyes
-type PestanyaConfig = "marca" | "personal" | "jornada" | "telegram" | "node_ia" | "barema";
+// Tipus de pestanyes (Paleta Camaleònica i Node Sobirà són exclusius de Superadmin)
+type PestanyaConfig = "personal" | "jornada" | "telegram" | "barema";
 
 interface UsuariAdmin {
   id: string;
@@ -104,7 +96,7 @@ export default function ConfiguracioPage() {
         const savedTab = sessionStorage.getItem("sevalor_config_tab") as PestanyaConfig | null;
         if (
           savedTab &&
-          ["marca", "personal", "jornada", "telegram", "node_ia", "barema"].includes(savedTab)
+          ["personal", "jornada", "telegram", "barema"].includes(savedTab)
         ) {
           setPestanyaActivaState(savedTab);
         }
@@ -114,33 +106,24 @@ export default function ConfiguracioPage() {
     }
   }, []);
 
-  // Estat d'Empresa & Marca Camaleònica (carregat del backend - Zero Mock)
-  const [empresaId, setEmpresaId] = useState<string | null>(null);
+  // Dades informatives d'empresa per a la capçalera (lectura des del backend - Zero Mock)
   const [nomEmpresa, setNomEmpresa] = useState("");
   const [nifEmpresa, setNifEmpresa] = useState("");
   const [adrecaEmpresa, setAdrecaEmpresa] = useState("");
   const [subdominiEmpresa, setSubdominiEmpresa] = useState("");
   const [dominiCustomEmpresa, setDominiCustomEmpresa] = useState<string | null>(null);
   const [monograma, setMonograma] = useState("--");
-  const [primariHsl, setPrimariHsl] = useState("210 100% 15%");
-  const [secundariHsl, setSecundariHsl] = useState("38 92% 50%");
-  const [accentHsl, setAccentHsl] = useState("190 90% 50%");
-  const [contrastRatio, setContrastRatio] = useState(14.8);
   const [logotipCarregat, setLogotipCarregat] = useState<string | null>(null);
 
   useEffect(() => {
     apiFetch("/gestio/configuracio/empresa")
       .then((data: any) => {
-        if (data.id) setEmpresaId(data.id);
         if (data.nom) setNomEmpresa(data.nom);
         if (data.nif) setNifEmpresa(data.nif);
         if (data.adreca) setAdrecaEmpresa(data.adreca);
         if (data.subdomini) setSubdominiEmpresa(data.subdomini);
         if (data.domini_custom) setDominiCustomEmpresa(data.domini_custom);
         if (data.monograma) setMonograma(data.monograma);
-        if (data.primari_hsl) setPrimariHsl(data.primari_hsl);
-        if (data.secundari_hsl) setSecundariHsl(data.secundari_hsl);
-        if (data.accent_hsl) setAccentHsl(data.accent_hsl);
         if (data.id && data.logotip_path) {
           setLogotipCarregat(`/api/v1/public/tenant/${data.id}/logo`);
         }
@@ -153,16 +136,6 @@ export default function ConfiguracioPage() {
   const fqdnEmpresa =
     dominiCustomEmpresa ||
     (subdominiEmpresa ? `${subdominiEmpresa}.projectexinoxano.cat` : "Sense subdomini assignat");
-
-  // IA ADN de Marca
-  const [adnPrompt, setAdnPrompt] = useState("");
-  const [iaAnalitzant, setIaAnalitzant] = useState(false);
-  const [paletaPropostaIa, setPaletaPropostaIa] = useState<{
-    primari_hsl: string;
-    secundari_hsl: string;
-    accent_hsl: string;
-    descripcio: string;
-  } | null>(null);
 
   // Estat d'Usuaris Administratius (carregat del backend)
   const [usuaris, setUsuaris] = useState<UsuariAdmin[]>([]);
@@ -257,172 +230,12 @@ export default function ConfiguracioPage() {
       .catch(() => setTelegramEstat("NO_CONFIGURAT"));
   }, []);
 
-  // Node d'IA Sobirà / Ordinador Dedicat (Constitució §2.V)
-  const [nodeIaUrl, setNodeIaUrl] = useState("");
-  const [discDurUrl, setDiscDurUrl] = useState("");
-  const [nodeIaActiu, setNodeIaActiu] = useState(false);
-  const [nodeIaExplicitlyDisabled, setNodeIaExplicitlyDisabled] = useState(false);
-  const [featureCopilotIa, setFeatureCopilotIa] = useState<boolean | null>(null);
-  const [agentPromptSystem, setAgentPromptSystem] = useState("");
-  const [nodeIaEstat, setNodeIaEstat] = useState<"OPERATIU" | "ERROR_CONNEXIO" | "NO_CONFIGURAT">("NO_CONFIGURAT");
-  const [nodeIaLatencia, setNodeIaLatencia] = useState<number | null>(null);
-  const [nodeIaModelInfo, setNodeIaModelInfo] = useState<string | null>(null);
-  const [nodeIaTestant, setNodeIaTestant] = useState(false);
-  const [nodeIaDesant, setNodeIaDesant] = useState(false);
-
-  useEffect(() => {
-    apiFetch("/gestio/configuracio/node-ia")
-      .then(async (data: any) => {
-        if (data.node_ia_url) setNodeIaUrl(data.node_ia_url);
-        if (data.disc_dur_url) setDiscDurUrl(data.disc_dur_url);
-        if (data.node_ia_actiu !== undefined) setNodeIaActiu(Boolean(data.node_ia_actiu));
-        if (data.feature_copilot_ia !== undefined) {
-          setFeatureCopilotIa(Boolean(data.feature_copilot_ia));
-        }
-        if (data.agent_prompt_system) setAgentPromptSystem(data.agent_prompt_system);
-        if (data.te_ordinador_dedicat) {
-          setNodeIaEstat("OPERATIU");
-        } else {
-          setNodeIaEstat("NO_CONFIGURAT");
-        }
-        if (data.node_ia_url || data.disc_dur_url) {
-          try {
-            const probe: any = await apiFetch("/gestio/configuracio/node-ia/provar", {
-              method: "POST",
-              body: JSON.stringify({
-                node_ia_url: data.node_ia_url || null,
-                disc_dur_url: data.disc_dur_url || null,
-                activar_si_operatiu: false,
-              }),
-            });
-            if (probe?.estat === "OPERATIU") {
-              setNodeIaEstat(probe.node_ia_actiu ? "OPERATIU" : "NO_CONFIGURAT");
-              setNodeIaLatencia(probe.latencia_ms ?? null);
-              if (Array.isArray(probe.models_disponibles) && probe.models_disponibles.length > 0) {
-                setNodeIaModelInfo(probe.models_disponibles.join(", "));
-              } else if (probe.detall) {
-                setNodeIaModelInfo(probe.detall);
-              }
-            }
-          } catch {
-            // Conservem l'estat base carregat de la fitxa si la sonda ràpida falla
-          }
-        }
-      })
-      .catch(() => setNodeIaEstat("NO_CONFIGURAT"));
-  }, []);
-
   // Missatge flash de feedback
   const [missatgeFlash, setMissatgeFlash] = useState<{ tipus: "EXIT" | "ERROR"; text: string } | null>(null);
 
   const mostrarFeedback = (tipus: "EXIT" | "ERROR", text: string) => {
     setMissatgeFlash({ tipus, text });
     setTimeout(() => setMissatgeFlash(null), 4000);
-  };
-
-  // Càlcul ràpid de contrast en viu
-  const calcularContrastEnViu = (hslStr: string) => {
-    // Estimació heurística de contrast contra blanc segons luminància HSL
-    const parts = hslStr.replace(/%/g, "").split(" ");
-    if (parts.length >= 3) {
-      const l = parseFloat(parts[2]) / 100;
-      // Aproximació: (1.05) / (l^2.2 + 0.05)
-      const ratio = 1.05 / (Math.pow(l, 2.2) + 0.05);
-      setContrastRatio(Math.round(ratio * 10) / 10);
-    }
-  };
-
-  const handleCanviPrimari = (nouHsl: string) => {
-    setPrimariHsl(nouHsl);
-    calcularContrastEnViu(nouHsl);
-  };
-
-  // IA ADN de marca (Backend real POST /gestio/configuracio/marca/adn)
-  const handleAnalitzarAdn = async () => {
-    if (!adnPrompt.trim()) return;
-    if (adnPrompt.trim().length < 10) {
-      mostrarFeedback("ERROR", "Cal descriure l'ADN de marca amb almenys 10 caràcters.");
-      return;
-    }
-    setIaAnalitzant(true);
-    try {
-      const res = await apiFetch<{ paleta_proposta?: any }>("/gestio/configuracio/marca/adn", {
-        method: "POST",
-        body: JSON.stringify({ adn_text: adnPrompt.trim() }),
-      });
-      if (res?.paleta_proposta) {
-        setPaletaPropostaIa(res.paleta_proposta);
-      }
-      mostrarFeedback("EXIT", "Proposta de paleta generada pel Copilot IA. Requereix aprovació del Boss (HITL).");
-    } catch (err: any) {
-      mostrarFeedback("ERROR", err?.message || "No s'ha pogut analitzar l'ADN de marca al backend.");
-    } finally {
-      setIaAnalitzant(false);
-    }
-  };
-
-  const handleAprovarPaletaIa = async () => {
-    if (!paletaPropostaIa) return;
-    if (!esBoss) {
-      mostrarFeedback("ERROR", "VETO: Només el Boss pot aprovar la paleta de marca corporativa (HITL).");
-      return;
-    }
-    try {
-      await apiFetch("/gestio/configuracio/marca/adn/aprovar", {
-        method: "POST",
-        body: JSON.stringify({
-          aprovat_per_boss: true,
-          primari_hsl: paletaPropostaIa.primari_hsl,
-          secundari_hsl: paletaPropostaIa.secundari_hsl,
-          accent_hsl: paletaPropostaIa.accent_hsl,
-        }),
-      });
-      setPrimariHsl(paletaPropostaIa.primari_hsl);
-      setSecundariHsl(paletaPropostaIa.secundari_hsl);
-      setAccentHsl(paletaPropostaIa.accent_hsl);
-      setPaletaPropostaIa(null);
-      calcularContrastEnViu(paletaPropostaIa.primari_hsl);
-      mostrarFeedback("EXIT", "Paleta d'ADN aprovada i persistida a les variables de la suite.");
-    } catch (err: any) {
-      mostrarFeedback("ERROR", err?.message || "No s'ha pogut aprovar la paleta d'ADN.");
-    }
-  };
-
-  // Gestió de Logotip & Magic Bytes (Backend real POST /gestio/configuracio/logotip)
-  const handlePujarLogo = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (esEnginyer) {
-      mostrarFeedback("ERROR", "Veto d'Enginyer (HTTP 403): Modificació de logotip no autoritzada.");
-      return;
-    }
-    const fitxer = e.target.files?.[0];
-    if (!fitxer) return;
-
-    if (fitxer.size > 10 * 1024 * 1024) {
-      mostrarFeedback("ERROR", "HTTP 413: El fitxer supera el límit màxim permès de 10 MB.");
-      return;
-    }
-
-    if (!["image/png", "image/jpeg", "image/webp"].includes(fitxer.type)) {
-      mostrarFeedback("ERROR", "HTTP 415: Només s'admeten imatges PNG, JPG o WEBP autèntiques (Magic Bytes).");
-      return;
-    }
-
-    try {
-      const formData = new FormData();
-      formData.append("fitxer", fitxer);
-      await apiFetch("/gestio/configuracio/logotip", {
-        method: "POST",
-        body: formData,
-      });
-      if (empresaId) {
-        setLogotipCarregat(`/api/v1/public/tenant/${empresaId}/logo?t=${Date.now()}`);
-      } else {
-        setLogotipCarregat(URL.createObjectURL(fitxer));
-      }
-      mostrarFeedback("EXIT", "Logotip pujat i validat al disc sobirà (Magic Bytes verificats).");
-    } catch (err: any) {
-      mostrarFeedback("ERROR", err?.message || "Error al pujar el logotip corporatiu.");
-    }
   };
 
   // Funció per copiar al portapapers amb fallback segur
@@ -673,186 +486,6 @@ export default function ConfiguracioPage() {
     }
   };
 
-  // Node d'IA Sobirà / Ordinador Dedicat (Constitució §2.V)
-  const persistirNodeIaAlBackend = async (actiuFinal: boolean) => {
-    const res: any = await apiFetch("/gestio/configuracio/node-ia", {
-      method: "PUT",
-      body: JSON.stringify({
-        node_ia_url: nodeIaUrl.trim() || null,
-        disc_dur_url: discDurUrl.trim() || null,
-        node_ia_actiu: actiuFinal,
-        agent_prompt_system: agentPromptSystem.trim() || null,
-      }),
-    });
-    if (res) {
-      if (res.node_ia_actiu !== undefined) setNodeIaActiu(Boolean(res.node_ia_actiu));
-      if (res.feature_copilot_ia !== undefined) {
-        setFeatureCopilotIa(Boolean(res.feature_copilot_ia));
-      }
-      if (!res.node_ia_actiu) {
-        setNodeIaEstat("NO_CONFIGURAT");
-      }
-    }
-    if (typeof window !== "undefined") {
-      window.dispatchEvent(new CustomEvent("sevalor:node-ia-updated"));
-    }
-    return res;
-  };
-
-  const handleToggleNodeIaActiu = async (checked: boolean) => {
-    if (esEnginyer) {
-      mostrarFeedback("ERROR", "Veto d'Enginyer (HTTP 403): La configuració del node d'IA està reservada al Boss.");
-      return;
-    }
-    const previ = nodeIaActiu;
-    setNodeIaExplicitlyDisabled(!checked);
-    setNodeIaActiu(checked);
-    setNodeIaDesant(true);
-    try {
-      const res: any = await persistirNodeIaAlBackend(checked);
-      if (res?.avis) {
-        mostrarFeedback("ERROR", res.avis);
-      } else {
-        mostrarFeedback(
-          "EXIT",
-          checked
-            ? "Ordinador dedicat d'IA local activat i desat a PostgreSQL."
-            : "Ordinador dedicat d'IA local desactivat i desat."
-        );
-      }
-    } catch (err: any) {
-      setNodeIaActiu(previ);
-      mostrarFeedback("ERROR", err?.message || "No s'ha pogut desar l'estat de l'ordinador dedicat.");
-    } finally {
-      setNodeIaDesant(false);
-    }
-  };
-
-  const handleDesarNodeIa = async () => {
-    if (esEnginyer) {
-      mostrarFeedback("ERROR", "Veto d'Enginyer (HTTP 403): La configuració del node d'IA està reservada al Boss.");
-      return;
-    }
-    setNodeIaDesant(true);
-    try {
-      const teAlgunaUrl = Boolean(nodeIaUrl.trim() || discDurUrl.trim());
-      const actiuFinal = teAlgunaUrl && !nodeIaExplicitlyDisabled ? true : nodeIaActiu;
-      const res: any = await persistirNodeIaAlBackend(actiuFinal);
-      if (res?.avis) {
-        mostrarFeedback("ERROR", res.avis);
-      } else {
-        mostrarFeedback("EXIT", "Paràmetres de l'ordinador dedicat d'IA i disc dur desats correctament.");
-      }
-    } catch (err: any) {
-      mostrarFeedback("ERROR", err.message || "Error en desar el node d'IA dedicat.");
-    } finally {
-      setNodeIaDesant(false);
-    }
-  };
-
-  const detectarLmStudioLocalNavegador = async (baseUrl: string): Promise<string[] | null> => {
-    const clean = baseUrl.replace(/\/+$/, "");
-    if (!clean) return null;
-    const candidateEndpoints = clean.endsWith("/v1")
-      ? [`${clean}/models`]
-      : [`${clean}/v1/models`, `${clean}/api/tags`];
-    for (const url of candidateEndpoints) {
-      try {
-        const ctrl = new AbortController();
-        const timer = setTimeout(() => ctrl.abort(), 2500);
-        const resp = await fetch(url, { method: "GET", mode: "cors", signal: ctrl.signal });
-        clearTimeout(timer);
-        if (resp.ok) {
-          const data = await resp.json().catch(() => null);
-          if (data && Array.isArray(data.data)) {
-            return data.data.map((m: any) => String(m.id || m.name)).filter(Boolean);
-          }
-          if (data && Array.isArray(data.models)) {
-            return data.models.map((m: any) => String(m.name || m.id)).filter(Boolean);
-          }
-          return [];
-        }
-      } catch {
-        // Ignorar errors de sonda secundària
-      }
-    }
-    return null;
-  };
-
-  const handleProvarNodeIa = async () => {
-    const rawUrl = nodeIaUrl.trim();
-    const rawDiscUrl = discDurUrl.trim();
-    if (!rawUrl && !rawDiscUrl) {
-      mostrarFeedback("ERROR", "Cal introduir la URL de l'ordinador dedicat o del túnel abans de provar la connexió.");
-      return;
-    }
-    setNodeIaTestant(true);
-
-    try {
-      // Sonda REAL des del servidor backend de Sevalor (és el servidor qui executa el Copilot via túnel)
-      const res: any = await apiFetch("/gestio/configuracio/node-ia/provar", {
-        method: "POST",
-        body: JSON.stringify({
-          node_ia_url: rawUrl || null,
-          disc_dur_url: rawDiscUrl || null,
-          activar_si_operatiu: !esEnginyer,
-        }),
-      });
-      if (res && res.feature_copilot_ia !== undefined) {
-        setFeatureCopilotIa(Boolean(res.feature_copilot_ia));
-      }
-      if (res && res.node_ia_actiu !== undefined) {
-        setNodeIaActiu(Boolean(res.node_ia_actiu));
-      }
-      if (res?.estat === "OPERATIU") {
-        setNodeIaEstat("OPERATIU");
-        setNodeIaLatencia(res.latencia_ms ?? null);
-        const models = Array.isArray(res.models_disponibles) ? res.models_disponibles : [];
-        setNodeIaModelInfo(models.length > 0 ? models.join(", ") : "Model OpenAI compatible actiu");
-        if (typeof window !== "undefined") {
-          window.dispatchEvent(new CustomEvent("sevalor:node-ia-updated"));
-        }
-        if (res.avis) {
-          mostrarFeedback("ERROR", res.avis);
-        } else {
-          mostrarFeedback(
-            "EXIT",
-            res.missatge || `Túnel operatiu (${res.latencia_ms}ms) i activació desada.`
-          );
-        }
-      } else {
-        setNodeIaEstat("ERROR_CONNEXIO");
-        setNodeIaLatencia(null);
-        setNodeIaModelInfo(null);
-
-        // Diagnòstic secundari: detectar si LM Studio respon només al navegador local però NO pel túnel del servidor
-        const base = rawUrl.replace(/\/+$/, "");
-        const isLocalClientUrl =
-          Boolean(base) &&
-          /^https?:\/\/(127\.0\.0\.1|localhost|192\.168\.|10\.|172\.(1[6-9]|2\d|3[0-1])\.)/i.test(base);
-        if (res?.estat === "ERROR_CONNEXIO" && isLocalClientUrl) {
-          const localModels = await detectarLmStudioLocalNavegador(base);
-          if (localModels !== null) {
-            const modelsTxt = localModels.length > 0 ? localModels.join(", ") : "actiu";
-            mostrarFeedback(
-              "ERROR",
-              `LM Studio respon només al teu navegador local (${modelsTxt}), però el servidor de Sevalor NO hi pot arribar per túnel! Configura una URL pública HTTPS (Cloudflare Tunnel cap al port 9001 de client_vault_agent.py o port 1234).`
-            );
-            setNodeIaTestant(false);
-            return;
-          }
-        }
-        mostrarFeedback("ERROR", res?.missatge || "No s'ha pogut connectar pel túnel amb l'ordinador dedicat.");
-      }
-    } catch (err: any) {
-      setNodeIaEstat("ERROR_CONNEXIO");
-      setNodeIaLatencia(null);
-      mostrarFeedback("ERROR", err?.message || "Error de xarxa en provar el túnel de l'ordinador dedicat.");
-    } finally {
-      setNodeIaTestant(false);
-    }
-  };
-
   return (
     <div className="space-y-6 pb-12">
       {/* CAPÇALERA SUPERIOR D'ALTA DENSITAT */}
@@ -920,7 +553,7 @@ export default function ConfiguracioPage() {
           <div className="mt-4 p-3 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800/60 flex items-start gap-3">
             <AlertTriangle className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
             <p className="text-xs text-amber-800 dark:text-amber-300">
-              <strong className="font-bold">Mode Consulta (Veto d'Enginyer — Spec 011 RF-03):</strong> Tens accés de lectura a la configuració corporativa i al teu slot de jornada assignat. Les modificacions d'ADN de marca, logotips, usuaris administratius i paràmetres de Telegram estan reservades per llei a Gerència (Boss) i Secretaria.
+              <strong className="font-bold">Mode Consulta (Veto d'Enginyer — Spec 011 RF-03):</strong> Tens accés de lectura a la configuració corporativa i al teu slot de jornada assignat. Les modificacions d'usuaris administratius, horaris, barema i paràmetres de Telegram estan reservades a Gerència (Boss) i Secretaria.
             </p>
           </div>
         )}
@@ -941,30 +574,18 @@ export default function ConfiguracioPage() {
           </div>
         )}
 
-        {/* SELECTOR DE PESTANYES */}
+        {/* SELECTOR DE PESTANYES (Paleta Camaleònica i Node Sobirà gestionats exclusivament des de Superadmin) */}
         <div className="flex flex-wrap items-center gap-2 mt-5 border-t border-slate-200 dark:border-slate-800 pt-4">
-          <button
-            onClick={() => setPestanyaActiva("marca")}
-            className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-all ${
-              pestanyaActiva === "marca"
-                ? "bg-emerald-600 text-white shadow-md shadow-emerald-600/20"
-                : "text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"
-            }`}
-          >
-            <Palette className="w-3.5 h-3.5" />
-            <span>1. Identitat & Marca Camaleònica</span>
-          </button>
-
           <button
             onClick={() => setPestanyaActiva("personal")}
             className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-all ${
               pestanyaActiva === "personal"
-                ? "bg-emerald-600 text-white shadow-md shadow-emerald-600/20"
+                ? "bg-primary text-primary-foreground shadow-md"
                 : "text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"
             }`}
           >
             <Users className="w-3.5 h-3.5" />
-            <span>2. Personal d'Oficina & 2FA TOTP</span>
+            <span>Personal d'Oficina & 2FA TOTP</span>
             <span className="px-1.5 py-0.5 text-[9px] rounded-full bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300">
               {usuaris.length}
             </span>
@@ -974,46 +595,27 @@ export default function ConfiguracioPage() {
             onClick={() => setPestanyaActiva("jornada")}
             className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-all ${
               pestanyaActiva === "jornada"
-                ? "bg-emerald-600 text-white shadow-md shadow-emerald-600/20"
+                ? "bg-primary text-primary-foreground shadow-md"
                 : "text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"
             }`}
           >
             <Clock className="w-3.5 h-3.5" />
-            <span>3. Slots de Jornada & Estiu</span>
+            <span>Slots de Jornada & Estiu</span>
           </button>
 
           <button
             onClick={() => setPestanyaActiva("telegram")}
             className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-all ${
               pestanyaActiva === "telegram"
-                ? "bg-emerald-600 text-white shadow-md shadow-emerald-600/20"
+                ? "bg-primary text-primary-foreground shadow-md"
                 : "text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"
             }`}
           >
             <Send className="w-3.5 h-3.5" />
-            <span>4. Bot de Telegram Corporatiu</span>
+            <span>Bot de Telegram Corporatiu</span>
             <span
               className={`w-2 h-2 rounded-full ${
                 telegramEstat === "OPERATIU" ? "bg-emerald-500" : "bg-red-500"
-              }`}
-            />
-          </button>
-
-          <button
-            onClick={() => setPestanyaActiva("node_ia")}
-            className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-all ${
-              pestanyaActiva === "node_ia"
-                ? "bg-emerald-600 text-white shadow-md shadow-emerald-600/20"
-                : "text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"
-            }`}
-          >
-            <Cpu className="w-3.5 h-3.5" />
-            <span>5. Node d'IA Sobirà (Ordinador Dedicat)</span>
-            <span
-              className={`w-2 h-2 rounded-full ${
-                nodeIaActiu && nodeIaUrl
-                  ? nodeIaEstat === "OPERATIU" ? "bg-emerald-500" : "bg-red-500"
-                  : "bg-slate-400"
               }`}
             />
           </button>
@@ -1028,345 +630,14 @@ export default function ConfiguracioPage() {
               }`}
             >
               <DollarSign className="w-3.5 h-3.5" />
-              <span>6. Barema de Preus</span>
+              <span>Barema de Preus</span>
             </button>
           )}
         </div>
       </div>
 
       {/* ========================================================================= */}
-      {/* 1. IDENTITAT & MARCA CAMALEÒNICA (RF-12 a RF-18, EDGE-02, EDGE-03)        */}
-      {/* ========================================================================= */}
-      {pestanyaActiva === "marca" && (
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* Banner de Governança Superadmin per a la Marca Camaleó */}
-          <div className="lg:col-span-3 p-4 rounded-2xl bg-primary/5 border border-primary/20 flex items-start gap-3">
-            <Building className="w-5 h-5 text-primary shrink-0 mt-0.5" />
-            <div className="text-xs text-slate-700 dark:text-slate-200">
-              <strong className="font-bold">Governança Centralitzada de Marca (Superadmin — Constitució §2.VIII):</strong> La configuració d'alta d'imatge corporativa, logotips oficials i tokens de color Camaleó per al teu tenant és gestionada per l'administrador de la plataforma a través de Superadmin. Aquí pots consultar la paleta HSL activa i simular el contrast d'accessibilitat.
-            </div>
-          </div>
-
-          {/* Panell de Control de Colors HSL & Contrast WCAG */}
-          <div className="lg:col-span-2 space-y-6">
-            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm space-y-5">
-              <div className="flex items-center justify-between">
-                <div>
-                  <h2 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
-                    <Sliders className="w-4 h-4 text-emerald-600" />
-                    Paleta Camaleònica HSL & Contrast WCAG 2.1 AA
-                  </h2>
-                  <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                    Definiu els valors HSL que s'injecten de forma dinàmica a les variables CSS (--color-primary, --color-secondary)
-                  </p>
-                </div>
-
-                {/* Termòmetre de Contrast WCAG */}
-                <div className="text-right">
-                  <div className="flex items-center gap-1.5 justify-end">
-                    <span className="text-xs font-mono font-black text-slate-900 dark:text-white">
-                      {contrastRatio}:1
-                    </span>
-                    <span
-                      className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
-                        contrastRatio >= 4.5
-                          ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-950/80 dark:text-emerald-300"
-                          : "bg-red-100 text-red-800 dark:bg-red-950/80 dark:text-red-300"
-                      }`}
-                    >
-                      {contrastRatio >= 4.5 ? "WCAG AA OK" : "IL·LEGIBLE (<4.5)"}
-                    </span>
-                  </div>
-                  <p className="text-[10px] text-slate-400">Mínim legal 4.5:1 (EDGE-02)</p>
-                </div>
-              </div>
-
-              {/* Formulari de selectors HSL */}
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                {/* Color Primari */}
-                <div className="p-3 rounded-xl border border-slate-200 dark:border-slate-800 space-y-2">
-                  <label className="text-xs font-bold text-slate-700 dark:text-slate-300 block">
-                    Color Primari (HSL)
-                  </label>
-                  <input
-                    type="text"
-                    disabled={esEnginyer}
-                    value={primariHsl}
-                    onChange={(e) => handleCanviPrimari(e.target.value)}
-                    className="w-full px-3 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-mono text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500 disabled:opacity-50"
-                  />
-                  <div className="flex gap-2">
-                    <button
-                      type="button"
-                      disabled={esEnginyer}
-                      onClick={() => handleCanviPrimari("210 100% 15%")}
-                      className="px-2 py-1 rounded text-[10px] bg-slate-800 text-white font-mono hover:bg-slate-700 disabled:opacity-50"
-                    >
-                      Blau Fosc
-                    </button>
-                    <button
-                      type="button"
-                      disabled={esEnginyer}
-                      onClick={() => handleCanviPrimari("142 76% 25%")}
-                      className="px-2 py-1 rounded text-[10px] bg-emerald-800 text-white font-mono hover:bg-emerald-700 disabled:opacity-50"
-                    >
-                      Verd Agro
-                    </button>
-                    <button
-                      type="button"
-                      disabled={esEnginyer}
-                      onClick={() => handleCanviPrimari("0 0% 75%")}
-                      className="px-2 py-1 rounded text-[10px] bg-slate-200 text-slate-800 font-mono hover:bg-slate-300 disabled:opacity-50"
-                      title="Provoca error de contrast WCAG per comprovar EDGE-02"
-                    >
-                      Test &lt;4.5
-                    </button>
-                  </div>
-                </div>
-
-                {/* Color Secundari */}
-                <div className="p-3 rounded-xl border border-slate-200 dark:border-slate-800 space-y-2">
-                  <label className="text-xs font-bold text-slate-700 dark:text-slate-300 block">
-                    Color Secundari (Ambre)
-                  </label>
-                  <input
-                    type="text"
-                    disabled={esEnginyer}
-                    value={secundariHsl}
-                    onChange={(e) => setSecundariHsl(e.target.value)}
-                    className="w-full px-3 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-mono text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500 disabled:opacity-50"
-                  />
-                  <p className="text-[10px] text-slate-400">Utilitzat en avisos i avisos ITV</p>
-                </div>
-
-                {/* Color d'Accent */}
-                <div className="p-3 rounded-xl border border-slate-200 dark:border-slate-800 space-y-2">
-                  <label className="text-xs font-bold text-slate-700 dark:text-slate-300 block">
-                    Color d'Accent (Cian)
-                  </label>
-                  <input
-                    type="text"
-                    disabled={esEnginyer}
-                    value={accentHsl}
-                    onChange={(e) => setAccentHsl(e.target.value)}
-                    className="w-full px-3 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-mono text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500 disabled:opacity-50"
-                  />
-                  <p className="text-[10px] text-slate-400">Utilitzat en vectors cartogràfics GIS</p>
-                </div>
-              </div>
-
-              {/* Botó Desar Canvis */}
-              <div className="flex justify-end pt-2">
-                <button
-                  type="button"
-                  disabled={esEnginyer || contrastRatio < 4.5}
-                  onClick={async () => {
-                    try {
-                      await apiFetch("/gestio/configuracio/marca", {
-                        method: "PUT",
-                        body: JSON.stringify({ primari_hsl: primariHsl, secundari_hsl: secundariHsl, accent_hsl: accentHsl }),
-                      });
-                      mostrarFeedback("EXIT", "Colors corporatius desats a PostgreSQL i aplicats a la Suite.");
-                    } catch {
-                      mostrarFeedback("ERROR", "No s'han pogut desar els colors.");
-                    }
-                  }}
-                  className="px-4 py-2 rounded-xl text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed shadow-sm"
-                >
-                  Desar Colors Corporatius
-                </button>
-              </div>
-            </div>
-
-            {/* Càrrega i Anàlisi IA d'ADN de Marca (RF-12, RF-13) */}
-            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm space-y-4">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <Sparkles className="w-4 h-4 text-purple-600 dark:text-purple-400" />
-                  <h3 className="text-sm font-bold text-slate-900 dark:text-white">
-                    Assistent IA d'ADN de Marca (Supervisat HITL)
-                  </h3>
-                </div>
-                <span className="text-[10px] font-mono uppercase bg-purple-100 dark:bg-purple-950/60 text-purple-800 dark:text-purple-300 px-2 py-0.5 rounded border border-purple-300 dark:border-purple-800">
-                  Mandat Human-in-the-Loop
-                </span>
-              </div>
-
-              <p className="text-xs text-slate-500 dark:text-slate-400">
-                Enganxeu la declaració de valors o guia d'estil corporatiu de la vostra instal·ladora. El Copilot IA proposarà una paleta cromàtica optimitzada que requereix la signatura i confirmació explícita del Boss abans d'aplicar-se.
-              </p>
-
-              <textarea
-                disabled={esEnginyer}
-                rows={3}
-                value={adnPrompt}
-                onChange={(e) => setAdnPrompt(e.target.value)}
-                placeholder="Exemple: Som una empresa del Penedès especialitzada en sistemes de reg per goteig i sostenibilitat ecològica. Volem tons verds de natura combinats amb ambre industrial per a màquines..."
-                className="w-full p-3 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-purple-500 disabled:opacity-50 resize-none"
-              />
-
-              <div className="flex items-center justify-between">
-                <p className="text-[10px] text-slate-400">
-                  Processament local sobirà LM Studio a Hetzner (zero fugides fora de la UE)
-                </p>
-                <button
-                  type="button"
-                  disabled={esEnginyer || !adnPrompt.trim() || iaAnalitzant}
-                  onClick={handleAnalitzarAdn}
-                  className="flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold bg-purple-600 hover:bg-purple-700 text-white transition-colors disabled:opacity-50 shadow-sm"
-                >
-                  {iaAnalitzant ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
-                  <span>Analitzar amb Copilot IA</span>
-                </button>
-              </div>
-
-              {/* Targeta de Proposta de la IA pendent d'Aprovació HITL */}
-              {paletaPropostaIa && (
-                <div className="p-4 rounded-xl bg-purple-50 dark:bg-purple-950/30 border border-purple-200 dark:border-purple-800/60 space-y-3">
-                  <div className="flex items-start justify-between">
-                    <div>
-                      <span className="text-xs font-bold text-purple-900 dark:text-purple-200">
-                        Proposta Generada pel Copilot IA
-                      </span>
-                      <p className="text-xs text-purple-700 dark:text-purple-300 mt-0.5">
-                        {paletaPropostaIa.descripcio}
-                      </p>
-                    </div>
-                    <div className="flex gap-2">
-                      <div className="w-6 h-6 rounded-md border border-slate-300 shadow-sm" style={{ backgroundColor: `hsl(${paletaPropostaIa.primari_hsl})` }} title="Primari" />
-                      <div className="w-6 h-6 rounded-md border border-slate-300 shadow-sm" style={{ backgroundColor: `hsl(${paletaPropostaIa.secundari_hsl})` }} title="Secundari" />
-                      <div className="w-6 h-6 rounded-md border border-slate-300 shadow-sm" style={{ backgroundColor: `hsl(${paletaPropostaIa.accent_hsl})` }} title="Accent" />
-                    </div>
-                  </div>
-
-                  <div className="flex items-center justify-end gap-2 pt-2 border-t border-purple-200 dark:border-purple-800">
-                    <button
-                      type="button"
-                      onClick={() => setPaletaPropostaIa(null)}
-                      className="px-3 py-1.5 rounded-lg text-xs font-semibold text-slate-600 dark:text-slate-400 hover:bg-purple-100 dark:hover:bg-purple-900/40 transition-colors"
-                    >
-                      Descartar Proposta
-                    </button>
-                    <button
-                      type="button"
-                      onClick={handleAprovarPaletaIa}
-                      className="flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm transition-colors"
-                    >
-                      <Check className="w-3.5 h-3.5" />
-                      <span>{esBoss ? "Aprovar i Aplicar (Firma Boss HITL)" : "Requerit Rol Boss per Aprovar"}</span>
-                    </button>
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* Columna Lateral: Logotip Sobirà & Live Preview */}
-          <div className="space-y-6">
-            {/* Slot de Pujada de Logotip (RF-16, RF-17, EDGE-03) */}
-            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm space-y-4">
-              <h3 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
-                <Upload className="w-4 h-4 text-emerald-600" />
-                Logotip Oficial de l'Empresa
-              </h3>
-              <p className="text-xs text-slate-500 dark:text-slate-400">
-                Formats permesos PNG o JPG (màxim 10 MB). Es processarà sobiràment al servidor Hetzner de Falkenstein amb validació de Magic Bytes.
-              </p>
-
-              <div className="p-4 border-2 border-dashed border-slate-300 dark:border-slate-700 rounded-xl text-center space-y-3">
-                <div className="w-16 h-16 mx-auto rounded-xl bg-slate-100 dark:bg-slate-800 flex items-center justify-center text-slate-400 font-bold overflow-hidden">
-                  {logotipCarregat ? (
-                    <img
-                      src={logotipCarregat}
-                      alt="Logo"
-                      className="w-full h-full object-contain"
-                      onError={() => setLogotipCarregat(null)}
-                    />
-                  ) : (
-                    <span className="text-2xl font-mono text-slate-500">{monograma}</span>
-                  )}
-                </div>
-                <div>
-                  <label
-                    className={`inline-block px-3 py-1.5 rounded-lg text-xs font-bold transition-colors ${
-                      esEnginyer
-                        ? "bg-slate-200 text-slate-400 cursor-not-allowed"
-                        : "bg-slate-900 hover:bg-slate-800 text-white dark:bg-slate-700 dark:hover:bg-slate-600 cursor-pointer shadow-sm"
-                    }`}
-                  >
-                    <span>Seleccionar PNG/JPG</span>
-                    <input
-                      type="file"
-                      disabled={esEnginyer}
-                      accept="image/png,image/jpeg"
-                      onChange={handlePujarLogo}
-                      className="hidden"
-                    />
-                  </label>
-                  <p className="text-[10px] text-slate-400 mt-1">Límit 10 MB • Redimensionament asíncron</p>
-                </div>
-              </div>
-
-              {/* Monograma Tipogràfic de Respatller (RF-18) */}
-              <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-800 flex items-center justify-between">
-                <div>
-                  <p className="text-xs font-bold text-slate-800 dark:text-slate-200">Monograma Tipogràfic Net</p>
-                  <p className="text-[10px] text-slate-400">Actiu en absència de logotip (Zero Mock Data)</p>
-                </div>
-                <div className="w-8 h-8 rounded-lg bg-emerald-600 text-white font-bold text-xs flex items-center justify-center font-mono">
-                  {monograma}
-                </div>
-              </div>
-            </div>
-
-            {/* Finestra de Live Preview Interactiva (RF-15) */}
-            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm space-y-4">
-              <div className="flex items-center justify-between">
-                <h3 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
-                  <Eye className="w-4 h-4 text-emerald-600" />
-                  Previsualització en Viu (Live Preview)
-                </h3>
-                <span className="text-[9px] font-mono uppercase bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded text-slate-500">
-                  Temps Real
-                </span>
-              </div>
-
-              <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 space-y-3 bg-slate-50 dark:bg-slate-950">
-                <div className="flex items-center justify-between pb-2 border-b border-slate-200 dark:border-slate-800">
-                  <div className="flex items-center gap-2">
-                    <div className="w-6 h-6 rounded bg-slate-900 text-white font-bold text-[10px] flex items-center justify-center">
-                      {monograma}
-                    </div>
-                    <span className="text-xs font-bold text-slate-900 dark:text-white">Capçalera Web</span>
-                  </div>
-                  <span
-                    className="text-[10px] font-bold px-2 py-0.5 rounded text-white shadow-sm"
-                    style={{ backgroundColor: `hsl(${secundariHsl})` }}
-                  >
-                    Avís de Camp
-                  </span>
-                </div>
-
-                <div className="space-y-1.5">
-                  <p className="text-[11px] text-slate-600 dark:text-slate-300">
-                    Aspecte dels botons d'acció amb el color primari seleccionat:
-                  </p>
-                  <button
-                    type="button"
-                    className="w-full py-2 rounded-lg text-xs font-bold text-white shadow-sm flex items-center justify-center gap-1.5"
-                    style={{ backgroundColor: `hsl(${primariHsl})` }}
-                  >
-                    <span>Botó d'Acció Principal</span>
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ========================================================================= */}
-      {/* 2. PERSONAL D'OFICINA & 2FA TOTP (RF-01 a RF-07, EDGE-01, EDGE-05)        */}
+      {/* 1. PERSONAL D'OFICINA & 2FA TOTP (RF-01 a RF-07, EDGE-01, EDGE-05)        */}
       {/* ========================================================================= */}
       {pestanyaActiva === "personal" && (
         <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm space-y-5">
@@ -1685,221 +956,6 @@ export default function ConfiguracioPage() {
                 className="px-4 py-2 rounded-xl text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white transition-colors disabled:opacity-50 shadow-sm"
               >
                 Desar Paràmetres Bot
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ========================================================================= */}
-      {/* 5. NODE D'IA SOBIRÀ (ORDINADOR DEDICAT DE LA SEU — CONSTITUCIÓ §2.V)      */}
-      {/* ========================================================================= */}
-      {pestanyaActiva === "node_ia" && (
-        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-6 shadow-sm space-y-6">
-          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-            <div>
-              <div className="flex items-center gap-2">
-                <h2 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
-                  <Cpu className="w-5 h-5 text-emerald-600" />
-                  Node d'IA Sobirà (Ordinador Dedicat de l'Empresa)
-                </h2>
-                <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold uppercase bg-purple-100 text-purple-800 dark:bg-purple-950/70 dark:text-purple-300 border border-purple-300 dark:border-purple-800">
-                  Constitució §2.V
-                </span>
-              </div>
-              <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-                La intel·ligència artificial s'executa exclusivament a l'ordinador físic de les vostres oficines o tallers.
-              </p>
-            </div>
-
-            <div className="flex items-center gap-2">
-              <span
-                className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold ${
-                  nodeIaEstat === "OPERATIU"
-                    ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-950/80 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800"
-                    : nodeIaEstat === "ERROR_CONNEXIO"
-                    ? "bg-rose-100 text-rose-800 dark:bg-rose-950/80 dark:text-rose-300 border border-rose-300 dark:border-rose-800"
-                    : "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300 border border-slate-300 dark:border-slate-700"
-                }`}
-              >
-                <span
-                  className={`w-2 h-2 rounded-full ${
-                    nodeIaEstat === "OPERATIU"
-                      ? "bg-emerald-500 animate-pulse"
-                      : nodeIaEstat === "ERROR_CONNEXIO"
-                      ? "bg-rose-500"
-                      : "bg-slate-400"
-                  }`}
-                />
-                <span>
-                  {nodeIaEstat === "OPERATIU"
-                    ? "ORDINADOR DEDICAT CONNECTAT"
-                    : nodeIaEstat === "ERROR_CONNEXIO"
-                    ? "ORDINADOR DESCONNECTAT / APAGAT"
-                    : "SENSE ORDINADOR DEDICAT"}
-                </span>
-              </span>
-            </div>
-          </div>
-
-          {/* AVÍS SI EL MÒDUL COPILOT ESTÀ DESACTIVAT A SUPERADMIN */}
-          {featureCopilotIa === false && (
-            <div className="p-4 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-800 space-y-1">
-              <div className="flex items-center gap-2 text-xs font-bold text-amber-900 dark:text-amber-200">
-                <AlertTriangle className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0" />
-                <span>Mòdul Copilot d'IA desactivat a la llicència de l'empresa</span>
-              </div>
-              <p className="text-xs text-amber-800 dark:text-amber-300 leading-relaxed">
-                Encara que l'ordinador local de la seu respongui, el Copilot retornarà error fins que Superadmin activi l'interruptor <strong>Copilot d'IA</strong> (<code>feature_copilot_ia</code>) a la fitxa d'aquesta empresa.
-              </p>
-            </div>
-          )}
-
-          {/* MANIFEST CONSTITUCIONAL DE SOBIRANIA */}
-          <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/80 space-y-2">
-            <div className="flex items-center gap-2 text-xs font-bold text-slate-800 dark:text-slate-200">
-              <ShieldCheck className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
-              <span>Principi Constitucional de Sobirania Absoluta (Zero Cloud Egress)</span>
-            </div>
-            <p className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed">
-              Per mandat fundacional de Sevalor Suite, <strong>a Hetzner no s'allotja cap model d'IA processant dades de la vostra empresa</strong>. 
-              Totes les consultes d'enginyeria, auditories de marge i peritatges s'encaminen directament cap a l'ordinador dedicat físic que teniu a la seu de la vostra empresa mitjançant connexió xifrada privada.
-            </p>
-          </div>
-
-          <div className="space-y-4">
-            {/* INTERRUPTOR D'ACTIVACIÓ */}
-            <div className="flex items-center justify-between p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/40">
-              <div>
-                <span className="text-xs font-bold text-slate-800 dark:text-white">
-                  Activar Ordinador Dedicat Local
-                </span>
-                <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                  Habilita les crides del Copilot exclusivament cap a la URL del vostre ordinador local.
-                </p>
-              </div>
-              <label className="relative inline-flex items-center cursor-pointer">
-                <input
-                  type="checkbox"
-                  disabled={esEnginyer || nodeIaDesant}
-                  checked={nodeIaActiu}
-                  onChange={(e) => handleToggleNodeIaActiu(e.target.checked)}
-                  className="sr-only peer"
-                />
-                <div className="w-11 h-6 bg-slate-300 peer-focus:outline-none rounded-full peer dark:bg-slate-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-600"></div>
-              </label>
-            </div>
-
-            {/* URL DE L'ORDINADOR DEDICAT (COPILOT IA) */}
-            <div className="space-y-1.5">
-              <label className="text-xs font-bold text-slate-700 dark:text-slate-300 flex items-center justify-between">
-                <span>1. Adreça del Copilot Local (LM Studio / Ollama Local)</span>
-                <span className="text-[10px] font-normal text-slate-400">Endpoint OpenAI-compatible</span>
-              </label>
-              <input
-                type="text"
-                disabled={esEnginyer}
-                placeholder="Ex: https://node-empresa.projectexinoxano.cat o http://127.0.0.1:1234"
-                value={nodeIaUrl}
-                onChange={(e) => {
-                  const val = e.target.value;
-                  setNodeIaUrl(val);
-                  if (val.trim() && !nodeIaExplicitlyDisabled) setNodeIaActiu(true);
-                }}
-                className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-mono text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500 disabled:opacity-50"
-              />
-              <p className="text-[10px] text-slate-400">
-                El backend verifica la connectivitat real pel túnel. En núvol (Hetzner) cal una URL pública HTTPS (Cloudflare Tunnel cap al port 9001 o 1234); en local Docker pots usar <code>http://127.0.0.1:1234</code>.
-              </p>
-            </div>
-
-            {/* ADREÇA DEL DISC DUR DEDICAT */}
-            <div className="space-y-1.5">
-              <label className="text-xs font-bold text-slate-700 dark:text-slate-300 flex items-center justify-between">
-                <span>2. Adreça o Carpeta del Disc Dur Dedicat (Arxiu Històric i Plànols)</span>
-                <span className="text-[10px] font-normal text-slate-400">Memòria local de l'empresa</span>
-              </label>
-              <input
-                type="text"
-                disabled={esEnginyer}
-                placeholder="Ex: https://disc-empresa.projectexinoxano.cat o http://127.0.0.1:9001"
-                value={discDurUrl}
-                onChange={(e) => {
-                  const val = e.target.value;
-                  setDiscDurUrl(val);
-                  if (val.trim() && !nodeIaExplicitlyDisabled) setNodeIaActiu(true);
-                }}
-                className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-mono text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500 disabled:opacity-50"
-              />
-            </div>
-
-            {/* DIAGNÒSTIC EN TEMPS REAL */}
-            {nodeIaModelInfo && (
-              <div className="p-3.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 flex items-center justify-between text-xs">
-                <div className="space-y-0.5">
-                  <span className="font-bold text-emerald-900 dark:text-emerald-200">
-                    Model Detectat a l'Ordinador de la Seu:
-                  </span>
-                  <p className="font-mono text-emerald-700 dark:text-emerald-400 text-[11px]">
-                    {nodeIaModelInfo}
-                  </p>
-                </div>
-                {nodeIaLatencia !== null && (
-                  <span className="px-2.5 py-1 rounded-lg bg-emerald-200/60 dark:bg-emerald-900/60 text-emerald-900 dark:text-emerald-200 font-mono text-[10px] font-bold">
-                    Latència: {nodeIaLatencia} ms
-                  </span>
-                )}
-              </div>
-            )}
-
-            {/* DIRECTRIUS D'EMPRESA PER AL COPILOT */}
-            <div className="space-y-1.5">
-              <label className="text-xs font-bold text-slate-700 dark:text-slate-300 flex items-center justify-between">
-                <span>Directrius Específiques de l'Empresa (Agent System Prompt)</span>
-                <span className="text-[10px] font-normal text-slate-400">Opcional</span>
-              </label>
-              <textarea
-                rows={3}
-                disabled={esEnginyer}
-                placeholder="Ex: Recorda sempre prioritza els proveïdors locals de proximitat. En cas de canonades de reg, verificar pressió nominal PN10 abans de pressupostar..."
-                value={agentPromptSystem}
-                onChange={(e) => setAgentPromptSystem(e.target.value)}
-                className="w-full px-3.5 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500 disabled:opacity-50"
-              />
-              <p className="text-[10px] text-slate-400">
-                Aquestes directrius s'injecten a cada consulta al Copilot juntament amb la vertical tècnica de la vostra empresa.
-              </p>
-            </div>
-          </div>
-
-          <div className="flex items-center justify-between pt-4 border-t border-slate-200 dark:border-slate-800">
-            <div className="flex items-center gap-1.5 text-xs text-slate-500">
-              <Server className="w-3.5 h-3.5 text-emerald-500" />
-              <span>Aïllament estricte per empresa a PostgreSQL RLS</span>
-            </div>
-
-            <div className="flex gap-2">
-              <button
-                type="button"
-                disabled={nodeIaTestant || (!nodeIaUrl.trim() && !discDurUrl.trim())}
-                onClick={handleProvarNodeIa}
-                className="flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold bg-slate-800 hover:bg-slate-700 text-white transition-colors disabled:opacity-50 shadow-sm"
-              >
-                {nodeIaTestant ? (
-                  <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                ) : (
-                  <Cpu className="w-3.5 h-3.5" />
-                )}
-                <span>Provar Connexió amb l'Ordinador</span>
-              </button>
-
-              <button
-                type="button"
-                disabled={esEnginyer || nodeIaDesant}
-                onClick={handleDesarNodeIa}
-                className="px-4 py-2 rounded-xl text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white transition-colors disabled:opacity-50 shadow-sm"
-              >
-                {nodeIaDesant ? "Desant..." : "Desar Paràmetres del Node"}
               </button>
             </div>
           </div>
