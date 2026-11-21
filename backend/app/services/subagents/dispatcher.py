@@ -542,29 +542,8 @@ class CopilotDispatcher:
             primary_subagent, secondary_subagent, rol_usuari
         )
 
-        # ── 5. Injecció Dinàmica de Context i System Prompt Estrictament Aïllat ─
-        system_content, configured_llm_model = await build_isolated_system_prompt(
-            db=db,
-            empresa_id=empresa_id,
-            primary_subagent_id=primary_subagent.id,
-            ara_str=ara_str,
-            usuari_nom=usuari_nom or rol_usuari,
-            usuari_id=str(usuari_id),
-            rol_usuari=rol_usuari,
-            empresa_nom=empresa_nom,
-            vertical_efectiva=vertical_efectiva,
-            context_extra_str=context_extra_str,
-        )
-
-        # ── 6. Inferència Obligatòria amb Ordinador Local via Túnel WSS Únic ───
-        # NORMA CONSTITUCIONAL: Zero fallback a Hetzner. Si el túnel WSS o LM Studio no respon -> 503.
-        es_actiu = True
-        resposta_ia: Optional[str] = None
-        tool_name: Optional[str] = None
-        tool_args: Optional[dict] = None
-        tool_result: Optional[dict] = None
-        selected_subagent: BaseSubagent = primary_subagent
-
+        # ── 5. Verificació Estricta del Túnel WSS Dedicat (abans de validar prompt) ──
+        # NORMA CONSTITUCIONAL: Zero fallback a Hetzner. Si el túnel WSS no està connectat -> 503.
         target_key = empresa_target_key(empresa_id)
         if not await vault_tunnel_broker.is_online(target_key):
             logger.warning(
@@ -582,6 +561,27 @@ class CopilotDispatcher:
                     ),
                 },
             )
+
+        # ── 6. Injecció Dinàmica de Context i System Prompt Estrictament Aïllat ─
+        system_content, configured_llm_model = await build_isolated_system_prompt(
+            db=db,
+            empresa_id=empresa_id,
+            primary_subagent_id=primary_subagent.id,
+            ara_str=ara_str,
+            usuari_nom=usuari_nom or rol_usuari,
+            usuari_id=str(usuari_id),
+            rol_usuari=rol_usuari,
+            empresa_nom=empresa_nom,
+            vertical_efectiva=vertical_efectiva,
+            context_extra_str=context_extra_str,
+        )
+
+        es_actiu = True
+        resposta_ia: Optional[str] = None
+        tool_name: Optional[str] = None
+        tool_args: Optional[dict] = None
+        tool_result: Optional[dict] = None
+        selected_subagent: BaseSubagent = primary_subagent
 
         model_name = configured_llm_model or getattr(settings, "LM_STUDIO_MODEL", "qwen2.5-vl-7b-instruct")
         try:

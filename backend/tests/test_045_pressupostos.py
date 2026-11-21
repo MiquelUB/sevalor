@@ -89,12 +89,22 @@ async def test_triple_button_and_copilot(admin_session, headers, boss_token, tmp
         )
         assert res_ia_off.status_code == 503, res_ia_off.text
 
-        # Activem disc sobirà + catàleg real + node_ia_actiu
+        # Activem disc sobirà + catàleg real + node_ia_actiu + configuració estricta Copilot
         disc_root = tmp_path / "disc_pres"
         inicialitzar_arbre_carpetes_disc(disc_root)
         emp.feature_copilot_ia = True
         emp.node_ia_actiu = True
         await admin_session.commit()
+
+        from app.services.copilot_config_service import save_strict_copilot_config
+
+        await save_strict_copilot_config(
+            db=admin_session,
+            empresa_id=emp_uuid,
+            system_prompt="Ets el Copilot tècnic de pressupostos de Test Pressupostos.",
+            rag_prompt="",
+            subagent_prompts={},
+        )
 
         # Connectem Túnel Invers Sobirà WSS real (Zero Mock / ADR-001)
         from tests.wss_test_helpers import live_empresa_wss_context

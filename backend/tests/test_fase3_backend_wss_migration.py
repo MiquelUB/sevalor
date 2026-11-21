@@ -37,7 +37,6 @@ import jwt
 import pytest
 import uvicorn
 from fastapi import HTTPException
-from sqlalchemy import delete, select
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
 if str(ROOT_DIR) not in sys.path:
@@ -46,13 +45,9 @@ if str(ROOT_DIR) not in sys.path:
 import scripts.client_vault_agent as cva  # noqa: E402
 
 from app.core.config import settings  # noqa: E402
-from app.core.db import AsyncSessionLocal  # noqa: E402
 from app.main import app  # noqa: E402
 from app.models.models import (  # noqa: E402
-    AlertaSeguretat,
-    ConsultaXatCopilot,
     Empresa,
-    SaasHistorialLlicencia,
     Usuari,
 )
 from app.services.backup import executar_backup_sobira_empresa  # noqa: E402
@@ -468,6 +463,16 @@ async def test_fase3_copilot_diagnostics_i_xat_via_wss(admin_session, tmp_path: 
     admin_session.add(emp)
     admin_session.add(boss)
     await admin_session.commit()
+
+    from app.services.copilot_config_service import save_strict_copilot_config
+
+    await save_strict_copilot_config(
+        db=admin_session,
+        empresa_id=emp_id,
+        system_prompt="Copilot sobirà de Copilot WSS Test SL.",
+        rag_prompt="",
+        subagent_prompts={},
+    )
 
     try:
         async with _LiveUvicornServer() as server:

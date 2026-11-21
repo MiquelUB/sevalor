@@ -6,7 +6,6 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List
 
-import httpx
 import jwt
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -678,6 +677,15 @@ async def test_bloc2_503_zero_fallback_i_xat_amb_prompt_i_feedback_disc(
                 b"INSTRUCCIO SECRETA DEL CLIENT: Prioritza sempre les valvules de llauto.",
                 "text/plain; charset=utf-8",
             )
+            from app.services.copilot_config_service import save_strict_copilot_config
+
+            await save_strict_copilot_config(
+                db=admin_session,
+                empresa_id=emp_on,
+                system_prompt="INSTRUCCIO SECRETA DEL CLIENT: Prioritza sempre les valvules de llauto.",
+                rag_prompt="",
+                subagent_prompts={},
+            )
 
             res_ok = await ac.post(
                 "/api/v1/gestio/copilot/xat",
@@ -767,6 +775,15 @@ async def test_bloc2_fallback_de_node_ia_local_a_tunel_disc_dur_i_prioritat_dock
         )
     )
     await admin_session.flush()
+    from app.services.copilot_config_service import save_strict_copilot_config
+
+    await save_strict_copilot_config(
+        db=admin_session,
+        empresa_id=emp_id,
+        system_prompt="Copilot sobirà dedicat d'Empresa Tunel WSS SL.",
+        rag_prompt="",
+        subagent_prompts={},
+    )
 
     tok = _token(boss_id, emp_id, "BOSS")
     async with live_empresa_wss_context(

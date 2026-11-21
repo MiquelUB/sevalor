@@ -577,6 +577,15 @@ async def test_bloc3_pressupost_ia_boto_triple_503_vs_200_i_rag(
         assert res_offline.status_code == 503
 
         # Amb Túnel WSS real connectat + catàleg real al disc -> 200 PENDENT_AUDITORIA
+        from app.services.copilot_config_service import save_strict_copilot_config
+
+        await save_strict_copilot_config(
+            db=admin_session,
+            empresa_id=emp_uuid,
+            system_prompt="Copilot sobirà de pressupostos d'Empresa IA RAG Test.",
+            rag_prompt="",
+            subagent_prompts={},
+        )
         async with live_empresa_wss_context(emp_uuid, vault_token, disc_root):
             await SovereignStorageGateway.desar_entitat_json(
                 db=admin_session,

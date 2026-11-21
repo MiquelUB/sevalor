@@ -88,6 +88,16 @@ async def test_f3_01_tool_calling_stock_real(admin_session, boss_token, tmp_path
     admin_session.add(usuari)
     await admin_session.flush()
 
+    from app.services.copilot_config_service import save_strict_copilot_config
+
+    await save_strict_copilot_config(
+        db=admin_session,
+        empresa_id=empresa_id,
+        system_prompt="Copilot sobirà d'Instal·lacions Vallès SL.",
+        rag_prompt="",
+        subagent_prompts={},
+    )
+
     headers = {
         "Authorization": f"Bearer {token_jwt}",
         "X-Empresa-ID": str(empresa_id),
@@ -246,6 +256,16 @@ async def test_f3_02_tool_calling_vehicle_proper(admin_session, boss_token, tmp_
     )
     admin_session.add(ot_b)
     await admin_session.flush()
+
+    from app.services.copilot_config_service import save_strict_copilot_config
+
+    await save_strict_copilot_config(
+        db=admin_session,
+        empresa_id=empresa_id,
+        system_prompt="Copilot sobirà de Transports i Serveis SL.",
+        rag_prompt="",
+        subagent_prompts={},
+    )
 
     headers = {
         "Authorization": f"Bearer {token_jwt}",

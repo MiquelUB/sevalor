@@ -337,6 +337,16 @@ async def test_cross_03_coherencia_pressupost_telegram_copilot(admin_session, bo
     admin_session.add(pressupost)
     await admin_session.flush()
 
+    from app.services.copilot_config_service import save_strict_copilot_config
+
+    await save_strict_copilot_config(
+        db=admin_session,
+        empresa_id=empresa_id,
+        system_prompt="Copilot sobirà d'Instal·lacions del Maresme SL.",
+        rag_prompt="",
+        subagent_prompts={},
+    )
+
     async with live_empresa_wss_context(empresa_id, vault_token, tmp_path, default_reply=""):
         await SovereignStorageGateway.desar_entitat_json(
             admin_session,
@@ -411,6 +421,16 @@ async def test_cross_04_consistencia_estoc_magatzem_picking_copilot(admin_sessio
     )
     admin_session.add(empresa)
     await admin_session.flush()
+
+    from app.services.copilot_config_service import save_strict_copilot_config
+
+    await save_strict_copilot_config(
+        db=admin_session,
+        empresa_id=empresa_id,
+        system_prompt="Copilot sobirà de Logística i Peces SL.",
+        rag_prompt="",
+        subagent_prompts={},
+    )
 
     decoded = jwt.decode(token_jwt, options={"verify_signature": False})
     usuari_id = uuid.UUID(decoded["sub"])

@@ -18,7 +18,6 @@ from app.core.config import settings
 from app.main import app
 from app.models.models import Empresa, Usuari
 from app.services.sovereign_storage import SovereignStorageGateway
-from tests.wss_test_helpers import live_empresa_wss_context
 from app.services.subagents import (
     CopilotDispatcher,
     SubagentAuditoriaMarge,
@@ -29,6 +28,7 @@ from app.services.subagents import (
     SubagentOcrVision,
     SubagentPeritatgeCamp,
 )
+from tests.wss_test_helpers import live_empresa_wss_context
 
 
 def generar_token(usuari_id: uuid.UUID, empresa_id: uuid.UUID, rol: str) -> str:
@@ -153,6 +153,16 @@ async def test_subagents_rbac_double_barrier(admin_session, tmp_path: Path):
     )
     await admin_session.flush()
 
+    from app.services.copilot_config_service import save_strict_copilot_config
+
+    await save_strict_copilot_config(
+        db=admin_session,
+        empresa_id=empresa_id,
+        system_prompt="Copilot sobirà de Test Security Tenant.",
+        rag_prompt="",
+        subagent_prompts={},
+    )
+
     token_boss = generar_token(boss_id, empresa_id, "BOSS")
     token_enginyer = generar_token(enginyer_id, empresa_id, "ENGINYER")
     token_operari = generar_token(operari_id, empresa_id, "OPERARI")
@@ -224,6 +234,16 @@ async def test_subagent_logistica_and_flota_execution(admin_session, boss_token,
         )
     )
     await admin_session.flush()
+
+    from app.services.copilot_config_service import save_strict_copilot_config
+
+    await save_strict_copilot_config(
+        db=admin_session,
+        empresa_id=empresa_id,
+        system_prompt="Copilot sobirà de MultiAgent Logistics Tenant.",
+        rag_prompt="",
+        subagent_prompts={},
+    )
 
     headers = {"Authorization": f"Bearer {token_jwt}"}
 

@@ -654,6 +654,16 @@ async def test_copilot_dispatcher_dispatch_sovereign(admin_session, tmp_path: Pa
     emp.node_ia_actiu = True
     await admin_session.commit()
 
+    from app.services.copilot_config_service import save_strict_copilot_config
+
+    await save_strict_copilot_config(
+        db=admin_session,
+        empresa_id=empresa_id,
+        system_prompt="Copilot sobirà de Sovereign Agro SL.",
+        rag_prompt="",
+        subagent_prompts={},
+    )
+
     async with live_empresa_wss_context(empresa_id, vault_token, tmp_path, default_reply=""):
         res_salutacio = await dispatcher.dispatch(
             pregunta="Hola, qui ets?",

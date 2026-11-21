@@ -1344,6 +1344,18 @@ async def crear_nou_tenant(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Error en BD: {str(e)}"
         )
 
+    if agent_prompt_final:
+        from app.services.copilot_config_service import save_strict_copilot_config
+
+        await save_strict_copilot_config(
+            db=db,
+            empresa_id=nou_id,
+            system_prompt=agent_prompt_final,
+            rag_prompt="",
+            subagent_prompts={},
+            llm_model="",
+        )
+
     # Persistència immediata al Disc Dur Sobirà del Client (Minut 1)
     logotip_vault_path: Optional[str] = None
     if payload.logotip_base64:

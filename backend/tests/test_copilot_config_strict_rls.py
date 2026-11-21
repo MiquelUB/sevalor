@@ -133,18 +133,33 @@ async def test_copilot_config_force_rls_isolation_and_endpoints(
     headers_boss_b = _make_headers(boss_b_id, emp_b_id, "BOSS")
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-        # 1. Sense configuració -> GET retorna buit i /xat retorna 422 COPILOT_NOT_CONFIGURED
+        # 1. Sense configuració -> GET retorna buit, /xat amb túnel offline retorna 503
+        #    i /xat amb túnel online però sense configuració retorna 422 COPILOT_NOT_CONFIGURED
         r_empty = await ac.get("/api/v1/gestio/copilot/config", headers=headers_boss_a)
         assert r_empty.status_code == 200, r_empty.text
         assert r_empty.json()["system_prompt"] == ""
 
-        r_xat_unconf = await ac.post(
+        r_xat_off = await ac.post(
             "/api/v1/gestio/copilot/xat",
             headers=headers_boss_a,
             json={"pregunta": "Quines feines tenim avui?"},
         )
-        assert r_xat_unconf.status_code == 422, r_xat_unconf.text
-        assert "COPILOT_NOT_CONFIGURED" in r_xat_unconf.text
+        assert r_xat_off.status_code == 503, r_xat_off.text
+
+        async with live_empresa_wss_context(
+            emp_a_id,
+            token_a,
+            tmp_path / "disc_alfa_unconf",
+            model_name="qwen2.5-alfa-local",
+            default_reply="No s'hauria d'enviar",
+        ):
+            r_xat_unconf = await ac.post(
+                "/api/v1/gestio/copilot/xat",
+                headers=headers_boss_a,
+                json={"pregunta": "Quines feines tenim avui?"},
+            )
+            assert r_xat_unconf.status_code == 422, r_xat_unconf.text
+            assert "COPILOT_NOT_CONFIGURED" in r_xat_unconf.text
 
         # 2. ENGINYER no pot fer PUT /config (403)
         r_eng_put = await ac.put(

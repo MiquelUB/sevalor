@@ -36,6 +36,16 @@ async def test_copilot_xat(admin_session, headers, boss_token, tmp_path: Path):
     admin_session.add(Usuari(id=uuid.UUID(decoded["sub"]), empresa_id=emp_uuid, nom="Boss", cognoms="Boss", nif="BOSS1", rol="BOSS", estat="ACTIU"))
     await admin_session.flush()
 
+    from app.services.copilot_config_service import save_strict_copilot_config
+
+    await save_strict_copilot_config(
+        db=admin_session,
+        empresa_id=emp_uuid,
+        system_prompt="Copilot sobirà de Test Copilot.",
+        rag_prompt="",
+        subagent_prompts={},
+    )
+
     async with live_empresa_wss_context(emp_uuid, vault_token, tmp_path, default_reply=""):
         await SovereignStorageGateway.desar_entitat_json(
             admin_session,
