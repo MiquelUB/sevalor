@@ -231,3 +231,49 @@ async def test_copilot_config_force_rls_isolation_and_endpoints(
             assert "PROMPT_EXCLUSIU_ALFA_123" in sys_msg
             assert "RAG_EXCLUSIU_ALFA_456" in sys_msg
             assert "SUBAGENT_PLAN_ALFA_789" in sys_msg
+
+            # 7. CRUD complet de protocols RAG (crear, editar i eliminar al disc sobirà via WSS)
+            r_rag_create = await ac.post(
+                "/api/v1/gestio/copilot/rag/document",
+                headers=headers_boss_a,
+                json={
+                    "titol": "Protocol Bomba Pressió",
+                    "contingut": "Revisar pressostat a 3.5 bar abans d'arrencar.",
+                    "tags": "bomba, pressio",
+                },
+            )
+            assert r_rag_create.status_code == 201, r_rag_create.text
+            rag_doc_id = r_rag_create.json()["id"]
+
+            r_rag_edit = await ac.put(
+                f"/api/v1/gestio/copilot/rag/document/{rag_doc_id}",
+                headers=headers_boss_a,
+                json={
+                    "titol": "Protocol Bomba Pressió v2",
+                    "contingut": "Revisar pressostat a 4.0 bar i purgar aire.",
+                    "tags": "bomba, pressio, purga",
+                },
+            )
+            assert r_rag_edit.status_code == 200, r_rag_edit.text
+
+            r_rag_list = await ac.get("/api/v1/gestio/copilot/rag/document", headers=headers_boss_a)
+            assert r_rag_list.status_code == 200
+            docs_after_edit = r_rag_list.json()
+            assert any(
+                d["id"] == rag_doc_id
+                and d["titol"] == "Protocol Bomba Pressió v2"
+                and "purga" in d["tags"]
+                for d in docs_after_edit
+            )
+
+            r_rag_del = await ac.delete(
+                f"/api/v1/gestio/copilot/rag/document/{rag_doc_id}",
+                headers=headers_boss_a,
+            )
+            assert r_rag_del.status_code == 200, r_rag_del.text
+
+            r_rag_list_after = await ac.get(
+                "/api/v1/gestio/copilot/rag/document", headers=headers_boss_a
+            )
+            assert r_rag_list_after.status_code == 200
+            assert not any(d["id"] == rag_doc_id for d in r_rag_list_after.json())

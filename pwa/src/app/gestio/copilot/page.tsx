@@ -7,21 +7,78 @@ import {
   Bot,
   Camera,
   CheckCircle2,
+  ChevronDown,
+  ChevronUp,
   Cpu,
   ExternalLink,
   FileText,
   Layers,
+  Pencil,
   RefreshCw,
+  Save,
+  Search,
   Send,
+  Settings2,
   Shield,
   Sparkles,
+  Trash2,
   Wrench,
   X,
 } from "lucide-react";
 import { apiFetch } from "@/lib/api";
 import { useGestio } from "@/lib/gestio-context";
 
-type PestanyaCopilot = "XAT" | "RAG" | "GARANTIES" | "INCIDENCIES" | "RECONCILIACIO";
+type PestanyaCopilot = "XAT" | "CONFIG" | "RAG" | "GARANTIES" | "INCIDENCIES" | "RECONCILIACIO";
+
+interface CopilotConfigState {
+  system_prompt: string;
+  rag_prompt: string;
+  subagent_prompts: Record<string, string>;
+  llm_model: string;
+}
+
+const SUBAGENTS_CATALEG: Array<{ id: string; nom: string; ambit: string }> = [
+  {
+    id: "subagent_planificacio_equip",
+    nom: "Planificació i Equip",
+    ambit: "Ordres de treball, agenda, operaris, fitxatges i plantilla.",
+  },
+  {
+    id: "subagent_logistica_estoc",
+    nom: "Magatzem i Proveïment",
+    ambit: "Estoc real, materials sota mínims, proveïdors i albarans.",
+  },
+  {
+    id: "subagent_flota_despatx",
+    nom: "Flota i Desplaçaments",
+    ambit: "Vehicles, ITV, assegurances, conductors i proximitat GPS.",
+  },
+  {
+    id: "subagent_auditoria_marge",
+    nom: "Auditoria Financera i Marge",
+    ambit: "Imports pendents de facturar, rendibilitat i desviacions (només Direcció).",
+  },
+  {
+    id: "subagent_peritatge_camp",
+    nom: "Peritatge Tècnic de Camp",
+    ambit: "Incidències d'obra, dictàmens HITL i garanties d'equips.",
+  },
+  {
+    id: "subagent_general_rag",
+    nom: "General i RAG Corporatiu",
+    ambit: "Protocols interns, manuals, fitxes de clients i finques.",
+  },
+  {
+    id: "subagent_ocr_vision",
+    nom: "Digitalització OCR",
+    ambit: "Lectura d'albarans, tiquets i documents escanejats.",
+  },
+  {
+    id: "subagent_client_telegram",
+    nom: "Concierge Telegram",
+    ambit: "Comunicació i consultes de clients a través del canal Telegram.",
+  },
+];
 
 interface IaStatusResp {
   estat: string;
@@ -98,12 +155,25 @@ interface AlertaCopilotItem {
 
 export default function CopilotIAPage() {
   const { rolActiu } = useGestio();
-  const esEnginyer = (rolActiu || "").toUpperCase() === "ENGINYER";
+  const rolUpper = (rolActiu || "").toUpperCase();
+  const esEnginyer = rolUpper === "ENGINYER";
+  const potEditarConfig = rolUpper === "BOSS" || rolUpper === "ADMIN" || rolUpper === "SUPERADMIN";
 
   const [pestanya, setPestanya] = useState<PestanyaCopilot>("XAT");
   const [carregantInicial, setCarregantInicial] = useState(true);
   const [iaStatus, setIaStatus] = useState<IaStatusResp | null>(null);
   const [estatNode, setEstatNode] = useState<EstatNodeResp | null>(null);
+
+  // ── 0. CONFIGURACIÓ DE L'AGENT (Prompts & Model a PostgreSQL RLS) ───────
+  const [copilotConfig, setCopilotConfig] = useState<CopilotConfigState>({
+    system_prompt: "",
+    rag_prompt: "",
+    subagent_prompts: {},
+    llm_model: "",
+  });
+  const [desantConfig, setDesantConfig] = useState(false);
+  const [feedbackConfig, setFeedbackConfig] = useState<{ type: "ok" | "err"; text: string } | null>(null);
+  const [subagentObert, setSubagentObert] = useState<string | null>("subagent_planificacio_equip");
 
   // ── 1. XAT Multi-Agent ──────────────────────────────────────────────────
   const [missatgeXat, setMissatgeXat] = useState("");
@@ -117,8 +187,15 @@ export default function CopilotIAPage() {
     },
   ]);
 
-  // ── 2. RAG (Disc Sobirà) ────────────────────────────────────────────────
+  // ── 2. RAG (Disc Sobirà — Crear / Editar / Eliminar) ────────────────────
   const [ragDocs, setRagDocs] = useState<RagDoc[]>([]);
+  const [ragEditId, setRagEditId] = useState<string | null>(null);
+  const [ragTitol, setRagTitol] = useState("");
+  const [ragContingut, setRagContingut] = useState("");
+  const [ragTags, setRagTags] = useState("");
+  const [ragCerca, setRagCerca] = useState("");
+  const [ragConfirmDeleteId, setRagConfirmDeleteId] = useState<string | null>(null);
+  const [eliminantRagId, setEliminantRagId] = useState<string | null>(null);
   const [submittingRag, setSubmittingRag] = useState(false);
   const [feedbackRag, setFeedbackRag] = useState<{ type: "ok" | "err"; text: string } | null>(null);
 
@@ -152,9 +229,10 @@ export default function CopilotIAPage() {
   const carregarDades = async () => {
     setCarregantInicial(true);
     try {
-      const [st, node, docs, clis, ots, memoList, alList] = await Promise.all([
+      const [st, node, cfg, docs, clis, ots, memoList, alList] = await Promise.all([
         apiFetch<IaStatusResp>("/gestio/copilot/ia-status").catch(() => null),
         apiFetch<EstatNodeResp>("/gestio/copilot/estat-node").catch(() => null),
+        apiFetch<CopilotConfigState>("/gestio/copilot/config").catch(() => null),
         apiFetch<RagDoc[]>("/gestio/copilot/rag/document").catch(() => []),
         apiFetch<ClientOpt[]>("/gestio/clients?limit=200").catch(() => []),
         apiFetch<FeinaOpt[]>("/gestio/feines?limit=100").catch(() => []),
@@ -163,6 +241,14 @@ export default function CopilotIAPage() {
       ]);
       setIaStatus(st);
       setEstatNode(node);
+      if (cfg) {
+        setCopilotConfig({
+          system_prompt: cfg.system_prompt || "",
+          rag_prompt: cfg.rag_prompt || "",
+          subagent_prompts: cfg.subagent_prompts || {},
+          llm_model: cfg.llm_model || "",
+        });
+      }
       setRagDocs(Array.isArray(docs) ? docs : []);
       setClients(Array.isArray(clis) ? clis : []);
       setFeines(Array.isArray(ots) ? ots : []);
@@ -170,6 +256,135 @@ export default function CopilotIAPage() {
       setAlertesCopilot(Array.isArray(alList) ? alList : []);
     } finally {
       setCarregantInicial(false);
+    }
+  };
+
+  const desarConfiguracioAgent = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!copilotConfig.system_prompt.trim()) {
+      setFeedbackConfig({
+        type: "err",
+        text: "El Prompt del Sistema és obligatori perquè el Copilot pugui operar.",
+      });
+      return;
+    }
+    setDesantConfig(true);
+    setFeedbackConfig(null);
+    try {
+      const saved = await apiFetch<CopilotConfigState>("/gestio/copilot/config", {
+        method: "PUT",
+        body: JSON.stringify({
+          system_prompt: copilotConfig.system_prompt.trim(),
+          rag_prompt: copilotConfig.rag_prompt.trim(),
+          subagent_prompts: copilotConfig.subagent_prompts,
+          llm_model: copilotConfig.llm_model.trim(),
+        }),
+      });
+      setCopilotConfig({
+        system_prompt: saved.system_prompt || "",
+        rag_prompt: saved.rag_prompt || "",
+        subagent_prompts: saved.subagent_prompts || {},
+        llm_model: saved.llm_model || "",
+      });
+      setFeedbackConfig({
+        type: "ok",
+        text: "Configuració de l'agent desada i activa al Copilot de l'empresa.",
+      });
+    } catch (err: any) {
+      setFeedbackConfig({
+        type: "err",
+        text: err?.message || "No s'ha pogut desar la configuració de l'agent.",
+      });
+    } finally {
+      setDesantConfig(false);
+    }
+  };
+
+  const iniciarEdicioRag = (doc: RagDoc) => {
+    setRagEditId(doc.id);
+    setRagTitol(doc.titol || "");
+    setRagContingut(doc.contingut || "");
+    setRagTags(doc.tags || "");
+    setFeedbackRag(null);
+    setRagConfirmDeleteId(null);
+  };
+
+  const cancelarEdicioRag = () => {
+    setRagEditId(null);
+    setRagTitol("");
+    setRagContingut("");
+    setRagTags("");
+    setFeedbackRag(null);
+  };
+
+  const desarDocumentRag = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!ragTitol.trim() || !ragContingut.trim()) return;
+    setSubmittingRag(true);
+    setFeedbackRag(null);
+    try {
+      const payload = {
+        titol: ragTitol.trim(),
+        contingut: ragContingut.trim(),
+        tags: ragTags.trim(),
+      };
+      if (ragEditId) {
+        await apiFetch(`/gestio/copilot/rag/document/${encodeURIComponent(ragEditId)}`, {
+          method: "PUT",
+          body: JSON.stringify(payload),
+        });
+        setFeedbackRag({
+          type: "ok",
+          text: "Protocol actualitzat correctament al disc sobirà local.",
+        });
+      } else {
+        await apiFetch("/gestio/copilot/rag/document", {
+          method: "POST",
+          body: JSON.stringify(payload),
+        });
+        setFeedbackRag({
+          type: "ok",
+          text: "Document afegit i indexat correctament al disc sobirà local.",
+        });
+      }
+      setRagEditId(null);
+      setRagTitol("");
+      setRagContingut("");
+      setRagTags("");
+      await carregarDades();
+    } catch (err: any) {
+      setFeedbackRag({
+        type: "err",
+        text: `Error desant el document: ${err?.message || "Error de xarxa"}`,
+      });
+    } finally {
+      setSubmittingRag(false);
+    }
+  };
+
+  const eliminarDocumentRag = async (docId: string) => {
+    setEliminantRagId(docId);
+    setFeedbackRag(null);
+    try {
+      await apiFetch(`/gestio/copilot/rag/document/${encodeURIComponent(docId)}`, {
+        method: "DELETE",
+      });
+      if (ragEditId === docId) {
+        cancelarEdicioRag();
+      }
+      setRagConfirmDeleteId(null);
+      setFeedbackRag({
+        type: "ok",
+        text: "Protocol eliminat del disc sobirà local.",
+      });
+      await carregarDades();
+    } catch (err: any) {
+      setFeedbackRag({
+        type: "err",
+        text: `Error eliminant el document: ${err?.message || "Error de xarxa"}`,
+      });
+    } finally {
+      setEliminantRagId(null);
     }
   };
 
@@ -357,6 +572,16 @@ export default function CopilotIAPage() {
   };
 
   const nodeOnline = iaStatus?.estat === "ONLINE";
+  const copilotConfigurat = Boolean(copilotConfig.system_prompt.trim());
+  const ragDocsFiltrats = ragDocs.filter((doc) => {
+    const q = ragCerca.trim().toLowerCase();
+    if (!q) return true;
+    return (
+      (doc.titol || "").toLowerCase().includes(q) ||
+      (doc.contingut || "").toLowerCase().includes(q) ||
+      (doc.tags || "").toLowerCase().includes(q)
+    );
+  });
 
   return (
     <div className="p-6 max-w-6xl mx-auto space-y-6 w-full animate-fade-in">
@@ -436,15 +661,47 @@ export default function CopilotIAPage() {
         </div>
       </div>
 
+      {/* Avís accionable si falta configurar el Prompt de l'Agent */}
+      {!carregantInicial && !copilotConfigurat && (
+        <div className="p-4 rounded-2xl bg-amber-50 border border-amber-300 text-amber-950 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="flex items-start gap-3">
+            <AlertTriangle className="w-5 h-5 text-amber-700 shrink-0 mt-0.5" />
+            <div>
+              <div className="text-sm font-bold">
+                El Copilot IA encara no té configurat el prompt d&apos;aquesta empresa
+              </div>
+              <p className="text-xs text-amber-900/90 mt-0.5">
+                Sense el Prompt del Sistema, les consultes retornaran <span className="font-mono font-semibold">COPILOT_NOT_CONFIGURED</span>. Defineix les directrius de l&apos;agent per activar-lo.
+              </p>
+            </div>
+          </div>
+          {pestanya !== "CONFIG" && (
+            <button
+              type="button"
+              onClick={() => setPestanya("CONFIG")}
+              className="px-4 py-2 rounded-xl bg-primary text-on-primary text-xs font-bold hover:opacity-90 shrink-0 inline-flex items-center gap-1.5 cursor-pointer"
+            >
+              <Settings2 className="w-3.5 h-3.5" />
+              <span>Configurar l&apos;Agent</span>
+            </button>
+          )}
+        </div>
+      )}
+
       {/* Pestanyes */}
       <div className="flex flex-wrap gap-2 border-b border-outline-variant/40 pb-3">
         {(
           [
             { id: "XAT", label: "Xat Multi-Agent", icon: Bot },
+            {
+              id: "CONFIG",
+              label: copilotConfigurat ? "Configuració Agent" : "Configuració Agent (Pendent)",
+              icon: Settings2,
+            },
+            { id: "RAG", label: `Base Coneixement RAG (${ragDocs.length})`, icon: Layers },
             { id: "GARANTIES", label: "Auditoria Garanties 365d", icon: Shield },
             { id: "INCIDENCIES", label: `Peritatge & Memoràndums (${memos.length})`, icon: Wrench },
             { id: "RECONCILIACIO", label: `Reconciliació & Alertes (${alertesCopilot.length})`, icon: AlertTriangle },
-            { id: "RAG", label: `Base Coneixement RAG (${ragDocs.length})`, icon: Layers },
           ] as Array<{ id: PestanyaCopilot; label: string; icon: any }>
         ).map((tab) => {
           const Icon = tab.icon;
@@ -532,6 +789,18 @@ export default function CopilotIAPage() {
                     }`}
                   >
                     {m.text}
+                    {m.error && m.text.includes("COPILOT_NOT_CONFIGURED") && (
+                      <div className="mt-2 pt-2 border-t border-rose-200">
+                        <button
+                          type="button"
+                          onClick={() => setPestanya("CONFIG")}
+                          className="px-3 py-1.5 rounded-lg bg-primary text-on-primary text-[11px] font-bold hover:opacity-90 inline-flex items-center gap-1.5 cursor-pointer"
+                        >
+                          <Settings2 className="w-3.5 h-3.5" />
+                          <span>Obrir Configuració de l&apos;Agent</span>
+                        </button>
+                      </div>
+                    )}
                   </div>
                   {m.sender === "bot" && (m.subagent || m.latencyMs != null) && (
                     <span className="text-[10px] font-mono text-on-surface-variant mt-1 pl-1">
@@ -622,6 +891,222 @@ export default function CopilotIAPage() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* 1B. CONFIGURACIÓ DE L'AGENT (PROMPTS I MODEL LLM PER EMPRESA — RLS ESTRICTE) */}
+      {pestanya === "CONFIG" && (
+        <form onSubmit={desarConfiguracioAgent} className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+          <div className="lg:col-span-7 bg-surface-container-lowest rounded-2xl border border-outline-variant/40 p-6 shadow-sm space-y-5">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h2 className="text-base font-bold text-on-surface flex items-center gap-2">
+                  <Settings2 className="w-4 h-4 text-primary" />
+                  Configuració Sobirana de l&apos;Agent
+                </h2>
+                <p className="text-xs text-on-surface-variant mt-1">
+                  Aquests prompts són exclusius de la teva empresa (aïllament RLS estricte) i governen el comportament del Copilot i dels seus 8 subagents.
+                </p>
+              </div>
+              <span
+                className={`px-2.5 py-1 rounded-full text-[11px] font-semibold shrink-0 border ${
+                  copilotConfigurat
+                    ? "bg-emerald-50 border-emerald-200 text-emerald-800"
+                    : "bg-amber-50 border-amber-200 text-amber-800"
+                }`}
+              >
+                {copilotConfigurat ? "Actiu" : "Pendent"}
+              </span>
+            </div>
+
+            {!potEditarConfig && (
+              <div className="p-3 rounded-xl bg-surface-container-low border border-outline-variant/50 text-xs text-on-surface-variant">
+                Mode lectura: només els rols de Direcció (<span className="font-mono">BOSS</span> / <span className="font-mono">ADMIN</span>) poden modificar la configuració del Copilot.
+              </div>
+            )}
+
+            {feedbackConfig && (
+              <div
+                className={`p-3 rounded-xl border text-xs font-medium flex items-center gap-2 ${
+                  feedbackConfig.type === "ok"
+                    ? "bg-emerald-50 border-emerald-200 text-emerald-800"
+                    : "bg-rose-50 border-rose-200 text-rose-800"
+                }`}
+              >
+                {feedbackConfig.type === "ok" ? (
+                  <CheckCircle2 className="w-4 h-4 shrink-0" />
+                ) : (
+                  <AlertTriangle className="w-4 h-4 shrink-0" />
+                )}
+                <span>{feedbackConfig.text}</span>
+              </div>
+            )}
+
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between">
+                <label className="text-xs font-bold text-on-surface">
+                  Prompt del Sistema (Directrius de l&apos;Empresa) *
+                </label>
+                <span className="text-[11px] font-mono text-on-surface-variant">
+                  {copilotConfig.system_prompt.length} caràcters
+                </span>
+              </div>
+              <textarea
+                rows={7}
+                required
+                disabled={!potEditarConfig}
+                value={copilotConfig.system_prompt}
+                onChange={(e) =>
+                  setCopilotConfig((prev) => ({ ...prev, system_prompt: e.target.value }))
+                }
+                placeholder="Ex: Ets l'assistent tècnic oficial de [Nom Empresa], especialitzada en instal·lacions i manteniment. Respon sempre en català, amb precisió tècnica i basant-te únicament en les dades del disc local..."
+                className="w-full rounded-xl border border-outline-variant bg-surface-container-low text-on-surface p-3 text-xs leading-relaxed outline-none focus:border-primary disabled:opacity-70"
+              />
+            </div>
+
+            <div className="space-y-1.5">
+              <label className="block text-xs font-bold text-on-surface">
+                Instruccions RAG i Coneixement Corporatiu
+              </label>
+              <p className="text-[11px] text-on-surface-variant">
+                Indica com ha de prioritzar els protocols interns, paraules clau i documentació del disc sobirà.
+              </p>
+              <textarea
+                rows={4}
+                disabled={!potEditarConfig}
+                value={copilotConfig.rag_prompt}
+                onChange={(e) =>
+                  setCopilotConfig((prev) => ({ ...prev, rag_prompt: e.target.value }))
+                }
+                placeholder="Ex: Quan es consultin protocols interns o normatives, cita sempre el títol exacte del document RAG i avisa si falta informació actualitzada."
+                className="w-full rounded-xl border border-outline-variant bg-surface-container-low text-on-surface p-3 text-xs leading-relaxed outline-none focus:border-primary disabled:opacity-70"
+              />
+            </div>
+
+            <div className="space-y-2">
+              <label className="block text-xs font-bold text-on-surface">
+                Model LLM del Node Local (opcional)
+              </label>
+              <input
+                type="text"
+                disabled={!potEditarConfig}
+                value={copilotConfig.llm_model}
+                onChange={(e) =>
+                  setCopilotConfig((prev) => ({ ...prev, llm_model: e.target.value }))
+                }
+                placeholder="Deixa-ho buit per utilitzar el model actiu a LM Studio automàticament"
+                className="w-full rounded-xl border border-outline-variant bg-surface-container-low text-on-surface px-3 py-2.5 text-xs font-mono outline-none focus:border-primary disabled:opacity-70"
+              />
+              {iaStatus?.models_disponibles && iaStatus.models_disponibles.length > 0 && potEditarConfig && (
+                <div className="flex flex-wrap gap-1.5 pt-1">
+                  {iaStatus.models_disponibles.map((m) => (
+                    <button
+                      key={m}
+                      type="button"
+                      onClick={() => setCopilotConfig((prev) => ({ ...prev, llm_model: m }))}
+                      className={`px-2.5 py-1 rounded-lg text-[11px] font-mono border transition-colors cursor-pointer ${
+                        copilotConfig.llm_model === m
+                          ? "bg-primary text-on-primary border-primary"
+                          : "bg-surface-container-low text-on-surface-variant border-outline-variant/60 hover:border-primary"
+                      }`}
+                    >
+                      {m}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {potEditarConfig && (
+              <div className="pt-2 flex items-center gap-3">
+                <button
+                  type="submit"
+                  disabled={desantConfig}
+                  className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-primary text-on-primary text-xs font-bold hover:opacity-90 disabled:opacity-50 cursor-pointer"
+                >
+                  <Save className="w-3.5 h-3.5" />
+                  <span>{desantConfig ? "Desant configuració..." : "Desar Configuració"}</span>
+                </button>
+                {copilotConfigurat && (
+                  <button
+                    type="button"
+                    onClick={() => setPestanya("XAT")}
+                    className="px-4 py-2.5 rounded-xl border border-outline-variant/60 text-xs font-bold text-on-surface hover:border-primary cursor-pointer"
+                  >
+                    Anar al Xat
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+
+          <div className="lg:col-span-5 bg-surface-container-lowest rounded-2xl border border-outline-variant/40 p-5 shadow-sm space-y-3 h-fit">
+            <div>
+              <h3 className="text-sm font-bold text-on-surface">
+                Prompts Específics per Subagent (8)
+              </h3>
+              <p className="text-xs text-on-surface-variant mt-0.5">
+                Opcional. Afegeix instruccions concretes per a cada especialitat del Copilot.
+              </p>
+            </div>
+            <div className="space-y-2">
+              {SUBAGENTS_CATALEG.map((sub) => {
+                const obert = subagentObert === sub.id;
+                const valor = copilotConfig.subagent_prompts[sub.id] || "";
+                const personalitzat = Boolean(valor.trim());
+                return (
+                  <div
+                    key={sub.id}
+                    className="rounded-xl border border-outline-variant/40 bg-surface-container-low overflow-hidden"
+                  >
+                    <button
+                      type="button"
+                      onClick={() => setSubagentObert(obert ? null : sub.id)}
+                      className="w-full px-3.5 py-2.5 flex items-center justify-between gap-2 text-left hover:bg-surface-container transition-colors cursor-pointer"
+                    >
+                      <div className="min-w-0">
+                        <div className="text-xs font-bold text-on-surface flex items-center gap-2">
+                          <span className="truncate">{sub.nom}</span>
+                          {personalitzat && (
+                            <span className="px-1.5 py-0.5 rounded bg-primary/15 text-primary text-[10px] font-semibold shrink-0">
+                              Personalitzat
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-[11px] text-on-surface-variant truncate">{sub.ambit}</div>
+                      </div>
+                      {obert ? (
+                        <ChevronUp className="w-4 h-4 text-on-surface-variant shrink-0" />
+                      ) : (
+                        <ChevronDown className="w-4 h-4 text-on-surface-variant shrink-0" />
+                      )}
+                    </button>
+                    {obert && (
+                      <div className="px-3.5 pb-3.5 pt-1 space-y-1.5 border-t border-outline-variant/30">
+                        <div className="text-[10px] font-mono text-on-surface-variant">{sub.id}</div>
+                        <textarea
+                          rows={4}
+                          disabled={!potEditarConfig}
+                          value={valor}
+                          onChange={(e) =>
+                            setCopilotConfig((prev) => ({
+                              ...prev,
+                              subagent_prompts: {
+                                ...prev.subagent_prompts,
+                                [sub.id]: e.target.value,
+                              },
+                            }))
+                          }
+                          placeholder={`Instruccions addicionals per a ${sub.nom}...`}
+                          className="w-full rounded-xl border border-outline-variant bg-surface-container-lowest text-on-surface p-2.5 text-xs leading-relaxed outline-none focus:border-primary disabled:opacity-70"
+                        />
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </form>
       )}
 
       {/* 2. AUDITORIA GARANTIES 365 DIES */}
@@ -991,20 +1476,34 @@ export default function CopilotIAPage() {
         </div>
       )}
 
-      {/* 5. BASE DE CONEIXEMENT RAG */}
+      {/* 5. BASE DE CONEIXEMENT RAG (CREAR, EDITAR I ELIMINAR PROTOCOLS) */}
       {pestanya === "RAG" && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          <div className="bg-surface-container-lowest rounded-2xl shadow-sm border border-outline-variant/40 p-6 border-l-4 border-l-primary space-y-4">
-            <div className="flex items-center gap-3">
-              <div className="bg-primary/10 p-2 rounded-full">
-                <Layers className="h-5 w-5 text-primary" />
+          <div className="bg-surface-container-lowest rounded-2xl shadow-sm border border-outline-variant/40 p-6 border-l-4 border-l-primary space-y-4 h-fit">
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <div className="bg-primary/10 p-2 rounded-full">
+                  <Layers className="h-5 w-5 text-primary" />
+                </div>
+                <div>
+                  <h2 className="text-base font-bold text-on-surface">
+                    {ragEditId ? "Editar Protocol al Disc Sobirà" : "Nou Protocol al Disc Sobirà"}
+                  </h2>
+                  <p className="text-xs text-on-surface-variant">
+                    Directori <span className="font-mono">10_protocols_i_manuals/procediments_interns</span>
+                  </p>
+                </div>
               </div>
-              <div>
-                <h2 className="text-base font-bold text-on-surface">Nou Protocol al Disc Sobirà</h2>
-                <p className="text-xs text-on-surface-variant">
-                  Directori <span className="font-mono">10_protocols_i_manuals/procediments_interns</span>
-                </p>
-              </div>
+              {ragEditId && (
+                <button
+                  type="button"
+                  onClick={cancelarEdicioRag}
+                  className="px-2.5 py-1 rounded-lg border border-outline-variant text-xs font-semibold text-on-surface-variant hover:text-on-surface inline-flex items-center gap-1 cursor-pointer"
+                >
+                  <X className="w-3.5 h-3.5" />
+                  <span>Cancel·lar</span>
+                </button>
+              )}
             </div>
 
             {feedbackRag && (
@@ -1024,107 +1523,183 @@ export default function CopilotIAPage() {
               </div>
             )}
 
-            <form
-              onSubmit={async (e) => {
-                e.preventDefault();
-                const form = e.target as HTMLFormElement;
-                const dades = {
-                  titol: (form.elements.namedItem("titol") as HTMLInputElement).value,
-                  contingut: (form.elements.namedItem("contingut") as HTMLTextAreaElement).value,
-                  tags: (form.elements.namedItem("tags") as HTMLInputElement).value,
-                };
-                setSubmittingRag(true);
-                setFeedbackRag(null);
-                try {
-                  await apiFetch("/gestio/copilot/rag/document", {
-                    method: "POST",
-                    body: JSON.stringify(dades),
-                  });
-                  setFeedbackRag({
-                    type: "ok",
-                    text: "Document afegit i vectoritzat correctament al disc sobirà local.",
-                  });
-                  form.reset();
-                  await carregarDades();
-                } catch (err: any) {
-                  setFeedbackRag({
-                    type: "err",
-                    text: `Error afegint document: ${err.message || "Error de xarxa"}`,
-                  });
-                } finally {
-                  setSubmittingRag(false);
-                }
-              }}
-              className="space-y-4"
-            >
+            <form onSubmit={desarDocumentRag} className="space-y-4">
               <div>
-                <label className="block font-label-caps text-xs uppercase text-on-surface-variant mb-1">
-                  Títol del Protocol / Document
+                <label className="block text-xs font-bold text-on-surface-variant mb-1">
+                  Títol del Protocol / Document *
                 </label>
                 <input
                   type="text"
                   name="titol"
                   required
+                  value={ragTitol}
+                  onChange={(e) => setRagTitol(e.target.value)}
                   className="block w-full rounded-xl border-outline-variant bg-surface-container-low text-on-surface p-2.5 border text-xs outline-none focus:border-primary"
                   placeholder="Ex: Protocol d'Actuació Manteniment Bomba..."
                 />
               </div>
               <div>
-                <label className="block font-label-caps text-xs uppercase text-on-surface-variant mb-1">
-                  Informació o Contingut
+                <label className="block text-xs font-bold text-on-surface-variant mb-1">
+                  Informació, Normativa o Procediment *
                 </label>
                 <textarea
                   name="contingut"
                   required
-                  rows={6}
-                  className="block w-full rounded-xl border-outline-variant bg-surface-container-low text-on-surface p-2.5 border text-xs outline-none focus:border-primary"
+                  rows={7}
+                  value={ragContingut}
+                  onChange={(e) => setRagContingut(e.target.value)}
+                  className="block w-full rounded-xl border-outline-variant bg-surface-container-low text-on-surface p-2.5 border text-xs leading-relaxed outline-none focus:border-primary"
                   placeholder="Descriu pas a pas el protocol o detalls tècnics..."
                 />
               </div>
               <div>
-                <label className="block font-label-caps text-xs uppercase text-on-surface-variant mb-1">
-                  Paraules Clau (Tags, separats per coma)
+                <label className="block text-xs font-bold text-on-surface-variant mb-1">
+                  Paraules Clau (Tags, separades per coma)
                 </label>
                 <input
                   type="text"
                   name="tags"
+                  value={ragTags}
+                  onChange={(e) => setRagTags(e.target.value)}
                   className="block w-full rounded-xl border-outline-variant bg-surface-container-low text-on-surface p-2.5 border text-xs outline-none focus:border-primary"
                   placeholder="ex: manteniment, bomba, hidràulic"
                 />
               </div>
-              <button
-                type="submit"
-                disabled={submittingRag}
-                className="inline-flex items-center px-5 py-2.5 rounded-xl text-xs font-bold text-on-primary bg-primary hover:opacity-90 disabled:opacity-60 cursor-pointer"
-              >
-                <Send className="mr-2 h-3.5 w-3.5" />
-                {submittingRag ? "Desant al disc..." : "Entrenar Sistema Local"}
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="submit"
+                  disabled={submittingRag}
+                  className="inline-flex items-center px-5 py-2.5 rounded-xl text-xs font-bold text-on-primary bg-primary hover:opacity-90 disabled:opacity-60 cursor-pointer"
+                >
+                  {ragEditId ? (
+                    <Save className="mr-2 h-3.5 w-3.5" />
+                  ) : (
+                    <Send className="mr-2 h-3.5 w-3.5" />
+                  )}
+                  {submittingRag
+                    ? "Desant al disc..."
+                    : ragEditId
+                    ? "Desar Canvis del Protocol"
+                    : "Afegir Protocol al Disc"}
+                </button>
+                {ragEditId && (
+                  <button
+                    type="button"
+                    onClick={cancelarEdicioRag}
+                    className="px-4 py-2.5 rounded-xl border border-outline-variant/60 text-xs font-bold text-on-surface hover:border-primary cursor-pointer"
+                  >
+                    Descartar
+                  </button>
+                )}
+              </div>
             </form>
           </div>
 
           <div className="bg-surface-container-lowest rounded-2xl border border-outline-variant/40 p-5 shadow-sm space-y-3">
-            <h3 className="text-sm font-bold text-on-surface flex items-center gap-2">
-              <FileText className="w-4 h-4 text-primary" />
-              Protocols i Manuals al Disc ({ragDocs.length})
-            </h3>
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <h3 className="text-sm font-bold text-on-surface flex items-center gap-2">
+                <FileText className="w-4 h-4 text-primary" />
+                Protocols i Manuals al Disc ({ragDocs.length})
+              </h3>
+              {ragDocs.length > 0 && (
+                <div className="relative">
+                  <Search className="w-3.5 h-3.5 text-on-surface-variant absolute left-2.5 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="text"
+                    value={ragCerca}
+                    onChange={(e) => setRagCerca(e.target.value)}
+                    placeholder="Filtrar protocols o tags..."
+                    className="pl-8 pr-3 py-1.5 rounded-xl border border-outline-variant/60 bg-surface-container-low text-xs text-on-surface outline-none focus:border-primary w-full sm:w-56"
+                  />
+                </div>
+              )}
+            </div>
+
             {ragDocs.length === 0 ? (
               <div className="p-8 text-center text-xs text-on-surface-variant border border-dashed border-outline-variant/40 rounded-xl">
                 Encara no hi ha protocols indexats al disc local de l&apos;empresa.
               </div>
+            ) : ragDocsFiltrats.length === 0 ? (
+              <div className="p-6 text-center text-xs text-on-surface-variant border border-dashed border-outline-variant/40 rounded-xl">
+                Cap protocol coincideix amb &ldquo;{ragCerca}&rdquo;.
+              </div>
             ) : (
-              <div className="space-y-3 max-h-[500px] overflow-y-auto">
-                {ragDocs.map((doc) => (
-                  <div key={doc.id} className="p-3.5 rounded-xl border border-outline-variant/40 bg-surface-container-low space-y-1.5">
-                    <div className="text-xs font-bold text-on-surface">{doc.titol}</div>
-                    <p className="text-xs text-on-surface-variant whitespace-pre-wrap line-clamp-4">
-                      {doc.contingut}
-                    </p>
-                    {doc.tags && (
-                      <div className="text-[10px] font-mono text-primary">Tags: {doc.tags}</div>
-                    )}
-                  </div>
-                ))}
+              <div className="space-y-3 max-h-[540px] overflow-y-auto pr-1">
+                {ragDocsFiltrats.map((doc) => {
+                  const enEdicio = ragEditId === doc.id;
+                  const confirmantEliminacio = ragConfirmDeleteId === doc.id;
+                  return (
+                    <div
+                      key={doc.id}
+                      className={`p-3.5 rounded-xl border space-y-2 transition-colors ${
+                        enEdicio
+                          ? "border-primary bg-primary/5"
+                          : "border-outline-variant/40 bg-surface-container-low"
+                      }`}
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="text-xs font-bold text-on-surface">{doc.titol}</div>
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          <button
+                            type="button"
+                            onClick={() => iniciarEdicioRag(doc)}
+                            className="px-2.5 py-1 rounded-lg border border-outline-variant/60 bg-surface-container-lowest text-[11px] font-semibold text-on-surface hover:border-primary hover:text-primary inline-flex items-center gap-1 cursor-pointer"
+                          >
+                            <Pencil className="w-3 h-3" />
+                            <span>Editar</span>
+                          </button>
+                          {confirmantEliminacio ? (
+                            <div className="flex items-center gap-1">
+                              <button
+                                type="button"
+                                disabled={eliminantRagId === doc.id}
+                                onClick={() => eliminarDocumentRag(doc.id)}
+                                className="px-2 py-1 rounded-lg bg-rose-600 text-white text-[11px] font-bold hover:bg-rose-700 disabled:opacity-50 cursor-pointer"
+                              >
+                                {eliminantRagId === doc.id ? "..." : "Confirmar"}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setRagConfirmDeleteId(null)}
+                                className="px-2 py-1 rounded-lg border border-outline-variant text-[11px] text-on-surface-variant hover:text-on-surface cursor-pointer"
+                              >
+                                No
+                              </button>
+                            </div>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => setRagConfirmDeleteId(doc.id)}
+                              className="p-1.5 rounded-lg border border-outline-variant/60 bg-surface-container-lowest text-on-surface-variant hover:border-rose-300 hover:text-rose-700 cursor-pointer"
+                              title="Eliminar protocol"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                      <p className="text-xs text-on-surface-variant whitespace-pre-wrap line-clamp-4">
+                        {doc.contingut}
+                      </p>
+                      {doc.tags && (
+                        <div className="flex flex-wrap gap-1 pt-0.5">
+                          {doc.tags
+                            .split(",")
+                            .map((t) => t.trim())
+                            .filter(Boolean)
+                            .map((tag, i) => (
+                              <span
+                                key={`${doc.id}-tag-${i}`}
+                                className="px-2 py-0.5 rounded-md bg-primary/10 text-primary text-[10px] font-mono"
+                              >
+                                {tag}
+                              </span>
+                            ))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             )}
           </div>

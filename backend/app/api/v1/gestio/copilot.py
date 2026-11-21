@@ -1923,7 +1923,7 @@ class CopilotConfigIn(BaseModel):
 @router.get("/config", response_model=CopilotConfigIn)
 async def obtenir_config_copilot(
     db: AsyncSession = Depends(get_db_with_tenant_context),
-    claims: Dict[str, Any] = Depends(require_roles(["BOSS", "ADMIN", "ENGINYER"])),
+    claims: Dict[str, Any] = Depends(require_roles(["BOSS", "ADMIN", "ENGINYER", "SECRETARIA"])),
 ) -> CopilotConfigIn:
     """Retorna la configuració aïllada del Copilot per a l'empresa del JWT (Anti-IDOR + FORCE RLS)."""
     empresa_id = aplicar_tenant_context(claims)
@@ -2194,6 +2194,106 @@ async def llistar_documents_rag(
         for d in docs_disc
         if d.get("actiu", True)
     ]
+
+
+@router.put("/rag/document/{doc_id}")
+async def actualitzar_document_rag(
+    doc_id: str,
+    dades: DocumentRagIn,
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+    claims: Dict[str, Any] = Depends(get_current_user_claims),
+):
+    """Actualitza un protocol existent del RAG al disc dur sobirà de l'empresa."""
+    empresa_id = aplicar_tenant_context(claims)
+    doc_id_net = doc_id.strip()
+    if not doc_id_net:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Identificador de document RAG invàlid.",
+        )
+
+    docs_disc = await SovereignStorageGateway.llegir_entitats_json(
+        db, empresa_id, "protocols_interns"
+    )
+    existent = next((d for d in docs_disc if str(d.get("id") or "") == doc_id_net), None)
+    if not existent:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Protocol RAG no trobat al disc dur sobirà.",
+        )
+
+    await SovereignStorageGateway.desar_entitat_json(
+        db=db,
+        empresa_id=empresa_id,
+        categoria="protocols_interns",
+        item_id=doc_id_net,
+        dades={
+            "id": doc_id_net,
+            "titol": dades.pregunta,
+            "pregunta": dades.pregunta,
+            "contingut": dades.resposta,
+            "resposta": dades.resposta,
+            "tags": dades.paraules_clau,
+            "paraules_clau": dades.paraules_clau,
+            "actiu": True,
+            "creat_el": existent.get("creat_el") or datetime.now(timezone.utc).isoformat(),
+            "actualitzat_el": datetime.now(timezone.utc).isoformat(),
+        },
+    )
+
+    return {
+        "id": doc_id_net,
+        "estat": "OK",
+        "missatge": "Protocol actualitzat al disc dur sobirà.",
+    }
+
+
+@router.delete("/rag/document/{doc_id}")
+async def eliminar_document_rag(
+    doc_id: str,
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+    claims: Dict[str, Any] = Depends(get_current_user_claims),
+):
+    """Elimina un protocol del RAG del disc dur sobirà de l'empresa."""
+    empresa_id = aplicar_tenant_context(claims)
+    doc_id_net = doc_id.strip()
+    if not doc_id_net:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Identificador de document RAG invàlid.",
+        )
+
+    docs_disc = await SovereignStorageGateway.llegir_entitats_json(
+        db, empresa_id, "protocols_interns"
+    )
+    existent = next((d for d in docs_disc if str(d.get("id") or "") == doc_id_net), None)
+    if not existent:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Protocol RAG no trobat al disc dur sobirà.",
+        )
+
+    esborrat = await SovereignStorageGateway.esborrar_entitat_json(
+        db=db,
+        empresa_id=empresa_id,
+        categoria="protocols_interns",
+        item_id=doc_id_net,
+    )
+    if not esborrat:
+        # Fallback coherent: si no s'ha pogut eliminar el fitxer físic, desactivar-lo
+        await SovereignStorageGateway.desar_entitat_json(
+            db=db,
+            empresa_id=empresa_id,
+            categoria="protocols_interns",
+            item_id=doc_id_net,
+            dades={**existent, "actiu": False, "actualitzat_el": datetime.now(timezone.utc).isoformat()},
+        )
+
+    return {
+        "id": doc_id_net,
+        "estat": "OK",
+        "missatge": "Protocol eliminat del disc dur sobirà.",
+    }
 
 
 class ActionConfirmIn(BaseModel):
