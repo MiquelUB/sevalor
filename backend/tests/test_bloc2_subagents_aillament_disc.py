@@ -699,9 +699,11 @@ async def test_bloc2_503_zero_fallback_i_xat_amb_prompt_i_feedback_disc(
             assert "42" in data_ok["resposta"]
 
             assert len(captured_payloads) >= 2
-            sys_msg = captured_payloads[0]["messages"][0]["content"]
+            synth_payload = captured_payloads[-1]
+            sys_msg = synth_payload["messages"][0]["content"]
+            user_msg = synth_payload["messages"][-1]["content"]
             assert "INSTRUCCIO SECRETA DEL CLIENT" in sys_msg
-            assert "Maria Sobirana" in sys_msg
+            assert "Maria Sobirana" in user_msg
 
             feedbacks = await SovereignStorageGateway.llegir_entitats_json(
                 admin_session, emp_on, "copilot_feedback"

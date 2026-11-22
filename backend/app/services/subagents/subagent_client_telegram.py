@@ -16,12 +16,12 @@ class SubagentClientTelegram(BaseSubagent):
     descripcio = (
         "Especialista en comunicació amb clients via Telegram, avisos d'arribada i aprovació de pressupostos."
     )
-    allowed_roles = ["CLIENT_FINAL", "SECRETARIA", "ENGINYER", "BOSS"]
+    allowed_roles = ["CLIENT_FINAL", "SECRETARIA", "ENGINYER", "BOSS", "ADMIN"]
     tools_schema = SCHEMAS_CLIENT_TELEGRAM
     system_prompt = (
         "Ets el Concierge de Clients de SEVALOR Suite. "
         "Comunica't amb els clients de forma exquisida, clara i amable consultant les fitxes del disc dur dedicat de l'empresa. "
-        "Envia avisos d'arribada d'operaris, presenta pressupostos d'extres i rep fotos d'avaries. "
+        "Prepara avisos d'arribada d'operaris, pressupostos verificats del disc dur i recepció de fotos d'avaries. "
         "Aïlla completament les dades internes de l'empresa respecte al client."
     )
 
@@ -54,29 +54,32 @@ class SubagentClientTelegram(BaseSubagent):
             return await self.tool_notify_technician_arrival(
                 db,
                 empresa_id,
-                args.get("ordre_treball_id", ""),
-                int(args.get("minuts_estimats", 15)),
+                codi_ot=str(args.get("codi_ot") or args.get("ordre_treball_id") or ""),
+                minuts_estimats=int(args.get("minuts_estimats", 15)),
             )
         if tool_name == "send_interactive_budget":
+            # Seguretat financera (Constitució §2.IV HITL): MAI acceptar import_total ni concepte del LLM
             return await self.tool_send_interactive_budget(
                 db,
                 empresa_id,
-                args.get("client_id", ""),
-                args.get("concepte", ""),
-                float(args.get("import_total", 0.0)),
+                numero_pressupost=args.get("numero_pressupost") or args.get("pressupost_id"),
+                client_nom=args.get("client_nom") or args.get("client_id"),
             )
         if tool_name == "receive_client_media":
             return await self.tool_receive_client_media(
-                db, empresa_id, args.get("client_id", ""), args.get("descripcio", "")
+                db,
+                empresa_id,
+                client_nom=str(args.get("client_nom") or args.get("client_id") or ""),
+                descripcio=str(args.get("descripcio") or ""),
             )
         return {"error": f"Eina no suportada pel subagent Telegram: {tool_name}"}
 
     async def tool_notify_technician_arrival(
-        self, db: AsyncSession, empresa_id: uuid.UUID, ot_id_str: str, minuts: int = 15
+        self, db: AsyncSession, empresa_id: uuid.UUID, codi_ot: str, minuts_estimats: int = 15
     ) -> dict:
-        ot_ref = (ot_id_str or "").strip()
+        ot_ref = (codi_ot or "").strip()
         if not ot_ref:
-            return {"notificat": False, "missatge": "Cal un ID o codi vàlid d'ordre de treball."}
+            return {"trobat": False, "notificat": False, "missatge": "Cal un codi vàlid d'ordre de treball."}
 
         ots = await self.read_sovereign_category(db, empresa_id, "ots_actives")
         ot = next(
@@ -90,6 +93,7 @@ class SubagentClientTelegram(BaseSubagent):
         )
         if not ot:
             return {
+                "trobat": False,
                 "notificat": False,
                 "missatge": f"No s'ha trobat l'ordre de treball '{ot_ref}' al disc dur de l'empresa.",
             }
@@ -99,13 +103,15 @@ class SubagentClientTelegram(BaseSubagent):
         chat_id = client.get("telegram_chat_id") if client else None
 
         return {
+            "trobat": True,
             "notificat": bool(chat_id),
+            "requires_confirmation": bool(chat_id),
             "ordre_treball": ot.get("codi"),
-            "minuts_estimats": minuts,
+            "minuts_estimats": minuts_estimats,
             "telegram_chat_id_disponible": bool(chat_id),
             "missatge": (
                 f"Notificació preparada per al client per Telegram ({ot.get('codi')}): "
-                f"La quadrilla arribarà en aproximadament {minuts} minuts."
+                f"La quadrilla arribarà en aproximadament {minuts_estimats} minuts. Pendent de confirmació (HITL)."
                 if chat_id
                 else f"Ordre {ot.get('codi')} localitzada, però el client no té telegram_chat_id vinculat al disc dur."
             ),
@@ -115,49 +121,126 @@ class SubagentClientTelegram(BaseSubagent):
         self,
         db: AsyncSession,
         empresa_id: uuid.UUID,
-        client_id_str: str,
-        concepte: str,
-        import_total: float,
+        numero_pressupost: Optional[str] = None,
+        client_nom: Optional[str] = None,
     ) -> dict:
-        cid = (client_id_str or "").strip()
-        clients = await self.read_sovereign_category(db, empresa_id, "clients")
-        client = next((c for c in clients if str(c.get("id") or "") == cid), None)
-        if not client:
+        """Carrega el pressupost verificat del disc dur (mai importa xifres del LLM) i genera proposta HITL."""
+        pres_ref = (numero_pressupost or "").strip().lower()
+        cli_ref = (client_nom or "").strip().lower()
+        if not pres_ref and not cli_ref:
             return {
+                "trobat": False,
                 "enviat": False,
-                "client_id": cid,
-                "missatge": f"No s'ha trobat el client '{cid}' al disc dur de l'empresa.",
+                "missatge": "Cal indicar el número de pressupost o el nom del client.",
             }
 
+        pressupostos = await self.read_sovereign_category(db, empresa_id, "pressupostos")
+        clients = await self.read_sovereign_category(db, empresa_id, "clients")
+        clients_by_id = {str(c.get("id") or ""): c for c in clients if c.get("id")}
+
+        coincidents: List[dict] = []
+        for p in pressupostos:
+            p_id = str(p.get("id") or "").lower()
+            p_num = str(p.get("numero") or "").lower()
+            cid = str(p.get("client_id") or "")
+            cl = clients_by_id.get(cid)
+            cl_nom = str((cl or {}).get("rao_social") or p.get("client_nom") or "").lower()
+
+            if pres_ref and (pres_ref == p_id or pres_ref == p_num or pres_ref in p_num):
+                coincidents.append(p)
+            elif not pres_ref and cli_ref and (cli_ref == cid.lower() or cli_ref in cl_nom):
+                coincidents.append(p)
+
+        if not coincidents:
+            return {
+                "trobat": False,
+                "enviat": False,
+                "missatge": (
+                    f"No s'ha trobat cap pressupost registrat al disc per a '{numero_pressupost or client_nom}'."
+                ),
+            }
+
+        if len(coincidents) > 1 and not pres_ref:
+            candidats = [
+                {
+                    "numero": p.get("numero") or p.get("id"),
+                    "client": (clients_by_id.get(str(p.get("client_id") or "")) or {}).get("rao_social")
+                    or p.get("client_nom"),
+                    "estat": p.get("estat"),
+                }
+                for p in coincidents[:5]
+            ]
+            return {
+                "trobat": True,
+                "ambigu": True,
+                "enviat": False,
+                "candidats": candidats,
+                "missatge": (
+                    f"S'han trobat {len(coincidents)} pressupostos per a '{client_nom}'. "
+                    "Indica el número exacte de pressupost a preparar."
+                ),
+            }
+
+        pressupost = coincidents[0]
+        cid = str(pressupost.get("client_id") or "")
+        client = clients_by_id.get(cid)
+        cl_nom = str((client or {}).get("rao_social") or pressupost.get("client_nom") or "Client")
+        te_tg = bool(client and client.get("telegram_chat_id"))
+        import_disc = float(pressupost.get("total") or pressupost.get("import_total") or 0.0)
+        concepte_disc = str(
+            pressupost.get("titol") or pressupost.get("concepte") or pressupost.get("numero") or "Pressupost"
+        )
+
         return {
-            "enviat": bool(client.get("telegram_chat_id")),
+            "trobat": True,
+            "enviat": False,
+            "requires_confirmation": te_tg,
+            "pressupost_numero": pressupost.get("numero") or pressupost.get("id"),
             "client_id": cid,
-            "client_nom": client.get("rao_social"),
-            "concepte": concepte,
-            "import_total": import_total,
-            "estat": "PENDENT_APROVACIO_CLIENT" if client.get("telegram_chat_id") else "SENSE_CANAL_TELEGRAM",
+            "client_nom": cl_nom,
+            "concepte": concepte_disc,
+            "import_total": import_disc,
+            "estat": "PENDENT_CONFIRMACIO_HITL" if te_tg else "SENSE_CANAL_TELEGRAM",
             "missatge": (
-                f"S'ha preparat el pressupost interactiu de {import_total:.2f} € ('{concepte}') per a {client.get('rao_social')} via Telegram."
-                if client.get("telegram_chat_id")
-                else f"El client {client.get('rao_social')} no disposa de telegram_chat_id configurat al disc dur."
+                f"Proposta preparada per enviar el pressupost {pressupost.get('numero') or pressupost.get('id')} "
+                f"('{concepte_disc}', {import_disc:.2f} €) a {cl_nom} via Telegram. Requereix confirmació humana (HITL)."
+                if te_tg
+                else f"El client {cl_nom} no disposa de telegram_chat_id configurat al disc dur."
             ),
         }
 
     async def tool_receive_client_media(
-        self, db: AsyncSession, empresa_id: uuid.UUID, client_id_str: str, descripcio: str
+        self, db: AsyncSession, empresa_id: uuid.UUID, client_nom: str, descripcio: str = ""
     ) -> dict:
-        cid = (client_id_str or "").strip()
+        c_ref = (client_nom or "").strip()
+        c_low = c_ref.lower()
         clients = await self.read_sovereign_category(db, empresa_id, "clients")
-        client = next((c for c in clients if str(c.get("id") or "") == cid), None)
-        if not client:
+        coincidents = [
+            c
+            for c in clients
+            if str(c.get("id") or "") == c_ref
+            or c_low in str(c.get("rao_social") or c.get("nom") or "").lower()
+        ]
+        if not coincidents:
             return {
+                "trobat": False,
                 "rebut": False,
-                "client_id": cid,
-                "missatge": f"No s'ha trobat cap client amb ID '{cid}' al disc dur de l'empresa.",
+                "client_nom": c_ref,
+                "missatge": f"No s'ha trobat cap client coincident amb '{c_ref}' al disc dur de l'empresa.",
             }
+        if len(coincidents) > 1:
+            return {
+                "trobat": True,
+                "ambigu": True,
+                "rebut": False,
+                "candidats": [c.get("rao_social") for c in coincidents[:5]],
+                "missatge": f"Hi ha múltiples clients coincidents amb '{c_ref}'. Especifica el nom complet.",
+            }
+        client = coincidents[0]
         return {
+            "trobat": True,
             "rebut": True,
-            "client_id": cid,
+            "client_id": str(client.get("id") or ""),
             "client_nom": client.get("rao_social"),
             "descripcio": descripcio,
             "missatge": f"Arxiu multimèdia del client {client.get('rao_social')} registrat: {descripcio}.",

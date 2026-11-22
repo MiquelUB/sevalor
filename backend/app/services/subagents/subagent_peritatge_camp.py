@@ -31,7 +31,7 @@ class SubagentPeritatgeCamp(BaseSubagent):
     descripcio = (
         "Especialista en peritatge d'avaries, garanties vigents de fabricació/mà d'obra i redacció de memoràndums tècnics."
     )
-    allowed_roles = ["OPERARI", "CAP_DE_COLLA", "ENGINYER", "BOSS"]
+    allowed_roles = ["OPERARI", "CAP_DE_COLLA", "ENGINYER", "BOSS", "ADMIN"]
     tools_schema = SCHEMAS_PERITATGE_CAMP
     system_prompt = (
         "Ets el Perit Tècnic de Camp de SEVALOR. "
@@ -73,6 +73,8 @@ class SubagentPeritatgeCamp(BaseSubagent):
             return await self.tool_get_warranty_status(
                 db,
                 empresa_id,
+                finca_nom=args.get("finca_nom"),
+                client_nom=args.get("client_nom"),
                 finca_id=args.get("finca_id"),
                 client_id=args.get("client_id"),
                 numero_serie=args.get("numero_serie"),
@@ -81,7 +83,8 @@ class SubagentPeritatgeCamp(BaseSubagent):
             return await self.tool_generar_memorandum_tecnic(
                 db,
                 empresa_id,
-                descripcio=args.get("descripcio_avaria", ""),
+                descripcio_avaria=args.get("descripcio_avaria", ""),
+                codi_ot=args.get("codi_ot"),
                 ot_id_str=args.get("ordre_treball_id"),
             )
         return {"error": f"Eina no suportada pel subagent de peritatge: {tool_name}"}
@@ -93,19 +96,55 @@ class SubagentPeritatgeCamp(BaseSubagent):
         finca_id: Optional[str] = None,
         client_id: Optional[str] = None,
         numero_serie: Optional[str] = None,
+        finca_nom: Optional[str] = None,
+        client_nom: Optional[str] = None,
     ) -> dict:
         avui = date.today()
         fa_un_any = avui - timedelta(days=365)
         alertes: List[Dict[str, Any]] = []
 
-        if finca_id or client_id:
+        # Resolució d'identificadors humans (`finca_nom`, `client_nom`) a IDs del disc sobirà
+        resolved_finca_id = finca_id.strip() if finca_id else None
+        resolved_client_id = client_id.strip() if client_id else None
+
+        if not resolved_finca_id and finca_nom and finca_nom.strip():
+            f_low = finca_nom.strip().lower()
+            finques = await self.read_sovereign_category(db, empresa_id, "finques")
+            m_f = next(
+                (
+                    f
+                    for f in finques
+                    if str(f.get("id") or "") == finca_nom.strip()
+                    or f_low in str(f.get("nom") or "").lower()
+                ),
+                None,
+            )
+            if m_f and m_f.get("id"):
+                resolved_finca_id = str(m_f["id"])
+
+        if not resolved_client_id and client_nom and client_nom.strip():
+            c_low = client_nom.strip().lower()
+            clients = await self.read_sovereign_category(db, empresa_id, "clients")
+            m_c = next(
+                (
+                    c
+                    for c in clients
+                    if str(c.get("id") or "") == client_nom.strip()
+                    or c_low in str(c.get("rao_social") or c.get("nom") or "").lower()
+                ),
+                None,
+            )
+            if m_c and m_c.get("id"):
+                resolved_client_id = str(m_c["id"])
+
+        if resolved_finca_id or resolved_client_id:
             ots_act = await self.read_sovereign_category(db, empresa_id, "ots_actives")
             ots_hist = await self.read_sovereign_category(db, empresa_id, "ots_historic")
             candidates: List[Dict[str, Any]] = []
             for o in [*ots_act, *ots_hist]:
-                if finca_id and str(o.get("finca_id") or "") != finca_id.strip():
+                if resolved_finca_id and str(o.get("finca_id") or "") != resolved_finca_id:
                     continue
-                if client_id and str(o.get("client_id") or "") != client_id.strip():
+                if resolved_client_id and str(o.get("client_id") or "") != resolved_client_id:
                     continue
                 d_plan = _parse_date(o.get("data_planificacio") or o.get("created_at"))
                 if d_plan and d_plan >= fa_un_any:
@@ -160,9 +199,22 @@ class SubagentPeritatgeCamp(BaseSubagent):
         self,
         db: AsyncSession,
         empresa_id: uuid.UUID,
-        descripcio: str,
+        descripcio_avaria: str,
         ot_id_str: Optional[str] = None,
+        codi_ot: Optional[str] = None,
     ) -> dict:
+        resolved_ot_id = ot_id_str
+        if not resolved_ot_id and codi_ot and codi_ot.strip():
+            ots = await self.read_sovereign_category(db, empresa_id, "ots_actives")
+            c_up = codi_ot.strip().upper()
+            m_ot = next(
+                (o for o in ots if str(o.get("codi") or "").upper() == c_up or str(o.get("id") or "") == codi_ot.strip()),
+                None,
+            )
+            resolved_ot_id = str(m_ot.get("id")) if m_ot and m_ot.get("id") else codi_ot.strip()
+
+        descripcio = descripcio_avaria
+        ot_id_str = resolved_ot_id
         text_lower = (descripcio or "").lower()
 
         es_extra = any(

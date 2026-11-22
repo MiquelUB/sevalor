@@ -23,6 +23,7 @@ import argparse
 import asyncio
 import base64
 import hashlib
+import heapq
 import json
 import logging
 import math
@@ -34,18 +35,21 @@ import signal
 import sys
 import uuid
 import zipfile
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
 import httpx
 import websockets
 
-AGENT_VERSION = "sevalor-wss-agent/3.0.0"
+AGENT_VERSION = "sevalor-wss-agent/3.2.0"
 DEFAULT_SERVER_URL = "https://sevalor-sevalor-backend.80opze.easypanel.host"
 DEFAULT_LOCAL_LLM_URL = "http://127.0.0.1:1234"
+DEFAULT_LOCAL_LLM_CONCURRENCY = 1
+LLM_PRIORITY_RANKS: Dict[str, int] = {"HIGH": 0, "NORMAL": 1, "LOW": 2}
 VALID_VAULT_ROLES = ("EMPRESA", "SUPERADMIN")
 
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024  # 50 MB màxim per fitxer (AGENTS.md §3.4)
@@ -151,6 +155,7 @@ class AgentConfig:
     disk_b: Path
     empresa_id: Optional[str] = None
     local_llm_url: str = DEFAULT_LOCAL_LLM_URL
+    local_llm_concurrency: int = DEFAULT_LOCAL_LLM_CONCURRENCY
     agent_version: str = AGENT_VERSION
 
     def __post_init__(self) -> None:
@@ -178,6 +183,12 @@ class AgentConfig:
         if parsed_llm.scheme not in ("http", "https") or not parsed_llm.netloc:
             raise ValueError(f"SEVALOR_LOCAL_LLM_URL invàlida: {self.local_llm_url!r}.")
         object.__setattr__(self, "local_llm_url", self.local_llm_url.strip().rstrip("/"))
+
+        try:
+            conc = int(self.local_llm_concurrency)
+        except (TypeError, ValueError):
+            conc = DEFAULT_LOCAL_LLM_CONCURRENCY
+        object.__setattr__(self, "local_llm_concurrency", max(1, min(conc, 8)))
 
         object.__setattr__(self, "disk_a", self.disk_a.expanduser().resolve())
         object.__setattr__(self, "disk_b", self.disk_b.expanduser().resolve())
@@ -208,6 +219,12 @@ class AgentConfig:
         disk_b_raw = os.getenv("SEVALOR_VAULT_PATH_B", "").strip()
         disk_b = Path(disk_b_raw) if disk_b_raw else Path(f"{str(disk_a).rstrip('/')}_backup_B")
 
+        raw_conc = os.getenv("SEVALOR_LOCAL_LLM_CONCURRENCY", str(DEFAULT_LOCAL_LLM_CONCURRENCY)).strip()
+        try:
+            llm_concurrency = max(1, min(int(raw_conc), 8))
+        except ValueError:
+            llm_concurrency = DEFAULT_LOCAL_LLM_CONCURRENCY
+
         return cls(
             server_url=os.getenv("SEVALOR_SERVER_URL", DEFAULT_SERVER_URL).strip()
             or DEFAULT_SERVER_URL,
@@ -218,6 +235,7 @@ class AgentConfig:
             disk_b=disk_b,
             local_llm_url=os.getenv("SEVALOR_LOCAL_LLM_URL", DEFAULT_LOCAL_LLM_URL).strip()
             or DEFAULT_LOCAL_LLM_URL,
+            local_llm_concurrency=llm_concurrency,
         )
 
 
@@ -346,6 +364,65 @@ def inicialitzar_estructura_disc(
     return list(carpetes)
 
 
+class _PriorityConcurrencyLimiter:
+    """Semàfor asíncron amb cua de prioritat estricta (`HIGH > NORMAL > LOW`) per a LLM local.
+
+    Evita la saturació d'ample de banda de memòria als mini-PCs dedicats (Ryzen 7 5700U 16/32 GB)
+    serialitzant la inferència (`SEVALOR_LOCAL_LLM_CONCURRENCY=1`) i donant prioritat immediata al
+    Copilot interactiu (`HIGH`) per davant de tasques en segon pla com OCR (`LOW`).
+    """
+
+    def __init__(self, max_concurrency: int = DEFAULT_LOCAL_LLM_CONCURRENCY) -> None:
+        self._max_concurrency = max(1, int(max_concurrency))
+        self._in_flight = 0
+        self._seq = 0
+        self._waiters: List[Tuple[int, int, asyncio.Future[None]]] = []
+
+    @property
+    def max_concurrency(self) -> int:
+        return self._max_concurrency
+
+    @property
+    def in_flight(self) -> int:
+        return self._in_flight
+
+    @property
+    def queued(self) -> int:
+        return sum(1 for _r, _s, fut in self._waiters if not fut.done())
+
+    async def _acquire(self, priority: str = "HIGH") -> None:
+        if self._in_flight < self._max_concurrency:
+            self._in_flight += 1
+            return
+        loop = asyncio.get_running_loop()
+        fut: asyncio.Future[None] = loop.create_future()
+        rank = LLM_PRIORITY_RANKS.get(str(priority or "HIGH").strip().upper(), 0)
+        self._seq += 1
+        heapq.heappush(self._waiters, (rank, self._seq, fut))
+        try:
+            await fut
+        except BaseException:
+            if fut.done() and not fut.cancelled():
+                self._release()
+            raise
+
+    def _release(self) -> None:
+        while self._waiters:
+            _rank, _seq, fut = heapq.heappop(self._waiters)
+            if not fut.done():
+                fut.set_result(None)
+                return
+        self._in_flight = max(0, self._in_flight - 1)
+
+    @asynccontextmanager
+    async def acquire(self, priority: str = "HIGH") -> AsyncIterator[None]:
+        await self._acquire(priority)
+        try:
+            yield
+        finally:
+            self._release()
+
+
 class SovereignWssAgent:
     """Agent sobirà WSS que executa les accions del broker sobre el disc dur i LLM locals."""
 
@@ -353,6 +430,7 @@ class SovereignWssAgent:
         self.config = config
         self.welcome: Dict[str, Any] = {}
         self.last_close_code: Optional[int] = None
+        self._llm_limiter = _PriorityConcurrencyLimiter(config.local_llm_concurrency)
 
     def init_folders(self) -> Dict[str, Any]:
         carpetes = inicialitzar_estructura_disc(
@@ -408,6 +486,8 @@ class SovereignWssAgent:
             "disc_a_lliure_gb": round(usage_a.free / (1024**3), 2),
             "disc_b_lliure_gb": round(usage_b.free / (1024**3), 2),
             "llm_online": llm_online,
+            "llm_concurrency": self.config.local_llm_concurrency,
+            "llm_in_flight": self._llm_limiter.in_flight,
             "models": models,
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
@@ -645,24 +725,36 @@ class SovereignWssAgent:
             ) from exc
 
     async def action_llm_chat(self, payload: Dict[str, Any], *, timeout_s: float = 120.0) -> Dict[str, Any]:
-        """Executa inferència OpenAI-compatible contra el LM Studio / Ollama local del PC."""
+        """Executa inferència OpenAI-compatible contra el LM Studio / Ollama local del PC.
+
+        Serialitza les crides amb `_PriorityConcurrencyLimiter` (`SEVALOR_LOCAL_LLM_CONCURRENCY=1`,
+        `HIGH` per a Copilot interactiu > `LOW` per a OCR en segon pla) i elimina capçaleres o
+        claus internes `_sevalor_*` abans d'enviar el JSON al motor IA local.
+        """
         base = self.config.local_llm_url
         endpoint = (
             f"{base}/chat/completions" if base.endswith("/v1") else f"{base}/v1/chat/completions"
         )
-        # Mai propagar credencials de túnel cap al motor IA local
-        body = {k: v for k, v in payload.items() if str(k).lower() != "x-vault-token"}
+        priority = str(payload.get("_sevalor_priority") or "HIGH").strip().upper()
+        # Mai propagar credencials de túnel ni camps interns `_sevalor_*` cap al motor IA local
+        body = {
+            k: v
+            for k, v in payload.items()
+            if str(k).lower() != "x-vault-token" and not str(k).startswith("_sevalor_")
+        }
         req_headers: Dict[str, str] = {"Content-Type": "application/json"}
         api_key = os.getenv("SEVALOR_LOCAL_LLM_API_KEY", "").strip()
         if api_key:
             req_headers["Authorization"] = f"Bearer {api_key}"
 
+        effective_timeout = max(2.0, min(timeout_s, 180.0))
         try:
-            async with httpx.AsyncClient(
-                timeout=max(5.0, min(timeout_s, 180.0)),
-                follow_redirects=False,
-            ) as client:
-                resp = await client.post(endpoint, json=body, headers=req_headers)
+            async with self._llm_limiter.acquire(priority):
+                async with httpx.AsyncClient(
+                    timeout=effective_timeout,
+                    follow_redirects=False,
+                ) as client:
+                    resp = await client.post(endpoint, json=body, headers=req_headers)
             if resp.status_code >= 400:
                 raise AgentActionError(
                     f"LM Studio/Ollama local ha retornat HTTP {resp.status_code}: {resp.text[:200]}",

@@ -1,12 +1,18 @@
 "use client";
 import React, { useState, useEffect } from "react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { Sparkles, X, Send, ExternalLink, Bot, Camera } from "lucide-react";
 import { apiFetch, getAuthToken } from "@/lib/api";
+import {
+  CopilotErrorModal,
+  extractCopilotPopupError,
+  type CopilotPopupError,
+} from "@/components/CopilotErrorModal";
 
 export default function CopilotWidget({ isMobile = false }: { isMobile?: boolean }) {
   const pathname = usePathname();
+  const router = useRouter();
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
   const [hasCopilotIa, setHasCopilotIa] = useState<boolean>(false);
   const [iaStatus, setIaStatus] = useState<{
@@ -23,6 +29,8 @@ export default function CopilotWidget({ isMobile = false }: { isMobile?: boolean
   const [carregant, setCarregant] = useState(false);
   const [imatgeB64, setImatgeB64] = useState<string | null>(null);
   const [executantAccio, setExecutantAccio] = useState(false);
+  const [popupError, setPopupError] = useState<CopilotPopupError | null>(null);
+  const [ultimaPreguntaFallida, setUltimaPreguntaFallida] = useState<string | null>(null);
 
   // El Copilot MAI es pot renderitzar a pàgines de login ni sense autenticació prèvia
   const isAuthPage =
@@ -146,9 +154,20 @@ export default function CopilotWidget({ isMobile = false }: { isMobile?: boolean
         },
       ]);
     } catch (err: any) {
+      const structured = extractCopilotPopupError(err);
+      if (structured) {
+        setUltimaPreguntaFallida(textFinal);
+        setPopupError(structured);
+      }
       setConversaXat((prev) => [
         ...prev,
-        { sender: "bot", text: err?.message || "Error de connexió amb l'Assistent AI.", error: true },
+        {
+          sender: "bot",
+          text: structured
+            ? `${structured.titol}: ${structured.message}`
+            : err?.message || "Error de connexió amb l'Assistent AI.",
+          error: true,
+        },
       ]);
     } finally {
       setCarregant(false);
@@ -354,6 +373,22 @@ export default function CopilotWidget({ isMobile = false }: { isMobile?: boolean
           </div>
         </div>
       )}
+
+      <CopilotErrorModal
+        error={popupError}
+        onClose={() => setPopupError(null)}
+        onOpenConfig={!isMobile ? () => router.push("/gestio/copilot") : undefined}
+        onRetry={
+          ultimaPreguntaFallida
+            ? () => {
+                const retryPrompt = ultimaPreguntaFallida;
+                setUltimaPreguntaFallida(null);
+                enviarMissatgeXat(retryPrompt);
+              }
+            : undefined
+        }
+        canCheckStatus={!isMobile}
+      />
     </>
   );
 }

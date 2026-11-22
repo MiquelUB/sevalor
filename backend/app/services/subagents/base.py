@@ -1,13 +1,81 @@
 """Classe base abstracta per als Subagents especialitzats de Sevalor Suite (Zero-Storage Sobirà)."""
 
+from __future__ import annotations
+
+import asyncio
 import re
 import uuid
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from contextlib import contextmanager
+from contextvars import ContextVar
+from typing import Any, Dict, Iterator, List, Optional, Sequence, Tuple
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.services.sovereign_storage import SovereignStorageGateway
+
+
+class RequestDiskCache:
+    """Caché d'abast de petició per evitar lectures WSS duplicades i coalescent crides paral·leles."""
+
+    def __init__(self) -> None:
+        self._data: Dict[Tuple[str, str], List[Dict[str, Any]]] = {}
+        self._inflight: Dict[Tuple[str, str], asyncio.Task[List[Dict[str, Any]]]] = {}
+        self.hits: int = 0
+        self.misses: int = 0
+
+    async def get_or_load(
+        self,
+        db: AsyncSession,
+        empresa_id: uuid.UUID,
+        categoria: str,
+    ) -> List[Dict[str, Any]]:
+        key = (str(empresa_id), str(categoria))
+        if key in self._data:
+            self.hits += 1
+            return list(self._data[key])
+
+        existing = self._inflight.get(key)
+        if existing is not None:
+            self.hits += 1
+            return list(await existing)
+
+        self.misses += 1
+        task: asyncio.Task[List[Dict[str, Any]]] = asyncio.create_task(
+            SovereignStorageGateway.llegir_entitats_json(db, empresa_id, categoria)
+        )
+        self._inflight[key] = task
+        try:
+            result = await task
+            self._data[key] = list(result)
+            return list(result)
+        finally:
+            self._inflight.pop(key, None)
+
+    def invalidate(self, empresa_id: uuid.UUID, categoria: str) -> None:
+        key = (str(empresa_id), str(categoria))
+        self._data.pop(key, None)
+
+
+_ACTIVE_DISK_CACHE: ContextVar[Optional[RequestDiskCache]] = ContextVar(
+    "sevalor_active_request_disk_cache", default=None
+)
+
+
+@contextmanager
+def request_disk_cache_scope() -> Iterator[RequestDiskCache]:
+    """Activa una `RequestDiskCache` aïllada per a la durada d'una consulta del Copilot."""
+    cache = RequestDiskCache()
+    token = _ACTIVE_DISK_CACHE.set(cache)
+    try:
+        yield cache
+    finally:
+        _ACTIVE_DISK_CACHE.reset(token)
+
+
+def get_active_disk_cache() -> Optional[RequestDiskCache]:
+    """Retorna la `RequestDiskCache` activa en la petició actual (si existeix)."""
+    return _ACTIVE_DISK_CACHE.get()
 
 
 class BaseSubagent(ABC):
@@ -27,6 +95,9 @@ class BaseSubagent(ABC):
         categoria: str,
     ) -> List[Dict[str, Any]]:
         """Llegeix totes les fitxes verificades (HMAC + tenant) d'una categoria al disc de l'empresa."""
+        cache = _ACTIVE_DISK_CACHE.get()
+        if cache is not None:
+            return await cache.get_or_load(db, empresa_id, categoria)
         return await SovereignStorageGateway.llegir_entitats_json(db, empresa_id, categoria)
 
     async def save_sovereign_entity(
@@ -38,9 +109,13 @@ class BaseSubagent(ABC):
         dades: Dict[str, Any],
     ) -> str:
         """Desa una fitxa JSON signada amb HMAC al disc dur dedicat de l'empresa."""
-        return await SovereignStorageGateway.desar_entitat_json(
+        res = await SovereignStorageGateway.desar_entitat_json(
             db, empresa_id, categoria, item_id, dades
         )
+        cache = _ACTIVE_DISK_CACHE.get()
+        if cache is not None:
+            cache.invalidate(empresa_id, categoria)
+        return res
 
     async def read_sovereign_text(
         self,
@@ -62,12 +137,14 @@ class BaseSubagent(ABC):
         query_text: str,
         limit: int = 10,
     ) -> List[Dict[str, Any]]:
-        """Cerca textual multi-carpeta sobre fitxes verificades del disc dur del tenant."""
+        """Cerca textual multi-carpeta en paral·lel sobre fitxes verificades del disc dur del tenant."""
         q_norm = (query_text or "").strip().lower()
         tokens = [t for t in re.split(r"[\s,;:\-_]+", q_norm) if len(t) >= 2]
+        batches = await asyncio.gather(
+            *(self.read_sovereign_category(db, empresa_id, cat) for cat in categories)
+        )
         resultats: List[Dict[str, Any]] = []
-        for cat in categories:
-            registres = await self.read_sovereign_category(db, empresa_id, cat)
+        for cat, registres in zip(categories, batches):
             for item in registres:
                 haystack = " ".join(
                     str(v)
@@ -131,4 +208,3 @@ class BaseSubagent(ABC):
         Retorna (resposta, tool_name, tool_args, tool_resultat, enllacos).
         """
         pass
-

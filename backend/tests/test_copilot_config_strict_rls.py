@@ -210,6 +210,7 @@ async def test_copilot_config_force_rls_isolation_and_endpoints(
         assert cfg_a_direct.empresa_id == emp_a_id
 
         # 6. Inferència real via Túnel WSS d'Empresa A rep exactament el prompt i model d'Alfa
+        #    i la configuració resideix EXCLUSIVAMENT al disc dur del PC (Zero-Storage Hetzner)
         async with live_empresa_wss_context(
             emp_a_id,
             token_a,
@@ -224,13 +225,31 @@ async def test_copilot_config_force_rls_isolation_and_endpoints(
             )
             assert r_xat_a.status_code == 200, r_xat_a.text
             chat_calls = [c for c in ctx["llm_calls"] if c["path"] == "/v1/chat/completions"]
-            assert len(chat_calls) >= 1
-            sent_body = chat_calls[0]["body"]
-            assert sent_body["model"] == "qwen2.5-alfa-local"
-            sys_msg = sent_body["messages"][0]["content"]
+            assert len(chat_calls) >= 2  # Etapa 1 (Router JSON) + Etapa 2 (Síntesi KV Prefix Cache)
+
+            router_body = chat_calls[0]["body"]
+            assert router_body["model"] == "qwen2.5-alfa-local"
+            assert router_body.get("response_format", {}).get("type") == "json_schema"
+
+            synth_body = chat_calls[-1]["body"]
+            assert synth_body["model"] == "qwen2.5-alfa-local"
+            assert "tools" not in synth_body
+            sys_msg = synth_body["messages"][0]["content"]
             assert "PROMPT_EXCLUSIU_ALFA_123" in sys_msg
             assert "RAG_EXCLUSIU_ALFA_456" in sys_msg
             assert "SUBAGENT_PLAN_ALFA_789" in sys_msg
+
+            # Verificació física Zero-Storage: prompt al PC dedicat i 0 files a PostgreSQL copilot_configs
+            prompt_dir = tmp_path / "disc_alfa" / "09_copilot_ia" / "prompt_sistema"
+            assert (prompt_dir / "system_prompt.txt").is_file()
+            assert "PROMPT_EXCLUSIU_ALFA_123" in (prompt_dir / "system_prompt.txt").read_text(encoding="utf-8")
+            assert (prompt_dir / "copilot_profile.json").is_file()
+
+            pg_rows = await admin_session.execute(
+                text("SELECT count(*) FROM public.copilot_configs WHERE empresa_id = :eid"),
+                {"eid": str(emp_a_id)},
+            )
+            assert int(pg_rows.scalar() or 0) == 0
 
             # 7. CRUD complet de protocols RAG (crear, editar i eliminar al disc sobirà via WSS)
             r_rag_create = await ac.post(

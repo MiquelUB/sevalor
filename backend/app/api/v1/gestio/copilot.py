@@ -1,16 +1,14 @@
 """Endpoints per al Mòdul d'IA Copilot de Camp i Gestió (/gestio/copilot & PWA — Spec 012)."""
 
-import json
 import logging
-import re
 import time
 import uuid
 from datetime import date, datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import AliasChoices, BaseModel, Field
-from sqlalchemy import func, or_, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -21,20 +19,18 @@ from app.models.models import (
     AlertaGarantiaRecompra,
     Article,
     AuditoriaPostObra,
-    Client,
     EinaCustodia,
     Empresa,
     EstocMagatzem,
-    FaqCorporativaRag,
     MemorandumTecnicCopilot,
     OrdreTreball,
     Usuari,
-    Vehicle,
 )
 from app.services.copilot_config_service import (
     get_strict_copilot_config,
     save_strict_copilot_config,
 )
+from app.services.llm_utils import strip_think
 from app.services.sovereign_storage import SovereignStorageGateway
 from app.services.subagents.dispatcher import copilot_dispatcher
 from app.services.vault_tunnel import (
@@ -92,315 +88,8 @@ PARAULES_CLAU_FINANCERES_VETO = [
 logger = logging.getLogger("copilot_ia")
 
 # ---------------------------------------------------------------------------
-# Registre d'Eines (TOOLS_SCHEMA) per a Tool Calling (Spec 012 / Phase 3)
+# Pont de compatibilitat i client LLM directe via Túnel WSS Sobirà (Copilot v3.2)
 # ---------------------------------------------------------------------------
-
-TOOLS_SCHEMA = [
-    {
-        "type": "function",
-        "function": {
-            "name": "get_unbilled_money",
-            "description": "Calcula quants diners no han estat facturats comparant els treballs tancats i el material instal·lat amb les factures emeses.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "mes": {
-                        "type": "integer",
-                        "description": "Mes de l'any a analitzar (1-12), opcional. Si no es posa es fa global.",
-                    }
-                },
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "replanificar_ot",
-            "description": "Proposa re-planificar una Ordre de Treball (canvi de data o tècnic assignat). L'acció no s'executa immediatament, es demana confirmació a l'usuari.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "codi_ot": {
-                        "type": "string",
-                        "description": "Codi de l'Ordre de Treball (ex: 'OT-2026-001')",
-                    },
-                    "nova_data": {
-                        "type": "string",
-                        "description": "Nova data de planificació en format YYYY-MM-DD",
-                    },
-                },
-                "required": ["codi_ot", "nova_data"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "get_real_stock",
-            "description": "Consulta l'estoc real en temps real d'un article o material als magatzems de l'empresa.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "article_ref": {
-                        "type": "string",
-                        "description": "Referència d'inventari o nom de l'article (ex: 'Cable 6mm²', 'Tub PE-100', 'Electrovalvula')",
-                    }
-                },
-                "required": ["article_ref"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "get_vehicle_info",
-            "description": "Consulta les dades tècniques, estat i data d'ITV d'un vehicle de la flota per matrícula.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "matricula": {
-                        "type": "string",
-                        "description": "Matrícula del vehicle (ex: '1234-XYZ')",
-                    }
-                },
-                "required": ["matricula"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "get_closest_vehicle",
-            "description": "Determina quin vehicle de la flota és el més proper a unes coordenades GPS donades usant la fórmula Haversine.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "lat": {
-                        "type": "number",
-                        "description": "Latitud geogràfica de la ubicació o obra",
-                    },
-                    "lng": {
-                        "type": "number",
-                        "description": "Longitud geogràfica de la ubicació o obra",
-                    },
-                },
-                "required": ["lat", "lng"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "get_warranty_status",
-            "description": "Audita si una finca, client o equip disposa de garantia oficial o garantia de mà d'obra vigent.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "finca_id": {
-                        "type": "string",
-                        "description": "UUID de la finca",
-                    },
-                    "client_id": {
-                        "type": "string",
-                        "description": "UUID del client",
-                    },
-                    "numero_serie": {
-                        "type": "string",
-                        "description": "Número de sèrie de l'equip",
-                    },
-                },
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "get_client_history",
-            "description": "Recopila la Fitxa 360° i l'historial complet dels darrers 365 dies d'un client (intervencions, peces instal·lades i incidències).",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "client_id": {
-                        "type": "string",
-                        "description": "UUID del client",
-                    },
-                    "client_nom": {
-                        "type": "string",
-                        "description": "Nom o raó social del client",
-                    },
-                },
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "get_rag_knowledge",
-            "description": "Cerca procediments tècnics, manuals d'obra i normatives a la base de coneixement corporativa RAG.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": "Paraules clau o descripció del procediment a cercar",
-                    }
-                },
-                "required": ["query"],
-            },
-        },
-    },
-]
-
-
-# ---------------------------------------------------------------------------
-# Funcions d'Execució d'Eines (Tools Execution Engine)
-
-
-async def execute_tool_get_unbilled_money(
-    db: AsyncSession,
-    empresa_id: uuid.UUID,
-    mes: int = None,  # type: ignore
-) -> dict:
-    from sqlalchemy import and_, func, select
-
-    from app.models.models import Article, FacturaLinia, FullaPicking, LiniaPicking, OrdreTreball
-
-    # Cost material instal·lat en OT's tancades / facturades vs no facturades
-    # 1. Cost material de OTs "TANCADA"
-    condicions_ot = [OrdreTreball.empresa_id == empresa_id, OrdreTreball.estat == "TANCADA"]
-    if mes:
-        # PostgreSQL extract
-        condicions_ot.append(func.extract("month", OrdreTreball.data_planificacio) == mes)
-
-    stmt_cost = (
-        select(func.sum(LiniaPicking.quantitat_carregada_pick_in * Article.preu_venda))
-        .join(FullaPicking, LiniaPicking.picking_id == FullaPicking.id)
-        .join(OrdreTreball, FullaPicking.ordre_treball_id == OrdreTreball.id)
-        .join(Article, LiniaPicking.article_id == Article.id)
-        .where(and_(*condicions_ot))
-    )
-    res_cost = await db.execute(stmt_cost)
-    cost_materials_esperat = res_cost.scalar() or 0.0
-
-    # 2. Ingressos facturats per aquestes mateixes OTs
-    stmt_fact = (
-        select(func.sum(FacturaLinia.preu_venda_unitari * FacturaLinia.quantitat))
-        .join(OrdreTreball, FacturaLinia.obra_id == OrdreTreball.id)
-        .where(and_(*condicions_ot))
-    )
-    res_fact = await db.execute(stmt_fact)
-    facturat_real = res_fact.scalar() or 0.0
-
-    diferencia = float(cost_materials_esperat) - float(facturat_real)
-
-    return {
-        "trobat": True,
-        "cost_materials_consumit_pvp": float(cost_materials_esperat),
-        "facturat_real": float(facturat_real),
-        "diner_no_facturat": diferencia,
-        "missatge": f"L'anàlisi mostra que el material consumit a preu de venda val {cost_materials_esperat:.2f}€, però només s'ha facturat {facturat_real:.2f}€. Falten per facturar {diferencia:.2f}€.",
-    }
-
-
-async def execute_tool_replanificar_ot(
-    db: AsyncSession, empresa_id: uuid.UUID, codi_ot: str, nova_data: str
-) -> dict:
-    from sqlalchemy import select
-
-    from app.models.models import OrdreTreball
-
-    q = select(OrdreTreball).where(
-        OrdreTreball.empresa_id == empresa_id, OrdreTreball.codi == codi_ot
-    )
-    res = await db.execute(q)
-    ot = res.scalar_one_or_none()
-    if not ot:
-        return {"trobat": False, "missatge": f"No s'ha trobat l'ordre de treball {codi_ot}."}
-
-    # En lloc de canviar-ho directament, retornem una proposta
-    return {
-        "trobat": True,
-        "requires_confirmation": True,
-        "action": "confirm_replanificar_ot",
-        "payload": {
-            "ot_id": str(ot.id),
-            "codi_ot": codi_ot,
-            "nova_data": nova_data,
-            "titol": ot.titol,
-        },
-        "missatge": f"He preparat la proposta per moure l'ordre {codi_ot} ({ot.titol}) al dia {nova_data}. Necessito la teva confirmació per executar l'acció.",
-    }
-
-
-# ---------------------------------------------------------------------------
-
-
-async def execute_tool_get_real_stock(
-    db: AsyncSession, empresa_id: uuid.UUID, article_ref: str
-) -> dict:
-    terme = article_ref.strip()
-    cerca = f"%{terme}%"
-    stmt = select(Article).where(
-        Article.empresa_id == empresa_id,
-        or_(Article.referencia_inventari.ilike(cerca), Article.nom.ilike(cerca)),
-    )
-    res = await db.execute(stmt)
-    articles = res.scalars().all()
-
-    # Si no troba coincidència exacta de frase, provar amb paraules clau
-    if not articles:
-        paraules = [p for p in terme.split() if len(p) > 2]
-        if paraules:
-            clauses = [
-                or_(Article.referencia_inventari.ilike(f"%{p}%"), Article.nom.ilike(f"%{p}%"))
-                for p in paraules
-            ]
-            stmt_p = select(Article).where(Article.empresa_id == empresa_id, or_(*clauses))
-            res_p = await db.execute(stmt_p)
-            articles = res_p.scalars().all()
-
-    if not articles:
-        return {
-            "trobat": False,
-            "article_cercat": article_ref,
-            "total_disponible": 0.0,
-            "articles": [],
-            "missatge": f"No s'ha trobat cap article amb la referència o nom '{article_ref}'.",
-        }
-
-    articles_data = []
-    total_disponible_global = 0.0
-
-    for art in articles:
-        q_stock = select(
-            func.coalesce(
-                func.sum(
-                    EstocMagatzem.quantitat_fisica - EstocMagatzem.quantitat_virtual_reservada
-                ),
-                0,
-            )
-        ).where(EstocMagatzem.article_id == art.id, EstocMagatzem.empresa_id == empresa_id)
-        stock_val = float((await db.execute(q_stock)).scalar_one() or 0.0)
-        total_disponible_global += stock_val
-        articles_data.append(
-            {
-                "id": str(art.id),
-                "referencia": art.referencia_inventari,
-                "nom": art.nom,
-                "estoc_disponible": stock_val,
-                "unitat_mesura": art.unitat_mesura,
-                "estoc_minim": float(art.estoc_minim),
-                "estoc_optim": float(art.estoc_optim),
-                "familia": art.familia,
-            }
-        )
-
-    return {
-        "trobat": True,
-        "article_cercat": article_ref,
-        "total_disponible": total_disponible_global,
-        "articles": articles_data,
-    }
 
 
 async def execute_tool_get_vehicle_info(
@@ -408,238 +97,6 @@ async def execute_tool_get_vehicle_info(
 ) -> dict:
     """Pont de compatibilitat cap enrere que delega directament al subagent de flota."""
     return await copilot_dispatcher.subagent_flota.tool_get_vehicle_info(db, empresa_id, matricula)
-
-
-async def execute_tool_get_closest_vehicle(
-    db: AsyncSession, empresa_id: uuid.UUID, lat: float, lng: float
-) -> dict:
-    from app.api.v1.gestio.flota import calcular_distancia_haversine
-
-    stmt_v = select(Vehicle).where(Vehicle.empresa_id == empresa_id)
-    res_v = await db.execute(stmt_v)
-    vehicles = res_v.scalars().all()
-
-    if not vehicles:
-        return {"trobat": False, "missatge": "No hi ha cap vehicle registrat a la flota."}
-
-    stmt_ot = (
-        select(OrdreTreball)
-        .where(
-            OrdreTreball.empresa_id == empresa_id,
-            OrdreTreball.vehicle_id.isnot(None),
-            OrdreTreball.estat.in_(["EN_OBRA", "EN_RUTA", "EN_CURS", "PENDENT"]),
-        )
-        .order_by(OrdreTreball.created_at.desc())
-    )
-    res_ot = await db.execute(stmt_ot)
-    ots = res_ot.scalars().all()
-    vehicle_ot_map = {}
-    for ot in ots:
-        if ot.vehicle_id not in vehicle_ot_map:
-            vehicle_ot_map[ot.vehicle_id] = ot
-
-    llista = []
-    for v in vehicles:
-        v_lat, v_lng = 41.3851, 2.1734
-        ot_rel = vehicle_ot_map.get(v.id)
-        if ot_rel and ot_rel.adreca:
-            m = re.findall(r"[-+]?\d+\.\d+", ot_rel.adreca)
-            if len(m) >= 2:
-                v_lat, v_lng = float(m[0]), float(m[1])
-            elif "," in ot_rel.adreca:
-                try:
-                    parts = [float(p.strip()) for p in ot_rel.adreca.split(",")]
-                    if len(parts) >= 2:
-                        v_lat, v_lng = parts[0], parts[1]
-                except (ValueError, TypeError):
-                    pass
-
-        dist = calcular_distancia_haversine(lat, lng, v_lat, v_lng)
-        llista.append(
-            {
-                "vehicle_id": str(v.id),
-                "matricula": v.matricula,
-                "marca": v.marca,
-                "model": v.model,
-                "estat": v.estat,
-                "distancia_km": dist,
-                "lat": v_lat,
-                "lng": v_lng,
-                "ordre_treball_actual": ot_rel.codi if ot_rel else None,
-            }
-        )
-
-    llista.sort(key=lambda x: x["distancia_km"])  # type: ignore
-    closest = llista[0]
-
-    return {
-        "trobat": True,
-        "coordenades_cercades": {"lat": lat, "lng": lng},
-        "vehicle_mes_proper": closest,
-        "tots_els_vehicles": llista,
-    }
-
-
-async def execute_tool_get_warranty_status(
-    db: AsyncSession,
-    empresa_id: uuid.UUID,
-    finca_id: Optional[str] = None,
-    client_id: Optional[str] = None,
-    numero_serie: Optional[str] = None,
-) -> dict:
-    f_uuid = uuid.UUID(finca_id) if finca_id else None
-    c_uuid = uuid.UUID(client_id) if client_id else None
-    avui = date.today()
-    fa_un_any = avui - timedelta(days=365)
-    alertes = []
-
-    if f_uuid or c_uuid:
-        query = (
-            select(OrdreTreball)
-            .where(
-                OrdreTreball.empresa_id == empresa_id, OrdreTreball.data_planificacio >= fa_un_any
-            )
-            .order_by(OrdreTreball.data_planificacio.desc())
-        )
-        if f_uuid:
-            query = query.where(OrdreTreball.finca_id == f_uuid)
-        if c_uuid:
-            query = query.where(OrdreTreball.client_id == c_uuid)
-        ots = (await db.execute(query)).scalars().all()
-        if ots:
-            darrera = ots[0]
-            dies = (avui - darrera.data_planificacio).days
-            if dies <= TERMINI_GARANTIA_MA_OBRA_DIES:
-                alertes.append(
-                    {
-                        "tipus": "GARANTIA_INTERNA_SERVEI",
-                        "activa": True,
-                        "cost_euros": 0.0,
-                        "dies_passats": dies,
-                        "missatge": f"Garantia interna de mà d'obra vigent (<90 dies: {dies} dies). Cost 0 € per al client.",
-                    }
-                )
-
-    if numero_serie:
-        res_eina = await db.execute(
-            select(EinaCustodia).where(
-                EinaCustodia.empresa_id == empresa_id, EinaCustodia.numero_serie == numero_serie
-            )
-        )
-        eina = res_eina.scalar_one_or_none()
-        if eina:
-            data_compra = eina.created_at.date()
-            data_fi = data_compra + timedelta(days=730)
-            dies_restants = (data_fi - avui).days
-            if dies_restants >= 0:
-                alertes.append(
-                    {
-                        "tipus": "GARANTIA_FABRICANT",
-                        "activa": True,
-                        "dies_restants": dies_restants,
-                        "missatge": f"Garantia oficial del fabricant vigent fins al {data_fi.isoformat()} ({dies_restants} dies restants).",
-                    }
-                )
-
-    return {"trobat": len(alertes) > 0, "garanties": alertes}
-
-
-async def execute_tool_get_client_history(
-    db: AsyncSession,
-    empresa_id: uuid.UUID,
-    client_id: Optional[str] = None,
-    client_nom: Optional[str] = None,
-) -> dict:
-    c_uuid = uuid.UUID(client_id) if client_id else None
-    if not c_uuid and client_nom:
-        res_c = await db.execute(
-            select(Client).where(
-                Client.empresa_id == empresa_id, Client.rao_social.ilike(f"%{client_nom.strip()}%")
-            )
-        )
-        cl = res_c.scalars().first()
-        if cl:
-            c_uuid = cl.id
-
-    if not c_uuid:
-        return {
-            "trobat": False,
-            "missatge": f"No s'ha trobat cap client amb '{client_nom or client_id}'.",
-        }
-
-    fa_un_any = datetime.now(timezone.utc) - timedelta(days=365)
-    res_ots = await db.execute(
-        select(OrdreTreball)
-        .where(
-            OrdreTreball.client_id == c_uuid,
-            OrdreTreball.empresa_id == empresa_id,
-            OrdreTreball.created_at >= fa_un_any,
-        )
-        .order_by(OrdreTreball.created_at.desc())
-    )
-    ots = res_ots.scalars().all()
-
-    return {
-        "trobat": True,
-        "client_id": str(c_uuid),
-        "total_intervencions_365d": len(ots),
-        "intervencions": [
-            {"id": str(o.id), "codi": o.codi, "titol": o.titol, "estat": o.estat} for o in ots
-        ],
-    }
-
-
-async def execute_tool_get_rag_knowledge(
-    db: AsyncSession, empresa_id: uuid.UUID, query: str
-) -> dict:
-    paraules = [p for p in query.lower().split() if len(p) > 3]
-    if not paraules:
-        return {"trobat": False, "documents": []}
-    filtres = []
-    for p in paraules:
-        filtres.append(func.lower(FaqCorporativaRag.resposta).contains(p))
-        filtres.append(func.lower(FaqCorporativaRag.pregunta).contains(p))
-        filtres.append(func.lower(FaqCorporativaRag.paraules_clau).contains(p))
-    q_faq = select(FaqCorporativaRag).where(
-        FaqCorporativaRag.empresa_id == empresa_id, or_(*filtres)
-    )
-    docs = (await db.execute(q_faq)).scalars().all()
-    return {
-        "trobat": len(docs) > 0,
-        "documents": [
-            {"pregunta": d.pregunta, "resposta": d.resposta, "tags": d.paraules_clau} for d in docs
-        ],
-    }
-
-
-async def executar_eina(nom_eina: str, args: dict, db: AsyncSession, empresa_id: uuid.UUID) -> dict:
-    """Invoca l'eina corresponent passant el context RLS."""
-    if nom_eina == "get_real_stock":
-        return await execute_tool_get_real_stock(db, empresa_id, args.get("article_ref", ""))
-    elif nom_eina == "get_vehicle_info":
-        return await execute_tool_get_vehicle_info(db, empresa_id, args.get("matricula", ""))
-    elif nom_eina == "get_closest_vehicle":
-        lat = float(args.get("lat", 0.0))
-        lng = float(args.get("lng", 0.0))
-        return await execute_tool_get_closest_vehicle(db, empresa_id, lat, lng)
-    elif nom_eina == "get_warranty_status":
-        return await execute_tool_get_warranty_status(
-            db, empresa_id, args.get("finca_id"), args.get("client_id"), args.get("numero_serie")
-        )
-    elif nom_eina == "get_client_history":
-        return await execute_tool_get_client_history(
-            db, empresa_id, args.get("client_id"), args.get("client_nom")
-        )
-    elif nom_eina == "get_unbilled_money":
-        return await execute_tool_get_unbilled_money(db, empresa_id, args.get("mes"))  # type: ignore
-    elif nom_eina == "replanificar_ot":
-        return await execute_tool_replanificar_ot(
-            db, empresa_id, args.get("codi_ot", ""), args.get("nova_data", "")
-        )
-    elif nom_eina == "get_rag_knowledge":
-        return await execute_tool_get_rag_knowledge(db, empresa_id, args.get("query", ""))
-    else:
-        return {"error": f"Eina desconeguda: {nom_eina}"}
 
 
 async def cridar_lm_studio(
@@ -676,16 +133,16 @@ async def cridar_lm_studio(
         cfg = await get_strict_copilot_config(db, uuid.UUID(emp_target_id))
         if not cfg or not (cfg.system_prompt or "").strip():
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=422,
                 detail="COPILOT_NOT_CONFIGURED: Aquesta empresa no té el prompt configurat a /gestio/copilot/.",
             )
         system_prompt = cfg.system_prompt.strip()
         if (cfg.rag_prompt or "").strip():
             system_prompt += f"\n\nINSTRUCCIONS RAG:\n{cfg.rag_prompt.strip()}"
-        configured_model = (cfg.llm_model or "").strip()
+        configured_model = (cfg.effective_chat_model or "").strip()
     else:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=422,
             detail="COPILOT_NOT_CONFIGURED: Cal sessió de BD per carregar la configuració aïllada del Copilot.",
         )
 
@@ -711,345 +168,13 @@ async def cridar_lm_studio(
         data = await vault_tunnel_broker.call_llm_chat(target_key, payload, timeout=60.0)
         choices = data.get("choices", [])
         if choices:
-            return str(choices[0].get("message", {}).get("content", "")).strip()
+            raw_content = str(choices[0].get("message", {}).get("content", "")).strip()
+            return strip_think(raw_content) or raw_content
     except (VaultTunnelError, Exception) as e:
         logger.warning("Connexió amb LM Studio via WSS fallida (%s): %s", target_key, e)
 
     return None
 
-
-async def cridar_lm_studio_amb_tools(
-    pregunta: str,
-    vertical: str,
-    db: AsyncSession,
-    empresa_id: uuid.UUID,
-    imatge_b64: Optional[str] = None,
-    agent_prompt_system: Optional[str] = None,
-) -> Tuple[Optional[str], Optional[str], Optional[dict], Optional[dict]]:
-    """
-    Executa el cicle d'Agent de Tool Calling amb LM Studio local via Túnel WSS Únic.
-    Retorna (resposta_final, tool_name, tool_args, tool_result).
-    """
-    res = await db.execute(select(Empresa).where(Empresa.id == empresa_id))
-    empresa = res.scalar_one_or_none()
-    if (
-        not empresa
-        or not empresa.node_ia_actiu
-        or not getattr(empresa, "feature_copilot_ia", False)
-    ):
-        logger.info(
-            "Empresa %s sense ordinador dedicat actiu. Zero egress a Hetzner (Constitució §2.V).",
-            empresa_id,
-        )
-        return None, None, None, None
-
-    target_key = empresa_target_key(empresa_id)
-    if not await vault_tunnel_broker.is_online(target_key):
-        return None, None, None, None
-
-    system_prompt = f"Ets el Copilot d'Intel·ligència Artificial tècnic de SEVALOR Suite, especialitzat en {vertical}. "
-    if agent_prompt_system:
-        system_prompt += f" Directrius Específiques de l'Empresa: {agent_prompt_system}. "
-
-    system_prompt += (
-        "Tens accés a eines internes del sistema (tools) per consultar dades en temps real (estoc, vehicles, garanties, fitxa 360). "
-        "Quan l'usuari pregunti sobre estoc, vehicles, proximitat o clients, utilitza les eines proporcionades abans de respondre. "
-        "Respon sempre en català de forma professional, tècnica i precisa, basant-te exclusivament en les dades obtingudes de les eines."
-    )
-
-    model_name = getattr(settings, "LM_STUDIO_MODEL", "qwen2.5-vl-7b-instruct")
-    messages: List[Dict[str, Any]] = [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": pregunta},
-    ]
-    payload: Dict[str, Any] = {
-        "model": model_name,
-        "messages": messages,
-        "tools": TOOLS_SCHEMA,
-        "tool_choice": "auto",
-        "temperature": 0.2,
-        "max_tokens": 400,
-    }
-
-    try:
-        res_json = await vault_tunnel_broker.call_llm_chat(target_key, payload, timeout=60.0)
-        choices = res_json.get("choices", [])
-        if not choices:
-            return None, None, None, None
-
-        msg = choices[0].get("message", {})
-        tool_calls = msg.get("tool_calls", [])
-
-        if tool_calls:
-            tc = tool_calls[0]
-            fn_name = tc.get("function", {}).get("name")
-            args_str = tc.get("function", {}).get("arguments", "{}")
-            try:
-                fn_args = json.loads(args_str) if isinstance(args_str, str) else args_str
-            except Exception:
-                fn_args = {}
-
-            tool_res = await executar_eina(fn_name, fn_args, db, empresa_id)
-
-            messages.append(msg)
-            messages.append(
-                {
-                    "role": "tool",
-                    "tool_call_id": tc.get("id", "call_1"),
-                    "name": fn_name,
-                    "content": json.dumps(tool_res, ensure_ascii=False),
-                }
-            )
-
-            payload_synthesis: Dict[str, Any] = {
-                "model": model_name,
-                "messages": messages,
-                "temperature": 0.2,
-                "max_tokens": 700,
-            }
-            synth_json = await vault_tunnel_broker.call_llm_chat(
-                target_key, payload_synthesis, timeout=60.0
-            )
-            synth_choices = synth_json.get("choices", [])
-            if synth_choices:
-                content = str(
-                    (synth_choices[0].get("message") or {}).get("content") or ""
-                ).strip()
-                if content:
-                    return content, fn_name, fn_args, tool_res
-
-            return None, fn_name, fn_args, tool_res
-
-        content = str(msg.get("content") or "").strip()
-        if content:
-            return content, None, None, None
-    except (VaultTunnelError, Exception) as e:
-        logger.warning("Execució Tool Calling amb LM Studio via WSS fallida (%s): %s", target_key, e)
-
-    return None, None, None, None
-
-
-async def executar_agent_local(
-    pregunta: str, db: AsyncSession, empresa_id: uuid.UUID
-) -> Tuple[str, Optional[str], Optional[dict], Optional[dict], List[dict]]:
-    """
-    Agent determinista sobirà local: selecciona l'eina òptima i sintetitza la resposta
-    amb les dades reals de la base de dades (Zero Mock Data).
-    """
-    pregunta_lower = pregunta.lower()
-    enllacos: List[dict] = []
-
-    # 1. Proximitat / Vehicle més proper
-    if any(
-        k in pregunta_lower
-        for k in [
-            "més a prop",
-            "mes aprop",
-            "mes a prop",
-            "més proper",
-            "mes proper",
-            "proper",
-            "aprop",
-            "proxim",
-            "pròxim",
-            "closest",
-            "cercano",
-            "cerca",
-        ]
-    ):
-        coords = re.findall(r"[-+]?\d+\.\d+", pregunta)
-        if len(coords) >= 2:
-            lat = float(coords[0])
-            lng = float(coords[1])
-        else:
-            nums = re.findall(r"[-+]?\d+(?:\.\d+)?", pregunta)
-            if len(nums) >= 2:
-                lat = float(nums[0])
-                lng = float(nums[1])
-            else:
-                lat, lng = 41.3851, 2.1734
-
-        tool_name = "get_closest_vehicle"
-        tool_args = {"lat": lat, "lng": lng}
-        tool_res = await execute_tool_get_closest_vehicle(db, empresa_id, lat, lng)
-        enllacos.append({"titol": "Flota de Vehicles", "url": "/gestio/flota"})
-
-        if tool_res.get("trobat") and tool_res.get("vehicle_mes_proper"):
-            v = tool_res["vehicle_mes_proper"]
-            resposta = (
-                f"El vehicle més proper a les coordenades [{lat}, {lng}] és el {v['matricula']} "
-                f"({v['marca']} {v['model']}), que es troba a {v['distancia_km']} km (estat: {v['estat']})."
-            )
-        else:
-            resposta = "No hi ha cap vehicle registrat a la flota per calcular la proximitat."
-
-        return resposta, tool_name, tool_args, tool_res, enllacos
-
-    # 2. Estoc / Inventari
-    if any(
-        k in pregunta_lower
-        for k in [
-            "estoc",
-            "stock",
-            "quantitat",
-            "queden",
-            "queda",
-            "disposem",
-            "cable",
-            "tub",
-            "electrovalvula",
-            "material",
-            "inventari",
-        ]
-    ):
-        stmt_arts = select(Article).where(Article.empresa_id == empresa_id)
-        articles_db = (await db.execute(stmt_arts)).scalars().all()
-
-        target_ref = ""
-        best_match_len = 0
-        for art in articles_db:
-            nom_l = art.nom.lower()
-            ref_l = art.referencia_inventari.lower()
-            if nom_l in pregunta_lower and len(nom_l) > best_match_len:
-                target_ref = art.nom
-                best_match_len = len(nom_l)
-            elif ref_l in pregunta_lower and len(ref_l) > best_match_len:
-                target_ref = art.referencia_inventari
-                best_match_len = len(ref_l)
-
-        if not target_ref:
-            stopwords = [
-                "tenim",
-                "suficient",
-                "per",
-                "l'obra",
-                "obra",
-                "quant",
-                "quants",
-                "queden",
-                "disposem",
-                "de",
-                "d'",
-                "ens",
-                "queda",
-                "el",
-                "la",
-                "els",
-                "les",
-            ]
-            cleaned = " ".join(
-                [w for w in pregunta_lower.split() if w not in stopwords and len(w) > 1]
-            )
-            target_ref = cleaned or pregunta_lower
-
-        tool_name = "get_real_stock"
-        tool_args = {"article_ref": target_ref}  # type: ignore
-        tool_res = await execute_tool_get_real_stock(db, empresa_id, target_ref)
-        enllacos.append({"titol": "Inventari de Magatzem", "url": "/gestio/magatzem"})
-
-        if tool_res.get("trobat"):
-            tot = tool_res["total_disponible"]
-            tot_str = f"{int(tot)}" if float(tot).is_integer() else f"{tot:.1f}"
-            detalls = ", ".join(
-                [
-                    f"{a['nom']} ({int(a['estoc_disponible']) if float(a['estoc_disponible']).is_integer() else a['estoc_disponible']} {a['unitat_mesura']})"
-                    for a in tool_res["articles"]
-                ]
-            )
-            resposta = (
-                f"Segons la consulta en temps real d'inventari a magatzem (eina get_real_stock), "
-                f"disposem de {tot_str} unitats disponibles en total. Detall d'estoc: {detalls}."
-            )
-        else:
-            resposta = f"No s'ha trobat cap registre d'estoc per a '{target_ref}' als magatzems de l'empresa."
-
-        return resposta, tool_name, tool_args, tool_res, enllacos
-
-    # 3. Vehicle per matrícula o informació general de vehicle
-    if any(
-        k in pregunta_lower
-        for k in ["vehicle", "furgoneta", "cotxe", "matricula", "itv", "asseguranca"]
-    ):
-        stmt_v = select(Vehicle).where(Vehicle.empresa_id == empresa_id)
-        vehs = (await db.execute(stmt_v)).scalars().all()
-        target_mat = ""
-        for v in vehs:
-            if v.matricula.lower() in pregunta_lower:
-                target_mat = v.matricula
-                break
-
-        if not target_mat:
-            mat_match = re.search(r"\b[0-9]{4}[ -]?[A-Z]{3}\b", pregunta.upper())
-            if mat_match:
-                target_mat = mat_match.group(0).replace(" ", "-")
-
-        if target_mat:
-            tool_name = "get_vehicle_info"
-            tool_args = {"matricula": target_mat}  # type: ignore
-            tool_res = await execute_tool_get_vehicle_info(db, empresa_id, target_mat)
-            enllacos.append({"titol": "Flota de Vehicles", "url": "/gestio/flota"})
-            if tool_res.get("trobat"):
-                resposta = (
-                    f"Vehicle {tool_res['matricula']} ({tool_res['marca']} {tool_res['model']}): "
-                    f"Estat: {tool_res['estat']}. "
-                    f"ITV: {tool_res.get('estat_itv')} (Propera: {tool_res.get('data_proxima_itv') or 'Pendent'}). "
-                    f"Assegurança: {tool_res.get('companyia_asseguradora') or 'No consta'} (Caduca: {tool_res.get('data_caducitat_asseguranca') or 'No consta'}). "
-                    f"Carnet Requerit: {tool_res.get('carnet_necessari')}. "
-                    f"Règim: {tool_res.get('regim_adquisicio')} (Límit: {tool_res.get('renting_limit_km') or 'N/A'} km). "
-                    f"Consum: {tool_res.get('consum_l_100km') or 'N/A'} L/100km. "
-                    f"Odòmetre: {tool_res['odometre_acumulat']} km. "
-                    f"Pòlissa Assegurança: {tool_res.get('polissa_asseguranca', 'Desconeguda')}. "
-                    f"Documents Registrats: {len(tool_res.get('documents', []))} arxius."
-                )
-            else:
-                resposta = tool_res.get(
-                    "missatge", f"No s'ha trobat informació per la matrícula {target_mat}."
-                )
-            return resposta, tool_name, tool_args, tool_res, enllacos
-
-    # 4. Historial de Client / Fitxa 360
-    if any(
-        k in pregunta_lower for k in ["client", "historial", "fitxa 360", "360", "intervencions de"]
-    ):
-        tool_name = "get_client_history"
-        tool_args = {"client_nom": pregunta}  # type: ignore
-        tool_res = await execute_tool_get_client_history(db, empresa_id, client_nom=pregunta)
-        enllacos.append({"titol": "Directori de Clients", "url": "/gestio/clients"})
-        if tool_res.get("trobat"):
-            resposta = f"Historial del client: {tool_res['total_intervencions_365d']} intervencions registrades en els últims 365 dies."
-        else:
-            resposta = tool_res.get("missatge", "No s'han trobat dades històriques del client.")
-        return resposta, tool_name, tool_args, tool_res, enllacos
-
-    # 5. Garanties
-    if any(k in pregunta_lower for k in ["garantia", "garanties", "rma", "fabricant"]):
-        tool_name = "get_warranty_status"
-        tool_args = {"numero_serie": None}  # type: ignore
-        tool_res = await execute_tool_get_warranty_status(db, empresa_id)
-        enllacos.append({"titol": "Auditoria de Garanties", "url": "/gestio/copilot"})
-        if tool_res.get("trobat"):
-            msg_g = "; ".join([g["missatge"] for g in tool_res["garanties"]])
-            resposta = f"Estat de garanties: {msg_g}"
-        else:
-            resposta = "No hi ha alertes de garantia actives per als elements consultats."
-        return resposta, tool_name, tool_args, tool_res, enllacos
-
-    # 6. Fallback a RAG de coneixement
-    tool_name = "get_rag_knowledge"
-    tool_args = {"query": pregunta}  # type: ignore
-    tool_res = await execute_tool_get_rag_knowledge(db, empresa_id, pregunta)
-    if tool_res.get("trobat"):
-        enllacos.append({"titol": "Base de Coneixement Corporativa", "url": "/gestio/copilot"})
-        docs_txt = "\n".join(
-            [f"• [{d['pregunta']}]: {d['resposta']}" for d in tool_res["documents"]]
-        )
-        resposta = (
-            f"He trobat aquesta informació a la base de coneixement corporativa:\n\n{docs_txt}"
-        )
-    else:
-        resposta = "No he trobat protocols específics ni dades directes a la base de coneixement corporativa per a aquesta consulta."
-
-    return resposta, tool_name, tool_args, tool_res, enllacos
 
 
 def aplicar_tenant_context(claims: Dict[str, Any]) -> uuid.UUID:
@@ -1918,6 +1043,10 @@ class CopilotConfigIn(BaseModel):
     rag_prompt: str = ""
     subagent_prompts: Dict[str, str] = Field(default_factory=dict)
     llm_model: str = ""
+    llm_chat_model: str = ""
+    llm_vision_model: str = ""
+    hardware_profile: str = "32GB"
+    timeout_budget_s: Optional[float] = None
 
 
 @router.get("/config", response_model=CopilotConfigIn)
@@ -1925,16 +1054,29 @@ async def obtenir_config_copilot(
     db: AsyncSession = Depends(get_db_with_tenant_context),
     claims: Dict[str, Any] = Depends(require_roles(["BOSS", "ADMIN", "ENGINYER", "SECRETARIA"])),
 ) -> CopilotConfigIn:
-    """Retorna la configuració aïllada del Copilot per a l'empresa del JWT (Anti-IDOR + FORCE RLS)."""
+    """Retorna la configuració sobirana del Copilot llegida exclusivament del PC dedicat (FR-024)."""
     empresa_id = aplicar_tenant_context(claims)
-    cfg = await get_strict_copilot_config(db, empresa_id)
+    cfg = await get_strict_copilot_config(db, empresa_id, use_cache=False)
     if not cfg:
-        return CopilotConfigIn(system_prompt="", rag_prompt="", subagent_prompts={}, llm_model="")
+        return CopilotConfigIn(
+            system_prompt="",
+            rag_prompt="",
+            subagent_prompts={},
+            llm_model="",
+            llm_chat_model="",
+            llm_vision_model="",
+            hardware_profile="32GB",
+            timeout_budget_s=18.0,
+        )
     return CopilotConfigIn(
         system_prompt=cfg.system_prompt or "",
         rag_prompt=cfg.rag_prompt or "",
         subagent_prompts=dict(cfg.subagent_prompts or {}),
-        llm_model=cfg.llm_model or "",
+        llm_model=cfg.effective_chat_model,
+        llm_chat_model=cfg.effective_chat_model,
+        llm_vision_model=cfg.llm_vision_model or "",
+        hardware_profile=cfg.hardware_profile,
+        timeout_budget_s=cfg.timeout_budget_s,
     )
 
 
@@ -1944,7 +1086,7 @@ async def actualitzar_config_copilot(
     db: AsyncSession = Depends(get_db_with_tenant_context),
     claims: Dict[str, Any] = Depends(require_roles(["BOSS", "ADMIN"])),
 ) -> CopilotConfigIn:
-    """Desa la configuració aïllada del Copilot per a l'empresa del JWT (Anti-IDOR + FORCE RLS)."""
+    """Desa la configuració sobirana del Copilot exclusivament al PC dedicat de l'empresa (FR-024)."""
     empresa_id = aplicar_tenant_context(claims)
     cfg = await save_strict_copilot_config(
         db=db,
@@ -1953,12 +1095,20 @@ async def actualitzar_config_copilot(
         rag_prompt=payload.rag_prompt,
         subagent_prompts=payload.subagent_prompts,
         llm_model=payload.llm_model,
+        llm_chat_model=payload.llm_chat_model or payload.llm_model,
+        llm_vision_model=payload.llm_vision_model,
+        hardware_profile=payload.hardware_profile,
+        timeout_budget_s=payload.timeout_budget_s,
     )
     return CopilotConfigIn(
         system_prompt=cfg.system_prompt or "",
         rag_prompt=cfg.rag_prompt or "",
         subagent_prompts=dict(cfg.subagent_prompts or {}),
-        llm_model=cfg.llm_model or "",
+        llm_model=cfg.effective_chat_model,
+        llm_chat_model=cfg.effective_chat_model,
+        llm_vision_model=cfg.llm_vision_model or "",
+        hardware_profile=cfg.hardware_profile,
+        timeout_budget_s=cfg.timeout_budget_s,
     )
 
 

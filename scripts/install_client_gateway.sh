@@ -33,6 +33,7 @@ VAULT_TOKEN="${SEVALOR_VAULT_SECRET:-}"
 DISK_A="${SEVALOR_VAULT_PATH_A:-}"
 DISK_B="${SEVALOR_VAULT_PATH_B:-}"
 LLM_URL="${SEVALOR_LOCAL_LLM_URL:-http://127.0.0.1:1234}"
+LLM_CONCURRENCY="${SEVALOR_LOCAL_LLM_CONCURRENCY:-1}"
 INSTALL_DIR=""
 ENABLE_SYSTEMD=1
 
@@ -51,6 +52,7 @@ Opcions recomanades:
                           Perfil del node (defecte: EMPRESA -> 38 carpetes; SUPERADMIN -> 20 carpetes)
   --disk-b <ruta>         Carpeta del Disc Secundari B mirall (defecte: <disk-a>_backup_B)
   --llm-url <url>         URL del motor IA local LM Studio/Ollama (defecte: http://127.0.0.1:1234)
+  --llm-concurrency <n>   Concurrència màxima LLM local (1..8; defecte: 1 per a mini-PC 16/32 GB)
   --install-dir <ruta>    Directori d'instal·lació de l'agent i venv
   --no-systemd            Prepara venv, carpetes i .env sense registrar servei systemd
   -h, --help              Mostra aquesta ajuda
@@ -85,6 +87,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --llm-url)
       LLM_URL="${2:-}"
+      shift 2
+      ;;
+    --llm-concurrency)
+      LLM_CONCURRENCY="${2:-}"
       shift 2
       ;;
     --install-dir)
@@ -134,6 +140,11 @@ else
     echo "ERROR: --empresa-id no es pot utilitzar amb --role SUPERADMIN." >&2
     exit 2
   fi
+fi
+
+if [[ ! "${LLM_CONCURRENCY}" =~ ^[1-8]$ ]]; then
+  echo "ERROR: --llm-concurrency ha de ser un enter entre 1 i 8 (rebut: ${LLM_CONCURRENCY})." >&2
+  exit 2
 fi
 
 if [[ ! -f "${AGENT_SRC}" ]]; then
@@ -199,6 +210,7 @@ umask 077
   printf 'SEVALOR_VAULT_PATH_A=%s\n' "${DISK_A}"
   printf 'SEVALOR_VAULT_PATH_B=%s\n' "${DISK_B}"
   printf 'SEVALOR_LOCAL_LLM_URL=%s\n' "${LLM_URL}"
+  printf 'SEVALOR_LOCAL_LLM_CONCURRENCY=%s\n' "${LLM_CONCURRENCY}"
 } > "${ENV_FILE}"
 chmod 600 "${ENV_FILE}"
 

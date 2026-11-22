@@ -19,6 +19,7 @@ from typing import Any, Dict, List, Optional
 
 from app.core.config import settings
 from app.core.network_utils import extract_wss_tunnel_target
+from app.services.llm_utils import strip_think
 from app.services.vault_tunnel import (
     VaultTunnelError,
     empresa_target_key,
@@ -179,7 +180,43 @@ async def _cridar_ia_vision(
         logger.info("Túnel WSS fora de línia per a OCR (%s). S'aplica extracció directa.", target_key)
         return None
 
-    model_name = getattr(settings, "LM_STUDIO_MODEL", "qwen2.5-vl-7b-instruct")
+    # Resoldre `llm_vision_model` del perfil sobirà de l'empresa al PC (caché o disc) amb fallback segur
+    vision_model_override = ""
+    try:
+        import time as _time
+
+        from app.services.copilot_config_service import _PROFILE_CACHE, PROFILE_ITEM_ID
+
+        cached = _PROFILE_CACHE.get(str(emp_target_str))
+        if cached is not None and cached[0] > _time.monotonic():
+            vision_model_override = cached[1].effective_vision_model
+        else:
+            raw_profiles = await vault_tunnel_broker.json_get_list(
+                target_key, "09_copilot_ia/prompt_sistema", timeout=2.0
+            )
+            if isinstance(raw_profiles, list) and raw_profiles:
+                pdoc = next(
+                    (
+                        d
+                        for d in raw_profiles
+                        if isinstance(d, dict) and str(d.get("id") or "") == PROFILE_ITEM_ID
+                    ),
+                    raw_profiles[0] if isinstance(raw_profiles[0], dict) else None,
+                )
+                if isinstance(pdoc, dict):
+                    vision_model_override = str(
+                        pdoc.get("llm_vision_model")
+                        or pdoc.get("llm_chat_model")
+                        or pdoc.get("llm_model")
+                        or ""
+                    ).strip()
+    except Exception:
+        pass
+
+    model_name = (
+        vision_model_override
+        or getattr(settings, "LM_STUDIO_MODEL", "qwen2.5-vl-7b-instruct")
+    )
 
     user_content: Any = text_contingut
     if imatge_b64:
@@ -196,13 +233,15 @@ async def _cridar_ia_vision(
         ],
         "temperature": 0.0,
         "max_tokens": max_tokens,
+        "_sevalor_priority": "LOW",
     }
 
     try:
         data = await vault_tunnel_broker.call_llm_chat(target_key, payload, timeout=45.0)
         choices = data.get("choices", [])
         if choices:
-            content_str = str(choices[0].get("message", {}).get("content", "")).strip()
+            raw_content = str(choices[0].get("message", {}).get("content", "")).strip()
+            content_str = strip_think(raw_content)
             json_match = re.search(r"\{[\s\S]*\}", content_str)
             if json_match:
                 parsed = json.loads(json_match.group(0))

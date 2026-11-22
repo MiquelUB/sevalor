@@ -395,3 +395,13 @@ services:
 - [x] Bot de Telegram securitzat amb validació de dobles extensions, enllaços efímers de 24h per a factures i deep-linking exclusiu per invitació.
 - [x] Generació de documents Veri*factu amb ReportLab mitjançant encadenament de Hash SHA-256 amb bloqueig `SELECT FOR UPDATE` i model Outbox.
 - [x] Cap servei extern de núvol comercial configurat; totes les dades es processen en la infraestructura sobirana de Falkenstein (Alemanya).
+
+---
+
+## 9. Evolució Copilot v3.2 (Coordinador en 2 Etapes, Sobirania de Prompts al PC i Blindatge d'Eines)
+
+D'acord amb el Blueprint ratificat v3.2 i els requisits `FR-022`–`FR-026`, l'arquitectura del Copilot evoluciona en 4 fases controlades:
+1. **Fase 1 (Seguretat, Registre Únic Pydantic i Anti-Narració):** Creació de `app/services/llm_utils.py` (`strip_think`, `triar_resposta`, `xifres_inventades` normalitzat) i `app/services/subagents/tools_registry.py` (font única Pydantic + RBAC declaratiu + aplanador GBNF), tancament de `fitxer_path`/`import_total`, correcció dels 6 desajustos i rànquing d'estoc baix, eliminació del bonus `+0.5` de `subagent_general_rag` i `tests/test_tool_contract.py`.
+2. **Fase 2 (Coordinador en 2 Etapes + Prompts Exclusius al PC Dedicat):** Router JSON estructurat (amb `historial` i `context_id` + degradació `json_schema` → `json_object` → `run_sovereign`), `RequestDiskCache` + `asyncio.gather`, Síntesi `tools=None` amb KV Prefix Cache estable (`<dades_empresa>`), lectura/escriptura de `09_copilot_ia/prompt_sistema/` via WSS (Zero-Storage Hetzner) i política `HTTP 200` (subagents sempre visibles) vs `HTTP 503` estructurat (`TUNEL_OFFLINE`/`LLM_OFFLINE`/`COPILOT_DESACTIVAT`).
+3. **Fase 3 (Pop-up Diagnòstic a la PWA):** Propagació d'errors estructurats a `pwa/src/lib/api.ts` i modal `CopilotErrorModal.tsx` (Chameleon UI HSL) integrat a `/gestio/copilot`, `CopilotWidget.tsx` i `/operari/feines/[id]/copilot`.
+4. **Fase 4 (Concurrència=1 al Mini-PC, Pressupost 18s/22s, Neteja Legacy i Eval):** Semàfor prioritari (`Copilot > OCR`) a `client_vault_agent.py`, `strip_think()` a `ocr_service.py`, eliminació de codi legacy/SQL residual i `scripts/eval_copilot_models.py` sobre maquinari real (`Ryzen 7 5700U`, perfils 32 GB i 16 GB).

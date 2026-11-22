@@ -80,9 +80,9 @@ class SubagentFlotaDespatx(BaseSubagent):
     tools_schema = SCHEMAS_FLOTA_DESPATX
     system_prompt = (
         "Ets l'assistent expert en Flota i Despatx de SEVALOR. "
-        "Per consultar quins vehicles estan en ruta, en servei actiu, assignats a operaris o disponibles al parc, crida SEMPRE l'eina 'get_fleet_status'. "
-        "Només has de cridar 'audit_itv_insurance_fleet' quan l'usuari pregunti expressament per inspeccions ITV o venciment d'assegurances. "
-        "Optimitza el desplaçament de vehicles, audita consums de combustible i localitza el vehicle més proper a una urgència amb 'get_closest_vehicle'. "
+        "Consultes l'estat actual dels vehicles de la flota (en ruta, assignats a operaris o disponibles), "
+        "audites venciments d'ITV i assegurances, optimitzes desplaçaments, revises consums de carburant "
+        "i localitzes el vehicle més proper a una urgència. "
         "Respon sempre en català de forma concisa i precisa basant-te exclusivament en les dades reals del disc dur de l'empresa."
     )
 
@@ -318,34 +318,6 @@ class SubagentFlotaDespatx(BaseSubagent):
         avui = date.today()
         limit = avui + timedelta(days=dies_marge)
         vehs = await self.read_sovereign_category(db, empresa_id, "vehicles")
-        if not vehs and db is not None:
-            try:
-                from sqlalchemy import select
-
-                from app.models.models import Vehicle
-                stmt = select(Vehicle).where(Vehicle.empresa_id == empresa_id)
-                res = await db.execute(stmt)
-                db_vehs = res.scalars().all()
-                if db_vehs:
-                    vehs = []
-                    for v_obj in db_vehs:
-                        vehs.append({
-                            "id": str(getattr(v_obj, "id", "")),
-                            "matricula": getattr(v_obj, "matricula", None),
-                            "marca": getattr(v_obj, "marca", None),
-                            "model": getattr(v_obj, "model", None),
-                            "data_proxima_itv": getattr(v_obj, "data_proxima_itv", None),
-                            "data_caducitat_asseguranca": getattr(v_obj, "data_caducitat_asseguranca", None),
-                            "data_venciment_renting": getattr(v_obj, "data_venciment_renting", None),
-                            "regim_adquisicio": getattr(v_obj, "regim_adquisicio", None),
-                            "renting_limit_km": getattr(v_obj, "renting_limit_km", None),
-                            "odometre_acumulat": getattr(v_obj, "odometre_acumulat", None),
-                            "odometre_inici_contracte": getattr(v_obj, "odometre_inici_contracte", None),
-                            "preu_km_exces_eur": getattr(v_obj, "preu_km_exces_eur", None),
-                            "dades_pesants": getattr(v_obj, "dades_pesants", None),
-                        })
-            except Exception:
-                pass
 
         alertes: List[Dict[str, Any]] = []
         alertes_renting_km: List[Dict[str, Any]] = []
@@ -478,54 +450,6 @@ class SubagentFlotaDespatx(BaseSubagent):
             for u in operaris
             if u.get("id")
         }
-
-        if not vehs and db is not None:
-            try:
-                from sqlalchemy import select
-
-                from app.models.models import Usuari, Vehicle
-                stmt = (
-                    select(Vehicle, Usuari.nom, Usuari.cognoms)
-                    .outerjoin(Usuari, Vehicle.conductor_habitual_id == Usuari.id)
-                    .where(Vehicle.empresa_id == empresa_id)
-                    .order_by(Vehicle.carrega_util_kg.desc().nullslast())
-                )
-                res = await db.execute(stmt)
-                rows = res.all()
-                if rows:
-                    vehs = []
-                    for row in rows:
-                        if isinstance(row, tuple) and len(row) >= 3:
-                            veh_obj, u_nom, u_cognoms = row[0], row[1], row[2]
-                        elif hasattr(row, "Vehicle"):
-                            veh_obj = getattr(row, "Vehicle")
-                            u_nom = getattr(row, "nom", None)
-                            u_cognoms = getattr(row, "cognoms", None)
-                        else:
-                            veh_obj, u_nom, u_cognoms = row, None, None
-
-                        v_dict = {
-                            "id": str(getattr(veh_obj, "id", "")),
-                            "matricula": getattr(veh_obj, "matricula", None),
-                            "marca": getattr(veh_obj, "marca", None),
-                            "model": getattr(veh_obj, "model", None),
-                            "categoria_ue": getattr(veh_obj, "categoria_ue", None),
-                            "mma_kg": getattr(veh_obj, "mma_kg", None),
-                            "carrega_util_kg": getattr(veh_obj, "carrega_util_kg", None),
-                            "equipament_homologat": getattr(veh_obj, "equipament_homologat", None) or [],
-                            "carnet_necessari": getattr(veh_obj, "carnet_necessari", None),
-                            "requereix_cap": getattr(veh_obj, "requereix_cap", None),
-                            "apte_assignacio_pwa": getattr(veh_obj, "apte_assignacio_pwa", True),
-                            "estat": getattr(veh_obj, "estat", None),
-                            "conductor_habitual_id": getattr(veh_obj, "conductor_habitual_id", None),
-                            "conductor": f"{u_nom or ''} {u_cognoms or ''}".strip(),
-                        }
-                        vehs.append(v_dict)
-                        cid = getattr(veh_obj, "conductor_habitual_id", None)
-                        if cid:
-                            op_map[str(cid)] = f"{u_nom or ''} {u_cognoms or ''}".strip()
-            except Exception:
-                pass
 
         vehs_sorted = sorted(
             vehs,

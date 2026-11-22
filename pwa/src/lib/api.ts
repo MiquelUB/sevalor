@@ -8,6 +8,14 @@
  * - Gestió d'errors neta i descriptiva
  */
 
+export interface ApiStructuredError extends Error {
+  status?: number;
+  code?: string;
+  motiu?: string;
+  titol?: string;
+  passos_solucio?: string[];
+}
+
 export function getApiBaseUrl(): string {
   if (typeof window !== "undefined") {
     // 1. Permetre override dinàmic manual si està definit
@@ -164,6 +172,9 @@ export async function apiFetch<T = any>(
   if (!response.ok) {
     let errorDetail = `Error ${response.status}: ${response.statusText}`;
     let errorCode: string | undefined;
+    let errorMotiu: string | undefined;
+    let errorTitol: string | undefined;
+    let errorPassos: string[] | undefined;
     try {
       const errorJson = await response.json();
       const rawDetail = errorJson?.detail ?? errorJson?.message;
@@ -180,6 +191,17 @@ export async function apiFetch<T = any>(
         if (typeof rawDetail.code === "string") {
           errorCode = rawDetail.code;
         }
+        if (typeof rawDetail.motiu === "string") {
+          errorMotiu = rawDetail.motiu;
+        }
+        if (typeof rawDetail.titol === "string") {
+          errorTitol = rawDetail.titol;
+        }
+        if (Array.isArray(rawDetail.passos_solucio)) {
+          errorPassos = rawDetail.passos_solucio
+            .map((p: unknown) => String(p || "").trim())
+            .filter(Boolean);
+        }
         errorDetail =
           (typeof rawDetail.message === "string" && rawDetail.message) ||
           (typeof rawDetail.detail === "string" && rawDetail.detail) ||
@@ -188,34 +210,46 @@ export async function apiFetch<T = any>(
       if (typeof errorJson?.code === "string") {
         errorCode = errorJson.code;
       }
+      if (typeof errorJson?.motiu === "string" && !errorMotiu) {
+        errorMotiu = errorJson.motiu;
+      }
     } catch {
       const errorText = await response.text().catch(() => "");
       if (errorText) errorDetail = errorText;
     }
 
+    const attachMeta = (err: ApiStructuredError, fallbackCode?: string): ApiStructuredError => {
+      err.status = response.status;
+      if (errorCode || fallbackCode) err.code = errorCode || fallbackCode;
+      if (errorMotiu) err.motiu = errorMotiu;
+      if (errorTitol) err.titol = errorTitol;
+      if (errorPassos && errorPassos.length > 0) err.passos_solucio = errorPassos;
+      return err;
+    };
+
     if (response.status === 503 && errorCode === "NODE_EMPRESA_OFFLINE") {
-      const err = new Error(
-        errorDetail ||
-          "🖥️ Ordinador central de l'empresa apagat: Tens cobertura mòbil, però l'ordinador d'oficina de l'empresa està apagat o desconnectat."
-      ) as Error & { code?: string };
-      err.code = "NODE_EMPRESA_OFFLINE";
-      throw err;
+      throw attachMeta(
+        new Error(
+          errorDetail ||
+            "Ordinador central de l'empresa apagat: Tens cobertura mòbil, però l'ordinador d'oficina de l'empresa està apagat o desconnectat."
+        ) as ApiStructuredError,
+        "NODE_EMPRESA_OFFLINE"
+      );
     }
 
     if ([502, 503, 504].includes(response.status)) {
       const safeDetail = typeof errorDetail === "string" ? errorDetail : String(errorDetail || "");
-      const err = new Error(
-        safeDetail.includes("Error 50")
-          ? "⚠️ Base de dades central no disponible temporalment: Tens cobertura mòbil, però el servidor de dades no respon en aquest instant."
-          : safeDetail
-      ) as Error & { code?: string };
-      err.code = errorCode || "DB_UNAVAILABLE";
-      throw err;
+      throw attachMeta(
+        new Error(
+          safeDetail.includes("Error 50")
+            ? "Base de dades central no disponible temporalment: Tens cobertura mòbil, però el servidor de dades no respon en aquest instant."
+            : safeDetail
+        ) as ApiStructuredError,
+        "DB_UNAVAILABLE"
+      );
     }
 
-    const err = new Error(errorDetail) as Error & { code?: string };
-    if (errorCode) err.code = errorCode;
-    throw err;
+    throw attachMeta(new Error(errorDetail) as ApiStructuredError);
   }
 
   // Si la resposta és 204 No Content

@@ -260,43 +260,55 @@ def test_vehicle_create_and_response_schemas_pesants_renting():
 
 
 @pytest.mark.asyncio
-async def test_subagent_flota_get_heavy_vehicles_for_ot():
-    """Valida la nova eina del subagent per filtrar vehicles pesants amb grua per a una OT."""
+async def test_subagent_flota_get_heavy_vehicles_for_ot(monkeypatch):
+    """Valida l'eina del subagent per filtrar vehicles pesants amb grua llegint del disc sobirà."""
     empresa_id = uuid.uuid4()
     subagent = SubagentFlotaDespatx()
+    conductor_1_id = str(uuid.uuid4())
+    conductor_2_id = str(uuid.uuid4())
 
-    v1 = Vehicle(
-        matricula="1001-AAA",
-        marca="Renault",
-        model="Kangoo",
-        categoria_ue="M1",
-        carrega_util_kg=600,
-        equipament_homologat=[],
-        carnet_necessari="B",
-        requereix_cap=False,
-        estat="OPERATIU",
-    )
+    sovereign_data = {
+        "vehicles": [
+            {
+                "id": str(uuid.uuid4()),
+                "matricula": "1001-AAA",
+                "marca": "Renault",
+                "model": "Kangoo",
+                "categoria_ue": "M1",
+                "carrega_util_kg": 600,
+                "equipament_homologat": [],
+                "carnet_necessari": "B",
+                "requereix_cap": False,
+                "apte_assignacio_pwa": True,
+                "estat": "OPERATIU",
+                "conductor_habitual_id": conductor_1_id,
+            },
+            {
+                "id": str(uuid.uuid4()),
+                "matricula": "2002-BBB",
+                "marca": "Iveco",
+                "model": "Daily 70C",
+                "categoria_ue": "N2",
+                "carrega_util_kg": 3200,
+                "equipament_homologat": ["GRUA_AUTOCARGANT", "ENGANXALL_REMOLC"],
+                "carnet_necessari": "C",
+                "requereix_cap": True,
+                "apte_assignacio_pwa": True,
+                "estat": "OPERATIU",
+                "conductor_habitual_id": conductor_2_id,
+            },
+        ],
+        "operaris": [
+            {"id": conductor_1_id, "nom": "Pere", "cognoms": "Gomis"},
+            {"id": conductor_2_id, "nom": "Manel", "cognoms": "Font"},
+        ],
+    }
 
-    v2_grua = Vehicle(
-        matricula="2002-BBB",
-        marca="Iveco",
-        model="Daily 70C",
-        categoria_ue="N2",
-        carrega_util_kg=3200,
-        equipament_homologat=["GRUA_AUTOCARGANT", "ENGANXALL_REMOLC"],
-        carnet_necessari="C",
-        requereix_cap=True,
-        estat="OPERATIU",
-    )
+    async def fake_read(db, emp_id, cat):
+        return sovereign_data.get(cat, [])
 
-    # Mock db session
+    monkeypatch.setattr(subagent, "read_sovereign_category", fake_read)
     mock_db = MagicMock(spec=AsyncSession)
-    mock_result = MagicMock()
-    mock_result.all.return_value = [
-        (v2_grua, "Manel", "Font"),
-        (v1, "Pere", "Gomis"),
-    ]
-    mock_db.execute.return_value = mock_result
 
     # Cerca 1: Exigir GRUA_AUTOCARGANT
     res_grua = await subagent.tool_get_heavy_vehicles_for_ot(
@@ -307,6 +319,7 @@ async def test_subagent_flota_get_heavy_vehicles_for_ot():
     assert res_grua["vehicles"][0]["matricula"] == "2002-BBB"
     assert res_grua["vehicles"][0]["carrega_util_kg"] == 3200
     assert res_grua["vehicles"][0]["requereix_cap"] is True
+    mock_db.execute.assert_not_called()
 
     # Cerca 2: Exigir càrrega mínima útil >= 2000 kg
     res_carrega = await subagent.tool_get_heavy_vehicles_for_ot(
@@ -325,31 +338,35 @@ async def test_subagent_flota_get_heavy_vehicles_for_ot():
 
 
 @pytest.mark.asyncio
-async def test_subagent_flota_audit_venciments_i_renting_km():
-    """Valida l'auditoria consolidada de venciments i excés de quilometratge de rènting."""
+async def test_subagent_flota_audit_venciments_i_renting_km(monkeypatch):
+    """Valida l'auditoria consolidada de venciments i excés de quilometratge llegint del disc sobirà."""
     avui = date.today()
     empresa_id = uuid.uuid4()
     subagent = SubagentFlotaDespatx()
 
-    # Vehicle amb contracte rènting i excés de km
-    v_renting_exces = Vehicle(
-        matricula="7777-XYZ",
-        regim_adquisicio="RENTING",
-        renting_limit_km=50000,
-        odometre_inici_contracte=0,
-        odometre_acumulat=54000,  # 4.000 km d'excés
-        preu_km_exces_eur=0.15,
-        data_venciment_renting=avui + timedelta(days=10),  # Venciment imminent (<= 15 dies)
-        data_proxima_itv=avui + timedelta(days=100),
-        data_caducitat_asseguranca=avui + timedelta(days=100),
-    )
+    sovereign_vehicles = [
+        {
+            "id": str(uuid.uuid4()),
+            "matricula": "7777-XYZ",
+            "regim_adquisicio": "RENTING",
+            "renting_limit_km": 50000,
+            "odometre_inici_contracte": 0,
+            "odometre_acumulat": 54000,  # 4.000 km d'excés
+            "preu_km_exces_eur": 0.15,
+            "data_venciment_renting": (avui + timedelta(days=10)).isoformat(),
+            "data_proxima_itv": (avui + timedelta(days=100)).isoformat(),
+            "data_caducitat_asseguranca": (avui + timedelta(days=100)).isoformat(),
+        }
+    ]
 
+    async def fake_read(db, emp_id, cat):
+        return sovereign_vehicles if cat == "vehicles" else []
+
+    monkeypatch.setattr(subagent, "read_sovereign_category", fake_read)
     mock_db = MagicMock(spec=AsyncSession)
-    mock_res = MagicMock()
-    mock_res.scalars.return_value.all.return_value = [v_renting_exces]
-    mock_db.execute.return_value = mock_res
 
     res_audit = await subagent.tool_audit_itv_insurance_fleet(mock_db, empresa_id, dies_marge=30)
+    mock_db.execute.assert_not_called()
 
     assert res_audit["trobat"] is True
     assert len(res_audit["alertes"]) == 1

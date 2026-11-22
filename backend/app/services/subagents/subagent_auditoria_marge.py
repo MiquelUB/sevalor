@@ -27,7 +27,7 @@ class SubagentAuditoriaMarge(BaseSubagent):
     descripcio = (
         "Especialista en conciliació econòmica post-obra, diners pendents de facturar i fuites de marge."
     )
-    allowed_roles = ["BOSS"]  # VETO estricte a ENGINYER, SECRETARIA i OPERARI (RF-20.1)
+    allowed_roles = ["BOSS", "ADMIN"]  # VETO estricte a ENGINYER, SECRETARIA i OPERARI (RF-20.1)
     tools_schema = SCHEMAS_AUDITORIA_MARGE
     system_prompt = (
         "Ets l'auditor financer sobirà de Direcció de SEVALOR (Rol: BOSS). "
@@ -76,11 +76,17 @@ class SubagentAuditoriaMarge(BaseSubagent):
                 "missatge": "Accés denegat: només Direcció (BOSS) pot accedir a auditories financeres.",
             }
         if tool_name == "get_unbilled_money":
-            return await self.tool_get_unbilled_money(db, empresa_id, args.get("mes"))
+            return await self.tool_get_unbilled_money(
+                db, empresa_id, mes=args.get("mes"), any=args.get("any")
+            )
         if tool_name == "reconcile_post_obra":
-            return await self.tool_reconcile_post_obra(db, empresa_id, args.get("codi_ot", ""))
+            return await self.tool_reconcile_post_obra(
+                db, empresa_id, args.get("codi_ot") or args.get("ordre_treball_id") or ""
+            )
         if tool_name == "detect_margin_leak":
-            return await self.tool_detect_margin_leak(db, empresa_id, args.get("codi_ot", ""))
+            return await self.tool_detect_margin_leak(
+                db, empresa_id, args.get("codi_ot") or args.get("ordre_treball_id")
+            )
         return {"error": f"Eina no suportada pel subagent financer: {tool_name}"}
 
     async def _load_ots(self, db: AsyncSession, empresa_id: uuid.UUID) -> List[Dict[str, Any]]:
@@ -98,14 +104,27 @@ class SubagentAuditoriaMarge(BaseSubagent):
         return res
 
     async def tool_get_unbilled_money(
-        self, db: AsyncSession, empresa_id: uuid.UUID, mes: Optional[int] = None
+        self,
+        db: AsyncSession,
+        empresa_id: uuid.UUID,
+        mes: Optional[int] = None,
+        any: Optional[int] = None,
     ) -> dict:
         ots = await self._load_ots(db, empresa_id)
+
+        def _matches_year(val: Any) -> bool:
+            if any is None:
+                return True
+            if not isinstance(val, str) or len(val.strip()) < 4:
+                return False
+            return val.strip()[:4] == str(any)
+
         ots_tancades = [
             o
             for o in ots
             if str(o.get("estat") or "").upper() == "TANCADA"
             and (mes is None or _extract_month(o.get("data_planificacio")) == mes)
+            and _matches_year(o.get("data_planificacio") or o.get("created_at"))
         ]
         ots_tancades_ids = {str(o.get("id")) for o in ots_tancades if o.get("id")}
         ots_tancades_codis = {str(o.get("codi")) for o in ots_tancades if o.get("codi")}
@@ -217,23 +236,56 @@ class SubagentAuditoriaMarge(BaseSubagent):
         }
 
     async def tool_detect_margin_leak(
-        self, db: AsyncSession, empresa_id: uuid.UUID, codi_ot: str
+        self, db: AsyncSession, empresa_id: uuid.UUID, codi_ot: Optional[str] = None
     ) -> dict:
-        rec = await self.tool_reconcile_post_obra(db, empresa_id, codi_ot)
-        if not rec.get("trobat") or not rec.get("reconciliat"):
+        if codi_ot and codi_ot.strip():
+            rec = await self.tool_reconcile_post_obra(db, empresa_id, codi_ot.strip())
+            if not rec.get("trobat") or not rec.get("reconciliat"):
+                return {
+                    "trobat": False,
+                    "alerta_merma": False,
+                    "codi_ot": codi_ot.strip(),
+                    "missatge": f"No hi ha dades per detectar merma a l'ordre {codi_ot.strip()}.",
+                }
+
+            alerta = bool(rec.get("alerta_merma", False)) or float(rec.get("marge_real") or 100.0) < 25.0
             return {
-                "alerta_merma": False,
-                "missatge": f"No hi ha dades per detectar merma a l'ordre {codi_ot}.",
+                "trobat": True,
+                "alerta_merma": alerta,
+                "codi_ot": codi_ot.strip(),
+                "marge_real": rec.get("marge_real"),
+                "missatge": (
+                    f"ALERTA: S'ha detectat fuga de marge o consum excessiu a {codi_ot.strip()} "
+                    f"(marge real: {rec.get('marge_real')}%)."
+                    if alerta
+                    else f"Consums i marge dintre dels llindars permesos a {codi_ot.strip()}."
+                ),
             }
 
-        alerta = bool(rec.get("alerta_merma", False))
+        # Sense codi_ot concret: auditem totes les auditories post-obra registrades al disc
+        informes = await self.read_sovereign_category(db, empresa_id, "ots_informes")
+        mermes = await self.read_sovereign_category(db, empresa_id, "copilot_mermes_preus")
+        alertes: List[Dict[str, Any]] = []
+        for doc in [*informes, *mermes]:
+            m_real = float(doc.get("marge_real_liquidat_percentatge") or doc.get("marge_real") or 100.0)
+            flag = bool(doc.get("alerta_merma_operativa") or doc.get("alerta_merma"))
+            if flag or m_real < 25.0:
+                alertes.append(
+                    {
+                        "codi_ot": doc.get("codi_ot") or doc.get("ordre_treball_id") or "N/D",
+                        "marge_real": m_real,
+                        "alerta_merma": flag,
+                    }
+                )
         return {
-            "alerta_merma": alerta,
-            "codi_ot": codi_ot,
+            "trobat": len(alertes) > 0,
+            "total_alertes": len(alertes),
+            "alerta_merma": len(alertes) > 0,
+            "alertes": alertes[:15],
             "missatge": (
-                f"ALERTA: S'ha detectat consum de material excessiu (>250%) a {codi_ot}."
-                if alerta
-                else f"Consums dintre dels llindars permesos a {codi_ot}."
+                f"S'han detectat {len(alertes)} obres amb fuga de marge (<25%) o alerta de merma operativa."
+                if alertes
+                else "No s'ha detectat cap fuga de marge ni alerta de merma a les auditories del disc dur."
             ),
         }
 

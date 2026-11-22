@@ -45,7 +45,15 @@ class SubagentGeneralRag(BaseSubagent):
         "Especialista en procediments corporatius, fitxa 360° de clients, parcel·les/finques, "
         "eines en custòdia i pressupostos pendents."
     )
-    allowed_roles = ["BOSS", "SECRETARIA", "ENGINYER", "OPERARI", "CAP_DE_COLLA", "ADMIN"]
+    allowed_roles = [
+        "BOSS",
+        "SECRETARIA",
+        "ENGINYER",
+        "CAP_DE_MAGATZEM",
+        "OPERARI",
+        "CAP_DE_COLLA",
+        "ADMIN",
+    ]
     tools_schema = SCHEMAS_GENERAL_RAG
     system_prompt = (
         "Ets el Copilot Tècnic de SEVALOR Suite. "
@@ -93,6 +101,7 @@ class SubagentGeneralRag(BaseSubagent):
             return await self.tool_get_pending_budgets(
                 db,
                 empresa_id,
+                client_nom=args.get("client_nom"),
                 client_id=args.get("client_id"),
                 limit=int(args.get("limit", 5)),
                 caller_role=caller_role,
@@ -101,6 +110,7 @@ class SubagentGeneralRag(BaseSubagent):
             return await self.tool_get_tools_custody(
                 db,
                 empresa_id,
+                operari_nom=args.get("operari_nom"),
                 operari_nom_o_id=args.get("operari_nom_o_id"),
                 limit=int(args.get("limit", 10)),
             )
@@ -148,11 +158,38 @@ class SubagentGeneralRag(BaseSubagent):
         elif client_nom:
             nom_clean = client_nom.strip().lower()
             tokens = self._extract_search_tokens(client_nom)
-            for c in clients:
-                rao = str(c.get("rao_social") or c.get("nom") or "").lower()
-                if nom_clean in rao or (tokens and any(t in rao for t in tokens)):
-                    matched_id = str(c.get("id"))
-                    break
+            coincidents = [
+                c
+                for c in clients
+                if nom_clean in str(c.get("rao_social") or c.get("nom") or "").lower()
+                or (
+                    tokens
+                    and any(t in str(c.get("rao_social") or c.get("nom") or "").lower() for t in tokens)
+                )
+            ]
+            if len(coincidents) > 1:
+                exactes = [
+                    c
+                    for c in coincidents
+                    if str(c.get("rao_social") or c.get("nom") or "").strip().lower() == nom_clean
+                ]
+                if len(exactes) == 1:
+                    matched_id = str(exactes[0].get("id"))
+                else:
+                    return {
+                        "trobat": True,
+                        "ambigu": True,
+                        "candidats": [
+                            {"codi": c.get("codi"), "rao_social": c.get("rao_social") or c.get("nom")}
+                            for c in coincidents[:5]
+                        ],
+                        "missatge": (
+                            f"S'han trobat {len(coincidents)} clients coincidents amb '{client_nom}'. "
+                            "Indica el nom exacte del client."
+                        ),
+                    }
+            elif len(coincidents) == 1:
+                matched_id = str(coincidents[0].get("id"))
 
         if not matched_id:
             return {
@@ -299,6 +336,7 @@ class SubagentGeneralRag(BaseSubagent):
         self,
         db: AsyncSession,
         empresa_id: uuid.UUID,
+        client_nom: Optional[str] = None,
         client_id: Optional[str] = None,
         limit: int = 5,
         caller_role: Optional[str] = None,
@@ -308,7 +346,7 @@ class SubagentGeneralRag(BaseSubagent):
         clients_map = {str(c.get("id")): c.get("rao_social") for c in clients if c.get("id")}
 
         pendents: List[Dict[str, Any]] = []
-        filter_c = (client_id or "").strip().lower()
+        filter_c = (client_nom or client_id or "").strip().lower()
         for p in pressupostos:
             if str(p.get("estat", "")).upper() not in ("PENDENT", "EMES", "EN_REVISIO"):
                 continue
@@ -345,6 +383,7 @@ class SubagentGeneralRag(BaseSubagent):
         self,
         db: AsyncSession,
         empresa_id: uuid.UUID,
+        operari_nom: Optional[str] = None,
         operari_nom_o_id: Optional[str] = None,
         limit: int = 10,
     ) -> dict:
@@ -356,7 +395,7 @@ class SubagentGeneralRag(BaseSubagent):
             if uid:
                 op_map[uid] = f"{u.get('nom') or ''} {u.get('cognoms') or ''}".strip()
 
-        op_filter = (operari_nom_o_id or "").strip().lower()
+        op_filter = (operari_nom or operari_nom_o_id or "").strip().lower()
         eines: List[Dict[str, Any]] = []
         for e in sorted(eines_raw, key=lambda x: str(x.get("nom") or "")):
             op_id = str(e.get("custodiat_per_operari_id") or "")

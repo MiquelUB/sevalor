@@ -5,6 +5,11 @@ import { Send, Bot, User, AlertCircle, ArrowLeft } from "lucide-react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { apiFetch } from "@/lib/api";
+import {
+  CopilotErrorModal,
+  extractCopilotPopupError,
+  type CopilotPopupError,
+} from "@/components/CopilotErrorModal";
 
 interface Message {
   id: string;
@@ -19,6 +24,8 @@ export default function CopilotPage() {
   const [input, setInput] = useState("");
   const [isOnline, setIsOnline] = useState(true);
   const [isLoading, setIsLoading] = useState(false);
+  const [popupError, setPopupError] = useState<CopilotPopupError | null>(null);
+  const [ultimaPreguntaFallida, setUltimaPreguntaFallida] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -38,16 +45,16 @@ export default function CopilotPage() {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!input.trim() || !isOnline || isLoading) return;
+  const sendPregunta = async (textToSend: string) => {
+    const cleanText = textToSend.trim();
+    if (!cleanText || !isOnline || isLoading) return;
 
     const userMsg: Message = {
       id: Date.now().toString(),
       role: "user",
-      content: input.trim(),
+      content: cleanText,
     };
-    
+
     setMessages((prev) => [...prev, userMsg]);
     setInput("");
     setIsLoading(true);
@@ -62,7 +69,6 @@ export default function CopilotPage() {
         body: JSON.stringify({ pregunta: userMsg.content, context_id: feinaId, historial }),
       });
 
-
       const botMsg: Message = {
         id: (Date.now() + 1).toString(),
         role: "bot",
@@ -70,15 +76,27 @@ export default function CopilotPage() {
       };
       setMessages((prev) => [...prev, botMsg]);
     } catch (error: any) {
+      const structured = extractCopilotPopupError(error);
+      if (structured) {
+        setUltimaPreguntaFallida(cleanText);
+        setPopupError(structured);
+      }
       const errorMsg: Message = {
         id: (Date.now() + 1).toString(),
         role: "bot",
-        content: error?.message || "Error de connexió amb el Copilot. Torna-ho a intentar més tard.",
+        content: structured
+          ? `${structured.titol}: ${structured.message}`
+          : error?.message || "Error de connexió amb el Copilot. Torna-ho a intentar més tard.",
       };
       setMessages((prev) => [...prev, errorMsg]);
     } finally {
       setIsLoading(false);
     }
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    await sendPregunta(input);
   };
 
   return (
@@ -176,6 +194,21 @@ export default function CopilotPage() {
           </button>
         </form>
       </div>
+
+      <CopilotErrorModal
+        error={popupError}
+        onClose={() => setPopupError(null)}
+        onRetry={
+          ultimaPreguntaFallida
+            ? () => {
+                const retryPrompt = ultimaPreguntaFallida;
+                setUltimaPreguntaFallida(null);
+                sendPregunta(retryPrompt);
+              }
+            : undefined
+        }
+        canCheckStatus={false}
+      />
     </div>
   );
 }

@@ -635,3 +635,49 @@
   *Descripció*: Joc de preguntes reals en català (encaminament + eina + dades) i execució de la suite completa al 100% en verd.  
   *Cadena de Test*: `backend/.venv/bin/pytest -v`
 
+---
+
+## 🛡️ Bloc 11: Copilot v3.2 — Coordinador en 2 Etapes, Registre Únic Pydantic, Prompts al PC i Pop-up Diagnòstic
+
+### Fase 1: Seguretat, Registre Únic Pydantic i Eliminació del Bug de Narració
+- [x] **T069 [Backend/Security] Utilitats LLM segures (`app/services/llm_utils.py`)** (~25 min)  
+  *Requisits Funcionals*: `FR-023`  
+  *Skill Mandatòria*: `security-and-hardening`, `systematic-debugging`  
+  *Descripció*: Implementar `strip_think()` robust (tancat i truncat), escapat anti-injecció `<dades_empresa>`, normalitzador numèric català/decimal `xifres_inventades()`, detecció `NARRACIO` i guarda determinista `triar_resposta()`.  
+  *Cadena de Test*: `backend/.venv/bin/pytest backend/tests/test_tool_contract.py -v`
+
+- [x] **T070 [Backend/Security] Registre Únic Pydantic (`tools_registry.py`) i tancament dels 6 desajustos + `fitxer_path` / `import_total`** (~30 min)  
+  *Requisits Funcionals*: `FR-022`  
+  *Skill Mandatòria*: `security-and-hardening`  
+  *Descripció*: Crear `tools_registry.py` com a font única de veritat Pydantic v2 amb RBAC declaratiu (`allowed_roles`), `inline_strict_schema()` sense `$defs`/`$ref`, identificadors humans (`codi_ot`, `client_nom`, `article_ref`, `numero_pressupost`), eliminació de `fitxer_path` i `import_total` dels arguments del LLM, i regeneració de `schemas.py` des del registre.  
+  *Cadena de Test*: `backend/.venv/bin/pytest backend/tests/test_tool_contract.py -v`
+
+- [x] **T071 [Backend/Subagents] Correcció dels 8 subagents (desajustos, prompts sense noms d'eines, rànquing d'estoc baix)** (~30 min)  
+  *Requisits Funcionals*: `FR-022`, `FR-023`  
+  *Skill Mandatòria*: `systematic-debugging`, `security-and-hardening`  
+  *Descripció*: Eliminar noms d'eines en prosa dels `system_prompt` dels subagents, corregir els 6 desajustos reals (`get_stock_movements`, `reconcile_post_obra`/`detect_margin_leak`, OCR sense `fitxer_path`, Telegram `send_interactive_budget` carregant import del disc + HITL, `get_pending_budgets`/`get_tools_custody`, `get_warranty_status`), afegir ordenació `menor_estoc`/`major_estoc` i `trobat` unificat a `SubagentLogisticaEstoc`.  
+  *Cadena de Test*: `backend/.venv/bin/pytest backend/tests/test_tool_contract.py backend/tests/test_copilot_v2.py backend/tests/test_subagents_architecture.py -v`
+
+- [x] **T072 [Backend/Dispatcher] Eliminació del `+0.5`, filtre estricte `allowed_roles` i guarda `triar_resposta()` a `dispatcher.py`** (~25 min)  
+  *Requisits Funcionals*: `FR-022`, `FR-023`  
+  *Skill Mandatòria*: `security-and-hardening`, `systematic-debugging`  
+  *Descripció*: Afegir `select_active_subagents()` (filtre `allowed_roles` previ, `ratio=0.6`, `min_score=1.0`, sense `+0.5` forçat), substituir el filtre trencat `get_margin_alert` per `allowed_roles` del registre i substituir el bloc `es_substantiu` (`L687-L710`) per `strip_think()` + `triar_resposta()`.  
+  *Cadena de Test*: `backend/.venv/bin/pytest backend/tests/test_tool_contract.py backend/tests/test_copilot_v2.py backend/tests/test_subagents_architecture.py backend/tests/test_phase3_copilot_eval.py -v`
+
+### Fase 2: Coordinador en 2 Etapes + Sobirania Exclusiva del System Prompt al PC Dedicat
+- [x] **T073 [Backend/IA] Coordinador en 2 etapes (Router JSON estructurat + Execució paral·lela + `RequestDiskCache` + Síntesi KV Cache)** (~30 min)  
+  *Requisits Funcionals*: `FR-015`, `FR-016`, `FR-020`, `FR-023`, `FR-025`  
+- [x] **T074 [Backend/Storage] Font única del System Prompt i perfil de models al PC dedicat (`09_copilot_ia/prompt_sistema/`)** (~30 min)  
+  *Requisits Funcionals*: `FR-024`, `FR-025`  
+
+### Fase 3: Pop-up Diagnòstic a la PWA
+- [x] **T075 [Frontend/PWA] Propagació d'errors estructurats a `api.ts` i Pop-up `CopilotErrorModal.tsx` (Chameleon UI)** (~30 min)  
+  *Requisits Funcionals*: `FR-025`  
+  *Skill Mandatòria*: `frontend-design`  
+
+### Fase 4: Concurrència=1 al Mini-PC, Neteja Legacy i Eval Real
+- [x] **T076 [Agent/WSS] Semàfor `concurrencia=1` amb prioritat (`Copilot > OCR`) a `client_vault_agent.py` i `strip_think` a `ocr_service.py`** (~25 min)  
+  *Requisits Funcionals*: `FR-026`  
+- [x] **T077 [Backend/Refactor] Neteja codi legacy a `gestio/copilot.py` i fallbacks SQL residuals de `subagent_flota_despatx.py`** (~25 min)  
+- [x] **T078 [QA/Eval] Script `scripts/eval_copilot_models.py` (30–40 casos reals per vertical sobre 5700U 32 GB i perfil 16 GB)** (~30 min)
+

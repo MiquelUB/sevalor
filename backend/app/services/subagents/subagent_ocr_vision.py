@@ -23,13 +23,14 @@ class SubagentOcrVision(BaseSubagent):
         "SECRETARIA",
         "ENGINYER",
         "BOSS",
+        "ADMIN",
     ]
     tools_schema = SCHEMAS_OCR_VISION
     system_prompt = (
         "Ets el digitalitzador OCR de SEVALOR Suite. "
         "La teva missió és extreure dades estructurades de documents (albarans de proveïdor, "
         "tiquets de benzina, targetes d'ITV) contrastant amb les fitxes del disc dur dedicat de l'empresa "
-        "per eliminar l'entrada manual de dades. Retorna sempre JSON estructurat i precís."
+        "per eliminar l'entrada manual de dades. Respon sempre en català de forma clara i precisa."
     )
 
     def can_handle(self, query: str, rol: str) -> bool:
@@ -63,7 +64,8 @@ class SubagentOcrVision(BaseSubagent):
         caller_user_id: Optional[uuid.UUID] = None,
         **kwargs: Any,
     ) -> dict:
-        text_ocr = args.get("text_ocr", "")
+        # Seguretat (OWASP LLM01/LLM05): mai llegir fitxer_path del LLM; només text de sessió o text_ocr validat
+        text_ocr = str(kwargs.get("uploaded_text_ocr") or args.get("text_ocr") or "")
         if tool_name == "extract_albara_lines":
             return await self.tool_extract_albara_lines(db, empresa_id, text_ocr)
         if tool_name == "extract_vehicle_tech_card":

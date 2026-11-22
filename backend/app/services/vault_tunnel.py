@@ -912,8 +912,12 @@ class VaultTunnelBroker:
         body: Dict[str, Any],
         *,
         timeout: float = LLM_RPC_TIMEOUT_SECONDS,
+        priority: Optional[str] = None,
     ) -> Dict[str, Any]:
-        return await self.call(target_key, "llm_chat", body, timeout=timeout)
+        payload = dict(body)
+        if priority:
+            payload["_sevalor_priority"] = str(priority).strip().upper()
+        return await self.call(target_key, "llm_chat", payload, timeout=timeout)
 
 
 vault_tunnel_broker = VaultTunnelBroker()

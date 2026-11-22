@@ -114,6 +114,7 @@ class SubagentPlanificacioEquip(BaseSubagent):
                 data=args.get("data"),
                 estat=args.get("estat"),
                 operari_nom=args.get("operari_nom"),
+                limit=int(args.get("limit", 10)),
                 caller_role=c_role,
                 caller_user_id=c_user_id,
             )
@@ -172,6 +173,7 @@ class SubagentPlanificacioEquip(BaseSubagent):
         data: Optional[str] = None,
         estat: Optional[str] = None,
         operari_nom: Optional[str] = None,
+        limit: int = 10,
         caller_role: Optional[str] = None,
         caller_user_id: Optional[uuid.UUID] = None,
     ) -> dict:
@@ -238,7 +240,7 @@ class SubagentPlanificacioEquip(BaseSubagent):
                     "adreca": o.get("adreca") or "",
                 }
             )
-            if len(ots_filtrades) >= 15:
+            if len(ots_filtrades) >= max(1, min(int(limit or 10), 50)):
                 break
 
         total = len(ots_filtrades)

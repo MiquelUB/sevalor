@@ -27,6 +27,11 @@ import {
 } from "lucide-react";
 import { apiFetch } from "@/lib/api";
 import { useGestio } from "@/lib/gestio-context";
+import {
+  CopilotErrorModal,
+  extractCopilotPopupError,
+  type CopilotPopupError,
+} from "@/components/CopilotErrorModal";
 
 type PestanyaCopilot = "XAT" | "CONFIG" | "RAG" | "GARANTIES" | "INCIDENCIES" | "RECONCILIACIO";
 
@@ -35,6 +40,10 @@ interface CopilotConfigState {
   rag_prompt: string;
   subagent_prompts: Record<string, string>;
   llm_model: string;
+  llm_chat_model: string;
+  llm_vision_model: string;
+  hardware_profile: "32GB" | "16GB";
+  timeout_budget_s: number;
 }
 
 const SUBAGENTS_CATALEG: Array<{ id: string; nom: string; ambit: string }> = [
@@ -164,12 +173,16 @@ export default function CopilotIAPage() {
   const [iaStatus, setIaStatus] = useState<IaStatusResp | null>(null);
   const [estatNode, setEstatNode] = useState<EstatNodeResp | null>(null);
 
-  // ── 0. CONFIGURACIÓ DE L'AGENT (Prompts & Model a PostgreSQL RLS) ───────
+  // ── 0. CONFIGURACIÓ SOBIRANA DE L'AGENT (Disc Dedicat de l'Empresa) ─────
   const [copilotConfig, setCopilotConfig] = useState<CopilotConfigState>({
     system_prompt: "",
     rag_prompt: "",
     subagent_prompts: {},
     llm_model: "",
+    llm_chat_model: "",
+    llm_vision_model: "",
+    hardware_profile: "32GB",
+    timeout_budget_s: 18,
   });
   const [desantConfig, setDesantConfig] = useState(false);
   const [feedbackConfig, setFeedbackConfig] = useState<{ type: "ok" | "err"; text: string } | null>(null);
@@ -180,6 +193,8 @@ export default function CopilotIAPage() {
   const [imatgeB64, setImatgeB64] = useState<string | null>(null);
   const [enviantXat, setEnviantXat] = useState(false);
   const [executantAccio, setExecutantAccio] = useState(false);
+  const [popupError, setPopupError] = useState<CopilotPopupError | null>(null);
+  const [ultimaPreguntaFallida, setUltimaPreguntaFallida] = useState<string | null>(null);
   const [conversaXat, setConversaXat] = useState<ChatMessage[]>([
     {
       sender: "bot",
@@ -242,11 +257,16 @@ export default function CopilotIAPage() {
       setIaStatus(st);
       setEstatNode(node);
       if (cfg) {
+        const hw: "32GB" | "16GB" = cfg.hardware_profile === "16GB" ? "16GB" : "32GB";
         setCopilotConfig({
           system_prompt: cfg.system_prompt || "",
           rag_prompt: cfg.rag_prompt || "",
           subagent_prompts: cfg.subagent_prompts || {},
-          llm_model: cfg.llm_model || "",
+          llm_model: cfg.llm_chat_model || cfg.llm_model || "",
+          llm_chat_model: cfg.llm_chat_model || cfg.llm_model || "",
+          llm_vision_model: cfg.llm_vision_model || "",
+          hardware_profile: hw,
+          timeout_budget_s: Number(cfg.timeout_budget_s || (hw === "16GB" ? 22 : 18)),
         });
       }
       setRagDocs(Array.isArray(docs) ? docs : []);
@@ -271,24 +291,34 @@ export default function CopilotIAPage() {
     setDesantConfig(true);
     setFeedbackConfig(null);
     try {
+      const chatModel = (copilotConfig.llm_chat_model || copilotConfig.llm_model || "").trim();
       const saved = await apiFetch<CopilotConfigState>("/gestio/copilot/config", {
         method: "PUT",
         body: JSON.stringify({
           system_prompt: copilotConfig.system_prompt.trim(),
           rag_prompt: copilotConfig.rag_prompt.trim(),
           subagent_prompts: copilotConfig.subagent_prompts,
-          llm_model: copilotConfig.llm_model.trim(),
+          llm_model: chatModel,
+          llm_chat_model: chatModel,
+          llm_vision_model: (copilotConfig.llm_vision_model || "").trim(),
+          hardware_profile: copilotConfig.hardware_profile,
+          timeout_budget_s: copilotConfig.timeout_budget_s,
         }),
       });
+      const hw: "32GB" | "16GB" = saved.hardware_profile === "16GB" ? "16GB" : "32GB";
       setCopilotConfig({
         system_prompt: saved.system_prompt || "",
         rag_prompt: saved.rag_prompt || "",
         subagent_prompts: saved.subagent_prompts || {},
-        llm_model: saved.llm_model || "",
+        llm_model: saved.llm_chat_model || saved.llm_model || "",
+        llm_chat_model: saved.llm_chat_model || saved.llm_model || "",
+        llm_vision_model: saved.llm_vision_model || "",
+        hardware_profile: hw,
+        timeout_budget_s: Number(saved.timeout_budget_s || (hw === "16GB" ? 22 : 18)),
       });
       setFeedbackConfig({
         type: "ok",
-        text: "Configuració de l'agent desada i activa al Copilot de l'empresa.",
+        text: "Configuració desada al disc dur dedicat de l'empresa (09_copilot_ia/prompt_sistema).",
       });
     } catch (err: any) {
       setFeedbackConfig({
@@ -436,11 +466,18 @@ export default function CopilotIAPage() {
         },
       ]);
     } catch (err: any) {
+      const structured = extractCopilotPopupError(err);
+      if (structured) {
+        setUltimaPreguntaFallida(promptTxt);
+        setPopupError(structured);
+      }
       setConversaXat((prev) => [
         ...prev,
         {
           sender: "bot",
-          text: err?.message || "No s'ha pogut contactar amb el node IA local.",
+          text: structured
+            ? `${structured.titol}: ${structured.message}`
+            : err?.message || "No s'ha pogut contactar amb el node IA local.",
           error: true,
         },
       ]);
@@ -904,7 +941,7 @@ export default function CopilotIAPage() {
                   Configuració Sobirana de l&apos;Agent
                 </h2>
                 <p className="text-xs text-on-surface-variant mt-1">
-                  Aquests prompts són exclusius de la teva empresa (aïllament RLS estricte) i governen el comportament del Copilot i dels seus 8 subagents.
+                  Aquests prompts i perfils de model resideixen exclusivament al disc dur dedicat de la teva empresa (<span className="font-mono">09_copilot_ia/prompt_sistema</span>), mai a Hetzner.
                 </p>
               </div>
               <span
@@ -982,38 +1019,110 @@ export default function CopilotIAPage() {
               />
             </div>
 
-            <div className="space-y-2">
-              <label className="block text-xs font-bold text-on-surface">
-                Model LLM del Node Local (opcional)
-              </label>
-              <input
-                type="text"
-                disabled={!potEditarConfig}
-                value={copilotConfig.llm_model}
-                onChange={(e) =>
-                  setCopilotConfig((prev) => ({ ...prev, llm_model: e.target.value }))
-                }
-                placeholder="Deixa-ho buit per utilitzar el model actiu a LM Studio automàticament"
-                className="w-full rounded-xl border border-outline-variant bg-surface-container-low text-on-surface px-3 py-2.5 text-xs font-mono outline-none focus:border-primary disabled:opacity-70"
-              />
-              {iaStatus?.models_disponibles && iaStatus.models_disponibles.length > 0 && potEditarConfig && (
-                <div className="flex flex-wrap gap-1.5 pt-1">
-                  {iaStatus.models_disponibles.map((m) => (
-                    <button
-                      key={m}
-                      type="button"
-                      onClick={() => setCopilotConfig((prev) => ({ ...prev, llm_model: m }))}
-                      className={`px-2.5 py-1 rounded-lg text-[11px] font-mono border transition-colors cursor-pointer ${
-                        copilotConfig.llm_model === m
-                          ? "bg-primary text-on-primary border-primary"
-                          : "bg-surface-container-low text-on-surface-variant border-outline-variant/60 hover:border-primary"
-                      }`}
-                    >
-                      {m}
-                    </button>
-                  ))}
+            <div className="space-y-4 pt-1 border-t border-outline-variant/30">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-bold text-on-surface">
+                    Perfil del Mini-PC Dedicat
+                  </label>
+                  <select
+                    disabled={!potEditarConfig}
+                    value={copilotConfig.hardware_profile}
+                    onChange={(e) => {
+                      const hw: "32GB" | "16GB" = e.target.value === "16GB" ? "16GB" : "32GB";
+                      setCopilotConfig((prev) => ({
+                        ...prev,
+                        hardware_profile: hw,
+                        timeout_budget_s: hw === "16GB" ? 22 : 18,
+                      }));
+                    }}
+                    className="w-full rounded-xl border border-outline-variant bg-surface-container-low text-on-surface px-3 py-2.5 text-xs outline-none focus:border-primary disabled:opacity-70"
+                  >
+                    <option value="32GB">32 GB RAM — Ideal (MoE 35B-A3B · 18 s)</option>
+                    <option value="16GB">16 GB RAM — Estàndard (4B / 9B · 22 s)</option>
+                  </select>
                 </div>
-              )}
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-bold text-on-surface">
+                    Pressupost màxim de síntesi (segons)
+                  </label>
+                  <input
+                    type="number"
+                    min={8}
+                    max={30}
+                    step={1}
+                    disabled={!potEditarConfig}
+                    value={copilotConfig.timeout_budget_s}
+                    onChange={(e) =>
+                      setCopilotConfig((prev) => ({
+                        ...prev,
+                        timeout_budget_s: Math.max(8, Math.min(30, Number(e.target.value) || 18)),
+                      }))
+                    }
+                    className="w-full rounded-xl border border-outline-variant bg-surface-container-low text-on-surface px-3 py-2.5 text-xs font-mono outline-none focus:border-primary disabled:opacity-70"
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <label className="block text-xs font-bold text-on-surface">
+                  Model LLM de Xat i Coordinació (opcional)
+                </label>
+                <input
+                  type="text"
+                  disabled={!potEditarConfig}
+                  value={copilotConfig.llm_chat_model}
+                  onChange={(e) =>
+                    setCopilotConfig((prev) => ({
+                      ...prev,
+                      llm_chat_model: e.target.value,
+                      llm_model: e.target.value,
+                    }))
+                  }
+                  placeholder="Deixa-ho buit per detectar automàticament el model actiu a LM Studio"
+                  className="w-full rounded-xl border border-outline-variant bg-surface-container-low text-on-surface px-3 py-2.5 text-xs font-mono outline-none focus:border-primary disabled:opacity-70"
+                />
+                {iaStatus?.models_disponibles && iaStatus.models_disponibles.length > 0 && potEditarConfig && (
+                  <div className="flex flex-wrap gap-1.5 pt-1">
+                    {iaStatus.models_disponibles.map((m) => (
+                      <button
+                        key={m}
+                        type="button"
+                        onClick={() =>
+                          setCopilotConfig((prev) => ({
+                            ...prev,
+                            llm_chat_model: m,
+                            llm_model: m,
+                          }))
+                        }
+                        className={`px-2.5 py-1 rounded-lg text-[11px] font-mono border transition-colors cursor-pointer ${
+                          copilotConfig.llm_chat_model === m
+                            ? "bg-primary text-on-primary border-primary"
+                            : "bg-surface-container-low text-on-surface-variant border-outline-variant/60 hover:border-primary"
+                        }`}
+                      >
+                        {m}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="block text-xs font-bold text-on-surface">
+                  Model LLM de Visió / OCR (opcional)
+                </label>
+                <input
+                  type="text"
+                  disabled={!potEditarConfig}
+                  value={copilotConfig.llm_vision_model}
+                  onChange={(e) =>
+                    setCopilotConfig((prev) => ({ ...prev, llm_vision_model: e.target.value }))
+                  }
+                  placeholder="Ex: qwen2.5-vl-7b-instruct (buit utilitza el model principal si suporta visió)"
+                  className="w-full rounded-xl border border-outline-variant bg-surface-container-low text-on-surface px-3 py-2.5 text-xs font-mono outline-none focus:border-primary disabled:opacity-70"
+                />
+              </div>
             </div>
 
             {potEditarConfig && (
@@ -1705,6 +1814,22 @@ export default function CopilotIAPage() {
           </div>
         </div>
       )}
+
+      <CopilotErrorModal
+        error={popupError}
+        onClose={() => setPopupError(null)}
+        onOpenConfig={potEditarConfig ? () => setPestanya("CONFIG") : undefined}
+        onRetry={
+          ultimaPreguntaFallida
+            ? () => {
+                const retryPrompt = ultimaPreguntaFallida;
+                setUltimaPreguntaFallida(null);
+                enviarMissatgeXat(retryPrompt);
+              }
+            : undefined
+        }
+        canCheckStatus={true}
+      />
     </div>
   );
 }

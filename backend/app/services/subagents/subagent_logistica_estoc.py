@@ -28,12 +28,9 @@ class SubagentLogisticaEstoc(BaseSubagent):
     tools_schema = SCHEMAS_LOGISTICA_ESTOC
     system_prompt = (
         "Ets l'assistent expert en Logística i Magatzem de SEVALOR. "
-        "La teva funció és verificar l'estoc real als magatzems al disc dur dedicat de l'empresa, "
+        "La teva funció és verificar l'estoc real de materials consumibles i equips al disc dur dedicat de l'empresa, "
         "alertar de ruptures d'inventari, auditar moviments i documents de proveïdors, i consultar "
         "l'estat i custòdia d'eines i maquinària. "
-        "Tens dues eines mestres d'inventari: 'get_real_stock' per a materials consumibles (tubs, cables, vàlvules, químics) "
-        "i 'get_eines_stock' per a eines, maquinària i equips de treball (trepants, radials, escombres, escales). "
-        "Si l'usuari pregunta per eines, maquinària o qui té un equip, utilitza sempre 'get_eines_stock'. "
         "Respon sempre en català de forma concisa, professional i basant-te estrictament en les dades del disc."
     )
 
@@ -141,7 +138,13 @@ class SubagentLogisticaEstoc(BaseSubagent):
         **kwargs: Any,
     ) -> dict:
         if tool_name == "get_real_stock":
-            return await self.tool_get_real_stock(db, empresa_id, args.get("article_ref", ""))
+            return await self.tool_get_real_stock(
+                db,
+                empresa_id,
+                article_ref=args.get("article_ref", ""),
+                ordenar_per=args.get("ordenar_per", "rellevancia"),
+                limit=int(args.get("limit", 15)),
+            )
         if tool_name == "get_eines_stock":
             return await self.tool_get_eines_stock(db, empresa_id, args.get("terme_cerca", ""))
         if tool_name == "replanificar_ot":
@@ -160,6 +163,7 @@ class SubagentLogisticaEstoc(BaseSubagent):
             return await self.tool_get_stock_movements(
                 db,
                 empresa_id,
+                article_ref=args.get("article_ref") or args.get("material_id"),
                 material_id=args.get("material_id"),
                 limit=int(args.get("limit", 10)),
             )
@@ -181,9 +185,15 @@ class SubagentLogisticaEstoc(BaseSubagent):
         return {"error": f"Eina no suportada pel subagent de logistica: {tool_name}"}
 
     async def tool_get_real_stock(
-        self, db: AsyncSession, empresa_id: uuid.UUID, article_ref: str
+        self,
+        db: AsyncSession,
+        empresa_id: uuid.UUID,
+        article_ref: str = "",
+        ordenar_per: str = "rellevancia",
+        limit: int = 15,
     ) -> dict:
         terme = (article_ref or "").strip().lower()
+        orden_norm = (ordenar_per or "rellevancia").strip().lower()
         stopwords = {
             "material",
             "materials",
@@ -224,6 +234,24 @@ class SubagentLogisticaEstoc(BaseSubagent):
             "stock",
             "magatzem",
             "inventari",
+            "central",
+            "unitat",
+            "unitats",
+            "mes",
+            "més",
+            "menys",
+            "baix",
+            "baixa",
+            "baixes",
+            "baixos",
+            "minim",
+            "mínim",
+            "minimes",
+            "mínimes",
+            "poc",
+            "poques",
+            "pocs",
+            "amb",
         }
         words = [w for w in terme.split() if w not in stopwords and len(w) > 1]
 
@@ -267,11 +295,13 @@ class SubagentLogisticaEstoc(BaseSubagent):
                 if any(tok in blob for tok in search_tokens):
                     articles.append(art)
 
-        es_consulta_generica = not words or any(
-            g in terme for g in ("tots", "general", "global", "inventari", "magatzem")
+        es_consulta_generica = (
+            not words
+            or orden_norm in ("menor_estoc", "major_estoc")
+            or any(g in terme for g in ("tots", "general", "global", "inventari", "magatzem"))
         )
         if not articles and es_consulta_generica:
-            articles = [a for a in tots_articles if a.get("actiu", True)][:25]
+            articles = [a for a in tots_articles if a.get("actiu", True)]
 
         if not articles:
             families_disponibles = sorted(
@@ -290,10 +320,8 @@ class SubagentLogisticaEstoc(BaseSubagent):
             }
 
         articles_data: List[Dict[str, Any]] = []
-        total_disponible_global = 0.0
         for art in articles:
             stock_val = self._calc_article_stock(art)
-            total_disponible_global += stock_val
             articles_data.append(
                 {
                     "id": str(art.get("id")),
@@ -307,9 +335,20 @@ class SubagentLogisticaEstoc(BaseSubagent):
                 }
             )
 
+        if orden_norm == "menor_estoc":
+            articles_data.sort(key=lambda x: (float(x["estoc_disponible"]), str(x.get("nom") or "")))
+        elif orden_norm == "major_estoc":
+            articles_data.sort(key=lambda x: (-float(x["estoc_disponible"]), str(x.get("nom") or "")))
+
+        limit_eff = max(1, min(int(limit or 15), 50))
+        articles_data = articles_data[:limit_eff]
+        total_disponible_global = sum(float(a["estoc_disponible"]) for a in articles_data)
+
         return {
             "trobat": True,
             "article_cercat": article_ref,
+            "ordenat_per": orden_norm,
+            "total": len(articles_data),
             "total_disponible": total_disponible_global,
             "articles": articles_data,
         }
@@ -401,6 +440,7 @@ class SubagentLogisticaEstoc(BaseSubagent):
         self,
         db: AsyncSession,
         empresa_id: uuid.UUID,
+        article_ref: Optional[str] = None,
         material_id: Optional[str] = None,
         limit: int = 10,
     ) -> dict:
@@ -463,7 +503,7 @@ class SubagentLogisticaEstoc(BaseSubagent):
                 }
             )
 
-        mat_filter = (material_id or "").strip().lower()
+        mat_filter = (article_ref or material_id or "").strip().lower()
         filtrats: List[Dict[str, Any]] = []
         for m in candidats:
             if mat_filter:
@@ -650,6 +690,8 @@ class SubagentLogisticaEstoc(BaseSubagent):
             )
 
         return {
+            "trobat": len(llista) > 0,
+            "total": len(llista),
             "total_trobades": len(llista),
             "eines": llista,
             "resum": (
@@ -673,10 +715,57 @@ class SubagentLogisticaEstoc(BaseSubagent):
 
         if any(
             w in pregunta_lower
+            for w in [
+                "més baixes unitats",
+                "mes baixes unitats",
+                "menys unitats",
+                "menor estoc",
+                "estoc més baix",
+                "estoc mes baix",
+                "menys estoc",
+                "més escàs",
+                "mes escas",
+                "més baix d'estoc",
+                "mes baix d'estoc",
+            ]
+        ):
+            tool_name = "get_real_stock"
+            tool_args: dict[str, Any] = {
+                "article_ref": "",
+                "ordenar_per": "menor_estoc",
+                "limit": 10,
+            }
+            tool_res = await self.tool_get_real_stock(
+                db, empresa_id, article_ref="", ordenar_per="menor_estoc", limit=10
+            )
+            if tool_res.get("trobat") and tool_res.get("articles"):
+                detalls = ", ".join(
+                    [
+                        f"{a['nom']} ({int(a['estoc_disponible']) if float(a['estoc_disponible']).is_integer() else a['estoc_disponible']} {a['unitat_mesura']})"
+                        for a in tool_res["articles"][:5]
+                    ]
+                )
+                primer = tool_res["articles"][0]
+                p_est = (
+                    int(primer["estoc_disponible"])
+                    if float(primer["estoc_disponible"]).is_integer()
+                    else primer["estoc_disponible"]
+                )
+                resposta = (
+                    f"El material amb menys unitats al magatzem és {primer['nom']} "
+                    f"({p_est} {primer['unitat_mesura']}). "
+                    f"Rànquing d'articles amb estoc més baix: {detalls}."
+                )
+            else:
+                resposta = "No hi ha cap article registrat al magatzem del disc dur de l'empresa."
+            return resposta, tool_name, tool_args, tool_res, enllacos
+
+        if any(
+            w in pregunta_lower
             for w in ["ruptura", "ruptures", "alerta estoc", "falta estoc", "baix estoc", "sota minim", "sota mínim"]
         ):
             tool_name = "get_low_stock_alerts"
-            tool_args: dict[str, Any] = {"familia": None}
+            tool_args = {"familia": None}
             tool_res = await self.tool_get_low_stock_alerts(db, empresa_id)
             if tool_res.get("trobat"):
                 detalls = ", ".join(
@@ -692,7 +781,7 @@ class SubagentLogisticaEstoc(BaseSubagent):
             for w in ["moviment", "moviments", "entrades i sortides", "entrades de material", "sortides de material"]
         ):
             tool_name = "get_stock_movements"
-            tool_args = {"material_id": None, "limit": 10}
+            tool_args = {"article_ref": None, "limit": 10}
             tool_res = await self.tool_get_stock_movements(db, empresa_id, limit=10)
             if tool_res.get("trobat"):
                 detalls = ", ".join(
@@ -817,7 +906,7 @@ class SubagentLogisticaEstoc(BaseSubagent):
                 ]
             )
             resposta = (
-                f"Segons la consulta en temps real d'inventari al disc de l'empresa (eina get_real_stock), "
+                f"Segons la consulta en temps real d'inventari al disc de l'empresa, "
                 f"disposem de {tot_str} unitats disponibles en total. Detall d'estoc: {detalls}."
             )
         else:
