@@ -1,4 +1,5 @@
 import hashlib
+import logging
 import re
 import uuid
 from datetime import date, datetime, timedelta, timezone
@@ -10,6 +11,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.models import HistorialAssignacioVehicle, Usuari, Vehicle
 from app.services.sovereign_storage import SovereignStorageGateway
+from app.services.sovereign_sync_service import serialize_usuari_safe, serialize_vehicle
+
+logger = logging.getLogger("sevalor.flota_service")
 
 # Jerarquia de permisos de conduir segons la DGT i normativa EARS (FR-012 / T028)
 JERARQUIA_CARNETS: dict[str, set[str]] = {
@@ -29,60 +33,8 @@ async def sincronitzar_vehicle_al_disc_empresa(
     dades_extra: Optional[Dict[str, Any]] = None,
 ) -> Optional[str]:
     """Persisteix la fitxa actualitzada del vehicle al disc dur dedicat de l'empresa (08_flota_i_operaris/vehicles)."""
-    payload: Dict[str, Any] = {
-        "id": str(vehicle.id),
-        "empresa_id": str(empresa_id),
-        "matricula": vehicle.matricula,
-        "marca": vehicle.marca,
-        "model": vehicle.model,
-        "tipus": getattr(vehicle, "tipus", "DIESEL"),
-        "distintiu_ambiental": getattr(vehicle, "distintiu_ambiental", "C"),
-        "estat": vehicle.estat,
-        "odometre_acumulat": int(vehicle.odometre_acumulat or 0),
-        "odometre_inici_contracte": int(getattr(vehicle, "odometre_inici_contracte", 0) or 0),
-        "regim_adquisicio": getattr(vehicle, "regim_adquisicio", "PROPIETAT"),
-        "renting_limit_km": getattr(vehicle, "renting_limit_km", None),
-        "data_inici_contracte": (
-            vehicle.data_inici_contracte.isoformat()
-            if vehicle.data_inici_contracte is not None
-            else None
-        ),
-        "data_fi_contracte": (
-            vehicle.data_fi_contracte.isoformat()
-            if vehicle.data_fi_contracte is not None
-            else None
-        ),
-        "quota_mensual_eur": float(getattr(vehicle, "quota_mensual_eur", 0.0) or 0.0),
-        "tarifa_diaria_eur": float(getattr(vehicle, "tarifa_diaria_eur", 0.0) or 0.0),
-        "preu_km_exces_eur": float(getattr(vehicle, "preu_km_exces_eur", 0.0) or 0.0),
-        "valor_residual_eur": (
-            float(vehicle.valor_residual_eur)
-            if vehicle.valor_residual_eur is not None
-            else None
-        ),
-        "fianca_eur": (
-            float(vehicle.fianca_eur)
-            if vehicle.fianca_eur is not None
-            else None
-        ),
-        "conductor_habitual_id": (
-            str(vehicle.conductor_habitual_id) if vehicle.conductor_habitual_id else None
-        ),
-        "carnet_necessari": getattr(vehicle, "carnet_necessari", "B"),
-        "estat_itv": getattr(vehicle, "estat_itv", None),
-        "data_proxima_itv": (
-            vehicle.data_proxima_itv.isoformat()
-            if vehicle.data_proxima_itv is not None
-            else None
-        ),
-        "companyia_asseguradora": getattr(vehicle, "companyia_asseguradora", None),
-        "polissa_asseguranca": getattr(vehicle, "polissa_asseguranca", None),
-        "data_caducitat_asseguranca": (
-            vehicle.data_caducitat_asseguranca.isoformat()
-            if vehicle.data_caducitat_asseguranca is not None
-            else None
-        ),
-    }
+    payload: Dict[str, Any] = serialize_vehicle(vehicle)
+    payload["empresa_id"] = str(empresa_id)
     if dades_extra:
         payload.update(dades_extra)
 
@@ -94,7 +46,13 @@ async def sincronitzar_vehicle_al_disc_empresa(
             item_id=str(vehicle.id),
             dades=payload,
         )
-    except Exception:
+    except Exception as exc:
+        logger.warning(
+            "Error sincronitzant vehicle=%s al disc d'empresa=%s: %s",
+            getattr(vehicle, "id", "?"),
+            empresa_id,
+            exc,
+        )
         return None
 
 
@@ -104,54 +62,27 @@ async def sincronitzar_operari_al_disc_empresa(
     operari: Usuari,
     dades_extra: Optional[Dict[str, Any]] = None,
 ) -> Optional[str]:
-    """Persisteix la fitxa actualitzada de l'operari al disc dur dedicat de l'empresa (08_flota_i_operaris/vehicles)."""
-    payload: Dict[str, Any] = {
-        "id": str(operari.id),
-        "empresa_id": str(empresa_id),
-        "nif": operari.nif,
-        "nom": operari.nom,
-        "cognoms": operari.cognoms or "",
-        "email": operari.email,
-        "telefon": operari.telefon,
-        "rol": operari.rol,
-        "especialitat": getattr(operari, "especialitat", None),
-        "estat": operari.estat,
-        "estat_operatiu": getattr(operari, "estat_operatiu", "DISPONIBLE"),
-        "cost_hora_eur": float(getattr(operari, "cost_hora_eur", 22.50) or 22.50),
-        "carnet_conduir": getattr(operari, "carnet_conduir", "B") or "B",
-        "carnet_caducitat": (
-            operari.carnet_caducitat.isoformat()
-            if operari.carnet_caducitat is not None
-            else None
-        ),
-        "prl_certificat_vigencia": (
-            operari.prl_certificat_vigencia.isoformat()
-            if operari.prl_certificat_vigencia is not None
-            else None
-        ),
-        "vehicle_assignat_id": (
-            str(operari.vehicle_assignat_id) if operari.vehicle_assignat_id else None
-        ),
-    }
+    """Persisteix la fitxa actualitzada de l'operari al disc dur dedicat de l'empresa (08_flota_i_operaris/operaris)."""
+    payload: Dict[str, Any] = serialize_usuari_safe(operari)
+    payload["empresa_id"] = str(empresa_id)
     if dades_extra:
         payload.update(dades_extra)
 
     try:
-        await SovereignStorageGateway.desar_entitat_json(
+        return await SovereignStorageGateway.desar_entitat_json(
             db=db,
             empresa_id=empresa_id,
             categoria="operaris",
             item_id=f"operari_{operari.id}",
             dades=payload,
         )
-        return await SovereignStorageGateway.desar_entitat_json(
-            db=db,
-            empresa_id=empresa_id,
-            categoria="vehicles",
-            item_id=f"operari_{operari.id}",
-            dades=payload,
+    except Exception as exc:
+        logger.warning(
+            "Error sincronitzant operari=%s al disc d'empresa=%s: %s",
+            getattr(operari, "id", "?"),
+            empresa_id,
+            exc,
         )
-    except Exception:
         return None
 
 

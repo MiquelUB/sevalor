@@ -832,8 +832,10 @@ async def crear_finca_client(
     res = await db.execute(
         select(Client).where(Client.id == client_id, Client.empresa_id == empresa_uuid)
     )
-    if not res.scalars().first():
+    client_obj = res.scalars().first()
+    if not client_obj:
         raise HTTPException(status_code=404, detail="Client no trobat")
+    client_nom = client_obj.rao_social
 
     nova_finca = Finca(
         empresa_id=empresa_uuid,
@@ -850,5 +852,22 @@ async def crear_finca_client(
     )
 
     db.add(nova_finca)
+    await db.flush()
+    from app.services.sovereign_sync_service import serialize_finca
+
+    finca_id_str = str(nova_finca.id)
+    finca_payload = serialize_finca(nova_finca, client_nom=client_nom)
     await db.commit()
+
+    try:
+        await SovereignStorageGateway.desar_entitat_json(
+            db=db,
+            empresa_id=empresa_uuid,
+            categoria="finques",
+            item_id=finca_id_str,
+            dades=finca_payload,
+        )
+    except Exception:
+        pass
+
     return nova_finca

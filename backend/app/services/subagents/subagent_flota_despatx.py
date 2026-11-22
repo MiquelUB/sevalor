@@ -70,6 +70,27 @@ def _extract_coords(
     return None
 
 
+def _is_real_vehicle_record(item: Dict[str, Any]) -> bool:
+    """Filtra fitxes auxiliars (doc_*, manteniment_*, operari_*) que comparteixen carpeta `vehicles`."""
+    if not isinstance(item, dict):
+        return False
+    meta = item.get("_sovereign_meta")
+    if isinstance(meta, dict):
+        item_id = str(meta.get("item_id") or "").lower()
+        if item_id.startswith(("doc_", "manteniment_", "operari_")):
+            return False
+    if item.get("tipus_document") or item.get("data_manteniment"):
+        return False
+    if item.get("rol") and not item.get("matricula"):
+        return False
+    return bool(str(item.get("matricula") or "").strip())
+
+
+def _filtrar_vehicles_reals(raw_items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Retorna únicament fitxes reals de vehicles de flota (sense documents, operaris ni manteniments)."""
+    return [r for r in raw_items if _is_real_vehicle_record(r)]
+
+
 class SubagentFlotaDespatx(BaseSubagent):
     id = "subagent_flota_despatx"
     nom = "Subagent de Flota i Desplaçaments"
@@ -195,7 +216,9 @@ class SubagentFlotaDespatx(BaseSubagent):
     async def tool_get_closest_vehicle(
         self, db: AsyncSession, empresa_id: uuid.UUID, lat: float, lng: float
     ) -> dict:
-        vehicles = await self.read_sovereign_category(db, empresa_id, "vehicles")
+        vehicles = _filtrar_vehicles_reals(
+            await self.read_sovereign_category(db, empresa_id, "vehicles")
+        )
         if not vehicles:
             return {"trobat": False, "missatge": "No hi ha cap vehicle registrat a la flota."}
 
@@ -252,7 +275,8 @@ class SubagentFlotaDespatx(BaseSubagent):
     async def tool_get_vehicle_info(
         self, db: AsyncSession, empresa_id: uuid.UUID, matricula: str
     ) -> dict:
-        vehicles = await self.read_sovereign_category(db, empresa_id, "vehicles")
+        raw_vehs = await self.read_sovereign_category(db, empresa_id, "vehicles")
+        vehicles = _filtrar_vehicles_reals(raw_vehs)
         mat_q = (matricula or "").strip().lower()
         v = next((veh for veh in vehicles if mat_q and mat_q in str(veh.get("matricula") or "").lower()), None)
         if not v:
@@ -276,8 +300,12 @@ class SubagentFlotaDespatx(BaseSubagent):
                             "data": d.get("data_document") or d.get("data"),
                         }
                     )
-        for ad in alertes_docs:
-            if str(ad.get("vehicle_id") or "") == vid and ad.get("nom_arxiu"):
+        for ad in [*alertes_docs, *raw_vehs]:
+            if (
+                not _is_real_vehicle_record(ad)
+                and str(ad.get("vehicle_id") or "") == vid
+                and ad.get("nom_arxiu")
+            ):
                 docs_list.append(
                     {
                         "tipus": ad.get("tipus_document") or ad.get("tipus"),
@@ -317,7 +345,9 @@ class SubagentFlotaDespatx(BaseSubagent):
     ) -> dict:
         avui = date.today()
         limit = avui + timedelta(days=dies_marge)
-        vehs = await self.read_sovereign_category(db, empresa_id, "vehicles")
+        vehs = _filtrar_vehicles_reals(
+            await self.read_sovereign_category(db, empresa_id, "vehicles")
+        )
 
         alertes: List[Dict[str, Any]] = []
         alertes_renting_km: List[Dict[str, Any]] = []
@@ -443,7 +473,9 @@ class SubagentFlotaDespatx(BaseSubagent):
         equipament: Optional[str] = None,
         categoria_ue: Optional[str] = None,
     ) -> dict:
-        vehs = await self.read_sovereign_category(db, empresa_id, "vehicles")
+        vehs = _filtrar_vehicles_reals(
+            await self.read_sovereign_category(db, empresa_id, "vehicles")
+        )
         operaris = await self.read_sovereign_category(db, empresa_id, "operaris")
         op_map = {
             str(u.get("id")): f"{u.get('nom') or ''} {u.get('cognoms') or ''}".strip()
@@ -526,7 +558,9 @@ class SubagentFlotaDespatx(BaseSubagent):
     async def tool_get_fleet_status(
         self, db: AsyncSession, empresa_id: uuid.UUID, filtres_estat: Optional[str] = None
     ) -> dict:
-        vehs = await self.read_sovereign_category(db, empresa_id, "vehicles")
+        vehs = _filtrar_vehicles_reals(
+            await self.read_sovereign_category(db, empresa_id, "vehicles")
+        )
         operaris = await self.read_sovereign_category(db, empresa_id, "operaris")
         op_map = {
             str(u.get("id")): f"{u.get('nom') or ''} {u.get('cognoms') or ''}".strip()
@@ -610,7 +644,17 @@ class SubagentFlotaDespatx(BaseSubagent):
         limit: int = 5,
         caller_role: Optional[str] = None,
     ) -> dict:
-        vehs = await self.read_sovereign_category(db, empresa_id, "vehicles")
+        raw_vehs = await self.read_sovereign_category(db, empresa_id, "vehicles")
+        vehs = _filtrar_vehicles_reals(raw_vehs)
+        mants_per_veh: Dict[str, List[Dict[str, Any]]] = {}
+        for raw_item in raw_vehs:
+            if (
+                not _is_real_vehicle_record(raw_item)
+                and raw_item.get("vehicle_id")
+                and raw_item.get("data_manteniment")
+            ):
+                mants_per_veh.setdefault(str(raw_item["vehicle_id"]), []).append(raw_item)
+
         mat_q = (matricula or "").strip().lower()
         filtrats = [
             v
@@ -620,10 +664,18 @@ class SubagentFlotaDespatx(BaseSubagent):
 
         llista: List[Dict[str, Any]] = []
         for v in filtrats:
+            vid = str(v.get("id") or "")
             d_itv = _parse_date(v.get("data_proxima_itv"))
             d_asseg = _parse_date(v.get("data_caducitat_asseguranca"))
+            mants = list(v.get("manteniments") or []) + mants_per_veh.get(vid, [])
+            hist_text = v.get("historial_reparacions")
+            if not hist_text and mants:
+                hist_text = "; ".join(
+                    f"{m.get('data_manteniment') or ''} {m.get('tipus') or ''}: {m.get('descripcio') or ''}".strip()
+                    for m in mants[:5]
+                )
             item: Dict[str, Any] = {
-                "id": str(v.get("id")),
+                "id": vid,
                 "matricula": v.get("matricula"),
                 "marca": v.get("marca"),
                 "model": v.get("model"),
@@ -632,7 +684,7 @@ class SubagentFlotaDespatx(BaseSubagent):
                 "proxima_itv": d_itv.isoformat() if d_itv else None,
                 "estat_itv": v.get("estat_itv"),
                 "caducitat_asseguranca": d_asseg.isoformat() if d_asseg else None,
-                "historial_reparacions": v.get("historial_reparacions") or "Sense reparacions recents registrades",
+                "historial_reparacions": hist_text or "Sense reparacions recents registrades",
             }
             if caller_role in ("BOSS", "ADMIN"):
                 item["regim_adquisicio"] = v.get("regim_adquisicio")
@@ -656,7 +708,9 @@ class SubagentFlotaDespatx(BaseSubagent):
         empresa_id: uuid.UUID,
         matricula: Optional[str] = None,
     ) -> dict:
-        vehs = await self.read_sovereign_category(db, empresa_id, "vehicles")
+        vehs = _filtrar_vehicles_reals(
+            await self.read_sovereign_category(db, empresa_id, "vehicles")
+        )
         tiquets = await self.read_sovereign_category(db, empresa_id, "tiquets_despesa")
         mat_q = (matricula or "").strip().lower()
         filtrats = [v for v in vehs if not mat_q or mat_q in str(v.get("matricula") or "").lower()]
@@ -818,7 +872,9 @@ class SubagentFlotaDespatx(BaseSubagent):
             )
             return tool_res.get("missatge", "Cerca de vehicles per a OT completada."), tool_name, tool_args, tool_res, enllacos
 
-        vehs = await self.read_sovereign_category(db, empresa_id, "vehicles")
+        vehs = _filtrar_vehicles_reals(
+            await self.read_sovereign_category(db, empresa_id, "vehicles")
+        )
         target_mat = ""
         for v in vehs:
             mat = str(v.get("matricula") or "")

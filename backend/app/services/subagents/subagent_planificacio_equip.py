@@ -382,7 +382,11 @@ class SubagentPlanificacioEquip(BaseSubagent):
         jornades_raw = await self.read_sovereign_category(db, empresa_id, "jornades")
         vehicles_raw = await self.read_sovereign_category(db, empresa_id, "vehicles")
 
-        veh_map = {str(v.get("id")): v.get("matricula") for v in vehicles_raw if v.get("id")}
+        veh_map = {
+            str(v.get("id")): v.get("matricula")
+            for v in vehicles_raw
+            if v.get("id") and v.get("matricula") and not v.get("tipus_document") and not v.get("data_manteniment")
+        }
         jornada_avui: Dict[str, Dict[str, Any]] = {}
         for j in jornades_raw:
             uid = str(j.get("usuari_id") or "")

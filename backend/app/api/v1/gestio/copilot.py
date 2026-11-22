@@ -1571,3 +1571,48 @@ async def generar_pressupost_intelligent(
         "partides_materials": partides_materials,
         "avis": "Revisa i ajusta les partides abans d'enviar al client. La IA no inventa preus.",
     }
+
+
+class SincronitzarDiscRequest(BaseModel):
+    only_missing: bool = False
+    categories: Optional[List[str]] = None
+
+
+@router.post("/sincronitzar-disc")
+async def sincronitzar_disc_sobira_empresa(
+    payload: Optional[SincronitzarDiscRequest] = None,
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+    claims: dict = Depends(get_current_user_claims),
+):
+    """Reconcilia totes les entitats operatives de l'empresa cap al seu disc dur sobirà via WSS.
+
+    Permet a Direcció (BOSS / ADMIN) forçar una sincronització completa o incremental
+    dels fitxers JSON del disc dur dedicat (flota, clients, magatzem, operaris, OTs, etc.).
+    """
+    rol = str(claims.get("rol") or "").upper()
+    if rol not in ("BOSS", "ADMIN"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Només Direcció (BOSS / ADMIN) pot executar la re-sincronització completa del disc sobirà.",
+        )
+
+    empresa_id = uuid.UUID(claims["empresa_id"])
+    req = payload or SincronitzarDiscRequest()
+
+    from app.services.sovereign_sync_service import sincronitzar_entitats_empresa_al_disc
+
+    resultat = await sincronitzar_entitats_empresa_al_disc(
+        db,
+        empresa_id,
+        categories=req.categories,
+        only_missing=req.only_missing,
+    )
+    if not resultat.get("online"):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "NODE_EMPRESA_OFFLINE",
+                "message": "El disc dur dedicat de l'empresa no està connectat al túnel WSS.",
+            },
+        )
+    return resultat

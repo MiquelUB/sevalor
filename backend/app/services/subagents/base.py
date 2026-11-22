@@ -13,6 +13,22 @@ from typing import Any, Dict, Iterator, List, Optional, Sequence, Tuple
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.services.sovereign_storage import SovereignStorageGateway
+from app.services.sovereign_sync_service import reparar_categoria_buida_si_cal
+
+
+async def _load_sovereign_category_with_repair(
+    db: AsyncSession,
+    empresa_id: uuid.UUID,
+    categoria: str,
+) -> List[Dict[str, Any]]:
+    """Llegeix del disc sobirà; si la carpeta és buida i el PC és online, auto-repara i rellegeix."""
+    items = await SovereignStorageGateway.llegir_entitats_json(db, empresa_id, categoria)
+    if items:
+        return items
+    repaired = await reparar_categoria_buida_si_cal(db, empresa_id, categoria)
+    if repaired:
+        return await SovereignStorageGateway.llegir_entitats_json(db, empresa_id, categoria)
+    return items
 
 
 class RequestDiskCache:
@@ -42,7 +58,7 @@ class RequestDiskCache:
 
         self.misses += 1
         task: asyncio.Task[List[Dict[str, Any]]] = asyncio.create_task(
-            SovereignStorageGateway.llegir_entitats_json(db, empresa_id, categoria)
+            _load_sovereign_category_with_repair(db, empresa_id, categoria)
         )
         self._inflight[key] = task
         try:
@@ -98,7 +114,7 @@ class BaseSubagent(ABC):
         cache = _ACTIVE_DISK_CACHE.get()
         if cache is not None:
             return await cache.get_or_load(db, empresa_id, categoria)
-        return await SovereignStorageGateway.llegir_entitats_json(db, empresa_id, categoria)
+        return await _load_sovereign_category_with_repair(db, empresa_id, categoria)
 
     async def save_sovereign_entity(
         self,

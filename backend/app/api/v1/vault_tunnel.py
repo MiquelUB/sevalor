@@ -466,6 +466,25 @@ async def _post_connect_empresa_bootstrap(empresa_id_str: str, conn: TunnelConne
                 stats["enviats"],
                 stats["pendents"],
             )
+
+        if conn.closed:
+            return
+
+        # 5. Reconciliació automàtica d'entitats existents a PostgreSQL -> Disc Dur Sobirà
+        #    Cobreix dades creades abans de connectar el PC o quan /tmp va ser purgat en redeploy.
+        from app.services.sovereign_sync_service import sincronitzar_entitats_empresa_al_disc
+
+        async with AsyncSessionLocal() as sync_session:
+            sync_stats = await sincronitzar_entitats_empresa_al_disc(
+                sync_session, emp_uuid, only_missing=True
+            )
+            if sync_stats.get("total_escrits", 0) > 0 or sync_stats.get("total_errors", 0) > 0:
+                logger.info(
+                    "Reconciliació bootstrap WSS completada per empresa=%s: escrits=%d, errors=%d",
+                    empresa_id_str,
+                    sync_stats.get("total_escrits", 0),
+                    sync_stats.get("total_errors", 0),
+                )
     except asyncio.CancelledError:
         return
     except Exception as exc:

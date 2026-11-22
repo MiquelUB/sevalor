@@ -442,6 +442,13 @@ async def crear_usuari_administratiu(
     created_at_iso = nou_usuari.created_at.isoformat() if nou_usuari.created_at else None
     await db.commit()
 
+    try:
+        from app.services.flota_service import sincronitzar_operari_al_disc_empresa
+
+        await sincronitzar_operari_al_disc_empresa(db, uuid.UUID(empresa_id), nou_usuari)
+    except Exception:
+        pass
+
     return {
         "status": "OK",
         "id": usuari_id_str,
@@ -523,6 +530,13 @@ async def actualitzar_usuari_administratiu(
         usuari.slot_jornada_id = payload.slot_jornada_id
 
     await db.commit()
+
+    try:
+        from app.services.flota_service import sincronitzar_operari_al_disc_empresa
+
+        await sincronitzar_operari_al_disc_empresa(db, uuid.UUID(empresa_id), usuari)
+    except Exception:
+        pass
 
     return {"status": "OK", "missatge": "Usuari actualitzat correctament"}
 
