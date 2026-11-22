@@ -124,6 +124,21 @@ SYNTH_CONTRACT_RULES = (
 _EMPRESA_META_CACHE: Dict[str, Tuple[float, str, str]] = {}
 _EMPRESA_META_TTL_S: float = 60.0
 
+_RE_PREGUNTA_PROCEDIMENT = re.compile(
+    r"(?:\bcom\s+(?:es\s+|s['’]|puc\s+|podem\s+|pots\s+|haig\s+de\s+|he\s+de\s+|"
+    r"donar|crear|afegir|registrar|editar|modificar|eliminar|esborrar|fer|configurar|"
+    r"pujar|importar|exportar|enviar|aprovar|tancar|generar|consultar|regenerar|"
+    r"assignar|consolidar|utilitzar|funciona|obrir|facturar|replanificar)\b|"
+    r"\b(?:passos\s+per|on\s+(?:puc|es\s+pot|trobo|est[àa]|es\s+configura|configurar)|"
+    r"guia\s+(?:de|del|dels|per)|tutorial|procediment\s+(?:de|per)|manual\s+(?:de|del))\b)",
+    re.IGNORECASE,
+)
+
+
+def _es_pregunta_com_es_fa(query: str) -> bool:
+    """Detecta preguntes d'ajuda, onboarding del SaaS o procediments («com donar d'alta...»)."""
+    return bool(_RE_PREGUNTA_PROCEDIMENT.search((query or "").strip()))
+
 
 def invalidate_empresa_meta_cache(empresa_id: Optional[uuid.UUID | str] = None) -> None:
     if empresa_id is None:
@@ -549,7 +564,9 @@ class CopilotDispatcher:
         if any(k in q for k in ["telegram", "concierge", "xat client", "canal client"]):
             scores["subagent_client_telegram"] += 5.0
 
-        # 8. General RAG / Directori
+        # 8. General RAG / Directori / Guies d'ús del Panell de Gestió
+        if _es_pregunta_com_es_fa(query):
+            scores["subagent_general_rag"] += 12.0
         if any(
             k in q
             for k in [

@@ -1,6 +1,7 @@
 """Subagent General i RAG Corporatiu (Lectura Exclusiva al Disc Sobirà de l'Empresa)."""
 
 import re
+import unicodedata
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
@@ -9,6 +10,51 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.services.subagents.base import BaseSubagent
 from app.services.subagents.schemas import SCHEMAS_GENERAL_RAG
+
+_RE_PREGUNTA_PROCEDIMENT_RAG = re.compile(
+    r"(?:\bcom\s+(?:es\s+|s['’]|puc\s+|podem\s+|pots\s+|haig\s+de\s+|he\s+de\s+|"
+    r"donar|crear|afegir|registrar|editar|modificar|eliminar|esborrar|fer|configurar|"
+    r"pujar|importar|exportar|enviar|aprovar|tancar|generar|consultar|regenerar|"
+    r"assignar|consolidar|utilitzar|funciona|obrir|facturar|replanificar)\b|"
+    r"\b(?:passos\s+per|on\s+(?:puc|es\s+pot|trobo|est[àa]|es\s+configura|configurar)|"
+    r"guia\s+(?:de|del|dels|per)|tutorial|procediment\s+(?:de|per)|manual\s+(?:de|del))\b)",
+    re.IGNORECASE,
+)
+
+_STOPWORDS_RAG = {
+    "com",
+    "que",
+    "què",
+    "per",
+    "amb",
+    "del",
+    "dels",
+    "les",
+    "els",
+    "una",
+    "uns",
+    "unes",
+    "puc",
+    "podem",
+    "pots",
+    "fer",
+    "donar",
+    "dona",
+    "passos",
+    "guia",
+    "manual",
+    "panell",
+    "gestio",
+    "sevalor",
+}
+
+
+def _norm_rag_text(text: str) -> str:
+    """Normalitza minúscules, accents i apòstrofs (`d'alta` -> `alta`) per millorar el matching català."""
+    raw = (text or "").lower().replace("’", "'")
+    raw = re.sub(r"\b[dlmsnt]'", "", raw)
+    nfkd = unicodedata.normalize("NFKD", raw)
+    return "".join(ch for ch in nfkd if not unicodedata.combining(ch))
 
 _STOPWORDS_CERCA = {
     "client",
@@ -119,7 +165,12 @@ class SubagentGeneralRag(BaseSubagent):
     async def tool_get_rag_knowledge(
         self, db: AsyncSession, empresa_id: uuid.UUID, query: str
     ) -> dict:
-        paraules = [p for p in re.split(r"[\s,;:.!?]+", (query or "").lower()) if len(p) > 3]
+        norm_query = _norm_rag_text(query)
+        totes_paraules = [
+            p for p in re.split(r"[\s,;:.!?/()\"'-]+", norm_query) if len(p) >= 3
+        ]
+        paraules_clau = [p for p in totes_paraules if p not in _STOPWORDS_RAG]
+        paraules = paraules_clau or [p for p in totes_paraules if len(p) > 3]
         if not paraules:
             return {"trobat": False, "documents": []}
 
@@ -128,17 +179,46 @@ class SubagentGeneralRag(BaseSubagent):
             empresa_id,
             categories=("protocols_interns", "manuals_fabricants", "normativa_prl", "copilot_rag_index"),
             query_text=" ".join(paraules),
-            limit=20,
+            limit=40,
         )
-        documents: List[Dict[str, Any]] = []
+        scored_docs: List[Tuple[float, Dict[str, Any]]] = []
         for d in tots_docs:
             preg = str(d.get("pregunta") or d.get("titol") or "")
             resp = str(d.get("resposta") or d.get("contingut") or d.get("resum") or "")
             tags = str(d.get("paraules_clau") or d.get("tags") or "")
-            blob = f"{preg} {resp} {tags}".lower()
-            if any(p in blob for p in paraules):
-                documents.append({"pregunta": preg, "resposta": resp, "tags": tags})
 
+            norm_preg = _norm_rag_text(preg)
+            norm_tags = _norm_rag_text(tags)
+            norm_resp = _norm_rag_text(resp)
+
+            score = 0.0
+            matched_tokens = 0
+            for p in paraules:
+                hit = False
+                if p in norm_preg:
+                    score += 5.0
+                    hit = True
+                if p in norm_tags:
+                    score += 4.0
+                    hit = True
+                if p in norm_resp:
+                    score += 1.0
+                    hit = True
+                if hit:
+                    matched_tokens += 1
+
+            if score <= 0.0:
+                continue
+
+            if matched_tokens == len(paraules) and len(paraules) >= 2:
+                score += 6.0
+            if norm_query and len(norm_query) >= 6 and (norm_query in norm_preg or norm_query in norm_tags):
+                score += 8.0
+
+            scored_docs.append((score, {"pregunta": preg, "resposta": resp, "tags": tags}))
+
+        scored_docs.sort(key=lambda item: item[0], reverse=True)
+        documents = [doc for _sc, doc in scored_docs[:5]]
         return {"trobat": len(documents) > 0, "documents": documents}
 
     async def tool_get_client_history(
@@ -464,6 +544,23 @@ class SubagentGeneralRag(BaseSubagent):
                 "En què et puc ajudar avui?"
             )
             return resposta, None, None, None, []
+
+        # Preguntes d'ajuda / procediment ("com donar d'alta un client", etc.) -> RAG directe
+        if _RE_PREGUNTA_PROCEDIMENT_RAG.search(pregunta_lower):
+            tool_name = "get_rag_knowledge"
+            tool_args_rag: Dict[str, Any] = {"query": pregunta}
+            tool_res = await self.tool_get_rag_knowledge(db, empresa_id, pregunta)
+            if tool_res.get("trobat"):
+                doc = tool_res["documents"][0]
+                titol = str(doc.get("pregunta") or "").strip()
+                prefix = f"Segons la guia «{titol}»:\n" if titol else ""
+                resposta = f"{prefix}{doc['resposta']}"
+                return resposta, tool_name, tool_args_rag, tool_res, [{"titol": "Base de Coneixement RAG", "url": "/gestio/copilot"}]
+            resposta = (
+                "No he trobat cap guia o protocol carregat a la Base de Coneixement RAG per a aquesta consulta. "
+                "Pots afegir-hi la documentació d'onboarding des de /gestio/copilot → Base Coneixement RAG."
+            )
+            return resposta, tool_name, tool_args_rag, tool_res, [{"titol": "Base de Coneixement RAG", "url": "/gestio/copilot"}]
 
         if any(k in pregunta_lower for k in ["pressupost", "pressupostos", "oferta", "ofertes"]):
             tool_name = "get_pending_budgets"

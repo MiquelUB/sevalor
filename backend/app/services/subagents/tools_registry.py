@@ -541,7 +541,11 @@ TOOL_REGISTRY: Dict[str, ToolSpec] = {
     "get_rag_knowledge": ToolSpec(
         name="get_rag_knowledge",
         subagent_id="subagent_general_rag",
-        description="Cerca procediments interns, manuals tècnics i normatives al RAG corporatiu del disc.",
+        description=(
+            "Cerca procediments interns, manuals tècnics, normatives i guies d'ús del panell de gestió "
+            "(com donar d'alta clients, vehicles, operaris, articles, crear OTs, pressupostos, facturar, etc.). "
+            "Usa-la SEMPRE per preguntes de «com es fa», «com donar d'alta» o «on es configura»."
+        ),
         args_model=GetRagKnowledgeArgs,
         handler_method="tool_get_rag_knowledge",
         allowed_roles=ROLES_GESTIO_I_CAMP,
@@ -557,7 +561,10 @@ TOOL_REGISTRY: Dict[str, ToolSpec] = {
     "search_clients": ToolSpec(
         name="search_clients",
         subagent_id="subagent_general_rag",
-        description="Cerca clients, contactes i NIF al directori corporatiu.",
+        description=(
+            "Cerca fitxes de clients reals existents per nom, NIF o població al directori corporatiu. "
+            "NO usar per preguntes de procediment o ajuda com «com donar d'alta un client»."
+        ),
         args_model=SearchClientsArgs,
         handler_method="tool_search_clients",
         allowed_roles=ROLES_GESTIO_I_CAMP,
