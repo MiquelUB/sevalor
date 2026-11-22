@@ -512,7 +512,8 @@ async def test_persistencia_sobirana_disc_dur_empresa_flota_i_operaris(
         op_id = res_op.json()["id"]
 
         carpeta_flota = disc_empresa / "08_flota_i_operaris" / "vehicles"
-        fitxa_op = carpeta_flota / f"operari_{op_id}.json"
+        carpeta_operaris = disc_empresa / "08_flota_i_operaris" / "operaris"
+        fitxa_op = carpeta_operaris / f"operari_{op_id}.json"
         assert fitxa_op.exists(), f"Fitxa d'operari no trobada al disc de l'empresa: {fitxa_op}"
         op_disk_data = json.loads(fitxa_op.read_text(encoding="utf-8"))
         assert op_disk_data["nom"] == "Arnau"
