@@ -246,8 +246,10 @@ async def test_02_contractes_rbac_enginyer_403_i_prefactura_real(admin_session, 
             )
         ).scalars().first()
         assert f_db is not None
-        assert f_db.hash_sha256 != "draft_hash"
-        assert len(f_db.hash_sha256) == 64
+        assert f_db.estat_document == "ESBORRANY_PREFACTURA"
+        assert f_db.estat_enviament == "ESBORRANY"
+        assert f_db.hash_sha256 == "ESBORRANY_PREFACTURA"
+        assert f_db.num_serie_verifactu.startswith("PRE-")
 
 
 @pytest.mark.asyncio

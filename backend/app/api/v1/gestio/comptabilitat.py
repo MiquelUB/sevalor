@@ -80,6 +80,8 @@ class FacturaCreate(BaseModel):
     import_suplits: float = Field(0.0)
     liquid_exigible: float = Field(0.0)
     data_emissio: str = Field("")
+    es_inversio_subjecte_passiu: bool = False
+    causa_exempcio: Optional[str] = None
 
 
 class FacturaResponse(BaseModel):
@@ -469,6 +471,8 @@ async def crear_factura(
         or format_num_serie(payload.serie, data_emissio_dt.year, payload.numero_factura),
         tipus_factura="F1",
         client_id=payload.client_id,
+        es_inversio_subjecte_passiu=payload.es_inversio_subjecte_passiu,
+        causa_exempcio=payload.causa_exempcio or ("ISP" if payload.es_inversio_subjecte_passiu else None),
         base_imposable=payload.base_imposable,
         quota_iva=payload.quota_iva,
         import_total_verifactu=round(payload.base_imposable + payload.quota_iva, 2),

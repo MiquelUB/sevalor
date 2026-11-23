@@ -31,7 +31,7 @@ async def test_generacio_xml_aeat_isp(setup_isp_xml):
     data = setup_isp_xml
     headers = {"Authorization": f"Bearer {data['token']}", "X-Empresa-ID": data["empresa_id"]}
 
-    # 1. Crear Factura ISP (Quota IVA = 0.0)
+    # 1. Crear Factura ISP (Inversió del Subjecte Passiu, Quota IVA = 0.0)
     payload = {
         "numero_factura": 99,
         "serie": "2026",
@@ -39,7 +39,8 @@ async def test_generacio_xml_aeat_isp(setup_isp_xml):
         "base_imposable": 1500.00,
         "quota_iva": 0.00,  # Inversión Sujeto Pasivo
         "import_retencio": 0.00,
-        "import_suplits": 0.00
+        "import_suplits": 0.00,
+        "es_inversio_subjecte_passiu": True,
     }
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
@@ -48,15 +49,15 @@ async def test_generacio_xml_aeat_isp(setup_isp_xml):
         factura_id = res1.json()["id"]
         hash_sha256 = res1.json()["hash_sha256"]
 
-        # 2. Descarregar XML
+        # 2. Descarregar XML oficial AEAT (SuministroLR / SuministroInformacion)
         res_xml = await ac.get(f"/api/v1/gestio/comptabilitat/factures/{factura_id}/xml", headers=headers)
         assert res_xml.status_code == 200
         assert "application/xml" in res_xml.headers["content-type"]
 
         xml_content = res_xml.text
 
-        # 3. Validar contingut estructural i fiscal del XML
-        assert "<RegistroAlta>" in xml_content
+        # 3. Validar contingut estructural i fiscal del XML oficial AEAT (Ordre HAC/1177/2024)
+        assert "<sum1:RegistroAlta>" in xml_content
         assert hash_sha256 in xml_content
-        assert "<CausaExencion>I</CausaExencion>" in xml_content or "<CausaExencion>ISP</CausaExencion>" in xml_content
+        assert "<sum1:CalificacionOperacion>S2</sum1:CalificacionOperacion>" in xml_content
         assert "1500.00" in xml_content
