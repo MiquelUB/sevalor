@@ -263,8 +263,14 @@ async def test_f1_04_protocol_3_fotos_i_bloqueig(operari_f1_setup):
         assert res_fail.status_code == 400
         assert "Falten fotografies requerides" in res_fail.json()["detail"]
 
-        # 2. Pujar Foto 1: INICIAL
-        res_f1 = await client.post(f"/operari/feines/{ot_id}/fotos", data={"tipus": "INICIAL"}, headers=headers)
+        # 2. Pujar Foto 1: INICIAL (WebP real amb Magic Bytes)
+        valid_webp = b"RIFF\x24\x00\x00\x00WEBPVP8 " + b"\x00" * 30
+        res_f1 = await client.post(
+            f"/operari/feines/{ot_id}/fotos",
+            data={"tipus": "INICIAL"},
+            files={"foto": ("inicial.webp", valid_webp, "image/webp")},
+            headers=headers,
+        )
         assert res_f1.status_code == 200
 
         # Comprovar estat intermedi: només 1 de 3
@@ -272,11 +278,21 @@ async def test_f1_04_protocol_3_fotos_i_bloqueig(operari_f1_setup):
         assert res_status1.json()["protocol_complet"] is False
 
         # 3. Pujar Foto 2: INTERMEDIA
-        res_f2 = await client.post(f"/operari/feines/{ot_id}/fotos", data={"tipus": "INTERMEDIA"}, headers=headers)
+        res_f2 = await client.post(
+            f"/operari/feines/{ot_id}/fotos",
+            data={"tipus": "INTERMEDIA"},
+            files={"foto": ("intermedia.webp", valid_webp, "image/webp")},
+            headers=headers,
+        )
         assert res_f2.status_code == 200
 
         # 4. Pujar Foto 3: FINAL
-        res_f3 = await client.post(f"/operari/feines/{ot_id}/fotos", data={"tipus": "FINAL"}, headers=headers)
+        res_f3 = await client.post(
+            f"/operari/feines/{ot_id}/fotos",
+            data={"tipus": "FINAL"},
+            files={"foto": ("final.webp", valid_webp, "image/webp")},
+            headers=headers,
+        )
         assert res_f3.status_code == 200
 
         # Comprovar estat complet: 3 de 3

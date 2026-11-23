@@ -543,17 +543,18 @@ async def test_f4_06_cicle_complet_pressupost_edicio_pdf_email_portal_i_rls(
         assert reg_data["canal_enviament"] == "WHATSAPP"
         assert reg_data["data_enviament"] is not None
 
-        # 6. RBAC Principi VI: ENGINYER té imports econòmics emmascarats
+        # 6. Fase 5: ENGINYER pot veure els imports comercials de venda dels pressupostos (reclamacions)
         res_eng_list = await client.get("/gestio/pressupostos", headers=headers_eng_a)
         assert res_eng_list.status_code == 200, res_eng_list.text
         eng_item = next(p for p in res_eng_list.json() if p["id"] == pid)
-        assert eng_item["total"] == 0.0
-        assert eng_item["base_imposable"] == 0.0
+        assert eng_item["total"] == pytest.approx(1724.25, abs=0.01)
+        assert eng_item["base_imposable"] == pytest.approx(1425.00, abs=0.01)
 
         res_fitxa_eng = await client.get(f"/gestio/clients/{client_a_id}/fitxa-360", headers=headers_eng_a)
         assert res_fitxa_eng.status_code == 200, res_fitxa_eng.text
         fitxa_eng_p = next(p for p in res_fitxa_eng.json()["pressupostos"] if p["id"] == pid)
-        assert fitxa_eng_p["total"] is None
+        assert fitxa_eng_p["total"] == pytest.approx(1724.25, abs=0.01)
+        assert res_fitxa_eng.json()["client"]["iban"] is None
 
         res_fitxa_boss = await client.get(f"/gestio/clients/{client_a_id}/fitxa-360", headers=headers_boss_a)
         assert res_fitxa_boss.status_code == 200, res_fitxa_boss.text

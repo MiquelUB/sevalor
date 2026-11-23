@@ -37,7 +37,9 @@ function PressupostosContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { rolActiu } = useGestio();
-  const esEnginyer = (rolActiu || "").toUpperCase() === "ENGINYER";
+  // Imports comercials de venda al client visibles per a ENGINYER, SECRETARIA i BOSS
+  const amagarImportsComercials = false;
+  void rolActiu;
 
   const paramId = searchParams.get("id") || "";
   const paramEnviar = searchParams.get("enviar") === "1";
@@ -224,7 +226,7 @@ function PressupostosContent() {
             Aprovats ({stats.aprovatsCount})
           </span>
           <span className="font-data-tabular text-2xl font-bold text-emerald-700 mt-1 block">
-            {esEnginyer ? "—" : `${stats.totalAprovat.toFixed(2)} €`}
+            {amagarImportsComercials ? "—" : `${stats.totalAprovat.toFixed(2)} €`}
           </span>
         </div>
       </div>
@@ -309,7 +311,7 @@ function PressupostosContent() {
                   <th className="py-3 px-4">Número</th>
                   <th className="py-3 px-4">Títol &amp; Client</th>
                   <th className="py-3 px-4">Enviament</th>
-                  {!esEnginyer && <th className="py-3 px-4 text-right">Import Total</th>}
+                  {!amagarImportsComercials && <th className="py-3 px-4 text-right">Import Total</th>}
                   <th className="py-3 px-4">Estat</th>
                   <th className="py-3 px-4 text-right">Accions</th>
                 </tr>
@@ -353,7 +355,7 @@ function PressupostosContent() {
                         </span>
                       )}
                     </td>
-                    {!esEnginyer && (
+                    {!amagarImportsComercials && (
                       <td className="py-3 px-4 text-right whitespace-nowrap font-data-tabular font-bold text-on-surface">
                         {Number(p.total || 0).toFixed(2)} €
                       </td>
@@ -446,7 +448,7 @@ function PressupostosContent() {
           initialPressupost={editorState.item}
           initialClientId={paramClientId}
           clientsProp={clients}
-          esEnginyer={esEnginyer}
+          esEnginyer={amagarImportsComercials}
           autoOpenSendOnCreate={false}
           onClose={() => setEditorState({ open: false, item: null })}
           onSaved={(saved, isNew) => {

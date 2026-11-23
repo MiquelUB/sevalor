@@ -17,11 +17,13 @@ import { ClipboardList, Package, Factory,
   Phone,
   Mail,
   RefreshCw,
+  Receipt,
 } from "lucide-react";
 import { apiFetch, getApiBaseUrl, getAuthToken, extractTenantId } from "@/lib/api";
 import { geocodificarAdreca } from "@/lib/geocoding";
 import { useGestio } from "@/lib/gestio-context";
 import { CrearOTModal } from "@/components/gestio/CrearOTModal";
+import { FacturaComercialModal } from "@/components/gestio/FacturaComercialModal";
 
 interface Client {
   id: string;
@@ -42,6 +44,19 @@ interface IntervencioFitxa360 { id: string; codi: string; titol: string; estat: 
 interface PecaInstaladaFitxa360 { article_id: string; nom_article: string; quantitat_instalada: number; unitat_mesura: string; data_instalacio: string; ordre_treball_codi: string; }
 interface IncidenciaFitxa360 { id: string; ambit: string; estat: string; text_observacions?: string; ordre_treball_codi?: string; created_at: string; }
 interface PressupostFitxa360 { id: string; numero: string; estat: string; total?: number | null; created_at: string; }
+interface FacturaClientFitxa360 {
+  id: string;
+  serie: string;
+  numero_factura: number;
+  estat_document: string;
+  estat_cobrament: string;
+  data_emissio?: string | null;
+  data_venciment?: string | null;
+  base_imposable: number;
+  quota_iva: number;
+  liquid_exigible: number;
+  ordres_treball_codis: string[];
+}
 interface Fitxa360Response {
   client: Client;
   finques: FincaFitxa360[];
@@ -49,11 +64,13 @@ interface Fitxa360Response {
   peces_instalades: PecaInstaladaFitxa360[];
   incidencies: IncidenciaFitxa360[];
   pressupostos?: PressupostFitxa360[];
+  factures?: FacturaClientFitxa360[];
 }
 
 export default function GestioClientsPage() {
   const { rolActiu } = useGestio();
   const esEnginyer = (rolActiu || "").toUpperCase() === "ENGINYER";
+  const [facturaModalId, setFacturaModalId] = useState<string | null>(null);
   const [clients, setClients] = useState<Client[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -658,7 +675,7 @@ export default function GestioClientsPage() {
                             </p>
                           </div>
                           <div className="flex items-center gap-3">
-                            {!esEnginyer && p.total != null && (
+                            {p.total != null && (
                               <span className="font-mono text-xs font-bold text-slate-800 dark:text-slate-200">
                                 {Number(p.total).toFixed(2)} €
                               </span>
@@ -672,6 +689,85 @@ export default function GestioClientsPage() {
                           </div>
                         </div>
                       ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* 5. PRE-FACTURES I FACTURES DE TASQUES DEL CLIENT (Tots 3 rols per reclamacions) */}
+                <div
+                  data-testid="fitxa360-factures-client"
+                  className="p-5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm"
+                >
+                  <div className="flex items-center justify-between mb-4">
+                    <h3 className="text-sm font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2">
+                      <Receipt className="w-4 h-4 text-primary" />
+                      Pre-factures i Factures de Tasques del Client
+                    </h3>
+                    <span className="text-[11px] font-mono text-slate-500">
+                      {fitxa360.factures?.length || 0} documents
+                    </span>
+                  </div>
+                  {!fitxa360.factures || fitxa360.factures.length === 0 ? (
+                    <p className="text-xs text-slate-400">
+                      Cap pre-factura ni factura associada a les tasques d&apos;aquest client.
+                    </p>
+                  ) : (
+                    <div className="space-y-2">
+                      {fitxa360.factures.map((fac) => {
+                        const esPref = fac.estat_document === "ESBORRANY_PREFACTURA";
+                        return (
+                          <div
+                            key={fac.id}
+                            className="p-3 rounded-xl border border-slate-100 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/40 flex flex-wrap items-center justify-between gap-3"
+                          >
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <span className="font-mono text-xs font-bold text-primary">
+                                  {fac.serie}-{String(fac.numero_factura).padStart(4, "0")}
+                                </span>
+                                <span
+                                  className={`text-[10px] px-2 py-0.5 rounded-full font-semibold border ${
+                                    esPref
+                                      ? "bg-amber-50 text-amber-900 border-amber-300"
+                                      : "bg-emerald-50 text-emerald-800 border-emerald-300"
+                                  }`}
+                                >
+                                  {esPref ? "PRE-FACTURA" : fac.estat_document}
+                                </span>
+                                <span className="text-[10px] px-2 py-0.5 rounded-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300">
+                                  {fac.estat_cobrament}
+                                </span>
+                              </div>
+                              <p className="text-[10px] text-slate-500 mt-1 font-mono">
+                                {fac.data_emissio
+                                  ? new Date(fac.data_emissio).toLocaleDateString("ca-ES")
+                                  : "—"}
+                                {fac.ordres_treball_codis?.length > 0
+                                  ? ` · OTs: ${fac.ordres_treball_codis.join(", ")}`
+                                  : ""}
+                              </p>
+                            </div>
+                            <div className="flex items-center gap-3">
+                              <div className="text-right">
+                                <span className="font-mono text-xs font-extrabold text-slate-900 dark:text-white block">
+                                  {Number(fac.liquid_exigible || 0).toFixed(2)} €
+                                </span>
+                                <span className="text-[10px] font-mono text-slate-500">
+                                  Base {Number(fac.base_imposable || 0).toFixed(2)} € + IVA{" "}
+                                  {Number(fac.quota_iva || 0).toFixed(2)} €
+                                </span>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => setFacturaModalId(fac.id)}
+                                className="px-2.5 py-1.5 rounded-lg bg-primary text-white text-[11px] font-bold hover:opacity-90 cursor-pointer"
+                              >
+                                Veure Detall / PDF
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
                     </div>
                   )}
                 </div>
@@ -700,6 +796,11 @@ export default function GestioClientsPage() {
       </div>
 
       
+      <FacturaComercialModal
+        facturaId={facturaModalId}
+        onClose={() => setFacturaModalId(null)}
+      />
+
       <CsvImportModal 
         isOpen={isImportModalOpen} 
         onClose={() => setIsImportModalOpen(false)} 

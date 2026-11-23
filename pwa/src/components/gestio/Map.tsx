@@ -38,6 +38,11 @@ export interface LiniaPickingItem {
   article_nom?: string;
   referencia_inventari?: string;
   quantitat_prevista: number;
+  quantitat_carregada_pick_in?: number;
+  quantitat_retornada_pick_out?: number;
+  quantitat_mermada?: number;
+  consum_real?: number;
+  origen_estoc?: "NAU" | "FURGONETA" | string;
   unitat_mesura?: string;
   estoc_disponible?: number;
 }
@@ -72,6 +77,21 @@ export interface TramTempsGestio {
   justificacio_gps?: string | null;
 }
 
+export interface DisclaimerOT {
+  codi:
+    | "NO_CONCLOSA"
+    | "CONCLOSA_PENDENT_VALIDACIO"
+    | "VALIDADA_PENDENT_FACTURAR"
+    | "PREFACTURADA"
+    | "FACTURADA"
+    | string;
+  titol: string;
+  descripcio: string;
+  severitat: "neutral" | "warning" | "info" | "success" | string;
+  pot_validar: boolean;
+  pot_prefacturar: boolean;
+}
+
 export interface Feina {
   id: string;
   codi: string;
@@ -96,6 +116,16 @@ export interface Feina {
   factura_serie?: string | null;
   factura_numero?: number | null;
   factura_estat_document?: string | null;
+  validada_per_id?: string | null;
+  validada_per_nom?: string | null;
+  data_validacio?: string | null;
+  notes_validacio_tecnica?: string | null;
+  signatura_present?: boolean;
+  nom_receptor?: string | null;
+  dni_receptor?: string | null;
+  desviacio_geovalla?: boolean;
+  justificacio_geovalla?: string | null;
+  disclaimer?: DisclaimerOT | null;
   te_tram_obert?: boolean;
   temps_acumulat_segons?: number;
   trams_temps?: TramTempsGestio[];

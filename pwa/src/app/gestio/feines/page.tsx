@@ -33,6 +33,8 @@ const ESTAT_CHIPS = [
   { id: "PENDENT", label: "Pendents" },
   { id: "ASSIGNADA", label: "Assignades" },
   { id: "EN_CURS", label: "En Curs / Obra" },
+  { id: "PENDENT_VALIDAR", label: "Pendents de Validar" },
+  { id: "PENDENT_FACTURAR", label: "Pendents de Facturar" },
   { id: "TANCADA", label: "Tancades" },
 ] as const;
 
@@ -45,6 +47,7 @@ const ESTATS_ACABADES = [
   "FINALITZADA",
   "EXECUTADA_PENDENT_VALIDACIO",
   "ALBARA_SIGNAT",
+  "VALIDADA_PER_FACTURAR",
   "PREFACTURADA",
   "FACTURADA",
 ];
@@ -56,6 +59,7 @@ const ESTATS_PER_PREFACTURAR = [
   "FINALITZADA",
   "EXECUTADA_PENDENT_VALIDACIO",
   "ALBARA_SIGNAT",
+  "VALIDADA_PER_FACTURAR",
 ];
 
 function estatBadgeClass(estat: string): string {
@@ -65,8 +69,12 @@ function estatBadgeClass(estat: string): string {
     return "bg-secondary-container/25 text-secondary border-secondary/30";
   if (up === "EN_CURS" || up === "EN_OBRA" || up === "EN_RUTA")
     return "bg-emerald-100 text-emerald-800 border-emerald-200";
+  if (up === "VALIDADA_PER_FACTURAR")
+    return "bg-primary/15 text-primary border-primary/35";
   if (up === "PREFACTURADA")
     return "bg-amber-100 text-amber-900 border-amber-300";
+  if (up === "FACTURADA")
+    return "bg-emerald-100 text-emerald-900 border-emerald-300";
   if (ESTATS_ACABADES.includes(up))
     return "bg-primary/10 text-primary border-primary/20";
   if (up === "BLOQUEJADA" || up === "INCIDENCIA")
@@ -151,8 +159,13 @@ function FeinesContent() {
     return feines.filter((f) => {
       if (filtreEstat !== "TOTES") {
         const up = (f.estat || "").toUpperCase();
+        const discCodi = f.disclaimer?.codi || "";
         if (filtreEstat === "EN_CURS") {
           if (!["EN_CURS", "EN_OBRA", "EN_RUTA"].includes(up)) return false;
+        } else if (filtreEstat === "PENDENT_VALIDAR") {
+          if (discCodi !== "CONCLOSA_PENDENT_VALIDACIO") return false;
+        } else if (filtreEstat === "PENDENT_FACTURAR") {
+          if (discCodi !== "VALIDADA_PENDENT_FACTURAR") return false;
         } else if (filtreEstat === "TANCADA") {
           if (!ESTATS_ACABADES.includes(up)) return false;
         } else if (up !== filtreEstat) {
@@ -186,7 +199,8 @@ function FeinesContent() {
     return { totals, actives, pendents, tancades };
   }, [feines]);
 
-  const potVeurePreus = rolActiu !== "ENGINYER";
+  const potVeurePreus = true;
+  const potAccedirComptabilitat = (rolActiu || "").toUpperCase() !== "ENGINYER";
 
   return (
     <div className="flex-1 flex flex-col space-y-lg w-full animate-fade-in">
@@ -439,20 +453,27 @@ function FeinesContent() {
                         </td>
                       )}
                       <td className="py-3 px-4 whitespace-nowrap">
-                        <span
-                          className={`text-[10px] font-label-caps px-2.5 py-0.5 rounded-full border font-bold uppercase ${estatBadgeClass(
-                            f.estat
-                          )}`}
-                        >
-                          {f.estat}
-                        </span>
+                        <div className="flex flex-col items-start gap-1">
+                          <span
+                            className={`text-[10px] font-label-caps px-2.5 py-0.5 rounded-full border font-bold uppercase ${estatBadgeClass(
+                              f.estat
+                            )}`}
+                          >
+                            {f.estat}
+                          </span>
+                          {f.disclaimer?.titol && (
+                            <span className="text-[10px] text-on-surface-variant font-medium">
+                              {f.disclaimer.titol}
+                            </span>
+                          )}
+                        </div>
                       </td>
                       <td
                         className="py-3 px-4 text-right whitespace-nowrap"
                         onClick={(e) => e.stopPropagation()}
                       >
                         <div className="inline-flex items-center gap-1">
-                          {potVeurePreus &&
+                          {potAccedirComptabilitat &&
                             ESTATS_PER_PREFACTURAR.includes((f.estat || "").toUpperCase()) &&
                             !f.factura_id && (
                               <button
@@ -466,7 +487,7 @@ function FeinesContent() {
                                 <span>{prefacturantId === f.id ? "..." : "Prefacturar"}</span>
                               </button>
                             )}
-                          {potVeurePreus &&
+                          {potAccedirComptabilitat &&
                             f.factura_id &&
                             f.factura_estat_document === "ESBORRANY_PREFACTURA" && (
                               <Link
@@ -518,7 +539,7 @@ function FeinesContent() {
       {showPressupostModal && (
         <PressupostModal
           onClose={() => setShowPressupostModal(false)}
-          esEnginyer={(rolActiu || "").toUpperCase() === "ENGINYER"}
+          esEnginyer={false}
           autoOpenSendOnCreate={true}
           showGoToPressupostosLink={true}
         />

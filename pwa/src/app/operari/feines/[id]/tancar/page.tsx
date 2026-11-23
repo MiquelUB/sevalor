@@ -17,8 +17,11 @@ export default function TancarFeinaPage() {
   const params = useParams();
   const router = useRouter();
   const [signatureSaved, setSignatureSaved] = useState(false);
+  const [savingSignature, setSavingSignature] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [nomSignant, setNomSignant] = useState("");
   const [dniSignant, setDniSignant] = useState("");
+  const [observacions, setObservacions] = useState("");
   const [ordre, setOrdre] = useState<OrdreResum | null>(null);
 
   const feinaId = params.id as string;
@@ -44,18 +47,25 @@ export default function TancarFeinaPage() {
   }, [feinaId]);
 
   const handleSaveSignature = async (base64Signature: string) => {
+    setSavingSignature(true);
+    setErrorMsg(null);
     try {
       const horesAImputar =
         ordre?.hores_imputades_facturables != null && ordre.hores_imputades_facturables > 0
           ? ordre.hores_imputades_facturables
           : undefined;
+      const nomClean = nomSignant.trim() || undefined;
+      const dniClean = dniSignant.trim().toUpperCase() || undefined;
+      const obsClean = observacions.trim() || undefined;
 
       if (typeof navigator !== "undefined" && navigator.onLine) {
         await apiFetch(`/operari/feines/${feinaId}/finalitzar`, {
           method: "PUT",
           body: JSON.stringify({
             signatura_base64: base64Signature,
-            observacions: nomSignant ? `Receptor: ${nomSignant} (${dniSignant})` : undefined,
+            nom_receptor: nomClean,
+            dni_receptor: dniClean,
+            observacions: obsClean,
             hores: horesAImputar,
           }),
         });
@@ -65,8 +75,11 @@ export default function TancarFeinaPage() {
           payload: {
             ordre_id: feinaId,
             signatura_base64: base64Signature,
-            nom_signant: nomSignant.trim() || undefined,
-            dni_signant: dniSignant.trim() || undefined,
+            nom_receptor: nomClean,
+            dni_receptor: dniClean,
+            nom_signant: nomClean,
+            dni_signant: dniClean,
+            observacions: obsClean,
             hores: horesAImputar,
             data_tancament: new Date().toISOString(),
           },
@@ -76,8 +89,10 @@ export default function TancarFeinaPage() {
       }
 
       setSignatureSaved(true);
-    } catch (e: any) {
-      alert(e.message || "Error en desar la signatura");
+    } catch (e: unknown) {
+      setErrorMsg(e instanceof Error ? e.message : "Error en desar la signatura i tancar la feina.");
+    } finally {
+      setSavingSignature(false);
     }
   };
 
@@ -135,12 +150,12 @@ export default function TancarFeinaPage() {
         Per favor, escaneja els tiquets de combustible o despeses necessaris i recull la conformitat del client o operari abans de tancar l&apos;ordre.
       </p>
 
-      {/* Escàner OCR de Tiquets */}
+      {/* Escàner OCR de Tiquets vinculat a aquesta OT */}
       <div className="bg-surface-container-lowest dark:bg-slate-900 p-4 rounded-xl border border-outline-variant/25 dark:border-slate-800 shadow-sm">
-        <TiquetScanner />
+        <TiquetScanner ordreTreballId={feinaId} />
       </div>
 
-      {/* Dades opcionals del receptor i Signatura Digital */}
+      {/* Dades del receptor, observacions tècniques i Signatura Digital */}
       <div className="bg-surface-container-lowest dark:bg-slate-900 p-4 rounded-xl border border-outline-variant/25 dark:border-slate-800 shadow-sm space-y-4">
         {!signatureSaved ? (
           <>
@@ -151,9 +166,11 @@ export default function TancarFeinaPage() {
                 </label>
                 <input
                   type="text"
+                  data-testid="input-nom-receptor"
                   value={nomSignant}
                   onChange={(e) => setNomSignant(e.target.value)}
                   placeholder="Nom i cognoms"
+                  maxLength={150}
                   className="w-full px-3 py-2 text-xs rounded-lg border border-outline-variant/40 dark:border-slate-700 bg-surface-container-low dark:bg-slate-800 text-on-surface dark:text-white"
                 />
               </div>
@@ -163,15 +180,38 @@ export default function TancarFeinaPage() {
                 </label>
                 <input
                   type="text"
+                  data-testid="input-dni-receptor"
                   value={dniSignant}
                   onChange={(e) => setDniSignant(e.target.value.toUpperCase())}
                   placeholder="12345678A"
+                  maxLength={30}
                   className="w-full px-3 py-2 text-xs font-mono rounded-lg border border-outline-variant/40 dark:border-slate-700 bg-surface-container-low dark:bg-slate-800 text-on-surface dark:text-white"
                 />
               </div>
             </div>
 
-            <SignaturePad onSave={handleSaveSignature} />
+            <div>
+              <label className="block text-[10px] font-bold uppercase tracking-wider text-on-surface-variant mb-1">
+                Observacions Tècniques de Tancament
+              </label>
+              <textarea
+                data-testid="input-observacions-tancament"
+                value={observacions}
+                onChange={(e) => setObservacions(e.target.value)}
+                placeholder="Notes d'obra, recomanacions al client o incidències resoltes..."
+                rows={3}
+                maxLength={2000}
+                className="w-full px-3 py-2 text-xs rounded-lg border border-outline-variant/40 dark:border-slate-700 bg-surface-container-low dark:bg-slate-800 text-on-surface dark:text-white resize-none"
+              />
+            </div>
+
+            {errorMsg && (
+              <div className="p-3 rounded-lg bg-error-container/25 border border-error text-xs font-semibold text-error">
+                {errorMsg}
+              </div>
+            )}
+
+            <SignaturePad onSave={handleSaveSignature} disabled={savingSignature} />
           </>
         ) : (
           <div className="text-center p-6 text-secondary bg-secondary-container/10 rounded-xl border border-secondary-container/30">

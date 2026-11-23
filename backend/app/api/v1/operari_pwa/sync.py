@@ -15,8 +15,10 @@ from app.models.models import (
     OrdreTreball,
     RegistreJornadaLaboral,
     TiquetCarburant,
+    TiquetDespesa,
     Vehicle,
 )
+from app.services.reconciliacio_ot_service import desar_signatura_client_ot
 from app.services.sovereign_storage import SovereignStorageGateway
 
 router = APIRouter(prefix="/sync", tags=["PWA Sync"])
@@ -110,18 +112,75 @@ async def bulk_sync_push(
 
             elif accio.accio == "CREAR_TIQUET":
                 logger.info(f"Processant CREAR_TIQUET per {accio.id}")
+                emp_uuid_tiquet = uuid.UUID(claims["empresa_id"])
+                usuari_uuid_tiquet = uuid.UUID(claims["sub"])
                 v_id = accio.payload.get("vehicle_id")
                 if not v_id:
                     v_res = await db.execute(
-                        select(Vehicle).where(Vehicle.empresa_id == uuid.UUID(claims["empresa_id"]))
+                        select(Vehicle).where(Vehicle.empresa_id == emp_uuid_tiquet)
                     )
                     v_obj = v_res.scalars().first()
                     v_id = v_obj.id if v_obj else None
 
-                if v_id:
+                ot_tiquet_raw = accio.payload.get("ordre_treball_id")
+                if ot_tiquet_raw:
+                    from datetime import date
+
+                    ot_tiquet_uuid = uuid.UUID(str(ot_tiquet_raw))
+                    ot_check = await db.execute(
+                        select(OrdreTreball.id).where(
+                            OrdreTreball.id == ot_tiquet_uuid,
+                            OrdreTreball.empresa_id == emp_uuid_tiquet,
+                        )
+                    )
+                    if not ot_check.scalar_one_or_none():
+                        raise HTTPException(
+                            status_code=404,
+                            detail="Ordre de treball no trobada al tenant per al tiquet offline.",
+                        )
+                    cat_raw = str(accio.payload.get("categoria") or "ALTRES").strip().upper()
+                    if cat_raw not in {"CARBURANT", "FERRETERIA", "PEATGES", "DIETES", "ALTRES"}:
+                        cat_raw = "ALTRES"
+                    nou_tiquet_despesa = TiquetDespesa(
+                        id=uuid.uuid4(),
+                        empresa_id=emp_uuid_tiquet,
+                        categoria=cat_raw,
+                        usuari_id=usuari_uuid_tiquet,
+                        vehicle_id=uuid.UUID(str(v_id)) if v_id else None,
+                        ordre_treball_id=ot_tiquet_uuid,
+                        data_tiquet=date.today(),
+                        import_total=accio.payload.get(
+                            "import_euros", accio.payload.get("import_total")
+                        ),
+                        estat_aprovacio="PENDENT_PROCESSAMENT",
+                        estat_fiscal="PENDENT_OCR",
+                        requereix_aprovacio_boss=False,
+                        custodia_paper_confirmada=False,
+                        nom_fitxer_visible=accio.payload.get("nom_fitxer", "offline_sync.webp"),
+                        foto_tiquet_path=accio.payload.get(
+                            "tiquet_foto_path", accio.payload.get("nom_fitxer", "offline_sync.webp")
+                        ),
+                        foto_odometre_path=accio.payload.get("odometre_foto_path"),
+                    )
+                    db.add(nou_tiquet_despesa)
+                    await db.flush()
+                    await SovereignStorageGateway.desar_entitat_json(
+                        db=db,
+                        empresa_id=claims["empresa_id"],
+                        categoria="tiquets_despesa",
+                        item_id=str(nou_tiquet_despesa.id),
+                        dades={
+                            "id": str(nou_tiquet_despesa.id),
+                            "usuari_id": str(usuari_uuid_tiquet),
+                            "ordre_treball_id": str(ot_tiquet_uuid),
+                            "categoria": cat_raw,
+                            "nom_fitxer_visible": nou_tiquet_despesa.nom_fitxer_visible,
+                        },
+                    )
+                elif v_id:
                     nou_tiquet = TiquetCarburant(
-                        empresa_id=uuid.UUID(claims["empresa_id"]),
-                        operari_id=uuid.UUID(claims["sub"]),
+                        empresa_id=emp_uuid_tiquet,
+                        operari_id=usuari_uuid_tiquet,
                         vehicle_id=uuid.UUID(str(v_id)),
                         tiquet_foto_path=accio.payload.get("tiquet_foto_path", "offline_sync.webp"),
                         odometre_foto_path=accio.payload.get("odometre_foto_path"),
@@ -188,10 +247,11 @@ async def bulk_sync_push(
                 # Exemple de validació de timestamp (CRDT/Conflict Resolution)
                 ordre_id = accio.payload.get("ordre_id")
                 if ordre_id:
+                    emp_uuid_ot = uuid.UUID(claims["empresa_id"])
                     result = await db.execute(
                         select(OrdreTreball).where(
                             OrdreTreball.id == uuid.UUID(str(ordre_id)),
-                            OrdreTreball.empresa_id == uuid.UUID(claims["empresa_id"]),
+                            OrdreTreball.empresa_id == emp_uuid_ot,
                         )
                     )
                     ordre = result.scalars().first()
@@ -211,6 +271,32 @@ async def bulk_sync_push(
                         from datetime import datetime, timezone
 
                         now_utc = datetime.now(timezone.utc)
+                        sig_b64 = accio.payload.get("signatura_base64")
+                        if sig_b64:
+                            sig_path = await desar_signatura_client_ot(
+                                db=db,
+                                empresa_id=emp_uuid_ot,
+                                ordre_treball_id=ordre.id,
+                                signatura_base64=str(sig_b64),
+                                exigir_magic_bytes=True,
+                            )
+                            ordre.signatura_client_path = sig_path
+                            ordre.data_signatura = now_utc
+
+                        nom_rec = accio.payload.get("nom_receptor") or accio.payload.get("nom_signant")
+                        if nom_rec is not None:
+                            ordre.nom_receptor = str(nom_rec).strip()[:150] or None
+
+                        dni_rec = accio.payload.get("dni_receptor") or accio.payload.get("dni_signant")
+                        if dni_rec is not None:
+                            ordre.dni_receptor = str(dni_rec).strip().upper()[:30] or None
+
+                        obs_tanc = accio.payload.get("observacions") or accio.payload.get(
+                            "observacions_tancament"
+                        )
+                        if obs_tanc is not None:
+                            ordre.observacions_tancament = str(obs_tanc).strip()[:2000] or None
+
                         ordre.estat = "COMPLERT"
                         if ordre.data_finalitzacio_camp is None:
                             ordre.data_finalitzacio_camp = now_utc.date()
@@ -219,32 +305,75 @@ async def bulk_sync_push(
                             and accio.payload.get("hores")
                         ):
                             ordre.hores_imputades_facturables = round(float(accio.payload["hores"]), 2)
+                        await db.flush()
+                        await SovereignStorageGateway.desar_entitat_json(
+                            db=db,
+                            empresa_id=claims["empresa_id"],
+                            categoria="ots_historic",
+                            item_id=str(ordre.id),
+                            dades={
+                                "id": str(ordre.id),
+                                "codi": ordre.codi,
+                                "titol": ordre.titol,
+                                "estat": ordre.estat,
+                                "hores": float(ordre.hores_imputades_facturables or 0.0),
+                                "nom_receptor": ordre.nom_receptor,
+                                "dni_receptor": ordre.dni_receptor,
+                                "observacions": ordre.observacions_tancament,
+                                "signatura_client_path": ordre.signatura_client_path,
+                                "data_signatura": (
+                                    ordre.data_signatura.isoformat()
+                                    if ordre.data_signatura
+                                    else None
+                                ),
+                                "signatura_present": bool(ordre.signatura_client_path),
+                            },
+                        )
 
             elif accio.accio == "POST_PLANOL_CAPA":
                 logger.info(f"Processant POST_PLANOL_CAPA per {accio.id}")
                 planol_id = accio.payload.get("planol_id")
                 capa_data = accio.payload.get("capa", {})
+                ot_capa_raw = accio.payload.get("ordre_treball_id") or capa_data.get(
+                    "ordre_treball_id"
+                )
+                ot_capa_uuid: Optional[uuid.UUID] = None
+                if ot_capa_raw:
+                    try:
+                        ot_capa_uuid = uuid.UUID(str(ot_capa_raw))
+                    except ValueError:
+                        ot_capa_uuid = None
+
                 if planol_id:
-                    pins = capa_data.get("pins", [])
-                    features = [
-                        {
-                            "type": "Feature",
-                            "geometry": {"type": "Point", "coordinates": [p.get("x", 0), p.get("y", 0)]},
-                            "properties": {"nom": p.get("etiqueta", "Anotació")},
-                        }
-                        for p in pins
-                    ]
+                    geojson_capa = capa_data.get("geometries_geojson") or capa_data.get(
+                        "dades_geojson"
+                    )
+                    if not isinstance(geojson_capa, dict):
+                        pins = capa_data.get("pins", [])
+                        features = [
+                            {
+                                "type": "Feature",
+                                "geometry": {
+                                    "type": "Point",
+                                    "coordinates": [p.get("x", 0), p.get("y", 0)],
+                                },
+                                "properties": {"nom": p.get("etiqueta", "Anotació")},
+                            }
+                            for p in pins
+                        ]
+                        geojson_capa = {"type": "FeatureCollection", "features": features}
                     nova_capa = CapaVectorial(
                         empresa_id=uuid.UUID(claims["empresa_id"]),
                         planol_base_id=uuid.UUID(str(planol_id)),
+                        ordre_treball_id=ot_capa_uuid,
                         nom=capa_data.get("nom", "Capa Operari"),
-                        disciplina="OBRA_CIVIL",
+                        disciplina=capa_data.get("disciplina", "OBRA_CIVIL"),
                         es_immutable=bool(capa_data.get("es_tancada", False)),
-                        color_hex="#0284c7",
-                        gruix_linia=3,
+                        color_hex=capa_data.get("color_hex", "#0284c7"),
+                        gruix_linia=int(capa_data.get("gruix_linia") or 3),
                         opacitat_percent=100,
                         visible=True,
-                        geometries_geojson={"type": "FeatureCollection", "features": features},
+                        geometries_geojson=geojson_capa,
                         version_id=1,
                     )
                     db.add(nova_capa)
@@ -285,6 +414,32 @@ async def bulk_sync_push(
                                 "features": features,
                             }
                             capa.version_id += 1
+
+            elif accio.accio == "USE_MATERIAL_FROM_VAN":
+                logger.info(f"Processant USE_MATERIAL_FROM_VAN per {accio.id}")
+                from app.services.picking_stock_service import registrar_consum_material_furgoneta
+
+                ot_raw = accio.payload.get("ordre_treball_id") or accio.payload.get("ordre_camp_id")
+                art_raw = accio.payload.get("article_id")
+                qty_raw = accio.payload.get("quantitat")
+                if not ot_raw or not art_raw or not qty_raw:
+                    raise HTTPException(
+                        status_code=422,
+                        detail="USE_MATERIAL_FROM_VAN requereix ordre_treball_id, article_id i quantitat.",
+                    )
+                mag_raw = accio.payload.get("magatzem_id")
+                await registrar_consum_material_furgoneta(
+                    db=db,
+                    empresa_id=uuid.UUID(claims["empresa_id"]),
+                    ordre_treball_id=uuid.UUID(str(ot_raw)),
+                    article_id=uuid.UUID(str(art_raw)),
+                    quantitat=float(qty_raw),
+                    quantitat_mermada=float(accio.payload.get("quantitat_mermada") or 0.0),
+                    magatzem_id=uuid.UUID(str(mag_raw)) if mag_raw else None,
+                    usuari_id=uuid.UUID(claims["sub"]) if claims.get("sub") else None,
+                    notes=accio.payload.get("notes"),
+                    auto_commit=False,
+                )
 
             else:
                 logger.warning(f"Acció desconeguda: {accio.accio}")

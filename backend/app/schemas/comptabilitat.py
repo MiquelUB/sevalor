@@ -16,15 +16,49 @@ class ClientRiscSanititzatDTO(BaseModel):
     missatge_operatiu: str
 
 
-class FacturaConsultaTecnicaDTO(BaseModel):
-    """DTO purgat per a consulta des d'obres per part de l'Enginyer (RF-05.4)."""
+class FacturaLiniaComercialDTO(BaseModel):
+    """Línia comercial d'una pre-factura o factura del client (sense costos interns PMP ni comptes PGC)."""
 
     id: uuid.UUID
+    concepte: str
+    quantitat: float
+    preu_venda_unitari: float
+    tipus_iva: float = 21.0
+    descompte_aplicat_pct: float = 0.0
+    subtotal: float
+    obra_id: Optional[uuid.UUID] = None
+
+
+class FacturaConsultaTecnicaDTO(BaseModel):
+    """DTO comercial d'una pre-factura o factura vinculada a tasques d'un client (tots 3 rols).
+
+    Inclou totes les dades comercials del document del client (línies, base, IVA, total, OTs)
+    sense costos interns PMP, sense marges ni comptes PGC.
+    """
+
+    id: uuid.UUID
+    client_id: Optional[uuid.UUID] = None
+    client_nom: Optional[str] = None
+    client_nif: Optional[str] = None
     numero_factura: int
     serie: str
     data_emissio: datetime
+    data_venciment: Optional[date] = None
     estat_document: str
-    descripcions_linies: List[str]
+    estat_cobrament: str = "PENDENT"
+    base_imposable: float = 0.0
+    quota_iva: float = 0.0
+    import_suplits: float = 0.0
+    import_retencio: float = 0.0
+    import_retencio_garantia_4308: float = 0.0
+    liquid_exigible: float = 0.0
+    es_inversio_subjecte_passiu: bool = False
+    ordres_treball_codis: List[str] = []
+    descripcions_linies: List[str] = []
+    linies: List[FacturaLiniaComercialDTO] = []
+
+
+FacturaConsultaClientDTO = FacturaConsultaTecnicaDTO
 
 
 # --- DTOs D'EMISSIÓ DE FACTURA VERI*FACTU ---

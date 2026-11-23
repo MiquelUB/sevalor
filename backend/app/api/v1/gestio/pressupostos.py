@@ -241,8 +241,8 @@ async def llistar_pressupostos(
     if not empresa_id_str:
         raise HTTPException(status_code=400, detail="Falta el tenant al token.")
     empresa_id = uuid.UUID(empresa_id_str)
-    rol = str(claims.get("rol") or "").upper()
-    amagar_imports = rol == "ENGINYER"
+    # Imports comercials de venda al client visibles per a ENGINYER, SECRETARIA i BOSS
+    amagar_imports = False
 
     stmt = select(Pressupost).where(Pressupost.empresa_id == empresa_id)
     if client_id:
@@ -342,7 +342,6 @@ async def obtenir_pressupost(
     if not empresa_id_str:
         raise HTTPException(status_code=400, detail="Falta el tenant al token.")
     empresa_id = uuid.UUID(empresa_id_str)
-    rol = str(claims.get("rol") or "").upper()
 
     pressupost, client = await _carregar_pressupost_i_client(db, empresa_id, pressupost_id)
     detalls_map = await carregar_detalls_pressupostos_map(db, empresa_id)
@@ -351,7 +350,7 @@ async def obtenir_pressupost(
         client,
         detalls_map.get(str(pressupost.id), {}),
         _resolve_origin(request),
-        amagar_imports=(rol == "ENGINYER"),
+        amagar_imports=False,
     )
 
 

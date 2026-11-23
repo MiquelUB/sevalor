@@ -4,8 +4,9 @@ import uuid
 from datetime import date, datetime, timezone
 from typing import Any, List, Optional
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
-from pydantic import BaseModel, ConfigDict
+import filetype  # type: ignore[import-untyped]
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -26,6 +27,14 @@ from app.services.barema_service import (
     calcular_cost_ma_obra_real,
     resoldre_preu_hora_control_panel,
 )
+from app.services.reconciliacio_ot_service import desar_signatura_client_ot
+
+MAX_FOTO_QA_BYTES = 10 * 1024 * 1024  # 10 MB (AGENTS.md §3.4)
+ALLOWED_FOTO_QA_MIMES = {
+    "image/webp": "webp",
+    "image/jpeg": "jpg",
+    "image/png": "png",
+}
 
 router = APIRouter(
     prefix="/operari",
@@ -771,6 +780,20 @@ async def finalitzar_temps_feina(
     }
 
 
+def _detectar_mime_imatge_qa(raw_bytes: bytes) -> Optional[str]:
+    """Valida Magic Bytes d'imatge real (WebP, JPEG o PNG) sense confiar en l'extensió."""
+    kind = filetype.guess(raw_bytes)
+    if kind is not None and kind.mime in ALLOWED_FOTO_QA_MIMES:
+        return str(kind.mime)
+    if raw_bytes.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if raw_bytes.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if len(raw_bytes) >= 12 and raw_bytes[:4] == b"RIFF" and raw_bytes[8:12] == b"WEBP":
+        return "image/webp"
+    return None
+
+
 @router.post("/feines/{feina_id}/fotos")
 async def pujar_foto_qualitat(
     feina_id: uuid.UUID,
@@ -786,27 +809,68 @@ async def pujar_foto_qualitat(
     empresa_id = request.state.empresa_id
     if not empresa_id or empresa_id == "undefined":
         raise HTTPException(status_code=401)
+    emp_uuid = uuid.UUID(str(empresa_id))
 
     tipus_upper = tipus.upper()
     if tipus_upper not in ("INICIAL", "INTERMEDIA", "FINAL"):
         raise HTTPException(
-            status_code=422, detail="El tipus de foto ha de ser INICIAL, INTERMEDIA o FINAL"
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="El tipus de foto ha de ser INICIAL, INTERMEDIA o FINAL",
+        )
+
+    ot_res = await db.execute(
+        select(OrdreTreball.id).where(
+            OrdreTreball.id == feina_id,
+            OrdreTreball.empresa_id == emp_uuid,
+        )
+    )
+    if not ot_res.scalar_one_or_none():
+        raise HTTPException(status_code=404, detail="Feina no trobada")
+
+    file_obj = foto or fitxer
+    if file_obj is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="És obligatori adjuntar el fitxer d'imatge de control de qualitat.",
+        )
+
+    content = await file_obj.read()
+    if not content:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="El fitxer de fotografia està buit.",
+        )
+    if len(content) > MAX_FOTO_QA_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+            detail="La fotografia supera el límit màxim de 10 MB.",
+        )
+
+    detected_mime = _detectar_mime_imatge_qa(content)
+    if not detected_mime:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Format d'imatge no vàlid (Magic Bytes). Només s'admeten WebP, JPEG o PNG.",
         )
 
     nom_fitxer = f"ot_{feina_id}_foto_{tipus_upper.lower()}.webp"
-    file_obj = foto or fitxer
-    content = await file_obj.read() if file_obj else b"WEBP_EVIDENCE_PLACEHOLDER"
-
     file_path = await SovereignStorageGateway.pujar_fitxer_binari(
         db=db,
         empresa_id=empresa_id,
         categoria="ots_actives",
         nom_fitxer=nom_fitxer,
         content=content,
-        content_type="image/webp",
+        content_type=detected_mime,
     )
 
-    return {"feina_id": str(feina_id), "tipus": tipus_upper, "path": file_path, "status": "GUARDAT"}
+    return {
+        "feina_id": str(feina_id),
+        "tipus": tipus_upper,
+        "path": file_path,
+        "content_type": detected_mime,
+        "mida_bytes": len(content),
+        "status": "GUARDAT",
+    }
 
 
 @router.get("/feines/{feina_id}/fotos")
@@ -836,8 +900,10 @@ async def consultar_fotos_qualitat(
 
 class FinalitzarFeinaRequest(BaseModel):
     hores: Optional[float] = None
-    observacions: Optional[str] = None
+    observacions: Optional[str] = Field(None, max_length=2000)
     signatura_base64: Optional[str] = None
+    nom_receptor: Optional[str] = Field(None, max_length=150)
+    dni_receptor: Optional[str] = Field(None, max_length=30)
 
 
 @router.put("/feines/{feina_id}/finalitzar")
@@ -853,10 +919,11 @@ async def finalitzar_feina(
     empresa_id = request.state.empresa_id
     if not empresa_id or empresa_id == "undefined":
         raise HTTPException(status_code=401)
+    emp_uuid = uuid.UUID(str(empresa_id))
 
     ot_res = await db.execute(
         select(OrdreTreball).where(
-            OrdreTreball.id == feina_id, OrdreTreball.empresa_id == uuid.UUID(empresa_id)
+            OrdreTreball.id == feina_id, OrdreTreball.empresa_id == emp_uuid
         )
     )
     feina = ot_res.scalars().first()
@@ -882,9 +949,28 @@ async def finalitzar_feina(
         )
 
     now = datetime.now(timezone.utc)
+    if payload and payload.signatura_base64:
+        sig_path = await desar_signatura_client_ot(
+            db=db,
+            empresa_id=emp_uuid,
+            ordre_treball_id=feina.id,
+            signatura_base64=payload.signatura_base64,
+            exigir_magic_bytes=True,
+        )
+        feina.signatura_client_path = sig_path
+        feina.data_signatura = now
+
+    if payload:
+        if payload.nom_receptor is not None:
+            feina.nom_receptor = payload.nom_receptor.strip() or None
+        if payload.dni_receptor is not None:
+            feina.dni_receptor = payload.dni_receptor.strip().upper() or None
+        if payload.observacions is not None:
+            feina.observacions_tancament = payload.observacions.strip() or None
+
     await _tancar_tram_actiu_i_acumular(
         db=db,
-        empresa_uuid=uuid.UUID(empresa_id),
+        empresa_uuid=emp_uuid,
         feina=feina,
         now=now,
     )
@@ -900,7 +986,6 @@ async def finalitzar_feina(
         feina.hores_imputades_facturables = round(payload.hores, 2)
 
     if feina.hores_imputades_facturables:
-        emp_uuid = uuid.UUID(empresa_id)
         trams_finals = list(
             (
                 await db.execute(
@@ -948,14 +1033,23 @@ async def finalitzar_feina(
                 feina.hores_imputades_facturables
                 or (payload.hores if payload and payload.hores is not None else 0.0)
             ),
-            "observacions": payload.observacions if payload else None,
-            "signatura_present": bool(payload and payload.signatura_base64),
+            "observacions": feina.observacions_tancament,
+            "nom_receptor": feina.nom_receptor,
+            "dni_receptor": feina.dni_receptor,
+            "signatura_client_path": feina.signatura_client_path,
+            "data_signatura": feina.data_signatura.isoformat() if feina.data_signatura else None,
+            "signatura_present": bool(feina.signatura_client_path),
         },
     )
 
     return {
         "feina_id": str(feina.id),
         "estat": "COMPLERT",
+        "signatura_client_path": feina.signatura_client_path,
+        "nom_receptor": feina.nom_receptor,
+        "dni_receptor": feina.dni_receptor,
+        "observacions_tancament": feina.observacions_tancament,
+        "data_signatura": feina.data_signatura.isoformat() if feina.data_signatura else None,
         "missatge": "Feina finalitzada satisfactòriament",
     }
 
@@ -963,9 +1057,10 @@ async def finalitzar_feina(
 @router.get("/materials")
 async def llistar_materials_operari_en_feines(
     request: Request,
+    ordre_treball_id: Optional[uuid.UUID] = None,
     db: AsyncSession = Depends(get_db_with_tenant_context),
 ):
     from app.api.v1.operari_pwa.picking import llistar_materials_operari
 
-    return await llistar_materials_operari(request, db)
+    return await llistar_materials_operari(request, db, ordre_treball_id=ordre_treball_id)
 

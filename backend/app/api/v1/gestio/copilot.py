@@ -720,161 +720,26 @@ async def reconciliar_post_obra(
     db: AsyncSession = Depends(get_db_with_tenant_context),
     claims: Dict[str, Any] = Depends(get_current_user_claims),
 ):
-    """Reconciliació automàtica post-obra dels 4 pilars del cost real i proposta de pressupost corregit (RF-11, RF-12, EDGE-04, EDGE-08)."""
+    """Reconciliació automàtica post-obra dels 4 pilars amb dades 100% reals (Zero Mock Data)."""
+    from app.services.reconciliacio_ot_service import ReconciliacioOTService
+
     empresa_id = aplicar_tenant_context(claims)
-
-    # EDGE-04: Sincronització offline pendent de camp bloqueja la pre-factura
-    if dades.sync_pendent:
-        # Guardar en estat Pendent de Camp
-        auditoria_sync = AuditoriaPostObra(
-            empresa_id=empresa_id,
-            ordre_treball_id=dades.ordre_treball_id,
-            desviacio_hores=0.0,
-            desviacio_km=0.0,
-            despeses_camp=0.0,
-            marge_previst_percentatge=30.0,
-            marge_real_liquidat_percentatge=30.0,
-            bloqueig_sync_pendent=True,
-            estat="PENDENT_CONFIRMACIO",
-            detall_merma="Sincronització de fotos de camp pendent des de zona blanca.",
-        )
-        db.add(auditoria_sync)
-        await db.commit()
-
-        return {
-            "estat_conciliacio": "Pendent de Campo",
-            "bloqueig_facturacio": True,
-            "missatge": "Sincronització de camp offline pendent; la línia de Triple Conciliació roman en estat 'Pendent de Campo' fins al sincronitzat complet a nau.",
-        }
-
-    # EDGE-08: Consum continu >250% del previst sense incidència de camp prèvia
-    bloqueig_merma = False
-    detall_merma = None
-    desviacions_materials_llista = []
-
-    for mat in dades.materials_consumits:
-        nom_mat = mat.get("nom", "Material continu")
-        previst = float(mat.get("previst", 0.0))
-        real = float(mat.get("real", 0.0))
-        retornat = float(mat.get("retornat", 0.0))
-        consum_net = real - retornat
-
-        desviacio = consum_net - previst
-        desviacions_materials_llista.append(
-            {
-                "nom": nom_mat,
-                "previst": previst,
-                "real_net": consum_net,
-                "desviacio": desviacio,
-            }
-        )
-
-        if previst > 0:
-            ratio_consum = (consum_net / previst) * 100.0
-            if (
-                ratio_consum >= LLINDAR_MERMA_CONTINUA_PERCENTATGE
-                and dades.incidencies_registrades == 0
-            ):
-                bloqueig_merma = True
-                exces = consum_net - previst
-                detall_merma = f"Consum de {nom_mat} excedit en +{exces:.1f} ({ratio_consum:.0f}%, >250%) sense cap incidència de camp reportada a la fulla de tasca."
-
-    # Càlcul de desviacions d'hores i impacte de marge
-    desviacio_hores = dades.hores_reals - dades.hores_previstes
-    marge_previst = 30.0
-    # Simulació de caiguda de marge proporcional a desviacions
-    caiguda_marge = min(20.0, max(0.0, (desviacio_hores * 3.5) + (10.0 if bloqueig_merma else 2.0)))
-    marge_real = max(5.0, marge_previst - caiguda_marge)
-    alerta_merma = caiguda_marge >= 5.0 or bloqueig_merma
-
-    # Proposta de Pressupost Corregit (RF-13)
-    pressupost_corregit = {
-        "partides_inicials": 1200.00,
-        "desviacio_materials_import": 145.00,
-        "desviacio_ma_obra_import": desviacio_hores * 35.0,
-        "despeses_camp_import": dades.despeses_camp,
-        "total_proposat_corregit": 1200.00
-        + 145.00
-        + (desviacio_hores * 35.0)
-        + dades.despeses_camp,
-        "data_proposta": datetime.now(timezone.utc).isoformat(),
-        "estat_proposta": "PENDENT_CONFIRMACIO_ENGINYER",
-    }
-
-    # Upsert a auditories_post_obra
-    q_aud = select(AuditoriaPostObra).where(
-        AuditoriaPostObra.ordre_treball_id == dades.ordre_treball_id
+    rol_usuari = str(claims.get("rol") or "").upper()
+    return await ReconciliacioOTService.executar_auditoria_post_obra(
+        db=db,
+        empresa_id=empresa_id,
+        ordre_treball_id=dades.ordre_treball_id,
+        rol_usuari=rol_usuari,
+        materials_override=dades.materials_consumits or None,
+        hores_reals_override=dades.hores_reals if dades.hores_reals > 0 else None,
+        hores_previstes_override=dades.hores_previstes if dades.hores_previstes > 0 else None,
+        km_reals_override=dades.km_reals if dades.km_reals > 0 else None,
+        despeses_camp_override=dades.despeses_camp if dades.despeses_camp > 0 else None,
+        sync_pendent=dades.sync_pendent,
+        incidencies_registrades_override=(
+            dades.incidencies_registrades if dades.incidencies_registrades > 0 else None
+        ),
     )
-    res_aud = await db.execute(q_aud)
-    auditoria = res_aud.scalar_one_or_none()
-
-    if not auditoria:
-        auditoria = AuditoriaPostObra(
-            empresa_id=empresa_id,
-            ordre_treball_id=dades.ordre_treball_id,
-            desviacio_hores=desviacio_hores,
-            desviacio_materials=desviacions_materials_llista,
-            desviacio_km=dades.km_reals,
-            despeses_camp=dades.despeses_camp,
-            marge_previst_percentatge=marge_previst,
-            marge_real_liquidat_percentatge=marge_real,
-            alerta_merma_operativa=alerta_merma,
-            detall_merma=detall_merma,
-            bloqueig_consum_excessiu=bloqueig_merma,
-            bloqueig_sync_pendent=False,
-            pressupost_corregit_proposta=pressupost_corregit,
-            estat="PENDENT_CONFIRMACIO",
-        )
-        db.add(auditoria)
-    else:
-        auditoria.desviacio_hores = desviacio_hores
-        auditoria.desviacio_materials = desviacions_materials_llista
-        auditoria.desviacio_km = dades.km_reals
-        auditoria.despeses_camp = dades.despeses_camp
-        auditoria.marge_previst_percentatge = marge_previst
-        auditoria.marge_real_liquidat_percentatge = marge_real
-        auditoria.alerta_merma_operativa = alerta_merma
-        auditoria.detall_merma = detall_merma
-        auditoria.bloqueig_consum_excessiu = bloqueig_merma
-        auditoria.pressupost_corregit_proposta = pressupost_corregit
-
-    await db.commit()
-
-    # Sincronitzar l'auditoria post-obra al disc dur del client (autoaprenentatge mermes i preus)
-    try:
-        await SovereignStorageGateway.desar_entitat_json(
-            db=db,
-            empresa_id=empresa_id,
-            categoria="copilot_mermes_preus",
-            item_id=str(auditoria.id),
-            dades={
-                "id": str(auditoria.id),
-                "ordre_treball_id": str(auditoria.ordre_treball_id),
-                "desviacio_hores": float(auditoria.desviacio_hores),
-                "desviacio_materials": auditoria.desviacio_materials,
-                "marge_previst_percentatge": float(auditoria.marge_previst_percentatge),
-                "marge_real_liquidat_percentatge": float(auditoria.marge_real_liquidat_percentatge),
-                "alerta_merma_operativa": auditoria.alerta_merma_operativa,
-                "detall_merma": auditoria.detall_merma,
-                "bloqueig_consum_excessiu": auditoria.bloqueig_consum_excessiu,
-                "estat": auditoria.estat,
-            },
-        )
-    except Exception as exc:
-        logger.warning("No s'ha pogut desar l'auditoria al disc del client: %s", exc)
-
-    return {
-        "auditoria_id": str(auditoria.id),
-        "desviacio_hores": float(auditoria.desviacio_hores),
-        "marge_previst_percentatge": float(auditoria.marge_previst_percentatge),
-        "marge_real_liquidat_percentatge": float(auditoria.marge_real_liquidat_percentatge),
-        "alerta_merma_operativa": auditoria.alerta_merma_operativa,
-        "bloqueig_consum_excessiu": auditoria.bloqueig_consum_excessiu,
-        "detall_merma": auditoria.detall_merma,
-        "pressupost_corregit_proposta": auditoria.pressupost_corregit_proposta,
-        "estat": auditoria.estat,
-        "missatge": "Auditoria post-obra realitzada. Proposta de pressupost corregit pendent de confirmació humana de l'Enginyer (RF-13).",
-    }
 
 
 @router.put("/reconciliacio/{auditoria_id}/aprovar-pressupost")

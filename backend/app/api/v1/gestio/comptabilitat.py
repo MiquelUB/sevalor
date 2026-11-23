@@ -20,6 +20,7 @@ from app.models.models import (
     FacturaCapcalera,
     FacturaLinia,
     OrdreTreball,
+    OrdreTreballTramTemps,
 )
 from app.schemas.comptabilitat import (
     Art80ItemDTO,
@@ -632,6 +633,20 @@ async def convertir_wip_a_prefactura(
         raise HTTPException(
             status_code=400,
             detail="L'ordre de treball encara no està finalitzada per poder passar a prefacturació.",
+        )
+    tram_obert = (
+        await db.execute(
+            select(OrdreTreballTramTemps.id).where(
+                OrdreTreballTramTemps.empresa_id == empresa_id,
+                OrdreTreballTramTemps.ordre_treball_id == ot.id,
+                OrdreTreballTramTemps.hora_fi.is_(None),
+            )
+        )
+    ).scalar_one_or_none()
+    if tram_obert is not None:
+        raise HTTPException(
+            status_code=400,
+            detail="L'ordre de treball té un tram de temps obert al cronòmetre de camp. Tanca'l abans de prefacturar.",
         )
     if not ot.client_id:
         raise HTTPException(status_code=400, detail="L'OT no té un client associat.")

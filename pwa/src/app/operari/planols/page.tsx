@@ -27,7 +27,7 @@ import {
   ExternalLink,
   Share2,
 } from "lucide-react";
-import { apiFetch, getApiBaseUrl } from "@/lib/api";
+import { apiFetch, extractTenantId, getApiBaseUrl, getAuthToken } from "@/lib/api";
 import { addToSyncQueue } from "@/lib/offline/sync";
 
 // --- TIPUS I LLEGENDA DE COLORS I SÍMBOLS (SPEC 01, 02 & AS-BUILT) ---
@@ -256,6 +256,13 @@ export default function OperariPlanolsPage() {
   const [planolsDisponibles, setPlanolsDisponibles] = useState<PlanolBaseUI[]>([]);
   const [planolActiuId, setPlanolActiuId] = useState<string | null>(null);
   const [planolActiuInfo, setPlanolActiuInfo] = useState<PlanolBaseUI | null>(null);
+  const [ordreTreballId, setOrdreTreballId] = useState<string | null>(null);
+  const [renderBlobUrl, setRenderBlobUrl] = useState<string | null>(null);
+  const [carregantRender, setCarregantRender] = useState<boolean>(false);
+  const [errorRender, setErrorRender] = useState<string | null>(null);
+  const [paginaActual, setPaginaActual] = useState<number>(0);
+  const [totalPagines, setTotalPagines] = useState<number>(1);
+  const [vectorBaseSegments, setVectorBaseSegments] = useState<Array<[number, number, number, number]>>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [zoom, setZoom] = useState<number>(1);
   const [opacitatFons, setOpacitatFons] = useState<number>(85);
@@ -308,6 +315,8 @@ export default function OperariPlanolsPage() {
     try {
       const urlParams = typeof window !== "undefined" ? new URLSearchParams(window.location.search) : null;
       let targetPlanolId = urlParams?.get("planol");
+      const targetOrdreId = urlParams?.get("ordre_id");
+      if (targetOrdreId) setOrdreTreballId(targetOrdreId);
 
       // Consultar plànols base disponibles de l'empresa
       const plansList = await apiFetch<PlanolBaseUI[]>("/operari/planols/disponibles").catch(() => []);
@@ -392,6 +401,134 @@ export default function OperariPlanolsPage() {
     carregarDades();
   }, []);
 
+  // Carregar i renderitzar el plànol base amb autenticació real (Bearer + X-Empresa-ID -> Blob URL)
+  useEffect(() => {
+    if (!planolActiuId) {
+      setRenderBlobUrl((prev) => {
+        if (prev) URL.revokeObjectURL(prev);
+        return null;
+      });
+      setVectorBaseSegments([]);
+      setErrorRender(null);
+      return;
+    }
+
+    let cancelled = false;
+    const carregarFitxerBase = async () => {
+      setCarregantRender(true);
+      setErrorRender(null);
+      try {
+        const baseUrl = getApiBaseUrl();
+        const token = getAuthToken();
+        const tenantId = extractTenantId();
+        const headers: Record<string, string> = {};
+        if (token) headers["Authorization"] = `Bearer ${token}`;
+        if (tenantId) {
+          headers["X-Empresa-ID"] = tenantId;
+          headers["X-Tenant-ID"] = tenantId;
+        }
+
+        const tipus = (planolActiuInfo?.tipus_fitxer || "").toUpperCase();
+        const isVector = ["DXF", "DWG", "GEOJSON", "JSON"].includes(tipus);
+
+        if (isVector) {
+          setRenderBlobUrl((prev) => {
+            if (prev) URL.revokeObjectURL(prev);
+            return null;
+          });
+          const resVec = await fetch(`${baseUrl}/operari/planols/${planolActiuId}/fitxer`, {
+            headers,
+            credentials: "include",
+          });
+          if (!resVec.ok) {
+            throw new Error(`No s'ha pogut carregar el fitxer vectorial (HTTP ${resVec.status}).`);
+          }
+          const text = await resVec.text();
+          if (cancelled) return;
+
+          const segs: Array<[number, number, number, number]> = [];
+          if (tipus === "GEOJSON" || tipus === "JSON") {
+            const parsed = JSON.parse(text);
+            const feats = parsed?.features || (parsed?.type === "Feature" ? [parsed] : []);
+            const pts: Array<[number, number]> = [];
+            for (const f of feats) {
+              const g = f?.geometry;
+              if (g?.type === "LineString" && Array.isArray(g.coordinates)) {
+                for (const c of g.coordinates) {
+                  if (Array.isArray(c) && c.length >= 2) pts.push([Number(c[0]), Number(c[1])]);
+                }
+              }
+            }
+            if (pts.length >= 2) {
+              const xs = pts.map((p) => p[0]);
+              const ys = pts.map((p) => p[1]);
+              const minX = Math.min(...xs);
+              const maxX = Math.max(...xs);
+              const minY = Math.min(...ys);
+              const maxY = Math.max(...ys);
+              const spanX = maxX - minX || 1;
+              const spanY = maxY - minY || 1;
+              for (const f of feats) {
+                const g = f?.geometry;
+                if (g?.type === "LineString" && Array.isArray(g.coordinates)) {
+                  for (let i = 0; i < g.coordinates.length - 1; i++) {
+                    const a = g.coordinates[i];
+                    const b = g.coordinates[i + 1];
+                    segs.push([
+                      5 + ((Number(a[0]) - minX) / spanX) * 90,
+                      95 - ((Number(a[1]) - minY) / spanY) * 90,
+                      5 + ((Number(b[0]) - minX) / spanX) * 90,
+                      95 - ((Number(b[1]) - minY) / spanY) * 90,
+                    ]);
+                  }
+                }
+              }
+            }
+          }
+          setVectorBaseSegments(segs);
+          setTotalPagines(1);
+        } else {
+          setVectorBaseSegments([]);
+          const resImg = await fetch(
+            `${baseUrl}/operari/planols/${planolActiuId}/render?pagina=${paginaActual}`,
+            { headers, credentials: "include" }
+          );
+          if (!resImg.ok) {
+            throw new Error(
+              resImg.status === 503
+                ? "El disc dur de l'oficina no respon ara mateix (Node Offline)."
+                : `No s'ha pogut renderitzar el plànol (HTTP ${resImg.status}).`
+            );
+          }
+          const pagesHdr = resImg.headers.get("X-Total-Pages");
+          if (pagesHdr && !cancelled) {
+            setTotalPagines(Math.max(1, parseInt(pagesHdr, 10) || 1));
+          }
+          const blob = await resImg.blob();
+          if (cancelled) return;
+          const objUrl = URL.createObjectURL(blob);
+          setRenderBlobUrl((prev) => {
+            if (prev) URL.revokeObjectURL(prev);
+            return objUrl;
+          });
+        }
+      } catch (err: unknown) {
+        if (!cancelled) {
+          setErrorRender(
+            err instanceof Error ? err.message : "No s'ha pogut mostrar el plànol base."
+          );
+        }
+      } finally {
+        if (!cancelled) setCarregantRender(false);
+      }
+    };
+
+    carregarFitxerBase();
+    return () => {
+      cancelled = true;
+    };
+  }, [planolActiuId, planolActiuInfo?.tipus_fitxer, paginaActual]);
+
   // Cleanup de la llanterna quan es tanca la vista
   useEffect(() => {
     return () => {
@@ -436,6 +573,8 @@ export default function OperariPlanolsPage() {
   // Canvi de plànol actiu
   const handleCanviarPlanol = (nouId: string) => {
     setPlanolActiuId(nouId);
+    setPaginaActual(0);
+    setTotalPagines(1);
     const found = planolsDisponibles.find((p) => p.id === nouId);
     setPlanolActiuInfo(found || null);
     setPuntsLiniaEnCurs([]);
@@ -650,6 +789,7 @@ export default function OperariPlanolsPage() {
       gruix_linia: 3,
       es_tancada: false,
       visible: true,
+      ordre_treball_id: ordreTreballId || undefined,
       dades_geojson: {
         type: "FeatureCollection",
         features: initialFeatures,
@@ -694,6 +834,7 @@ export default function OperariPlanolsPage() {
 
       await addToSyncQueue("POST_PLANOL_CAPA", {
         planol_id: planolActiuId,
+        ordre_treball_id: ordreTreballId || null,
         capa: novaCapaLocal,
       }).catch(console.error);
       mostrarNotificacio(`Capa creada localment (Mode Fora de Línia).`);
@@ -950,6 +1091,30 @@ export default function OperariPlanolsPage() {
               className="w-16 h-1 accent-sky-400 cursor-pointer"
             />
           </div>
+
+          {totalPagines > 1 && (
+            <div className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-slate-900/90 backdrop-blur-md border border-slate-700 text-[10px] font-mono text-white shadow">
+              <button
+                type="button"
+                disabled={paginaActual <= 0}
+                onClick={() => setPaginaActual((p) => Math.max(0, p - 1))}
+                className="px-1 disabled:opacity-30 cursor-pointer"
+              >
+                ‹
+              </button>
+              <span>
+                Pàg. {paginaActual + 1}/{totalPagines}
+              </span>
+              <button
+                type="button"
+                disabled={paginaActual >= totalPagines - 1}
+                onClick={() => setPaginaActual((p) => Math.min(totalPagines - 1, p + 1))}
+                className="px-1 disabled:opacity-30 cursor-pointer"
+              >
+                ›
+              </button>
+            </div>
+          )}
         </div>
 
         {/* Floating Right Controls (Zoom +/-) */}
@@ -1002,30 +1167,45 @@ export default function OperariPlanolsPage() {
               }}
             />
 
-            {/* Document Real / Plànol Base */}
+            {/* Document Real / Plànol Base Renderitzat amb Autenticació (Blob URL) */}
             {planolActiuId ? (
-              <div className="w-full h-full flex items-center justify-center">
-                {planolActiuInfo?.tipus_fitxer === "PDF" ? (
-                  <object
-                    data={`${getApiBaseUrl()}/operari/planols/${planolActiuId}/fitxer#toolbar=0&navpanes=0`}
-                    type="application/pdf"
-                    className="w-full h-full pointer-events-none opacity-90"
-                  >
-                    <div className="flex flex-col items-center justify-center h-full text-slate-400 text-xs">
-                      <FileText className="w-10 h-10 text-sky-400/50 mb-2" />
-                      <span>{planolActiuInfo.titol}</span>
-                    </div>
-                  </object>
-                ) : (
+              <div className="w-full h-full flex items-center justify-center relative">
+                {carregantRender ? (
+                  <div className="flex flex-col items-center justify-center gap-2 text-slate-300 text-xs">
+                    <RefreshCw className="w-6 h-6 text-sky-400 animate-spin" />
+                    <span>Renderitzant plànol base...</span>
+                  </div>
+                ) : errorRender ? (
+                  <div className="flex flex-col items-center justify-center text-center p-6 text-amber-300 text-xs gap-2">
+                    <AlertTriangle className="w-7 h-7 text-amber-400" />
+                    <p className="font-bold">No s&apos;ha pogut mostrar el plànol</p>
+                    <p className="text-[11px] text-slate-300 max-w-xs">{errorRender}</p>
+                  </div>
+                ) : renderBlobUrl ? (
                   <img
-                    src={`${getApiBaseUrl()}/operari/planols/${planolActiuId}/fitxer`}
-                    alt={planolActiuInfo?.titol || "Plànol"}
-                    onError={(e) => {
-                      // Fallback si no és raster directe
-                      (e.currentTarget as any).style.display = "none";
-                    }}
-                    className="max-w-full max-h-full object-contain pointer-events-none"
+                    src={renderBlobUrl}
+                    alt={planolActiuInfo?.titol || "Plànol base"}
+                    className="w-full h-full object-contain pointer-events-none select-none"
                   />
+                ) : vectorBaseSegments.length > 0 ? (
+                  <svg viewBox="0 0 100 100" className="w-full h-full pointer-events-none">
+                    {vectorBaseSegments.map((seg, idx) => (
+                      <line
+                        key={idx}
+                        x1={seg[0]}
+                        y1={seg[1]}
+                        x2={seg[2]}
+                        y2={seg[3]}
+                        stroke="#38bdf8"
+                        strokeWidth="0.45"
+                      />
+                    ))}
+                  </svg>
+                ) : (
+                  <div className="flex flex-col items-center justify-center h-full text-slate-400 text-xs">
+                    <FileText className="w-10 h-10 text-sky-400/50 mb-2" />
+                    <span>{planolActiuInfo?.titol || "Plànol base"}</span>
+                  </div>
                 )}
               </div>
             ) : (

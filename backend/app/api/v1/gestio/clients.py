@@ -397,6 +397,20 @@ class PressupostFitxa360(BaseModel):
     created_at: datetime
 
 
+class FacturaClientFitxa360(BaseModel):
+    id: uuid.UUID
+    serie: str
+    numero_factura: int
+    estat_document: str
+    estat_cobrament: str = "PENDENT"
+    data_emissio: Optional[str] = None
+    data_venciment: Optional[str] = None
+    base_imposable: float = 0.0
+    quota_iva: float = 0.0
+    liquid_exigible: float = 0.0
+    ordres_treball_codis: List[str] = []
+
+
 class Fitxa360Resum(BaseModel):
     total_intervencions: int
     total_incidencies: int
@@ -412,6 +426,7 @@ class Fitxa360Response(BaseModel):
     incidencies: List[IncidenciaFitxa360]
     alertes_garantia: List[Dict[str, Any]]
     pressupostos: List[PressupostFitxa360] = []
+    factures: List[FacturaClientFitxa360] = []
     resum: Fitxa360Resum
 
 
@@ -623,7 +638,7 @@ async def obtenir_fitxa_360_client(
                 }
             )
 
-    # 7. Obtenir Pressupostos del client
+    # 7. Obtenir Pressupostos del client (imports comercials visibles per a tots 3 rols)
     stmt_pres = (
         select(Pressupost)
         .where(
@@ -638,11 +653,47 @@ async def obtenir_fitxa_360_client(
             id=p.id,
             numero=p.numero,
             estat=p.estat,
-            total=None if is_enginyer else float(p.total or 0.0),
+            total=float(p.total or 0.0),
             created_at=p.created_at,
         )
         for p in pres_rows
     ]
+
+    # 8. Obtenir Pre-factures i Factures relacionades amb les tasques d'aquest client
+    # (via funció SECURITY DEFINER acotada al client/OT per preservar economics_boss_only sobre comptabilitat global)
+    from sqlalchemy import text as sa_text
+
+    res_facs = await db.execute(
+        sa_text(
+            "SELECT public.obtenir_factures_comercials_client(CAST(:emp_id AS uuid), CAST(:cli_id AS uuid))"
+        ),
+        {"emp_id": str(empresa_uuid), "cli_id": str(client_id)},
+    )
+    raw_facs = res_facs.scalar_one_or_none()
+    factures_fitxa: List[FacturaClientFitxa360] = []
+    if isinstance(raw_facs, list):
+        for f_item in raw_facs:
+            if not isinstance(f_item, dict):
+                continue
+            factures_fitxa.append(
+                FacturaClientFitxa360(
+                    id=uuid.UUID(str(f_item["id"])),
+                    serie=str(f_item.get("serie") or ""),
+                    numero_factura=int(f_item.get("numero_factura") or 0),
+                    estat_document=str(f_item.get("estat_document") or ""),
+                    estat_cobrament=str(f_item.get("estat_cobrament") or "PENDENT"),
+                    data_emissio=str(f_item["data_emissio"]) if f_item.get("data_emissio") else None,
+                    data_venciment=(
+                        str(f_item["data_venciment"]) if f_item.get("data_venciment") else None
+                    ),
+                    base_imposable=float(f_item.get("base_imposable") or 0.0),
+                    quota_iva=float(f_item.get("quota_iva") or 0.0),
+                    liquid_exigible=float(f_item.get("liquid_exigible") or 0.0),
+                    ordres_treball_codis=[
+                        str(c) for c in (f_item.get("ordres_treball_codis") or [])
+                    ],
+                )
+            )
 
     resum = Fitxa360Resum(
         total_intervencions=len(intervencions),
@@ -672,6 +723,7 @@ async def obtenir_fitxa_360_client(
         incidencies=incidencies,
         alertes_garantia=alertes,
         pressupostos=pressupostos_fitxa,
+        factures=factures_fitxa,
         resum=resum,
     )
 

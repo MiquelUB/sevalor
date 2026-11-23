@@ -191,8 +191,8 @@ async def test_pas1_02_feina_3_fotos_qa_i_tancament_al_disc_client(setup_pas1_op
         assert res_fail.status_code == 400
         assert "Falten fotografies requerides" in res_fail.json()["detail"]
 
-        # 2. Pujar Foto 1: INICIAL
-        f_inicial = b"FOTO_INICIAL_SAMPLE_BYTES"
+        # 2. Pujar Foto 1: INICIAL (WebP real amb Magic Bytes)
+        f_inicial = b"RIFF\x24\x00\x00\x00WEBPVP8 " + b"\x01" * 30
         res_f1 = await client.post(
             f"/operari/feines/{ot_id}/fotos",
             data={"tipus": "INICIAL"},
@@ -201,8 +201,8 @@ async def test_pas1_02_feina_3_fotos_qa_i_tancament_al_disc_client(setup_pas1_op
         )
         assert res_f1.status_code == 200, res_f1.text
 
-        # 3. Pujar Foto 2: INTERMEDIA
-        f_intermedia = b"FOTO_INTERMEDIA_SAMPLE_BYTES"
+        # 3. Pujar Foto 2: INTERMEDIA (WebP real amb Magic Bytes)
+        f_intermedia = b"RIFF\x24\x00\x00\x00WEBPVP8 " + b"\x02" * 30
         res_f2 = await client.post(
             f"/operari/feines/{ot_id}/fotos",
             data={"tipus": "INTERMEDIA"},
@@ -211,8 +211,8 @@ async def test_pas1_02_feina_3_fotos_qa_i_tancament_al_disc_client(setup_pas1_op
         )
         assert res_f2.status_code == 200, res_f2.text
 
-        # 4. Pujar Foto 3: FINAL
-        f_final = b"FOTO_FINAL_SAMPLE_BYTES"
+        # 4. Pujar Foto 3: FINAL (WebP real amb Magic Bytes)
+        f_final = b"RIFF\x24\x00\x00\x00WEBPVP8 " + b"\x03" * 30
         res_f3 = await client.post(
             f"/operari/feines/{ot_id}/fotos",
             data={"tipus": "FINAL"},

@@ -251,11 +251,12 @@ async def test_fase2_semafor_3_fotos_i_bloqueig_tancament(
         assert res_tancar_fail.status_code == 400
         assert "control de qualitat" in res_tancar_fail.json().get("detail", "").lower()
 
-        # 2. Pujar Foto INICIAL
+        # 2. Pujar Foto INICIAL (WebP real amb Magic Bytes)
+        valid_webp = b"RIFF\x24\x00\x00\x00WEBPVP8 " + b"\x00" * 30
         res_f1 = await client.post(
             f"/api/v1/operari/feines/{data['ot_id']}/fotos",
             data={"tipus": "INICIAL"},
-            files={"foto": ("inicial.webp", b"FOTO_INICIAL_BYTES", "image/webp")},
+            files={"foto": ("inicial.webp", valid_webp, "image/webp")},
             headers={"Authorization": f"Bearer {data['jwt_token']}"},
         )
         assert res_f1.status_code == 200
@@ -272,7 +273,7 @@ async def test_fase2_semafor_3_fotos_i_bloqueig_tancament(
         res_f2 = await client.post(
             f"/api/v1/operari/feines/{data['ot_id']}/fotos",
             data={"tipus": "INTERMEDIA"},
-            files={"foto": ("intermedia.webp", b"FOTO_INTERMEDIA_BYTES", "image/webp")},
+            files={"foto": ("intermedia.webp", valid_webp, "image/webp")},
             headers={"Authorization": f"Bearer {data['jwt_token']}"},
         )
         assert res_f2.status_code == 200
@@ -281,7 +282,7 @@ async def test_fase2_semafor_3_fotos_i_bloqueig_tancament(
         res_f3 = await client.post(
             f"/api/v1/operari/feines/{data['ot_id']}/fotos",
             data={"tipus": "FINAL"},
-            files={"foto": ("final.webp", b"FOTO_FINAL_BYTES", "image/webp")},
+            files={"foto": ("final.webp", valid_webp, "image/webp")},
             headers={"Authorization": f"Bearer {data['jwt_token']}"},
         )
         assert res_f3.status_code == 200
@@ -294,13 +295,17 @@ async def test_fase2_semafor_3_fotos_i_bloqueig_tancament(
         assert res_estat_final.status_code == 200
         assert res_estat_final.json()["protocol_complet"] is True
 
-        # 5. Ara que les 3 fotos estan pujades, tancar l'ordre satisfactòriament
+        # 5. Ara que les 3 fotos estan pujades, tancar l'ordre satisfactòriament amb PNG real
+        valid_sig_png_b64 = (
+            "data:image/png;base64,"
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+        )
         res_tancar_ok = await client.put(
             f"/api/v1/operari/feines/{data['ot_id']}/finalitzar",
             json={
                 "hores": 2.5,
                 "observacions": "Reparació completada amb èxit",
-                "signatura_base64": "data:image/png;base64,SIGNATURA_TEST",
+                "signatura_base64": valid_sig_png_b64,
             },
             headers={"Authorization": f"Bearer {data['jwt_token']}"},
         )

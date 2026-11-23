@@ -470,7 +470,7 @@ async def test_tarifa_real_barema_panell_control_i_cost_operari_sense_hardcode(
 
         res_eng_det = await client.get(f"/gestio/feines/{ot_id}", headers=h_eng)
         assert res_eng_det.status_code == 200
-        assert res_eng_det.json()["preu_venda_hora_aplicat"] is None
+        assert res_eng_det.json()["preu_venda_hora_aplicat"] == pytest.approx(62.5, abs=0.01)
 
 
 @pytest.mark.asyncio

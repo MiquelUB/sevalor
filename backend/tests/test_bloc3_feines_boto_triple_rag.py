@@ -386,14 +386,14 @@ async def test_bloc3_fr012_permis_conduir_i_enginyer_veto_tarifa(
         ot_id = res_ok.json()["id"]
         assert res_ok.json()["preu_venda_hora_aplicat"] is not None
 
-        # 3. Rol ENGINYER no veu tarifa/hora en llistat ni detall
+        # 3. Rol ENGINYER veu tarifa comercial PVP/h de la feina (sense costos interns ni marges)
         res_list_eng = await ac.get("/api/v1/gestio/feines", headers=eng_headers)
         assert res_list_eng.status_code == 200
-        assert res_list_eng.json()[0]["preu_venda_hora_aplicat"] is None
+        assert res_list_eng.json()[0]["preu_venda_hora_aplicat"] is not None
 
         res_det_eng = await ac.get(f"/api/v1/gestio/feines/{ot_id}", headers=eng_headers)
         assert res_det_eng.status_code == 200
-        assert res_det_eng.json()["preu_venda_hora_aplicat"] is None
+        assert res_det_eng.json()["preu_venda_hora_aplicat"] is not None
 
 
 @pytest.mark.asyncio

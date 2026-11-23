@@ -28,7 +28,7 @@ import {
   Square,
 } from "lucide-react";
 import CameraCapture from "@/components/CameraCapture";
-import { apiFetch } from "@/lib/api";
+import { apiFetch, extractTenantId, getApiBaseUrl, getAuthToken } from "@/lib/api";
 import { db } from "@/lib/offline/db";
 import { encryptWithPin, decryptWithPin } from "@/lib/crypto";
 
@@ -1048,6 +1048,48 @@ export default function LlistaMaquinesPage() {
             </div>
           </div>
 
+          {/* Banner Guia de Tancament i Signatura del Client quan el cronòmetre està aturat (PAUSADA) */}
+          {ordre.estat === "PAUSADA" && (
+            <div
+              data-testid="banner-tancament-signatura"
+              className={`p-4 rounded-xl border shadow-sm space-y-3 ${
+                estatFotos.protocol_complet
+                  ? "bg-secondary-container/15 border-secondary-container/45"
+                  : "bg-surface-container-low dark:bg-slate-800/70 border-outline-variant/35"
+              }`}
+            >
+              <div className="flex items-start gap-2.5">
+                <CheckCircle2
+                  className={`w-5 h-5 shrink-0 mt-0.5 ${
+                    estatFotos.protocol_complet ? "text-secondary" : "text-on-surface-variant"
+                  }`}
+                />
+                <div className="flex-1">
+                  <h4 className="text-xs font-extrabold uppercase tracking-wider text-primary dark:text-white">
+                    {estatFotos.protocol_complet
+                      ? "A punt per a Signatura del Client i Tancament"
+                      : "Temps registrat — Completa les 3 Fotos QA abans de Signar"}
+                  </h4>
+                  <p className="text-[11px] text-on-surface-variant dark:text-slate-300 mt-0.5 leading-relaxed">
+                    {estatFotos.protocol_complet
+                      ? "El cronòmetre s'ha aturat i les 3 fotografies QA estan desades. Recull la signatura del client, les observacions tècniques i els tiquets de l'ordre per concloure la tasca."
+                      : `Encara falten ${estatFotos.falten.length} fotografia(es) del protocol QA (${estatFotos.falten.join(", ")}) per habilitar el tancament amb signatura.`}
+                  </p>
+                </div>
+              </div>
+              {estatFotos.protocol_complet && (
+                <Link
+                  href={`/operari/feines/${ordre.id}/tancar`}
+                  data-testid="cta-banner-tancar-signatura"
+                  className="w-full py-3 px-4 rounded-xl bg-primary hover:bg-primary-container text-white text-xs font-extrabold uppercase tracking-wider flex items-center justify-center gap-2 shadow-sm transition-all active:scale-95"
+                >
+                  <CheckCircle2 className="w-4 h-4 text-secondary-container" />
+                  <span>Recollir Signatura del Client i Tancar Feina</span>
+                </Link>
+              )}
+            </div>
+          )}
+
           {/* Botons d'Acció Ràpida de l'Operari (Stitch 3-Column Action Grid) */}
           <div className="grid grid-cols-3 gap-2.5">
             <button
@@ -1145,15 +1187,37 @@ export default function LlistaMaquinesPage() {
                     <Layers className="w-3.5 h-3.5" />
                     <span>Editar As-Built</span>
                   </Link>
-                  <a
-                    href={`/api/v1/operari/planols/${ordre.planol_id}/fitxer`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="px-2.5 py-1.5 rounded-lg border border-outline-variant/60 bg-surface-container-lowest text-on-surface hover:bg-surface-container text-xs font-semibold flex items-center gap-1 transition-all"
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      if (!ordre.planol_id) return;
+                      try {
+                        const token = getAuthToken();
+                        const tenantId = extractTenantId();
+                        const headers: Record<string, string> = {};
+                        if (token) headers["Authorization"] = `Bearer ${token}`;
+                        if (tenantId) {
+                          headers["X-Empresa-ID"] = tenantId;
+                          headers["X-Tenant-ID"] = tenantId;
+                        }
+                        const res = await fetch(
+                          `${getApiBaseUrl()}/operari/planols/${ordre.planol_id}/fitxer`,
+                          { headers, credentials: "include" }
+                        );
+                        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                        const blob = await res.blob();
+                        const url = URL.createObjectURL(blob);
+                        window.open(url, "_blank", "noopener,noreferrer");
+                        setTimeout(() => URL.revokeObjectURL(url), 60_000);
+                      } catch {
+                        alert("No s'ha pogut obrir el fitxer original del plànol.");
+                      }
+                    }}
+                    className="px-2.5 py-1.5 rounded-lg border border-outline-variant/60 bg-surface-container-lowest text-on-surface hover:bg-surface-container text-xs font-semibold flex items-center gap-1 transition-all cursor-pointer"
                   >
                     <ExternalLink className="w-3 h-3 text-primary" />
                     <span>PDF</span>
-                  </a>
+                  </button>
                 </div>
               </div>
               <div className="p-2.5 bg-surface-container-low dark:bg-slate-800/60 rounded-lg text-xs font-medium text-slate-800 dark:text-slate-200">
@@ -1170,7 +1234,7 @@ export default function LlistaMaquinesPage() {
                 Materials Assignats ({ordre.linies_picking?.length || 0})
               </h3>
               <Link
-                href="/operari/material"
+                href={`/operari/material?ordre_id=${ordre.id}`}
                 className="text-[11px] font-bold text-secondary hover:underline"
               >
                 Anar a Picking →

@@ -1,8 +1,8 @@
 import os
 import uuid
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlalchemy import select
@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db_with_tenant_context
 from app.core.security import require_roles
-from app.models.models import CapaAnotacio, CapaVectorial, Empresa, PlanolBase
+from app.models.models import CapaAnotacio, CapaVectorial, Empresa, OrdreTreball, PlanolBase
 from app.services.sovereign_storage import SovereignStorageGateway
 from app.services.vault_tunnel import (
     VaultTunnelError,
@@ -34,6 +34,7 @@ class CapaVectorialCreate(BaseModel):
     gruix_linia: int = 3
     es_tancada: bool = False
     visible: bool = True
+    ordre_treball_id: Optional[uuid.UUID] = None
     dades_geojson: Dict[str, Any] | None = None
     geometries_geojson: Dict[str, Any] | None = None
 
@@ -46,6 +47,7 @@ class CapaVectorialResponse(BaseModel):
     gruix_linia: int
     es_tancada: bool
     visible: bool
+    ordre_treball_id: Optional[uuid.UUID] = None
     dades_geojson: Dict[str, Any]
 
 
@@ -90,13 +92,28 @@ async def crear_capa_operari(
     if not empresa_id or empresa_id == "undefined":
         raise HTTPException(status_code=401, detail="Context d'empresa no trobat")
 
+    emp_uuid = uuid.UUID(empresa_id)
     planol_res = await db.execute(
         select(PlanolBase).where(
-            PlanolBase.id == planol_id, PlanolBase.empresa_id == uuid.UUID(empresa_id)
+            PlanolBase.id == planol_id, PlanolBase.empresa_id == emp_uuid
         )
     )
     if not planol_res.scalars().first():
         raise HTTPException(status_code=404, detail="Plànol no trobat")
+
+    ot_uuid: Optional[uuid.UUID] = None
+    if payload.ordre_treball_id is not None:
+        ot_check = (
+            await db.execute(
+                select(OrdreTreball.id).where(
+                    OrdreTreball.id == payload.ordre_treball_id,
+                    OrdreTreball.empresa_id == emp_uuid,
+                )
+            )
+        ).scalar_one_or_none()
+        if ot_check is None:
+            raise HTTPException(status_code=404, detail="Ordre de treball no trobada")
+        ot_uuid = payload.ordre_treball_id
 
     geojson = (
         payload.geometries_geojson
@@ -105,8 +122,9 @@ async def crear_capa_operari(
     )
 
     nova_capa = CapaVectorial(
-        empresa_id=uuid.UUID(empresa_id),
+        empresa_id=emp_uuid,
         planol_base_id=planol_id,
+        ordre_treball_id=ot_uuid,
         nom=payload.nom,
         disciplina=payload.disciplina or "OBRA_CIVIL",
         es_immutable=payload.es_tancada,
@@ -128,6 +146,9 @@ async def crear_capa_operari(
         dades={
             "id": str(nova_capa.id),
             "planol_base_id": str(nova_capa.planol_base_id),
+            "ordre_treball_id": str(nova_capa.ordre_treball_id)
+            if nova_capa.ordre_treball_id
+            else None,
             "nom": nova_capa.nom,
             "disciplina": nova_capa.disciplina,
             "color_hex": nova_capa.color_hex,
@@ -147,6 +168,7 @@ async def crear_capa_operari(
         gruix_linia=nova_capa.gruix_linia,
         es_tancada=nova_capa.es_immutable,
         visible=nova_capa.visible,
+        ordre_treball_id=nova_capa.ordre_treball_id,
         dades_geojson=nova_capa.geometries_geojson,
     )
 
@@ -155,6 +177,7 @@ async def crear_capa_operari(
 async def llistar_capes_operari_per_planol(
     planol_id: uuid.UUID,
     request: Request,
+    ordre_treball_id: Optional[uuid.UUID] = None,
     db: AsyncSession = Depends(get_db_with_tenant_context),
 ):
     """Llista les capes vectorials d'un plànol per a la PWA operari."""
@@ -162,12 +185,13 @@ async def llistar_capes_operari_per_planol(
     if not empresa_id or empresa_id == "undefined":
         raise HTTPException(status_code=401, detail="Context d'empresa no trobat")
 
-    result = await db.execute(
-        select(CapaVectorial).where(
-            CapaVectorial.planol_base_id == planol_id,
-            CapaVectorial.empresa_id == uuid.UUID(empresa_id),
-        )
+    stmt = select(CapaVectorial).where(
+        CapaVectorial.planol_base_id == planol_id,
+        CapaVectorial.empresa_id == uuid.UUID(empresa_id),
     )
+    if ordre_treball_id is not None:
+        stmt = stmt.where(CapaVectorial.ordre_treball_id == ordre_treball_id)
+    result = await db.execute(stmt)
     return result.scalars().all()
 
 
@@ -305,6 +329,93 @@ async def descarregar_fitxer_planol_operari(
         fitxer_path=planol.fitxer_path,
         media_type=media_type,
         disposition=content_disposition_type,
+    )
+
+
+@router.api_route("/{planol_id}/render", methods=["GET", "HEAD"])
+async def renderitzar_planol_operari(
+    planol_id: uuid.UUID,
+    request: Request,
+    pagina: int = 0,
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+) -> Response:
+    """Renderitza el plànol base en format imatge (PNG) en memòria per a visualització mòbil PWA."""
+    empresa_id = request.state.empresa_id
+    if not empresa_id or empresa_id == "undefined":
+        raise HTTPException(status_code=401, detail="Context d'empresa no trobat")
+
+    stmt = select(PlanolBase).where(
+        PlanolBase.id == planol_id, PlanolBase.empresa_id == uuid.UUID(empresa_id)
+    )
+    planol = (await db.execute(stmt)).scalars().first()
+    if not planol or not planol.fitxer_path:
+        raise HTTPException(status_code=404, detail="Fitxer de plànol no trobat")
+
+    raw_bytes, filename = await SovereignStorageGateway.obtenir_bytes_fitxer(
+        db, empresa_id, planol.fitxer_path
+    )
+    ext = os.path.splitext(filename)[1].lower()
+    if not ext and planol.tipus_fitxer:
+        ext = f".{planol.tipus_fitxer.lower()}"
+
+    if ext == ".pdf":
+        import pymupdf
+
+        doc = pymupdf.open(stream=raw_bytes, filetype="pdf")  # type: ignore[no-untyped-call]
+        if len(doc) == 0:
+            raise HTTPException(status_code=400, detail="El document PDF no conté pàgines")
+        idx = min(max(0, pagina), len(doc) - 1)
+        page = doc[idx]
+        if request.method == "HEAD":
+            return Response(
+                content=b"",
+                media_type="image/png",
+                headers={"X-Total-Pages": str(len(doc))},
+            )
+        pix = page.get_pixmap(dpi=150)
+        return Response(
+            content=pix.tobytes("png"),  # type: ignore[no-untyped-call]
+            media_type="image/png",
+            headers={
+                "Cache-Control": "no-store",
+                "Content-Disposition": f'inline; filename="{filename}.png"',
+                "X-Total-Pages": str(len(doc)),
+                "X-Page-Width": str(pix.width),
+                "X-Page-Height": str(pix.height),
+            },
+        )
+
+    if ext in [".tif", ".tiff"]:
+        import pymupdf
+
+        doc = pymupdf.open(stream=raw_bytes, filetype="tiff")  # type: ignore[no-untyped-call]
+        if len(doc) == 0:
+            raise HTTPException(status_code=400, detail="El fitxer TIFF no conté imatges")
+        page = doc[0]
+        if request.method == "HEAD":
+            return Response(content=b"", media_type="image/png", headers={"X-Total-Pages": "1"})
+        pix = page.get_pixmap(dpi=150)
+        return Response(
+            content=pix.tobytes("png"),  # type: ignore[no-untyped-call]
+            media_type="image/png",
+            headers={
+                "Cache-Control": "no-store",
+                "Content-Disposition": f'inline; filename="{filename}.png"',
+                "X-Total-Pages": "1",
+            },
+        )
+
+    media_types = {
+        ".png": "image/png",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".webp": "image/webp",
+        ".svg": "image/svg+xml",
+    }
+    return Response(
+        content=b"" if request.method == "HEAD" else raw_bytes,
+        media_type=media_types.get(ext, "image/png"),
+        headers={"Cache-Control": "no-store", "X-Total-Pages": "1"},
     )
 
 

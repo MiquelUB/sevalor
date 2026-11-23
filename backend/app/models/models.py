@@ -1158,6 +1158,23 @@ class OrdreTreball(Base):
         Numeric(12, 2), default=0.00, server_default=text("0.00")
     )
     km_imputats: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+    signatura_client_path: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    nom_receptor: Mapped[Optional[str]] = mapped_column(String(150), nullable=True)
+    dni_receptor: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
+    observacions_tancament: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    data_signatura: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    validada_per_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("usuaris.id", ondelete="SET NULL"), nullable=True
+    )
+    data_validacio: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    notes_validacio_tecnica: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    checklist_conciliacio: Mapped[dict] = mapped_column(
+        JSONB, default=dict, server_default=text("'{}'::jsonb"), nullable=False
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
@@ -1315,6 +1332,12 @@ class LiniaPicking(Base):
     )
     quantitat_mermada: Mapped[float] = mapped_column(
         Numeric(12, 3), default=0.0, server_default=text("0")
+    )
+    origen_estoc: Mapped[str] = mapped_column(
+        String(20), default="NAU", server_default="NAU", nullable=False
+    )
+    consum_aplicat_magatzem: Mapped[float] = mapped_column(
+        Numeric(12, 3), default=0.0, server_default=text("0.000"), nullable=False
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

@@ -3,7 +3,7 @@
 import React, { useState } from "react";
 import { CheckCircle2, Camera, Receipt } from "lucide-react";
 import { localDB } from "@/lib/db";
-import { getApiBaseUrl, getAuthToken } from "@/lib/api";
+import { extractTenantId, getApiBaseUrl, getAuthToken } from "@/lib/api";
 import { CAMERA_LIVE_INPUT_PROPS, compressImageToWebP } from "@/lib/media";
 
 type CategoriaTiquet = "CARBURANT" | "FERRETERIA" | "PEATGES" | "DIETES" | "ALTRES";
@@ -16,7 +16,13 @@ const CATEGORIES: { id: CategoriaTiquet; label: string }[] = [
   { id: "ALTRES", label: "Altres" },
 ];
 
-export default function TiquetScanner({ onSaved }: { onSaved?: () => void }) {
+export default function TiquetScanner({
+  onSaved,
+  ordreTreballId,
+}: {
+  onSaved?: () => void;
+  ordreTreballId?: string;
+}) {
   const [categoria, setCategoria] = useState<CategoriaTiquet>("FERRETERIA");
   const [fotoTiquet, setFotoTiquet] = useState<Blob | null>(null);
   const [fotoOdometre, setFotoOdometre] = useState<Blob | null>(null);
@@ -57,9 +63,17 @@ export default function TiquetScanner({ onSaved }: { onSaved?: () => void }) {
         if (fotoOdometre) {
           formData.append("foto_odometre", fotoOdometre, `odo_${nomFitxer}`);
         }
+        if (ordreTreballId) {
+          formData.append("ordre_treball_id", ordreTreballId);
+        }
         const token = getAuthToken();
+        const tenantId = extractTenantId();
         const headers: Record<string, string> = {};
         if (token) headers["Authorization"] = `Bearer ${token}`;
+        if (tenantId) {
+          headers["X-Empresa-ID"] = tenantId;
+          headers["X-Tenant-ID"] = tenantId;
+        }
 
         const res = await fetch(`${getApiBaseUrl()}/operari/tiquets/captura-rapida`, {
           method: "POST",
@@ -71,7 +85,11 @@ export default function TiquetScanner({ onSaved }: { onSaved?: () => void }) {
           const err = await res.json().catch(() => ({}));
           throw new Error(err.detail || "Error en enviar el tiquet.");
         }
-        setStatusMsg(`Enviat (${nomFitxer}) a Gestió per processament OCR.`);
+        setStatusMsg(
+          ordreTreballId
+            ? `Enviat (${nomFitxer}) i vinculat a aquesta ordre de treball.`
+            : `Enviat (${nomFitxer}) a Gestió per processament OCR.`
+        );
       } else {
         let empresaId = "default";
         try {
@@ -97,7 +115,13 @@ export default function TiquetScanner({ onSaved }: { onSaved?: () => void }) {
           id: crypto.randomUUID(),
           bloc_uuid: crypto.randomUUID(),
           acció: "CREAR_TIQUET",
-          payload: { id, categoria, nom_fitxer: nomFitxer, data_captura: new Date().toISOString() },
+          payload: {
+            id,
+            categoria,
+            nom_fitxer: nomFitxer,
+            ordre_treball_id: ordreTreballId || undefined,
+            data_captura: new Date().toISOString(),
+          },
           timestamp: Date.now(),
           intents: 0,
         });
@@ -116,9 +140,16 @@ export default function TiquetScanner({ onSaved }: { onSaved?: () => void }) {
 
   return (
     <div className="flex flex-col gap-4 p-4 rounded-2xl border border-outline-variant/30 bg-surface-container-lowest dark:bg-slate-900 shadow-sm">
-      <div className="flex items-center gap-2 text-primary dark:text-slate-100">
-        <Receipt className="w-5 h-5 text-secondary-container" />
-        <h2 className="text-sm font-extrabold uppercase tracking-wider">Captura Ràpida Zero-Tecleig</h2>
+      <div className="flex items-center justify-between gap-2 text-primary dark:text-slate-100">
+        <div className="flex items-center gap-2">
+          <Receipt className="w-5 h-5 text-secondary-container" />
+          <h2 className="text-sm font-extrabold uppercase tracking-wider">Captura Ràpida Zero-Tecleig</h2>
+        </div>
+        {ordreTreballId && (
+          <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-secondary-container/15 text-secondary border border-secondary-container/30">
+            Vinculat a l&apos;OT
+          </span>
+        )}
       </div>
 
       <div className="grid grid-cols-3 gap-1.5">
