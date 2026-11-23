@@ -9,17 +9,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.db import get_db_with_tenant_context
 from app.core.security import require_roles
 from app.models.models import (
-    Article,
     Client,
     FacturaCapcalera,
-    FacturaLinia,
     FacturaProveidor,
-    FullaPicking,
-    LiniaPicking,
     OrdreTreball,
     RegistreJornadaLaboral,
     Usuari,
 )
+from app.services.magatzem_comptabilitat_service import calcular_cost_i_marge_analitic_ot
 
 router = APIRouter(
     prefix="/gestio/economia",
@@ -69,42 +66,19 @@ async def llistar_rendibilitat(
 
     res = []
     for ordre, client in rows:
-        # Calcular facturat
-        stmt_fact = select(func.coalesce(func.sum(FacturaLinia.subtotal), 0)).where(
-            FacturaLinia.obra_id == ordre.id, FacturaLinia.empresa_id == empresa_uuid
+        analitic = await calcular_cost_i_marge_analitic_ot(
+            db=db,
+            empresa_id=empresa_uuid,
+            ordre_treball_id=ordre.id,
         )
-        facturat = await db.scalar(stmt_fact) or 0.0
-
-        # Cost materials consumits en aquesta ordre
-        stmt_mat = (
-            select(
-                func.coalesce(
-                    func.sum(
-                        (
-                            LiniaPicking.quantitat_carregada_pick_in
-                            - LiniaPicking.quantitat_retornada_pick_out
-                            - LiniaPicking.quantitat_mermada
-                        )
-                        * Article.preu_cost
-                    ),
-                    0,
-                )
-            )
-            .join(FullaPicking, LiniaPicking.picking_id == FullaPicking.id)
-            .join(Article, LiniaPicking.article_id == Article.id)
-            .where(
-                FullaPicking.ordre_treball_id == ordre.id, LiniaPicking.empresa_id == empresa_uuid
-            )
+        desgl = analitic["desglossament_costos"]
+        cost_materials = float(desgl["materials_picking_pmp_eur"]) + float(
+            desgl["mermes_imputades_eur"]
         )
-        cost_materials = await db.scalar(stmt_mat) or 0.0
-
-        # PENDENT_AUDITORIA: Com que no hi ha taulell d'imputació directe d'hores a OrdreTreball,
-        # només tenim RegistreJornadaLaboral general o AuditoriaPostObra.desviacio_hores.
-        # Es manté a 0 segons requeriments de dades reals quan no hi ha vincle.
-        hores_treballades = 0.0
-        cost_operari = 0.0
-
-        marge = float(facturat) - float(cost_materials) - float(cost_operari)
+        cost_operari = float(desgl["ma_obra_real_eur"])
+        hores_treballades = float(analitic.get("hores_treballades_reals", 0.0))
+        facturat = float(analitic["ingressos_nets_eur"])
+        marge = float(analitic["marge_brut_eur"])
 
         res.append(
             RendibilitatObra(
@@ -115,8 +89,8 @@ async def llistar_rendibilitat(
                 client_nom=client.rao_social,
                 hores_treballades=hores_treballades,
                 cost_operari=cost_operari,
-                cost_materials=float(cost_materials),
-                import_facturat=float(facturat),
+                cost_materials=cost_materials,
+                import_facturat=facturat,
                 marge_brut=marge,
             )
         )

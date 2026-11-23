@@ -781,6 +781,8 @@ async def registrar_moviment_estoc(
                 detail=f"Stock insuficient: disponible {disponible}, sol·licitat {quantitat}",
             )
         estoc.quantitat_fisica = float(estoc.quantitat_fisica) - quantitat
+        art_obj.darrer_moviment_sortida = date.today()
+        art_obj.estoc_total_actual = max(0.0, float(art_obj.estoc_total_actual or 0.0) - quantitat)
     elif payload.tipus == "RESERVA":
         disponible = float(estoc.quantitat_fisica) - float(estoc.quantitat_virtual_reservada)
         if quantitat > disponible:
@@ -1175,6 +1177,16 @@ async def confirmar_devolucio(
         estoc.quantitat_cuarentena = float(estoc.quantitat_cuarentena) + float(quantitat_mermada)
 
         if baixa_fisica_total > 0:
+            art_pick = (
+                await db.execute(
+                    select(Article).where(
+                        Article.id == linia.article_id,
+                        Article.empresa_id == emp_uuid,
+                    )
+                )
+            ).scalars().first()
+            if art_pick:
+                art_pick.darrer_moviment_sortida = date.today()
             db.add(
                 MovimentEstoc(
                     empresa_id=emp_uuid,

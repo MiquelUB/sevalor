@@ -1,5 +1,6 @@
 """Servei d'integració analítica Magatzem -> Comptabilitat (Pla 2 / Specs 003, 004, 007, 018)."""
 
+from datetime import date
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 from uuid import UUID, uuid4
@@ -12,6 +13,7 @@ from app.models.models import (
     Article,
     DespesaComptable,
     EstocMagatzem,
+    FacturaCapcalera,
     FacturaLinia,
     FullaPicking,
     Incidencia,
@@ -20,7 +22,9 @@ from app.models.models import (
     MermaInventari,
     MovimentEstoc,
     OrdreTreball,
+    OrdreTreballTramTemps,
     TiquetDespesa,
+    Usuari,
 )
 
 TWO_DEC = Decimal("0.01")
@@ -348,6 +352,7 @@ async def registrar_merma_i_imputar_a_comptabilitat(
     )
     db.add(despesa)
 
+    article.darrer_moviment_sortida = date.today()
     db.add(
         MovimentEstoc(
             id=uuid4(),
@@ -421,6 +426,7 @@ async def calcular_cost_i_marge_analitic_ot(
                     0,
                 )
             )
+            .select_from(LiniaPicking)
             .join(FullaPicking, LiniaPicking.picking_id == FullaPicking.id)
             .join(Article, LiniaPicking.article_id == Article.id)
             .where(
@@ -446,24 +452,77 @@ async def calcular_cost_i_marge_analitic_ot(
     )
     cost_tiquets_ot = _q2((await db.execute(stmt_tiquets)).scalar_one() or 0)
 
-    # 4. Cost mà d'obra i flota
+    # 4. Cost mà d'obra i flota (reals des d'OT, trams de temps o km imputats)
+    trams_ot = (
+        await db.execute(
+            select(OrdreTreballTramTemps).where(
+                OrdreTreballTramTemps.empresa_id == empresa_id,
+                OrdreTreballTramTemps.ordre_treball_id == ordre_treball_id,
+            )
+        )
+    ).scalars().all()
+    hores_trams = Decimal("0.00")
+    cost_trams = Decimal("0.00")
+    op_ids_needed = {t.operari_id for t in trams_ot if t.operari_id}
+    if ot.cap_de_colla_id:
+        op_ids_needed.add(ot.cap_de_colla_id)
+    cost_h_map: dict[UUID, Decimal] = {}
+    if op_ids_needed:
+        ops_rows = (
+            await db.execute(
+                select(Usuari.id, Usuari.cost_hora_eur, Usuari.cost_hora_referencia).where(
+                    Usuari.empresa_id == empresa_id,
+                    Usuari.id.in_(list(op_ids_needed)),
+                )
+            )
+        ).all()
+        for uid, ch_eur, ch_ref in ops_rows:
+            cost_h_map[uid] = Decimal(str(ch_eur if ch_eur is not None else (ch_ref or 0)))
+
+    for t in trams_ot:
+        segons = int(t.durada_segons or 0)
+        if segons <= 0 and t.hora_inici and t.hora_fi:
+            segons = max(0, int((t.hora_fi - t.hora_inici).total_seconds()))
+        if segons > 0:
+            h_t = Decimal(segons) / Decimal("3600")
+            hores_trams += h_t
+            ch = cost_h_map.get(t.operari_id, Decimal("0.00")) if t.operari_id else Decimal("0.00")
+            cost_trams += h_t * ch
+
+    hores_reals = hores_trams if hores_trams > Decimal("0.00") else Decimal(str(ot.hores_imputades_facturables or 0))
     cost_ma_obra = _q2(ot.cost_ma_obra_real or 0)
+    if cost_ma_obra <= Decimal("0.00"):
+        if cost_trams > Decimal("0.00"):
+            cost_ma_obra = _q2(cost_trams)
+        elif hores_reals > Decimal("0.00"):
+            ch_cap = cost_h_map.get(ot.cap_de_colla_id, Decimal("0.00")) if ot.cap_de_colla_id else Decimal("0.00")
+            cost_ma_obra = _q2(hores_reals * ch_cap)
+
     cost_flota = _q2(ot.cost_flota_real or 0)
+    if cost_flota <= Decimal("0.00") and (ot.km_imputats or 0) > 0:
+        cost_flota = _q2(Decimal(int(ot.km_imputats or 0)) * Decimal("0.32"))
 
     cost_total_ot = _q2(cost_picking_net + cost_mermes_ot + cost_tiquets_ot + cost_ma_obra + cost_flota)
 
-    # 5. Ingressos nets (explicit o factures/pressupost)
-    ingressos_nets = _q2(ot.import_pressupostat_net or 0)
-    if ingressos_nets <= 0:
-        facturat_ot = (
-            await db.execute(
-                select(func.coalesce(func.sum(FacturaLinia.subtotal), 0)).where(
-                    FacturaLinia.empresa_id == empresa_id,
-                    FacturaLinia.obra_id == ordre_treball_id,
-                )
+    # 5. Ingressos nets (factures emeses no anul·lades, o pressupost net)
+    facturat_ot = (
+        await db.execute(
+            select(func.coalesce(func.sum(FacturaLinia.subtotal), 0))
+            .join(FacturaCapcalera, FacturaLinia.factura_id == FacturaCapcalera.id)
+            .where(
+                FacturaLinia.empresa_id == empresa_id,
+                FacturaLinia.obra_id == ordre_treball_id,
+                FacturaCapcalera.estat_document == "EMESA",
+                func.coalesce(FacturaCapcalera.estat_anulacio, "ACTIVA") != "ANULADA_VERIFACTU",
             )
-        ).scalar_one()
-        ingressos_nets = _q2(facturat_ot or ot.import_pressupostat or 0)
+        )
+    ).scalar_one()
+    ingressos_facturats = _q2(facturat_ot or 0)
+    ingressos_nets = _q2(ot.import_pressupostat_net or 0)
+    if ingressos_facturats > Decimal("0.00"):
+        ingressos_nets = ingressos_facturats
+    elif ingressos_nets <= Decimal("0.00"):
+        ingressos_nets = _q2(ot.import_pressupostat or ot.pvp_materials_aplicat or 0)
 
     marge_brut_eur = _q2(ingressos_nets - cost_total_ot)
     marge_brut_pct = (
@@ -476,6 +535,7 @@ async def calcular_cost_i_marge_analitic_ot(
         "ordre_treball_id": str(ot.id),
         "codi": ot.codi,
         "titol": ot.titol,
+        "hores_treballades_reals": float(_q2(hores_reals)),
         "ingressos_nets_eur": float(ingressos_nets),
         "desglossament_costos": {
             "materials_picking_pmp_eur": float(cost_picking_net),

@@ -1,6 +1,5 @@
 import os
 import uuid
-import xml.etree.ElementTree as ET
 from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import Any, Dict, List, Optional, Sequence
@@ -29,6 +28,11 @@ from app.schemas.comptabilitat import (
     ContracteMRRAuditoriaDTO,
     DashboardEconomicResponseDTO,
     DespesaComptableDTO,
+    DespesaFixaCreateDTO,
+    DespesaFixaResponseDTO,
+    DespesaFixaUpdateDTO,
+    FacturaAnulacioRequestDTO,
+    FacturaCobramentRequestDTO,
     FacturaEmissioCreateDTO,
     FacturaLiniaCreateDTO,
     FacturaLiniaDetailDTO,
@@ -50,9 +54,14 @@ from app.services.economic_suite_service import (
     EconomicSuiteService,
 )
 from app.services.magatzem_comptabilitat_service import calcular_cost_i_marge_analitic_ot
-from app.services.outbox_aeat import registrar_enviament_outbox
+from app.services.outbox_aeat import despatxar_outbox_empresa, registrar_enviament_outbox
 from app.services.sovereign_storage import SovereignStorageGateway
-from app.services.verifactu import generar_factura_pdf, renderitzar_pdf_factura_verifactu
+from app.services.verifactu import (
+    format_num_serie,
+    generar_factura_pdf,
+    renderitzar_pdf_factura_verifactu,
+)
+from app.services.verifactu_xml import generar_xml_factura_complet_aeat
 
 router = APIRouter(
     prefix="/gestio/comptabilitat",
@@ -75,26 +84,51 @@ class FacturaCreate(BaseModel):
 
 class FacturaResponse(BaseModel):
     id: uuid.UUID
+    exercici: int = 2026
     numero_factura: int
     serie: str
+    num_serie_verifactu: Optional[str] = None
+    tipus_factura: str = "F1"
+    tipus_rectificacio: Optional[str] = None
     client_id: uuid.UUID
     client_nom: Optional[str] = None
     estat_document: str = "EMESA"
+    estat_anulacio: str = "ACTIVA"
     data_emissio: Optional[datetime] = None
+    data_operacio: Optional[date] = None
     data_venciment: Optional[date] = None
     metode_pagament: str = "TRANSFERENCIA"
+    referencia_client: Optional[str] = None
     es_inversio_subjecte_passiu: bool = False
+    causa_exempcio: Optional[str] = None
+    mencio_legal: Optional[str] = None
+    notes_factura: Optional[str] = None
     base_imposable: float = 0.0
     quota_iva: float = 0.0
+    quota_recarrec_equivalencia: float = 0.0
+    import_total_verifactu: float = 0.0
     import_retencio: float = 0.0
     import_retencio_garantia_4308: float = 0.0
     import_suplits: float = 0.0
     liquid_exigible: float = 0.0
     hash_sha256: str
     hash_anterior: Optional[str] = None
+    fecha_hora_huso_gen_registro: Optional[str] = None
+    qr_verifactu_payload: Optional[str] = None
     pdf_path: Optional[str] = None
     estat_cobrament: str
+    import_cobrat: float = 0.0
+    data_cobrament_real: Optional[date] = None
     estat_enviament: str
+    estat_aeat: str = "PENDENT"
+    csv_aeat: Optional[str] = None
+    codi_error_aeat: Optional[str] = None
+    descripcio_error_aeat: Optional[str] = None
+    darrer_error_aeat: Optional[str] = None
+    hash_anulacio_sha256: Optional[str] = None
+    motiu_anulacio: Optional[str] = None
+    factura_rectificada_id: Optional[uuid.UUID] = None
+    motiu_rectificacio: Optional[str] = None
     linies: List[FacturaLiniaDetailDTO] = []
     ordres_treball_codis: List[str] = []
 
@@ -141,12 +175,15 @@ async def _serialitzar_factures(
                 centre_de_cost_id=lin.centre_de_cost_id or "CC-GENERAL",
                 article_id=lin.article_id,
                 concepte=lin.concepte,
+                descripcio_detall=getattr(lin, "descripcio_detall", None),
                 compte_pgc=lin.compte_pgc or "700000",
                 quantitat=float(lin.quantitat or 0),
                 quantitat_merma=float(lin.quantitat_merma or 0),
                 preu_venda_unitari=float(lin.preu_venda_unitari or 0),
                 descompte_aplicat_pct=float(lin.descompte_aplicat_pct or 0),
                 tipus_iva=float(lin.tipus_iva or 0),
+                tipus_recarrec_equivalencia=float(getattr(lin, "tipus_recarrec_equivalencia", 0) or 0),
+                quota_recarrec_linia=float(getattr(lin, "quota_recarrec_linia", 0) or 0),
                 subtotal=float(lin.subtotal or 0),
             )
         )
@@ -175,26 +212,67 @@ async def _serialitzar_factures(
     return [
         FacturaResponse(
             id=f.id,
+            exercici=int(f.exercici or (f.data_emissio.year if f.data_emissio else 2026)),
             numero_factura=f.numero_factura,
             serie=f.serie,
+            num_serie_verifactu=f.num_serie_verifactu
+            or format_num_serie(
+                f.serie,
+                int(f.exercici or (f.data_emissio.year if f.data_emissio else 2026)),
+                f.numero_factura,
+            ),
+            tipus_factura=str(f.tipus_factura or "F1"),
+            tipus_rectificacio=f.tipus_rectificacio,
             client_id=f.client_id,
             client_nom=cli_map.get(f.client_id),
             estat_document=f.estat_document,
+            estat_anulacio=str(f.estat_anulacio or "ACTIVA"),
             data_emissio=f.data_emissio,
+            data_operacio=f.data_operacio,
             data_venciment=f.data_venciment,
             metode_pagament=f.metode_pagament,
+            referencia_client=f.referencia_client,
             es_inversio_subjecte_passiu=bool(f.es_inversio_subjecte_passiu),
+            causa_exempcio=f.causa_exempcio,
+            mencio_legal=f.mencio_legal,
+            notes_factura=f.notes_factura,
             base_imposable=float(f.base_imposable or 0),
             quota_iva=float(f.quota_iva or 0),
+            quota_recarrec_equivalencia=float(f.quota_recarrec_equivalencia or 0),
+            import_total_verifactu=float(
+                f.import_total_verifactu
+                or ((f.base_imposable or 0) + (f.quota_iva or 0) + (f.quota_recarrec_equivalencia or 0))
+            ),
             import_retencio=float(f.import_retencio or 0),
             import_retencio_garantia_4308=float(f.import_retencio_garantia_4308 or 0),
             import_suplits=float(f.import_suplits or 0),
             liquid_exigible=float(f.liquid_exigible or 0),
             hash_sha256=f.hash_sha256,
             hash_anterior=f.hash_anterior,
+            fecha_hora_huso_gen_registro=f.fecha_hora_huso_gen_registro,
+            qr_verifactu_payload=f.qr_verifactu_payload,
             pdf_path=f.pdf_path,
             estat_cobrament=f.estat_cobrament,
+            import_cobrat=float(f.import_cobrat or 0),
+            data_cobrament_real=f.data_cobrament_real,
             estat_enviament=f.estat_enviament,
+            estat_aeat=f.estat_enviament,
+            csv_aeat=f.csv_aeat,
+            codi_error_aeat=(
+                f.darrer_error_aeat.split("]", 1)[0].lstrip("[")
+                if (f.darrer_error_aeat and f.darrer_error_aeat.startswith("[") and "]" in f.darrer_error_aeat)
+                else None
+            ),
+            descripcio_error_aeat=(
+                f.darrer_error_aeat.split("]", 1)[1].strip()
+                if (f.darrer_error_aeat and f.darrer_error_aeat.startswith("[") and "]" in f.darrer_error_aeat)
+                else f.darrer_error_aeat
+            ),
+            darrer_error_aeat=f.darrer_error_aeat,
+            hash_anulacio_sha256=f.hash_anulacio_sha256,
+            motiu_anulacio=f.motiu_anulacio,
+            factura_rectificada_id=f.factura_rectificada_id,
+            motiu_rectificacio=f.motiu_rectificacio,
             linies=lin_map.get(f.id, []),
             ordres_treball_codis=ot_codis_by_fact.get(f.id, []),
         )
@@ -384,17 +462,24 @@ async def crear_factura(
 
     nova_factura = FacturaCapcalera(
         empresa_id=uuid.UUID(empresa_id),
+        exercici=int(resultat_pdf.get("exercici") or data_emissio_dt.year),
         numero_factura=payload.numero_factura,
         serie=payload.serie,
+        num_serie_verifactu=resultat_pdf.get("num_serie_verifactu")
+        or format_num_serie(payload.serie, data_emissio_dt.year, payload.numero_factura),
+        tipus_factura="F1",
         client_id=payload.client_id,
         base_imposable=payload.base_imposable,
         quota_iva=payload.quota_iva,
+        import_total_verifactu=round(payload.base_imposable + payload.quota_iva, 2),
         import_retencio=payload.import_retencio,
         import_suplits=payload.import_suplits,
         liquid_exigible=import_total,
         data_emissio=data_emissio_dt,
         hash_anterior=hash_ant,
         hash_sha256=hash_actual,
+        fecha_hora_huso_gen_registro=resultat_pdf.get("fecha_hora_huso_gen_registro"),
+        qr_verifactu_payload=resultat_pdf.get("qr_content"),
         pdf_path=ruta_pdf_sobirana,
         estat_cobrament="PENDENT",
         estat_enviament="PENDENT",
@@ -459,6 +544,27 @@ async def descarregar_factura_pdf(
         )
     ).scalars().all()
 
+    num_serie_rect = None
+    data_rect = None
+    if factura.factura_rectificada_id:
+        orig_f = (
+            await db.execute(
+                select(FacturaCapcalera).where(
+                    FacturaCapcalera.id == factura.factura_rectificada_id,
+                    FacturaCapcalera.empresa_id == emp_uuid,
+                )
+            )
+        ).scalar_one_or_none()
+        if orig_f:
+            num_serie_rect = orig_f.num_serie_verifactu or format_num_serie(
+                orig_f.serie, int(orig_f.exercici or 2026), int(orig_f.numero_factura)
+            )
+            data_rect = (
+                orig_f.data_emissio.strftime("%Y-%m-%d")
+                if isinstance(orig_f.data_emissio, datetime)
+                else str(orig_f.data_emissio)
+            )
+
     temp_dir = "/tmp/sevalor_factures_temp"
     os.makedirs(temp_dir, exist_ok=True)
     data_em_str = (
@@ -470,26 +576,61 @@ async def descarregar_factura_pdf(
     try:
         renderitzar_pdf_factura_verifactu(
             empresa_nom=emp.nom if emp else "Sevalor Suite",
+            empresa_rao_social=(emp.rao_social_fiscal or emp.nom) if emp else "Sevalor Suite",
+            empresa_eslogan=emp.eslogan_activitat if emp else None,
             empresa_nif=emp.nif if emp else "B00000000",
+            empresa_adreca=emp.adreca if emp else None,
+            empresa_cp=emp.codi_postal if emp else None,
+            empresa_poblacio=emp.poblacio if emp else None,
+            empresa_provincia=emp.provincia if emp else None,
+            empresa_telefon=emp.telefon_facturacio if emp else None,
+            empresa_email=emp.email_facturacio if emp else None,
+            empresa_registre_mercantil=emp.dades_registre_mercantil if emp else None,
+            empresa_titular_compte=emp.titular_compte_bancari if emp else None,
+            empresa_iban=emp.iban_cobrament_xifrat if emp else None,
             primari_hsl=emp.primari_hsl if emp else "150 40 20",
             client_nom=cli.rao_social if cli else "Client",
             client_nif=cli.nif if cli else "00000000X",
+            client_adreca=cli.adreca_fiscal if cli else None,
+            client_cp=cli.codi_postal if cli else None,
+            client_poblacio=cli.poblacio if cli else None,
+            client_provincia=cli.provincia if cli else None,
+            client_email=cli.email if cli else None,
             serie=str(factura.serie),
             numero_factura=int(factura.numero_factura),
+            exercici=int(factura.exercici or 2026),
+            num_serie_verifactu=factura.num_serie_verifactu,
+            tipus_factura=str(factura.tipus_factura or "F1"),
+            tipus_rectificacio=factura.tipus_rectificacio,
+            num_serie_rectificada=num_serie_rect,
+            data_factura_rectificada=data_rect,
+            motiu_rectificacio=factura.motiu_rectificacio,
             data_emissio=data_em_str,
+            data_operacio=factura.data_operacio.isoformat() if factura.data_operacio else None,
             data_venciment=factura.data_venciment.isoformat() if factura.data_venciment else None,
+            metode_pagament=str(factura.metode_pagament or "TRANSFERENCIA"),
+            referencia_comanda=factura.referencia_client,
             estat_document=str(factura.estat_document),
+            estat_anulacio=str(factura.estat_anulacio or "ACTIVA"),
             linies=list(linies),
             base_imposable=float(factura.base_imposable or 0),
             quota_iva=float(factura.quota_iva or 0),
+            quota_recarrec_equivalencia=float(factura.quota_recarrec_equivalencia or 0),
+            import_total_verifactu=float(
+                factura.import_total_verifactu
+                or ((factura.base_imposable or 0) + (factura.quota_iva or 0) + (factura.quota_recarrec_equivalencia or 0))
+            ),
             import_suplits=float(factura.import_suplits or 0),
             import_retencio=float(factura.import_retencio or 0),
             import_retencio_garantia=float(factura.import_retencio_garantia_4308 or 0),
             import_total=float(factura.liquid_exigible or 0),
             es_isp=bool(factura.es_inversio_subjecte_passiu),
+            mencio_legal=factura.mencio_legal,
+            notes_factura=factura.notes_factura,
             hash_actual=str(factura.hash_sha256 or ""),
             hash_anterior=factura.hash_anterior,
             qr_content=factura.qr_verifactu_payload,
+            csv_aeat=factura.csv_aeat,
             ruta_desti=ruta_tmp,
         )
         with open(ruta_tmp, "rb") as f_bin:
@@ -511,60 +652,131 @@ async def descarregar_factura_pdf(
 
 @router.get("/factures/{factura_id}/xml")
 async def exportar_factura_xml(
-    factura_id: uuid.UUID, request: Request, db: AsyncSession = Depends(get_db_with_tenant_context)
+    factura_id: uuid.UUID,
+    request: Request,
+    tipus_registre: Optional[str] = None,
+    sobre_soap: bool = True,
+    db: AsyncSession = Depends(get_db_with_tenant_context),
 ) -> Response:
+    """Exporta l'XML oficial Veri*factu conforme a SuministroLR.xsd i SuministroInformacion.xsd (Ordre HAC/1177/2024)."""
     empresa_id = request.state.empresa_id
     if not empresa_id or empresa_id == "undefined":
         raise HTTPException(status_code=401)
 
+    emp_uuid = uuid.UUID(empresa_id)
     stmt = select(FacturaCapcalera).where(
-        FacturaCapcalera.id == factura_id, FacturaCapcalera.empresa_id == uuid.UUID(empresa_id)
+        FacturaCapcalera.id == factura_id, FacturaCapcalera.empresa_id == emp_uuid
     )
     factura = (await db.execute(stmt)).scalars().first()
     if not factura:
         raise HTTPException(status_code=404, detail="Factura no trobada")
 
-    # Creació de l'estructura XML Veri*factu
-    root = ET.Element("RegistroAlta")
+    emp = (await db.execute(select(Empresa).where(Empresa.id == emp_uuid))).scalar_one_or_none()
+    cli = (
+        await db.execute(
+            select(Client).where(Client.id == factura.client_id, Client.empresa_id == emp_uuid)
+        )
+    ).scalar_one_or_none()
+    linies = (
+        await db.execute(
+            select(FacturaLinia)
+            .where(FacturaLinia.factura_id == factura.id, FacturaLinia.empresa_id == emp_uuid)
+            .order_by(FacturaLinia.created_at.asc())
+        )
+    ).scalars().all()
 
-    # Dades identificatives
-    id_factura = ET.SubElement(root, "IDFactura")
-    num_serie = ET.SubElement(id_factura, "NumSerieFactura")
-    num_serie.text = f"{factura.serie}-{factura.numero_factura}"
-    data_exp = ET.SubElement(id_factura, "FechaExpedicionFactura")
-    data_exp.text = factura.data_emissio.strftime("%d-%m-%Y")
+    orig_f = None
+    if factura.factura_rectificada_id:
+        orig_f = (
+            await db.execute(
+                select(FacturaCapcalera).where(
+                    FacturaCapcalera.id == factura.factura_rectificada_id,
+                    FacturaCapcalera.empresa_id == emp_uuid,
+                )
+            )
+        ).scalar_one_or_none()
 
-    # Desglossament i Inversió de Subjecte Passiu (ISP)
-    desglose = ET.SubElement(root, "Desglose")
-    if factura.quota_iva == 0.0:
-        detalle = ET.SubElement(desglose, "DetalleExenta")
-        causa = ET.SubElement(detalle, "CausaExencion")
-        causa.text = "I"  # Codi I = Inversión Sujeto Pasivo
-        base = ET.SubElement(detalle, "BaseImponible")
-        base.text = f"{factura.base_imposable:.2f}"
-    else:
-        detalle = ET.SubElement(desglose, "DetalleSujeta")
-        base = ET.SubElement(detalle, "BaseImponible")
-        base.text = f"{factura.base_imposable:.2f}"
-        quota = ET.SubElement(detalle, "CuotaRepercutida")
-        quota.text = f"{factura.quota_iva:.2f}"
+    tipus_reg = (
+        tipus_registre.strip().upper()
+        if tipus_registre
+        else ("ANULACION" if getattr(factura, "estat_anulacio", "ACTIVA") == "ANULADA_VERIFACTU" else "ALTA")
+    )
 
-    # Encadenament
-    encadenamiento = ET.SubElement(root, "Encadenamiento")
-    reg_ant = ET.SubElement(encadenamiento, "RegistroAnterior")
-    if factura.hash_anterior:
-        reg_ant.text = factura.hash_anterior
-    else:
-        reg_ant.text = "PRIMER_REGISTRO"
-
-    # Sistema informàtic
-    sist_info = ET.SubElement(root, "SistemaInformatico")
-    hash_node = ET.SubElement(sist_info, "Hash")
-    hash_node.text = factura.hash_sha256
-
-    xml_str = ET.tostring(root, encoding="utf-8", xml_declaration=True).decode("utf-8")
+    xml_str = generar_xml_factura_complet_aeat(
+        factura=factura,
+        empresa=emp,
+        client=cli,
+        linies=linies,
+        factura_rectificada=orig_f,
+        tipus_registre=tipus_reg,
+        sobre_soap=sobre_soap,
+    )
 
     return Response(content=xml_str, media_type="application/xml")
+
+
+@router.post("/factures/{factura_id}/reenviar-aeat")
+async def reenviar_factura_outbox_aeat(
+    factura_id: uuid.UUID,
+    request: Request,
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+) -> Dict[str, Any]:
+    """Força el despatx immediat del registre d'Outbox Veri*factu (ALTA o ANULACION) cap a l'AEAT per a una factura."""
+    empresa_id, _, _ = _get_tenant_and_user(request)
+    factura = (
+        await db.execute(
+            select(FacturaCapcalera).where(
+                FacturaCapcalera.id == factura_id,
+                FacturaCapcalera.empresa_id == empresa_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if not factura:
+        raise HTTPException(status_code=404, detail="Factura no trobada.")
+
+    resultat = await despatxar_outbox_empresa(
+        db=db,
+        empresa_id=empresa_id,
+        factura_id=factura_id,
+    )
+    return {
+        "factura_id": str(factura_id),
+        "num_serie_verifactu": factura.num_serie_verifactu,
+        "estat_aeat": factura.estat_enviament,
+        "estat_enviament": factura.estat_enviament,
+        "csv_aeat": factura.csv_aeat,
+        "darrer_error_aeat": factura.darrer_error_aeat,
+        "despatx": resultat,
+    }
+
+
+@router.get("/verifactu/declaracio-responsable")
+async def obtenir_declaracio_responsable_sif(
+    request: Request,
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+) -> Dict[str, Any]:
+    """Retorna la Declaració Responsable oficial del Sistema Informàtic de Facturació (Art. 15 Ordre HAC/1177/2024)."""
+    from app.core.config import settings
+
+    empresa_id, _, _ = _get_tenant_and_user(request)
+    emp = (await db.execute(select(Empresa).where(Empresa.id == empresa_id))).scalar_one_or_none()
+    return {
+        "nom_sistema": settings.VERIFACTU_SIF_NOMBRE,
+        "id_sistema": settings.VERIFACTU_SIF_ID,
+        "versio": settings.VERIFACTU_SIF_VERSION,
+        "numero_instalacio": settings.VERIFACTU_SIF_NUM_INSTALACION,
+        "productor_nom": settings.VERIFACTU_SIF_NOM_PRODUCTOR,
+        "productor_nif": settings.VERIFACTU_SIF_NIF_PRODUCTOR,
+        "modalitat": "VERI*FACTU",
+        "tipus_us_nomes_verifactu": "S",
+        "tipus_us_multi_ot": "S",
+        "indicador_multiples_ot": "S",
+        "entorn_actiu": (emp.verifactu_entorn if emp and emp.verifactu_entorn else settings.VERIFACTU_ENV),
+        "normativa": "Reial Decret 1007/2023 i Ordre Ministerial HAC/1177/2024",
+        "algoritme_empremta": "SHA-256 (TipoHuella 01 - Art. 13 Ordre HAC/1177/2024)",
+        "especificacio_qr": "ISO/IEC 18004 Nivell M (30x30 mm a 40x40 mm - Art. 20-21 Ordre HAC/1177/2024)",
+        "data_declaracio": "2026-01-01",
+    }
 
 
 # ==============================================================================
@@ -829,6 +1041,9 @@ async def emetre_prefactura_definitiva(
 
 class RectificativaRequestDTO(BaseModel):
     motiu: str = Field(..., min_length=3, max_length=300)
+    tipus_factura: str = Field(default="R1", pattern="^R[1-5]$")
+    tipus_rectificacio: str = Field(default="S", pattern="^[SI]$")
+    linies: Optional[List[FacturaLiniaCreateDTO]] = None
 
 
 @router.post("/factures/{factura_id}/rectificar", status_code=status.HTTP_201_CREATED)
@@ -838,7 +1053,7 @@ async def emetre_rectificativa_serie_r(
     request: Request,
     db: AsyncSession = Depends(get_db_with_tenant_context),
 ) -> Dict[str, Any]:
-    """Emet una factura rectificativa Sèrie R (Spec 007 RF-14) vinculada a una factura emesa."""
+    """Emet una factura rectificativa Sèrie R (Spec 007 RF-14 i Ordre HAC/1177/2024) preservant multi-IVA."""
     empresa_id, usuari_id, _ = _get_tenant_and_user(request)
     orig = (
         await db.execute(
@@ -853,29 +1068,75 @@ async def emetre_rectificativa_serie_r(
     if str(orig.serie or "").upper().startswith("R"):
         raise HTTPException(status_code=400, detail="No es pot rectificar una factura rectificativa.")
 
-    avui = date.today()
-    base_orig = Decimal(str(orig.base_imposable or 0))
-    iva_pct = (
-        Decimal("21.00")
-        if not orig.es_inversio_subjecte_passiu and Decimal(str(orig.quota_iva or 0)) > 0
-        else Decimal("0.00")
+    orig_num_serie = orig.num_serie_verifactu or format_num_serie(
+        orig.serie, int(orig.exercici or 2026), int(orig.numero_factura)
     )
+    avui = date.today()
+    linies_rect: List[FacturaLiniaCreateDTO] = []
+
+    if payload.linies:
+        linies_rect = list(payload.linies)
+    else:
+        orig_linies = (
+            await db.execute(
+                select(FacturaLinia)
+                .where(
+                    FacturaLinia.factura_id == orig.id,
+                    FacturaLinia.empresa_id == empresa_id,
+                )
+                .order_by(FacturaLinia.created_at.asc())
+            )
+        ).scalars().all()
+
+        sign = Decimal("-1.00") if payload.tipus_rectificacio.upper() == "I" else Decimal("1.00")
+        if orig_linies:
+            for olin in orig_linies:
+                linies_rect.append(
+                    FacturaLiniaCreateDTO(
+                        obra_id=olin.obra_id,
+                        centre_de_cost_id=olin.centre_de_cost_id or "CC-GENERAL",
+                        article_id=olin.article_id,
+                        concepte=f"Rectificació ({orig_num_serie}): {olin.concepte}"[:200],
+                        descripcio_detall=payload.motiu.strip(),
+                        compte_pgc=olin.compte_pgc or "700000",
+                        quantitat=Decimal(str(olin.quantitat or 1)),
+                        preu_venda_unitari=Decimal(str(olin.preu_venda_unitari or 0)) * sign,
+                        descompte_aplicat_pct=Decimal(str(olin.descompte_aplicat_pct or 0)),
+                        tipus_iva_pct=Decimal(str(olin.tipus_iva or 0)),
+                        tipus_recarrec_equivalencia_pct=Decimal(
+                            str(getattr(olin, "tipus_recarrec_equivalencia", 0) or 0)
+                        ),
+                    )
+                )
+        else:
+            base_orig = Decimal(str(orig.base_imposable or 0))
+            quota_orig = Decimal(str(orig.quota_iva or 0))
+            iva_pct = (
+                (quota_orig / base_orig * Decimal("100")).quantize(Decimal("0.01"))
+                if (not orig.es_inversio_subjecte_passiu and base_orig > 0 and quota_orig > 0)
+                else Decimal("0.00")
+            )
+            linies_rect.append(
+                FacturaLiniaCreateDTO(
+                    concepte=f"Rectificativa Sèrie R de {orig_num_serie}: {payload.motiu.strip()}"[:200],
+                    quantitat=Decimal("1.00"),
+                    preu_venda_unitari=base_orig * sign,
+                    tipus_iva_pct=iva_pct,
+                )
+            )
+
     dto_rect = FacturaEmissioCreateDTO(
         client_id=orig.client_id,
         serie="R",
+        tipus_factura=payload.tipus_factura.upper(),
+        tipus_rectificacio=payload.tipus_rectificacio.upper(),
         data_emissio=avui,
         data_venciment=avui,
         es_inversio_subjecte_passiu=bool(orig.es_inversio_subjecte_passiu),
+        justificant_suplerts_pdf_path=orig.justificant_suplerts_pdf_path,
         factura_rectificada_id=orig.id,
         motiu_rectificacio=payload.motiu.strip(),
-        linies=[
-            FacturaLiniaCreateDTO(
-                concepte=f"Rectificativa Sèrie R de {orig.serie}-{orig.numero_factura}: {payload.motiu.strip()}",
-                quantitat=Decimal("1.00"),
-                preu_venda_unitari=max(Decimal("0.00"), base_orig),
-                tipus_iva_pct=iva_pct,
-            )
-        ],
+        linies=linies_rect,
     )
     rect = await EconomicSuiteService.emetre_factura_verifactu(
         db=db, empresa_id=empresa_id, usuari_id=usuari_id, payload=dto_rect
@@ -883,10 +1144,68 @@ async def emetre_rectificativa_serie_r(
     return {
         "id": rect.id,
         "serie": rect.serie,
+        "exercici": rect.exercici,
         "numero_factura": rect.numero_factura,
+        "num_serie_verifactu": rect.num_serie_verifactu,
+        "tipus_factura": rect.tipus_factura,
+        "tipus_rectificacio": rect.tipus_rectificacio,
         "liquid_exigible": rect.liquid_exigible,
+        "import_total_verifactu": rect.import_total_verifactu,
+        "hash_sha256": rect.hash_sha256,
+        "hash_anterior": rect.hash_anterior,
         "factura_rectificada_id": str(orig.id),
     }
+
+
+@router.post("/factures/{factura_id}/anular", response_model=FacturaResponse)
+async def anular_factura_emesa_verifactu(
+    factura_id: uuid.UUID,
+    payload: FacturaAnulacioRequestDTO,
+    request: Request,
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+) -> FacturaResponse:
+    """Emet un Registre d'Anul·lació (RegistroAnulacion) encadenat a Veri*factu (Art. 13.2 Ordre HAC/1177/2024)."""
+    empresa_id, usuari_id, rol = _get_tenant_and_user(request)
+    factura = await EconomicSuiteService.anular_factura_verifactu(
+        db=db,
+        empresa_id=empresa_id,
+        usuari_id=usuari_id,
+        factura_id=factura_id,
+        motiu=payload.motiu,
+        confirmacio_humana_hitl=payload.confirmacio_humana_hitl,
+    )
+    await set_tenant_context(
+        db,
+        str(empresa_id),
+        bool(getattr(request.state, "is_superadmin", False)),
+        role=getattr(request.state, "user_role", None) or rol,
+    )
+    return (await _serialitzar_factures(db, empresa_id, [factura]))[0]
+
+
+@router.patch("/factures/{factura_id}/cobrament", response_model=FacturaResponse)
+async def registrar_cobrament_manual_factura(
+    factura_id: uuid.UUID,
+    payload: FacturaCobramentRequestDTO,
+    request: Request,
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+) -> FacturaResponse:
+    """Registra manualment el cobrament total/parcial o impagament d'una factura emesa (compatible amb trigger a028)."""
+    empresa_id, usuari_id, rol = _get_tenant_and_user(request)
+    factura = await EconomicSuiteService.registrar_cobrament_factura(
+        db=db,
+        empresa_id=empresa_id,
+        usuari_id=usuari_id,
+        factura_id=factura_id,
+        payload=payload,
+    )
+    await set_tenant_context(
+        db,
+        str(empresa_id),
+        bool(getattr(request.state, "is_superadmin", False)),
+        role=getattr(request.state, "user_role", None) or rol,
+    )
+    return (await _serialitzar_factures(db, empresa_id, [factura]))[0]
 
 
 @router.post("/factures/emetre", status_code=status.HTTP_201_CREATED)
@@ -901,10 +1220,16 @@ async def emetre_factura_suite(
     )
     return {
         "id": factura.id,
+        "exercici": factura.exercici,
         "numero_factura": factura.numero_factura,
         "serie": factura.serie,
+        "num_serie_verifactu": factura.num_serie_verifactu,
+        "tipus_factura": factura.tipus_factura,
+        "import_total_verifactu": factura.import_total_verifactu,
         "liquid_exigible": factura.liquid_exigible,
         "hash_sha256": factura.hash_sha256,
+        "hash_anterior": factura.hash_anterior,
+        "fecha_hora_huso_gen_registro": factura.fecha_hora_huso_gen_registro,
         "qr_verifactu_payload": factura.qr_verifactu_payload,
     }
 
@@ -1114,3 +1439,69 @@ async def llistar_despeses_analitiques(
         )
     ).scalars().all()
     return rows
+
+
+@router.get("/despeses-fixes", response_model=List[DespesaFixaResponseDTO])
+async def llistar_despeses_fixes_estructura(
+    request: Request,
+    nomes_actives: bool = False,
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+) -> List[DespesaFixaResponseDTO]:
+    """Llista les despeses fixes recurrents d'estructura del tenant (RLS estricte, veto ENGINYER)."""
+    empresa_id, _, _ = _get_tenant_and_user(request)
+    return await EconomicSuiteService.llistar_despeses_fixes(
+        db=db, empresa_id=empresa_id, nomes_actives=nomes_actives
+    )
+
+
+@router.post(
+    "/despeses-fixes",
+    response_model=DespesaFixaResponseDTO,
+    status_code=status.HTTP_201_CREATED,
+)
+async def crear_despesa_fixa_estructura(
+    payload: DespesaFixaCreateDTO,
+    request: Request,
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+) -> DespesaFixaResponseDTO:
+    """Dona d'alta una despesa fixa recurrent (lloguer, subministraments, assegurances, gestoria, software...)."""
+    empresa_id, usuari_id, _ = _get_tenant_and_user(request)
+    return await EconomicSuiteService.crear_despesa_fixa(
+        db=db, empresa_id=empresa_id, usuari_id=usuari_id, payload=payload
+    )
+
+
+@router.put("/despeses-fixes/{despesa_id}", response_model=DespesaFixaResponseDTO)
+async def actualitzar_despesa_fixa_estructura(
+    despesa_id: uuid.UUID,
+    payload: DespesaFixaUpdateDTO,
+    request: Request,
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+) -> DespesaFixaResponseDTO:
+    """Actualitza una despesa fixa recurrent del tenant."""
+    empresa_id, usuari_id, _ = _get_tenant_and_user(request)
+    return await EconomicSuiteService.actualitzar_despesa_fixa(
+        db=db,
+        empresa_id=empresa_id,
+        usuari_id=usuari_id,
+        despesa_id=despesa_id,
+        payload=payload,
+    )
+
+
+@router.delete("/despeses-fixes/{despesa_id}")
+async def eliminar_despesa_fixa_estructura(
+    despesa_id: uuid.UUID,
+    request: Request,
+    hard_delete: bool = False,
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+) -> Dict[str, Any]:
+    """Desactiva (baixa lògica) o elimina definitivament una despesa fixa recurrent."""
+    empresa_id, usuari_id, _ = _get_tenant_and_user(request)
+    return await EconomicSuiteService.eliminar_despesa_fixa(
+        db=db,
+        empresa_id=empresa_id,
+        usuari_id=usuari_id,
+        despesa_id=despesa_id,
+        hard_delete=hard_delete,
+    )

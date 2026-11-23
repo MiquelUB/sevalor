@@ -498,6 +498,7 @@ async def test_spec007_v5_risc_art80_erosio_marge_i_worker(admin_session):
             preu_venda=Decimal("100.00"),
             llindar_marge_minim_pct=Decimal("25.00"),
             estoc_optim=10,
+            estoc_total_actual=10,
             darrer_moviment_sortida=avui - timedelta(days=120),
             actiu=True,
         )

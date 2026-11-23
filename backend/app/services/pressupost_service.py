@@ -193,13 +193,10 @@ def generar_pdf_pressupost_bytes(
     try:
         c = canvas.Canvas(ruta_tmp, pagesize=A4)
         primari_hsl = empresa.primari_hsl if empresa else "150 40 20"
-        try:
-            h_part, s_part, l_part = (primari_hsl or "150 40 20").replace("%", "").split()
-            primary_color = HexColor(
-                f"hsl({int(float(h_part))}, {int(float(s_part))}%, {int(float(l_part))}%)"
-            )
-        except (ValueError, AttributeError):
-            primary_color = HexColor("#1b4332")
+        from app.services.verifactu import parse_hsl_to_css_and_hex
+
+        _, _, primary_hex = parse_hsl_to_css_and_hex(primari_hsl)
+        primary_color = HexColor(primary_hex)
 
         # Capçalera empresa
         c.setFont("Helvetica-Bold", 15)

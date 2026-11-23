@@ -222,9 +222,58 @@ def generar_informe_post_obra(
 
 
 @celery_app.task(name="comptabilitat.processar_outbox_aeat", queue="queue_periodic", bind=True, max_retries=3)
-def processar_outbox_aeat(self):
-    """Despatx periòdic de la cua Veri*factu AEAT (queue_periodic)."""
-    return {"status": "COMPLETED", "queue": "queue_periodic"}
+def processar_outbox_aeat(self, empresa_id: str | None = None):
+    """Despatx periòdic real de la cua Veri*factu AEAT (queue_periodic)."""
+    import uuid
+
+    from sqlalchemy import select
+
+    from app.models.models import Empresa, OutboxEnviamentAEAT
+    from app.services.outbox_aeat import despatxar_outbox_empresa
+
+    async def _run_tenant(session: AsyncSession, eid: uuid.UUID) -> dict[str, Any]:
+        return await despatxar_outbox_empresa(session, eid)
+
+    if empresa_id:
+        res_t = _run_async_in_worker(
+            lambda s: _run_tenant(s, uuid.UUID(str(empresa_id))),
+            empresa_id=str(empresa_id),
+        )
+        return {"status": "COMPLETED", "queue": "queue_periodic", "resultat": res_t}
+
+    async def _run_all(session: AsyncSession) -> dict[str, Any]:
+        emp_ids = list(
+            (
+                await session.execute(
+                    select(OutboxEnviamentAEAT.empresa_id)
+                    .where(
+                        OutboxEnviamentAEAT.estat_enviament.in_(
+                            ["PENDENT_ENVIAMENT", "PENDENT_REENVIAMENT", "PENDENT", "ERROR_TEMPORAL"]
+                        )
+                    )
+                    .distinct()
+                )
+            )
+            .scalars()
+            .all()
+        )
+        if not emp_ids:
+            emp_ids = list(
+                (await session.execute(select(Empresa.id).where(Empresa.estat_pagament == "ACTIU")))
+                .scalars()
+                .all()
+            )
+        total_processats = 0
+        total_acceptats = 0
+        for eid in emp_ids:
+            await set_tenant_context(session, str(eid), is_superadmin=False, role="BOSS")
+            r = await despatxar_outbox_empresa(session, eid)
+            total_processats += int(r.get("processats", 0))
+            total_acceptats += int(r.get("acceptats", 0))
+        return {"processats": total_processats, "acceptats": total_acceptats}
+
+    res_all = _run_async_in_worker(_run_all, is_superadmin=True)
+    return {"status": "COMPLETED", "queue": "queue_periodic", **res_all}
 
 
 @celery_app.task(name="workers.executar_backup_setmanal_tenant", queue="queue_periodic")
@@ -340,14 +389,94 @@ def generar_backup_pgdump(empresa_id: str):
 
 
 @celery_app.task(name="generar_exportacio_aeat", queue="queue_critical")
-def generar_exportacio_aeat(empresa_id: str, trimestre: str):
+def generar_exportacio_aeat(
+    empresa_id: str,
+    trimestre: str,
+    db_session: AsyncSession | None = None,
+):
+    """
+    Calcula en temps real la facturació i l'IVA meritat del trimestre des de PostgreSQL (Zero Mock Data).
+    """
+    import re
+    import uuid
+    from datetime import datetime, timezone
+
+    from sqlalchemy import func, select
+
+    from app.models.models import FacturaCapcalera
+
+    def _parse_trimestre_range(trim_str: str) -> tuple[datetime, datetime]:
+        now_y = datetime.now(timezone.utc).year
+        raw = (trim_str or "").strip().upper()
+        m_y = re.search(r"(20\d{2})", raw)
+        year = int(m_y.group(1)) if m_y else now_y
+        raw_no_year = raw.replace(str(year), "")
+        q = 1
+        for cand in (1, 2, 3, 4):
+            if (
+                f"T{cand}" in raw_no_year
+                or f"{cand}T" in raw_no_year
+                or f"Q{cand}" in raw_no_year
+                or raw_no_year.strip("-_ ") == str(cand)
+            ):
+                q = cand
+                break
+        start_month = (q - 1) * 3 + 1
+        start_dt = datetime(year, start_month, 1, tzinfo=timezone.utc)
+        if q == 4:
+            end_dt = datetime(year + 1, 1, 1, tzinfo=timezone.utc)
+        else:
+            end_dt = datetime(year, start_month + 3, 1, tzinfo=timezone.utc)
+        return start_dt, end_dt
+
+    async def _calc(session: AsyncSession) -> tuple[float, float, int]:
+        emp_uuid = uuid.UUID(str(empresa_id))
+        start_dt, end_dt = _parse_trimestre_range(trimestre)
+        stmt = select(
+            func.coalesce(func.sum(FacturaCapcalera.base_imposable), 0.0),
+            func.coalesce(func.sum(FacturaCapcalera.quota_iva), 0.0),
+            func.count(FacturaCapcalera.id),
+        ).where(
+            FacturaCapcalera.empresa_id == emp_uuid,
+            FacturaCapcalera.estat_document == "EMESA",
+            FacturaCapcalera.estat_anulacio != "ANULADA_VERIFACTU",
+            FacturaCapcalera.data_emissio >= start_dt,
+            FacturaCapcalera.data_emissio < end_dt,
+        )
+        row = (await session.execute(stmt)).one()
+        return round(float(row[0] or 0.0), 2), round(float(row[1] or 0.0), 2), int(row[2] or 0)
+
+    if db_session is not None:
+        # En cas que el test passi la sessió SAVEPOINT activa, retornem una corutina o executem
+        async def _async_result() -> dict[str, Any]:
+            await set_tenant_context(db_session, str(empresa_id), is_superadmin=False, role="BOSS")
+            f_val, i_val, n_val = await _calc(db_session)
+            return {
+                "status": "COMPLETED",
+                "payload_summary": {
+                    "trimestre": trimestre,
+                    "empresa_id": empresa_id,
+                    "facturacion": f_val,
+                    "iva_meritat": i_val,
+                    "num_factures": n_val,
+                },
+            }
+
+        return _async_result()
+
+    facturacio_real, iva_real, num_factures = _run_async_in_worker(
+        _calc,
+        empresa_id=str(empresa_id),
+        is_superadmin=False,
+    )
     return {
         "status": "COMPLETED",
         "payload_summary": {
             "trimestre": trimestre,
             "empresa_id": empresa_id,
-            "facturacion": 1500.50,
-            "iva_meritat": 315.10,
+            "facturacion": facturacio_real,
+            "iva_meritat": iva_real,
+            "num_factures": num_factures,
         },
     }
 

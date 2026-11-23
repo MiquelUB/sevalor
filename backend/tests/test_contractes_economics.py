@@ -1,11 +1,13 @@
-import pytest
-from httpx import AsyncClient
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
 from datetime import date
 
-from app.models.models import Empresa, Client, Usuari, FacturaCapcalera
+import pytest
+from httpx import AsyncClient
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.models.contractes import ContracteManteniment
+from app.models.models import Client, Empresa, FacturaCapcalera, Usuari
+
 
 @pytest.fixture
 async def empresa(db_session: AsyncSession):
@@ -45,6 +47,7 @@ async def client_db(db_session: AsyncSession, empresa: Empresa):
 @pytest.fixture
 async def auth_headers(boss: Usuari):
     import jwt
+
     from app.core.config import settings
 
     payload = {
@@ -97,18 +100,19 @@ async def test_mrr_calcul(async_client: AsyncClient, contractes: tuple, auth_hea
 @pytest.mark.asyncio
 async def test_prefacturar_contracte(async_client: AsyncClient, db_session: AsyncSession, contractes: tuple, auth_headers: dict):
     c1 = contractes[0] # import 1200
-    
+
     resp = await async_client.post(f"/gestio/contractes/{c1.id}/prefacturar", headers=auth_headers)
     assert resp.status_code == 200
     dades = resp.json()
     factura_id = dades["factura_id"]
-    
+
     # Verify factura in DB
     stmt = select(FacturaCapcalera).where(FacturaCapcalera.id == factura_id)
     res = await db_session.execute(stmt)
     factura = res.scalar_one_or_none()
-    
+
     assert factura is not None
     assert float(factura.base_imposable) == 1200.0
     assert float(factura.quota_iva) == 252.0 # 1200 * 0.21
-    assert factura.estat_enviament == "PENDENT"
+    assert factura.estat_document == "ESBORRANY_PREFACTURA"
+    assert factura.estat_enviament == "ESBORRANY"

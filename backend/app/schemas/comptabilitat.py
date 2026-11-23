@@ -21,9 +21,12 @@ class FacturaLiniaComercialDTO(BaseModel):
 
     id: uuid.UUID
     concepte: str
+    descripcio_detall: Optional[str] = None
     quantitat: float
     preu_venda_unitari: float
     tipus_iva: float = 21.0
+    tipus_recarrec_equivalencia: float = 0.0
+    quota_recarrec_linia: float = 0.0
     descompte_aplicat_pct: float = 0.0
     subtotal: float
     obra_id: Optional[uuid.UUID] = None
@@ -40,14 +43,22 @@ class FacturaConsultaTecnicaDTO(BaseModel):
     client_id: Optional[uuid.UUID] = None
     client_nom: Optional[str] = None
     client_nif: Optional[str] = None
+    exercici: Optional[int] = None
     numero_factura: int
     serie: str
+    num_serie_verifactu: Optional[str] = None
+    tipus_factura: str = "F1"
+    tipus_rectificacio: Optional[str] = None
     data_emissio: datetime
+    data_operacio: Optional[date] = None
     data_venciment: Optional[date] = None
     estat_document: str
     estat_cobrament: str = "PENDENT"
+    estat_anulacio: str = "ACTIVA"
     base_imposable: float = 0.0
     quota_iva: float = 0.0
+    quota_recarrec_equivalencia: float = 0.0
+    import_total_verifactu: float = 0.0
     import_suplits: float = 0.0
     import_retencio: float = 0.0
     import_retencio_garantia_4308: float = 0.0
@@ -67,23 +78,32 @@ class FacturaLiniaCreateDTO(BaseModel):
     centre_de_cost_id: str = "CC-GENERAL"
     article_id: Optional[uuid.UUID] = None
     concepte: str
+    descripcio_detall: Optional[str] = None
     compte_pgc: str = "700000"
     quantitat: Decimal = Field(gt=Decimal("0"))
     quantitat_merma: Decimal = Field(default=Decimal("0.00"), ge=Decimal("0"))
-    preu_venda_unitari: Decimal = Field(ge=Decimal("0"))
+    preu_venda_unitari: Decimal = Field(default=Decimal("0.00"))
     descompte_aplicat_pct: Decimal = Field(
         default=Decimal("0.00"), ge=Decimal("0"), le=Decimal("100")
     )
     tipus_iva_pct: Decimal = Field(default=Decimal("21.00"))
+    tipus_recarrec_equivalencia_pct: Decimal = Field(default=Decimal("0.00"), ge=Decimal("0"))
 
 
 class FacturaEmissioCreateDTO(BaseModel):
     client_id: uuid.UUID
     serie: str = "F"
+    tipus_factura: str = "F1"
+    tipus_rectificacio: Optional[str] = None
     data_emissio: date
+    data_operacio: Optional[date] = None
     data_venciment: date
     metode_pagament: str = "TRANSFERENCIA"
+    referencia_client: Optional[str] = None
     es_inversio_subjecte_passiu: bool = False
+    causa_exempcio: Optional[str] = None
+    mencio_legal: Optional[str] = None
+    notes_factura: Optional[str] = None
     retencio_irpf_pct: Decimal = Field(default=Decimal("0.00"), ge=Decimal("0"))
     retencio_garantia_pct: Decimal = Field(
         default=Decimal("0.00"), ge=Decimal("0"), le=Decimal("20")
@@ -100,20 +120,29 @@ class FacturaLiniaDetailDTO(BaseModel):
     centre_de_cost_id: str = "CC-GENERAL"
     article_id: Optional[uuid.UUID] = None
     concepte: str
+    descripcio_detall: Optional[str] = None
     compte_pgc: str = "700000"
     quantitat: float
     quantitat_merma: float = 0.0
     preu_venda_unitari: float
     descompte_aplicat_pct: float = 0.0
     tipus_iva: float = 21.0
+    tipus_recarrec_equivalencia: float = 0.0
+    quota_recarrec_linia: float = 0.0
     subtotal: float
 
 
 class PrefacturaUpdateDTO(BaseModel):
     data_emissio: Optional[date] = None
+    data_operacio: Optional[date] = None
     data_venciment: Optional[date] = None
+    tipus_factura: str = "F1"
     metode_pagament: str = "TRANSFERENCIA"
+    referencia_client: Optional[str] = None
     es_inversio_subjecte_passiu: bool = False
+    causa_exempcio: Optional[str] = None
+    mencio_legal: Optional[str] = None
+    notes_factura: Optional[str] = None
     retencio_irpf_pct: Decimal = Field(default=Decimal("0.00"), ge=Decimal("0"), le=Decimal("30"))
     retencio_garantia_pct: Decimal = Field(
         default=Decimal("0.00"), ge=Decimal("0"), le=Decimal("20")
@@ -124,9 +153,23 @@ class PrefacturaUpdateDTO(BaseModel):
 
 class PrefacturaEmetreDTO(BaseModel):
     serie: str = Field(default="F", min_length=1, max_length=20)
+    tipus_factura: Optional[str] = None
     data_emissio: Optional[date] = None
+    data_operacio: Optional[date] = None
     data_venciment: Optional[date] = None
     confirmacio_humana_hitl: bool = True
+
+
+class FacturaAnulacioRequestDTO(BaseModel):
+    motiu: str = Field(..., min_length=3, max_length=300)
+    confirmacio_humana_hitl: bool = True
+
+
+class FacturaCobramentRequestDTO(BaseModel):
+    estat_cobrament: str = Field(..., pattern="^(PENDENT|PARCIAL|COBRADA|IMPAGADA)$")
+    import_cobrat: Optional[Decimal] = Field(default=None, ge=Decimal("0.00"))
+    data_cobrament_real: Optional[date] = None
+    notes: Optional[str] = Field(default=None, max_length=500)
 
 
 # --- DTOs DE LES 6 MILLORES I SUITE ECONÒMICA ---
@@ -239,6 +282,46 @@ class OTCostMargeDTO(BaseModel):
     marge_brut_eur: float
     marge_brut_pct: float
     alerta_desviacio_marge: bool
+
+
+class DespesaFixaCreateDTO(BaseModel):
+    concepte: str = Field(..., min_length=2, max_length=255)
+    categoria: str = Field(
+        ...,
+        pattern="^(LLOGUER|SUBMINISTRAMENTS|ASSEGURANCES|GESTORIA|SOFTWARE|ALTRES)$",
+    )
+    import_base: Decimal = Field(..., gt=Decimal("0.00"))
+    quota_iva: Decimal = Field(default=Decimal("0.00"), ge=Decimal("0.00"))
+    periodicitat: str = Field(default="MENSUAL", pattern="^(MENSUAL|TRIMESTRAL|ANUAL)$")
+    dia_carrec: int = Field(default=5, ge=1, le=28)
+    actiu: bool = True
+
+
+class DespesaFixaUpdateDTO(BaseModel):
+    concepte: Optional[str] = Field(default=None, min_length=2, max_length=255)
+    categoria: Optional[str] = Field(
+        default=None,
+        pattern="^(LLOGUER|SUBMINISTRAMENTS|ASSEGURANCES|GESTORIA|SOFTWARE|ALTRES)$",
+    )
+    import_base: Optional[Decimal] = Field(default=None, gt=Decimal("0.00"))
+    quota_iva: Optional[Decimal] = Field(default=None, ge=Decimal("0.00"))
+    periodicitat: Optional[str] = Field(default=None, pattern="^(MENSUAL|TRIMESTRAL|ANUAL)$")
+    dia_carrec: Optional[int] = Field(default=None, ge=1, le=28)
+    actiu: Optional[bool] = None
+
+
+class DespesaFixaResponseDTO(BaseModel):
+    id: uuid.UUID
+    concepte: str
+    categoria: str
+    import_base: Decimal
+    quota_iva: Decimal
+    periodicitat: str
+    import_mensual_normalitzat: Decimal
+    iva_mensual_normalitzat: Decimal
+    dia_carrec: int
+    actiu: bool
+    created_at: datetime
 
 
 class DespesaComptableDTO(BaseModel):

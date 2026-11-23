@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from datetime import date
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -462,6 +463,8 @@ async def actualitzar_linia_picking_amb_estoc(
                 )
                 ref_doc = ot.codi if ot else str(linia.picking_id)
                 if delta_fisic > 0:
+                    if article is not None:
+                        article.darrer_moviment_sortida = date.today()
                     db.add(
                         MovimentEstoc(
                             empresa_id=empresa_id,
@@ -768,6 +771,7 @@ async def registrar_consum_material_furgoneta(
         )
 
     # 4. Registrar moviment d'estoc i merma (si escau)
+    article.darrer_moviment_sortida = date.today()
     db.add(
         MovimentEstoc(
             empresa_id=empresa_id,

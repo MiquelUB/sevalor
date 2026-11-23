@@ -381,56 +381,37 @@ async def generar_prefactura(
     quota_base = round(float(contracte.import_anual or 0.0) / divisor, 2)
     quota_iva = round(quota_base * 0.21, 2)
     liquid_exigible = round(quota_base + quota_iva, 2)
-
-    ultima_row = (
-        await db.execute(
-            select(FacturaCapcalera)
-            .where(
-                FacturaCapcalera.empresa_id == empresa_uuid,
-                FacturaCapcalera.serie == "PRE",
-            )
-            .order_by(FacturaCapcalera.numero_factura.desc())
-            .limit(1)
-            .with_for_update()
-        )
-    ).scalars().first()
-    seq_num = int(ultima_row.numero_factura) + 1 if ultima_row else 1
-    hash_anterior = ultima_row.hash_sha256 if ultima_row else "GENESIS"
     avui = datetime.now(timezone.utc).date()
-    fingerprint = hashlib.sha256(
-        f"{empresa_uuid}|{contracte.id}|PRE|{seq_num}|{quota_base:.2f}|{avui.isoformat()}|{hash_anterior}".encode(
-            "utf-8"
-        )
-    ).hexdigest()
 
-    factura = FacturaCapcalera(
-        empresa_id=empresa_uuid,
-        client_id=contracte.client_id,
-        serie="PRE",
-        numero_factura=seq_num,
-        hash_sha256=fingerprint,
-        hash_anterior=hash_anterior,
-        data_emissio=avui,
-        base_imposable=quota_base,
-        quota_iva=quota_iva,
-        liquid_exigible=liquid_exigible,
-        estat_enviament="PENDENT",
-        estat_cobrament="PENDENT",
-    )
-    db.add(factura)
-    await db.flush()
+    from decimal import Decimal
+    from app.schemas.comptabilitat import FacturaEmissioCreateDTO, FacturaLiniaCreateDTO
+    from app.services.economic_suite_service import EconomicSuiteService
 
-    linia = FacturaLinia(
+    uid_str = claims.get("sub") or getattr(request.state, "user_id", None)
+    usuari_uuid = uuid.UUID(str(uid_str)) if uid_str else uuid.uuid4()
+
+    factura = await EconomicSuiteService.crear_prefactura_esborrany(
+        db=db,
         empresa_id=empresa_uuid,
-        factura_id=factura.id,
-        concepte=f"Quota {contracte.periodicitat} Manteniment Contracte {contracte.numero_contracte}",
-        quantitat=1,
-        preu_venda_unitari=quota_base,
-        subtotal=quota_base,
-        tipus_iva=21.0,
+        usuari_id=usuari_uuid,
+        payload=FacturaEmissioCreateDTO(
+            client_id=contracte.client_id,
+            serie="PRE",
+            data_emissio=avui,
+            data_venciment=avui,
+            referencia_client=contracte.numero_contracte,
+            linies=[
+                FacturaLiniaCreateDTO(
+                    concepte=f"Quota {contracte.periodicitat} Manteniment Contracte {contracte.numero_contracte}",
+                    quantitat=Decimal("1.00"),
+                    preu_venda_unitari=Decimal(str(quota_base)),
+                    tipus_iva_pct=Decimal("21.00"),
+                )
+            ],
+        ),
     )
-    db.add(linia)
-    await db.commit()
+    seq_num = int(factura.numero_factura)
+    fingerprint = factura.hash_sha256
 
     try:
         ruta = await SovereignStorageGateway.desar_entitat_json(

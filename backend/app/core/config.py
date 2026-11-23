@@ -173,6 +173,30 @@ class Settings(BaseSettings):
     # Entorn
     ENVIRONMENT: str = "development"
 
+    # Configuració Oficial Veri*factu / SIF (RD 1007/2023 i Ordre HAC/1177/2024)
+    VERIFACTU_ENV: str = "PREPRODUCCIO"  # PREPRODUCCIO | PRODUCCIO
+    VERIFACTU_MODALITAT: str = "VERIFACTU"  # 100% VERI*FACTU per defecte
+    VERIFACTU_SIF_NOMBRE: str = "SEVALOR SUITE SIF"
+    VERIFACTU_SIF_ID: str = "SV"
+    VERIFACTU_SIF_VERSION: str = "4.1.0"
+    VERIFACTU_SIF_NUM_INSTALACION: str = "SEVALOR-HETZNER-EU-01"
+    VERIFACTU_SIF_NIF_PRODUCTOR: str = "B99887766"
+    VERIFACTU_SIF_NOM_PRODUCTOR: str = "SEVALOR SUITE S.L."
+
+    # Emissor per defecte per a Facturació SaaS B2B de Superadmin (sobreescribible a disc sobirà)
+    SUPERADMIN_EMISSOR_NOM: str = "SEVALOR SUITE S.L."
+    SUPERADMIN_EMISSOR_NIF: str = "B99887766"
+    SUPERADMIN_EMISSOR_ESLOGAN: str = "Plataforma B2B Multi-Vertical per a Serveis Tècnics"
+    SUPERADMIN_EMISSOR_ADRECA: str = "Carrer de la Tecnologia, 10"
+    SUPERADMIN_EMISSOR_CP: str = "08001"
+    SUPERADMIN_EMISSOR_POBLACIO: str = "Barcelona"
+    SUPERADMIN_EMISSOR_PROVINCIA: str = "Barcelona"
+    SUPERADMIN_EMISSOR_TELEFON: str = "+34 930 000 000"
+    SUPERADMIN_EMISSOR_EMAIL: str = "facturacio@sevalor.net"
+    SUPERADMIN_EMISSOR_REGISTRE_MERCANTIL: str = "Inscrita al Registre Mercantil de Barcelona"
+    SUPERADMIN_EMISSOR_IBAN: str = ""
+    SUPERADMIN_EMISSOR_TITULAR_COMPTE: str = "SEVALOR SUITE S.L."
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

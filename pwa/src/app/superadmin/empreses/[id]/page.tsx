@@ -906,6 +906,44 @@ export default function EmpresaDetailPage({ params }: { params: { id: string } }
     }
   };
 
+  const handleDownloadFacturaXml = async (facturaId: string, numFactura: string) => {
+    try {
+      const token = getAuthToken();
+      const res = await fetch(`/api/v1/superadmin/crm/factures/${facturaId}/xml`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (!res.ok) throw new Error("Error descarregant l'XML Veri*factu de la factura B2B");
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${numFactura || facturaId}.xml`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (e: any) {
+      alert(e.message || "Error en descarregar XML");
+    }
+  };
+
+  const handleAnularFacturaB2B = async (facturaId: string, numFactura: string) => {
+    const motiu = prompt(
+      `Motiu de l'anul·lació Veri*factu (RegistroAnulacion) per a la factura ${numFactura}:`
+    );
+    if (!motiu || motiu.trim().length < 3) return;
+    try {
+      await apiFetch(`/superadmin/crm/factures/${facturaId}/anular`, {
+        method: "POST",
+        body: JSON.stringify({ motiu: motiu.trim(), confirmacio_humana: true }),
+      });
+      setSuccessMessage(`Registre d'Anul·lació Veri*factu emès per a ${numFactura}.`);
+      fetchTenantAll();
+    } catch (e: any) {
+      setErrorMessage(e.message || "Error en anul·lar la factura B2B.");
+    }
+  };
+
   const handleCrearTiquet = async () => {
     if (!nouTiquetAssumpte.trim() || !nouTiquetDescripcio.trim()) return;
     setCreatingTiquet(true);
@@ -1771,9 +1809,14 @@ export default function EmpresaDetailPage({ params }: { params: { id: string } }
                     <tr key={f.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/40">
                       <td className="p-3">
                         <div className="font-bold text-slate-900 dark:text-white">
-                          {f.numero_factura || "ESBORRANY (SENSE NÚM.)"}
+                          {f.num_serie_verifactu || f.numero_factura || "ESBORRANY (SENSE NÚM.)"}
                         </div>
                         <div className="text-[10px] text-slate-500">Període: {f.periode_facturacio}</div>
+                        {f.estat_anulacio === "ANULADA_VERIFACTU" && (
+                          <span className="mt-0.5 inline-block px-1.5 py-0.5 rounded bg-rose-100 text-rose-800 text-[9px] font-bold">
+                            ANUL·LADA VERI*FACTU
+                          </span>
+                        )}
                       </td>
                       <td className="p-3">
                         {f.estat === "ESBORRANY_PREFACTURA" ? (
@@ -1844,11 +1887,25 @@ export default function EmpresaDetailPage({ params }: { params: { id: string } }
                                 </button>
                               )}
                               <button
-                                onClick={() => handleDownloadFacturaPdf(f.id, f.numero_factura)}
+                                onClick={() => handleDownloadFacturaPdf(f.id, f.num_serie_verifactu || f.numero_factura)}
                                 className="px-2.5 py-1 rounded bg-blue-600 hover:bg-blue-500 text-white text-[10px] font-bold flex items-center gap-1"
                               >
                                 <Download className="w-3 h-3" /> PDF Veri*factu
                               </button>
+                              <button
+                                onClick={() => handleDownloadFacturaXml(f.id, f.num_serie_verifactu || f.numero_factura)}
+                                className="px-2 py-1 rounded bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-200 text-[10px] font-bold flex items-center gap-1"
+                              >
+                                <FileText className="w-3 h-3" /> XML
+                              </button>
+                              {f.estat_anulacio !== "ANULADA_VERIFACTU" && (
+                                <button
+                                  onClick={() => handleAnularFacturaB2B(f.id, f.num_serie_verifactu || f.numero_factura)}
+                                  className="px-2 py-1 rounded bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 text-[10px] font-bold"
+                                >
+                                  Anul·lar
+                                </button>
+                              )}
                             </>
                           )}
                         </div>

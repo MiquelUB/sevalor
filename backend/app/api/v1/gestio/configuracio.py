@@ -23,8 +23,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db, set_tenant_context
 from app.core.security import get_current_user_claims
-from app.models.models import Empresa, OrdreTreball, SlotJornada, Usuari
+from app.models.models import Empresa, OrdreTreball, OutboxEnviamentAEAT, SlotJornada, Usuari
+from app.services.outbox_aeat import validar_i_extreure_metadata_p12
 from app.services.sovereign_storage import SovereignStorageGateway
+from app.services.verifactu import desxifrar_secret_verifactu, xifrar_secret_verifactu
 
 router = APIRouter(prefix="/gestio/configuracio", tags=["Configuració"])
 limiter = Limiter(key_func=get_remote_address, enabled=os.getenv("TESTING") != "1")
@@ -87,7 +89,18 @@ def generar_monograma_net(nom: str) -> str:
 
 class EmpresaUpdateRequest(BaseModel):
     nom: Optional[str] = None
+    rao_social_fiscal: Optional[str] = None
+    eslogan_activitat: Optional[str] = None
     adreca: Optional[str] = None
+    codi_postal: Optional[str] = None
+    poblacio: Optional[str] = None
+    provincia: Optional[str] = None
+    telefon_facturacio: Optional[str] = None
+    email_facturacio: Optional[str] = None
+    titular_compte_bancari: Optional[str] = None
+    iban_cobrament: Optional[str] = None
+    dades_registre_mercantil: Optional[str] = None
+    verifactu_entorn: Optional[str] = Field(None, pattern="^(PREPRODUCCIO|PRODUCCIO)$")
     subdomini: Optional[str] = None
 
 
@@ -213,15 +226,41 @@ async def obtenir_dades_empresa(
         raise HTTPException(status_code=404, detail="Empresa no trobada")
 
     monograma = empresa.monograma or generar_monograma_net(empresa.nom)
+    rol_usuari = str(claims.get("rol") or "").upper()
+    pot_veure_iban = rol_usuari in ("BOSS", "SECRETARIA", "COMPTABILITAT") or (
+        rol_usuari == "SUPERADMIN" and bool(claims.get("is_impersonation"))
+    )
 
     return {
         "id": str(empresa.id),
         "nom": empresa.nom,
+        "rao_social_fiscal": empresa.rao_social_fiscal or empresa.nom,
+        "eslogan_activitat": empresa.eslogan_activitat,
         "nif": empresa.nif,
         "vertical": empresa.vertical,
         "magatzem_families_default": empresa.magatzem_families_default,
         "agent_prompt_system": empresa.agent_prompt_system,
         "adreca": empresa.adreca,
+        "codi_postal": empresa.codi_postal,
+        "poblacio": empresa.poblacio,
+        "provincia": empresa.provincia,
+        "telefon_facturacio": empresa.telefon_facturacio,
+        "email_facturacio": empresa.email_facturacio,
+        "titular_compte_bancari": empresa.titular_compte_bancari if pot_veure_iban else None,
+        "iban_cobrament": (
+            desxifrar_secret_verifactu(empresa.iban_cobrament_xifrat)
+            if (pot_veure_iban and empresa.iban_cobrament_xifrat)
+            else None
+        ),
+        "dades_registre_mercantil": empresa.dades_registre_mercantil,
+        "verifactu_entorn": empresa.verifactu_entorn or "PREPRODUCCIO",
+        "verifactu_cert_configurat": bool(empresa.verifactu_cert_path),
+        "verifactu_cert_subject": empresa.verifactu_cert_subject,
+        "verifactu_cert_caducitat": (
+            empresa.verifactu_cert_caducitat.isoformat()
+            if empresa.verifactu_cert_caducitat
+            else None
+        ),
         "subdomini": empresa.subdomini,
         "domini_custom": empresa.domini_custom,
         "primari_hsl": empresa.primari_hsl,
@@ -251,7 +290,7 @@ async def actualitzar_dades_empresa(
     claims: Dict[str, Any] = Depends(get_current_user_claims),
     db: AsyncSession = Depends(get_db),
 ) -> Dict[str, Any]:
-    """Actualitza dades bàsiques de l'empresa (Boss i Secretaria; Enginyer 403)."""
+    """Actualitza dades corporatives, fiscals, bancàries i d'entorn Veri*factu de l'empresa (només Boss)."""
     validar_permisos_gestio(claims, requereix_escriptura=True, nomes_boss=True)
     empresa_id = claims.get("empresa_id")
 
@@ -266,8 +305,31 @@ async def actualitzar_dades_empresa(
     if payload.nom is not None:
         empresa.nom = payload.nom
         empresa.monograma = generar_monograma_net(payload.nom)
+    if payload.rao_social_fiscal is not None:
+        empresa.rao_social_fiscal = payload.rao_social_fiscal.strip() or None
+    if payload.eslogan_activitat is not None:
+        empresa.eslogan_activitat = payload.eslogan_activitat.strip() or None
     if payload.adreca is not None:
         empresa.adreca = payload.adreca
+    if payload.codi_postal is not None:
+        empresa.codi_postal = payload.codi_postal.strip() or None
+    if payload.poblacio is not None:
+        empresa.poblacio = payload.poblacio.strip() or None
+    if payload.provincia is not None:
+        empresa.provincia = payload.provincia.strip() or None
+    if payload.telefon_facturacio is not None:
+        empresa.telefon_facturacio = payload.telefon_facturacio.strip() or None
+    if payload.email_facturacio is not None:
+        empresa.email_facturacio = payload.email_facturacio.strip() or None
+    if payload.titular_compte_bancari is not None:
+        empresa.titular_compte_bancari = payload.titular_compte_bancari.strip() or None
+    if payload.iban_cobrament is not None:
+        iban_clean = payload.iban_cobrament.replace(" ", "").strip().upper()
+        empresa.iban_cobrament_xifrat = xifrar_secret_verifactu(iban_clean) if iban_clean else None
+    if payload.dades_registre_mercantil is not None:
+        empresa.dades_registre_mercantil = payload.dades_registre_mercantil.strip() or None
+    if payload.verifactu_entorn is not None:
+        empresa.verifactu_entorn = payload.verifactu_entorn.strip().upper()
     if payload.subdomini is not None:
         empresa.subdomini = payload.subdomini
 
@@ -1044,3 +1106,137 @@ async def desar_barema_preus(
     )
     await db.commit()
     return {"status": "OK", "barema": dades}
+
+
+# ---------------------------------------------------------------------------
+# 8. CERTIFICAT DIGITAL PKCS#12 (.p12) I ESTAT VERI*FACTU AEAT (Ordre HAC/1177/2024)
+# ---------------------------------------------------------------------------
+
+
+class VerifactuCertificatUploadRequest(BaseModel):
+    p12_base64: str = Field(..., min_length=32)
+    password: str = Field(..., min_length=1)
+    nom_fitxer: Optional[str] = Field("certificat_aeat.p12", max_length=120)
+
+
+@router.post("/verifactu/certificat")
+async def pujar_certificat_verifactu_p12(
+    payload: VerifactuCertificatUploadRequest,
+    claims: Dict[str, Any] = Depends(get_current_user_claims),
+    db: AsyncSession = Depends(get_db),
+) -> Dict[str, Any]:
+    """
+    Valida i desa el certificat digital PKCS#12 (.p12 / .pfx) al disc dur sobirà de l'empresa
+    i xifra la seva contrasenya amb AES-256-GCM (reservat exclusivament al rol BOSS).
+    """
+    validar_permisos_gestio(claims, requereix_escriptura=True, nomes_boss=True)
+    empresa_id = str(claims.get("empresa_id") or "")
+    if not empresa_id:
+        raise HTTPException(status_code=401, detail="Tenant no identificat")
+    emp_uuid = uuid.UUID(empresa_id)
+    await set_tenant_context(db, empresa_id)
+
+    try:
+        raw_b64 = payload.p12_base64.strip()
+        if "," in raw_b64 and raw_b64.startswith("data:"):
+            raw_b64 = raw_b64.split(",", 1)[1]
+        p12_bytes = base64.b64decode(raw_b64, validate=False)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="El contingut Base64 del certificat PKCS#12 (.p12) és invàlid.",
+        ) from exc
+
+    try:
+        meta = validar_i_extreure_metadata_p12(p12_bytes, payload.password)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
+
+    res = await db.execute(select(Empresa).where(Empresa.id == emp_uuid))
+    empresa = res.scalar_one_or_none()
+    if not empresa:
+        raise HTTPException(status_code=404, detail="Empresa no trobada")
+
+    ruta_p12 = await SovereignStorageGateway.pujar_fitxer_binari(
+        db=db,
+        empresa_id=empresa_id,
+        categoria="configuracio",
+        nom_fitxer=f"certificat_verifactu_{empresa_id}.p12",
+        content=p12_bytes,
+        content_type="application/x-pkcs12",
+    )
+
+    empresa.verifactu_cert_path = ruta_p12
+    empresa.verifactu_cert_pass_xifrat = xifrar_secret_verifactu(payload.password)
+    empresa.verifactu_cert_subject = str(meta["subject"])[:255]
+    empresa.verifactu_cert_caducitat = meta["valid_until"]
+    await db.commit()
+
+    return {
+        "status": "OK",
+        "missatge": "Certificat digital PKCS#12 (.p12) validat i desat al disc sobirà.",
+        "subject": empresa.verifactu_cert_subject,
+        "issuer": meta["issuer"],
+        "serial_number": meta["serial_number"],
+        "caducitat": meta["valid_until"].isoformat(),
+        "dies_restants": meta["dies_restants"],
+        "alerta_caducitat_proxima": bool(meta["dies_restants"] <= 30),
+    }
+
+
+@router.get("/verifactu/estat")
+async def obtenir_estat_verifactu_empresa(
+    claims: Dict[str, Any] = Depends(get_current_user_claims),
+    db: AsyncSession = Depends(get_db),
+) -> Dict[str, Any]:
+    """Retorna l'estat del certificat digital .p12, entorn AEAT i cua Outbox de l'empresa."""
+    from datetime import datetime, timezone
+
+    validar_permisos_gestio(claims, requereix_escriptura=False)
+    empresa_id = str(claims.get("empresa_id") or "")
+    if not empresa_id:
+        raise HTTPException(status_code=401, detail="Tenant no identificat")
+    emp_uuid = uuid.UUID(empresa_id)
+    await set_tenant_context(db, empresa_id)
+
+    res = await db.execute(select(Empresa).where(Empresa.id == emp_uuid))
+    empresa = res.scalar_one_or_none()
+    if not empresa:
+        raise HTTPException(status_code=404, detail="Empresa no trobada")
+
+    dies_restants: Optional[int] = None
+    alerta_caducitat = False
+    if empresa.verifactu_cert_caducitat:
+        cad = empresa.verifactu_cert_caducitat
+        if cad.tzinfo is None:
+            cad = cad.replace(tzinfo=timezone.utc)
+        dies_restants = max(0, (cad - datetime.now(timezone.utc)).days)
+        alerta_caducitat = dies_restants <= 30
+
+    rows_outbox = (
+        await db.execute(
+            select(OutboxEnviamentAEAT.estat_enviament, func.count(OutboxEnviamentAEAT.id))
+            .where(OutboxEnviamentAEAT.empresa_id == emp_uuid)
+            .group_by(OutboxEnviamentAEAT.estat_enviament)
+        )
+    ).all()
+    resum_outbox = {str(est): int(cnt) for est, cnt in rows_outbox}
+
+    return {
+        "verifactu_entorn": empresa.verifactu_entorn or "PREPRODUCCIO",
+        "modalitat": "VERI*FACTU",
+        "certificat_configurat": bool(empresa.verifactu_cert_path),
+        "certificat_subject": empresa.verifactu_cert_subject,
+        "certificat_caducitat": (
+            empresa.verifactu_cert_caducitat.isoformat()
+            if empresa.verifactu_cert_caducitat
+            else None
+        ),
+        "dies_restants_certificat": dies_restants,
+        "alerta_caducitat_proxima": alerta_caducitat,
+        "outbox_resum": resum_outbox,
+    }
+

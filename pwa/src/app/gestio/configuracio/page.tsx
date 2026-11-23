@@ -26,10 +26,13 @@ import {
   Copy,
   Mail,
   DollarSign,
+  FileCheck2,
+  Building2,
+  Upload,
 } from "lucide-react";
 
 // Tipus de pestanyes (Paleta Camaleònica i Node Sobirà són exclusius de Superadmin)
-type PestanyaConfig = "personal" | "jornada" | "telegram" | "barema";
+type PestanyaConfig = "personal" | "jornada" | "telegram" | "barema" | "verifactu";
 
 interface UsuariAdmin {
   id: string;
@@ -96,7 +99,7 @@ export default function ConfiguracioPage() {
         const savedTab = sessionStorage.getItem("sevalor_config_tab") as PestanyaConfig | null;
         if (
           savedTab &&
-          ["personal", "jornada", "telegram", "barema"].includes(savedTab)
+          ["personal", "jornada", "telegram", "barema", "verifactu"].includes(savedTab)
         ) {
           setPestanyaActivaState(savedTab);
         }
@@ -106,21 +109,72 @@ export default function ConfiguracioPage() {
     }
   }, []);
 
-  // Dades informatives d'empresa per a la capçalera (lectura des del backend - Zero Mock)
+  // Dades informatives i fiscals d'empresa (lectura des del backend - Zero Mock)
   const [nomEmpresa, setNomEmpresa] = useState("");
+  const [raoSocialFiscal, setRaoSocialFiscal] = useState("");
+  const [esloganActivitat, setEsloganActivitat] = useState("");
   const [nifEmpresa, setNifEmpresa] = useState("");
   const [adrecaEmpresa, setAdrecaEmpresa] = useState("");
+  const [cpEmpresa, setCpEmpresa] = useState("");
+  const [poblacioEmpresa, setPoblacioEmpresa] = useState("");
+  const [provinciaEmpresa, setProvinciaEmpresa] = useState("");
+  const [telefonFacturacio, setTelefonFacturacio] = useState("");
+  const [emailFacturacio, setEmailFacturacio] = useState("");
+  const [titularCompte, setTitularCompte] = useState("");
+  const [ibanCobrament, setIbanCobrament] = useState("");
+  const [registreMercantil, setRegistreMercantil] = useState("");
+  const [verifactuEntorn, setVerifactuEntorn] = useState<"PREPRODUCCIO" | "PRODUCCIO">("PREPRODUCCIO");
+  const [certConfigurat, setCertConfigurat] = useState(false);
+  const [certSubject, setCertSubject] = useState<string | null>(null);
+  const [certCaducitat, setCertCaducitat] = useState<string | null>(null);
+  const [certDiesRestants, setCertDiesRestants] = useState<number | null>(null);
+  const [certAlertaCaducitat, setCertAlertaCaducitat] = useState(false);
+  const [outboxResum, setOutboxResum] = useState<Record<string, number>>({});
+  const [p12Base64, setP12Base64] = useState("");
+  const [p12NomFitxer, setP12NomFitxer] = useState("");
+  const [p12Password, setP12Password] = useState("");
+  const [desantEmissor, setDesantEmissor] = useState(false);
+  const [pujantCert, setPujantCert] = useState(false);
   const [subdominiEmpresa, setSubdominiEmpresa] = useState("");
   const [dominiCustomEmpresa, setDominiCustomEmpresa] = useState<string | null>(null);
   const [monograma, setMonograma] = useState("--");
   const [logotipCarregat, setLogotipCarregat] = useState<string | null>(null);
 
+  const carregarEstatVerifactu = () => {
+    apiFetch<any>("/gestio/configuracio/verifactu/estat")
+      .then((st) => {
+        if (!st) return;
+        if (st.verifactu_entorn) setVerifactuEntorn(st.verifactu_entorn);
+        setCertConfigurat(Boolean(st.certificat_configurat));
+        setCertSubject(st.certificat_subject || null);
+        setCertCaducitat(st.certificat_caducitat || null);
+        setCertDiesRestants(st.dies_restants_certificat ?? null);
+        setCertAlertaCaducitat(Boolean(st.alerta_caducitat_proxima));
+        setOutboxResum(st.outbox_resum || {});
+      })
+      .catch(() => {});
+  };
+
   useEffect(() => {
     apiFetch("/gestio/configuracio/empresa")
       .then((data: any) => {
         if (data.nom) setNomEmpresa(data.nom);
+        setRaoSocialFiscal(data.rao_social_fiscal || data.nom || "");
+        setEsloganActivitat(data.eslogan_activitat || "");
         if (data.nif) setNifEmpresa(data.nif);
         if (data.adreca) setAdrecaEmpresa(data.adreca);
+        setCpEmpresa(data.codi_postal || "");
+        setPoblacioEmpresa(data.poblacio || "");
+        setProvinciaEmpresa(data.provincia || "");
+        setTelefonFacturacio(data.telefon_facturacio || "");
+        setEmailFacturacio(data.email_facturacio || "");
+        setTitularCompte(data.titular_compte_bancari || "");
+        setIbanCobrament(data.iban_cobrament || "");
+        setRegistreMercantil(data.dades_registre_mercantil || "");
+        if (data.verifactu_entorn) setVerifactuEntorn(data.verifactu_entorn);
+        setCertConfigurat(Boolean(data.verifactu_cert_configurat));
+        setCertSubject(data.verifactu_cert_subject || null);
+        setCertCaducitat(data.verifactu_cert_caducitat || null);
         if (data.subdomini) setSubdominiEmpresa(data.subdomini);
         if (data.domini_custom) setDominiCustomEmpresa(data.domini_custom);
         if (data.monograma) setMonograma(data.monograma);
@@ -131,6 +185,7 @@ export default function ConfiguracioPage() {
       .catch(() => {
         console.error("Error carregant configuració d'empresa");
       });
+    carregarEstatVerifactu();
   }, []);
 
   const fqdnEmpresa =
@@ -631,6 +686,29 @@ export default function ConfiguracioPage() {
             >
               <DollarSign className="w-3.5 h-3.5" />
               <span>Barema de Preus</span>
+            </button>
+          )}
+
+          {!esEnginyer && (
+            <button
+              onClick={() => setPestanyaActiva("verifactu")}
+              className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-all ${
+                pestanyaActiva === "verifactu"
+                  ? "bg-primary text-primary-foreground shadow-md"
+                  : "text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"
+              }`}
+            >
+              <FileCheck2 className="w-3.5 h-3.5" />
+              <span>Facturació i Veri*factu (AEAT)</span>
+              <span
+                className={`w-2 h-2 rounded-full ${
+                  certConfigurat && !certAlertaCaducitat
+                    ? "bg-emerald-500"
+                    : certConfigurat && certAlertaCaducitat
+                    ? "bg-amber-500"
+                    : "bg-slate-400"
+                }`}
+              />
             </button>
           )}
         </div>
@@ -1433,6 +1511,375 @@ export default function ConfiguracioPage() {
             )}
           </div>
         </form>
+      )}
+
+      {/* 7. FACTURACIÓ EMISSOR & VERI*FACTU AEAT (RD 1007/2023 i Ordre HAC/1177/2024) */}
+      {pestanyaActiva === "verifactu" && !esEnginyer && (
+        <div className="space-y-6">
+          <form
+            onSubmit={async (e) => {
+              e.preventDefault();
+              if (!esBoss) {
+                mostrarFeedback("ERROR", "Només el rol BOSS pot modificar les dades fiscals i bancàries d'emissió.");
+                return;
+              }
+              setDesantEmissor(true);
+              try {
+                await apiFetch("/gestio/configuracio/empresa", {
+                  method: "PUT",
+                  body: JSON.stringify({
+                    rao_social_fiscal: raoSocialFiscal,
+                    eslogan_activitat: esloganActivitat,
+                    adreca: adrecaEmpresa,
+                    codi_postal: cpEmpresa,
+                    poblacio: poblacioEmpresa,
+                    provincia: provinciaEmpresa,
+                    telefon_facturacio: telefonFacturacio,
+                    email_facturacio: emailFacturacio,
+                    titular_compte_bancari: titularCompte,
+                    iban_cobrament: ibanCobrament,
+                    dades_registre_mercantil: registreMercantil,
+                    verifactu_entorn: verifactuEntorn,
+                  }),
+                });
+                carregarEstatVerifactu();
+                mostrarFeedback("EXIT", "Dades fiscals, IBAN xifrat (AES-256-GCM) i entorn Veri*factu desats.");
+              } catch (err: any) {
+                mostrarFeedback("ERROR", err?.message || "No s'han pogut desar les dades d'emissor.");
+              } finally {
+                setDesantEmissor(false);
+              }
+            }}
+            className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-6 shadow-sm space-y-5"
+          >
+            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+              <div>
+                <h2 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                  <Building2 className="w-4 h-4 text-primary" />
+                  Dades Fiscals, Bancàries i Peu Mercantil de l&apos;Emissor (Plantilla Veri*factu)
+                </h2>
+                <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                  Aquestes dades s&apos;imprimeixen automàticament al PDF oficial de factura i a la capçalera XML SOAP de l&apos;AEAT. L&apos;IBAN es desa xifrat amb AES-256-GCM.
+                </p>
+              </div>
+              <button
+                type="submit"
+                disabled={!esBoss || desantEmissor}
+                className="px-4 py-2 rounded-xl text-xs font-bold bg-primary text-primary-foreground hover:opacity-90 disabled:opacity-50 shadow-sm"
+              >
+                {desantEmissor ? "Desant..." : "Desar Dades Fiscals i IBAN"}
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs">
+              <div>
+                <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">
+                  Raó Social Fiscal (Obligat Emissió)
+                </label>
+                <input
+                  type="text"
+                  disabled={!esBoss}
+                  value={raoSocialFiscal}
+                  onChange={(e) => setRaoSocialFiscal(e.target.value)}
+                  placeholder="Ex: Instal·lacions Tècniques SL"
+                  className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800"
+                />
+              </div>
+              <div>
+                <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">
+                  NIF Emissor (Verificat)
+                </label>
+                <input
+                  type="text"
+                  disabled
+                  value={nifEmpresa}
+                  className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-100 dark:bg-slate-800/50 font-mono text-slate-500"
+                />
+              </div>
+              <div>
+                <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">
+                  Eslògan / Activitat Tècnica (Capçalera PDF)
+                </label>
+                <input
+                  type="text"
+                  disabled={!esBoss}
+                  value={esloganActivitat}
+                  onChange={(e) => setEsloganActivitat(e.target.value)}
+                  placeholder="Ex: Enginyeria, Baixa Tensió i Climatització"
+                  className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800"
+                />
+              </div>
+
+              <div className="md:col-span-2">
+                <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">
+                  Domicili Fiscal (Carrer i Número)
+                </label>
+                <input
+                  type="text"
+                  disabled={!esBoss}
+                  value={adrecaEmpresa}
+                  onChange={(e) => setAdrecaEmpresa(e.target.value)}
+                  placeholder="Ex: C/ Indústria 42, Nau 3"
+                  className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800"
+                />
+              </div>
+              <div>
+                <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">
+                  Codi Postal
+                </label>
+                <input
+                  type="text"
+                  disabled={!esBoss}
+                  value={cpEmpresa}
+                  onChange={(e) => setCpEmpresa(e.target.value)}
+                  placeholder="08025"
+                  className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-mono"
+                />
+              </div>
+
+              <div>
+                <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">
+                  Població / Municipi
+                </label>
+                <input
+                  type="text"
+                  disabled={!esBoss}
+                  value={poblacioEmpresa}
+                  onChange={(e) => setPoblacioEmpresa(e.target.value)}
+                  placeholder="Barcelona"
+                  className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800"
+                />
+              </div>
+              <div>
+                <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">
+                  Província
+                </label>
+                <input
+                  type="text"
+                  disabled={!esBoss}
+                  value={provinciaEmpresa}
+                  onChange={(e) => setProvinciaEmpresa(e.target.value)}
+                  placeholder="Barcelona"
+                  className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800"
+                />
+              </div>
+              <div>
+                <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">
+                  Telèfon de Facturació
+                </label>
+                <input
+                  type="text"
+                  disabled={!esBoss}
+                  value={telefonFacturacio}
+                  onChange={(e) => setTelefonFacturacio(e.target.value)}
+                  placeholder="+34 93 000 00 00"
+                  className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-mono"
+                />
+              </div>
+
+              <div>
+                <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">
+                  Correu Electrònic de Facturació
+                </label>
+                <input
+                  type="email"
+                  disabled={!esBoss}
+                  value={emailFacturacio}
+                  onChange={(e) => setEmailFacturacio(e.target.value)}
+                  placeholder="facturacio@empresa.cat"
+                  className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-mono"
+                />
+              </div>
+              <div>
+                <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">
+                  Titular del Compte Bancari
+                </label>
+                <input
+                  type="text"
+                  disabled={!esBoss}
+                  value={titularCompte}
+                  onChange={(e) => setTitularCompte(e.target.value)}
+                  placeholder="Instal·lacions Tècniques SL"
+                  className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800"
+                />
+              </div>
+              <div>
+                <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">
+                  IBAN de Cobrament (Xifrat AES-256-GCM)
+                </label>
+                <input
+                  type="text"
+                  disabled={!esBoss}
+                  value={ibanCobrament}
+                  onChange={(e) => setIbanCobrament(e.target.value)}
+                  placeholder="ES91 2100 0418 4502 0005 1332"
+                  className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-mono"
+                />
+              </div>
+
+              <div className="md:col-span-2">
+                <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">
+                  Inscripció al Registre Mercantil (Peu legal de factura)
+                </label>
+                <input
+                  type="text"
+                  disabled={!esBoss}
+                  value={registreMercantil}
+                  onChange={(e) => setRegistreMercantil(e.target.value)}
+                  placeholder="Inscrita al Reg. Mercantil de Barcelona, Tom 45120, Foli 88, Full B-477123"
+                  className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800"
+                />
+              </div>
+              <div>
+                <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">
+                  Entorn Telemàtic AEAT Veri*factu
+                </label>
+                <select
+                  disabled={!esBoss}
+                  value={verifactuEntorn}
+                  onChange={(e) => setVerifactuEntorn(e.target.value as "PREPRODUCCIO" | "PRODUCCIO")}
+                  className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-bold"
+                >
+                  <option value="PREPRODUCCIO">PREPRODUCCIÓ (Proves AEAT prewww1/prewww2)</option>
+                  <option value="PRODUCCIO">PRODUCCIÓ OFICIAL (AEAT www1/www2)</option>
+                </select>
+              </div>
+            </div>
+          </form>
+
+          {/* CERTIFICAT DIGITAL PKCS#12 (.p12) PER A CONNEXIÓ SOAP mTLS AEAT */}
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-6 shadow-sm space-y-5">
+            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+              <div>
+                <h3 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                  <FileCheck2 className="w-4 h-4 text-primary" />
+                  Certificat Digital Qualificat PKCS#12 (.p12 / .pfx) — Autenticació mTLS AEAT
+                </h3>
+                <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                  El certificat es desa exclusivament al disc dur sobirà de l&apos;empresa i la seva contrasenya es xifra amb AES-256-GCM.
+                </p>
+              </div>
+              <span
+                className={`px-3 py-1 rounded-full text-xs font-bold ${
+                  certConfigurat && !certAlertaCaducitat
+                    ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-950/80 dark:text-emerald-300"
+                    : certConfigurat && certAlertaCaducitat
+                    ? "bg-amber-100 text-amber-800 dark:bg-amber-950/80 dark:text-amber-300"
+                    : "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300"
+                }`}
+              >
+                {certConfigurat
+                  ? `Certificat Actiu (${certDiesRestants ?? "?"} dies restants)`
+                  : "Pendent de Certificat .p12"}
+              </span>
+            </div>
+
+            {certConfigurat && (
+              <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-800 text-xs space-y-1">
+                <p>
+                  <span className="font-bold text-slate-700 dark:text-slate-300">Titular X.509 (Subject):</span>{" "}
+                  <span className="font-mono">{certSubject}</span>
+                </p>
+                <p>
+                  <span className="font-bold text-slate-700 dark:text-slate-300">Caducitat:</span>{" "}
+                  <span className="font-mono">{certCaducitat ? new Date(certCaducitat).toLocaleDateString("ca-ES") : "—"}</span>
+                </p>
+                <div className="flex flex-wrap gap-2 pt-2">
+                  {Object.entries(outboxResum).map(([est, count]) => (
+                    <span
+                      key={est}
+                      className="px-2.5 py-0.5 rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 font-mono text-[11px]"
+                    >
+                      Outbox {est}: <strong>{count}</strong>
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {esBoss && (
+              <form
+                onSubmit={async (e) => {
+                  e.preventDefault();
+                  if (!p12Base64 || !p12Password) {
+                    mostrarFeedback("ERROR", "Seleccioneu un fitxer .p12/.pfx i introduïu la seva contrasenya.");
+                    return;
+                  }
+                  setPujantCert(true);
+                  try {
+                    const resp = await apiFetch<any>("/gestio/configuracio/verifactu/certificat", {
+                      method: "POST",
+                      body: JSON.stringify({
+                        p12_base64: p12Base64,
+                        password: p12Password,
+                        nom_fitxer: p12NomFitxer || "certificat_aeat.p12",
+                      }),
+                    });
+                    setP12Password("");
+                    setP12Base64("");
+                    carregarEstatVerifactu();
+                    mostrarFeedback("EXIT", resp.missatge || "Certificat digital .p12 validat i activat.");
+                  } catch (err: any) {
+                    mostrarFeedback("ERROR", err?.message || "Error validant el certificat .p12.");
+                  } finally {
+                    setPujantCert(false);
+                  }
+                }}
+                className="grid grid-cols-1 md:grid-cols-3 gap-4 items-end text-xs pt-2 border-t border-slate-200 dark:border-slate-800"
+              >
+                <div>
+                  <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">
+                    Arxiu Certificat PKCS#12 (.p12 / .pfx)
+                  </label>
+                  <label className="flex items-center gap-2 px-3 py-2 rounded-xl border border-dashed border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 cursor-pointer hover:border-primary">
+                    <Upload className="w-4 h-4 text-primary shrink-0" />
+                    <span className="truncate font-mono">
+                      {p12NomFitxer || "Seleccionar fitxer .p12 / .pfx..."}
+                    </span>
+                    <input
+                      type="file"
+                      accept=".p12,.pfx,application/x-pkcs12"
+                      className="hidden"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (!file) return;
+                        setP12NomFitxer(file.name);
+                        const reader = new FileReader();
+                        reader.onload = () => {
+                          const res = String(reader.result || "");
+                          const b64 = res.includes(",") ? res.split(",", 2)[1] : res;
+                          setP12Base64(b64);
+                        };
+                        reader.readAsDataURL(file);
+                      }}
+                    />
+                  </label>
+                </div>
+                <div>
+                  <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">
+                    Contrasenya del Certificat .p12
+                  </label>
+                  <input
+                    type="password"
+                    value={p12Password}
+                    onChange={(e) => setP12Password(e.target.value)}
+                    placeholder="Contrasenya del certificat digital"
+                    className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-mono"
+                  />
+                </div>
+                <div>
+                  <button
+                    type="submit"
+                    disabled={pujantCert || !p12Base64 || !p12Password}
+                    className="w-full px-4 py-2 rounded-xl text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white disabled:opacity-50 shadow-sm"
+                  >
+                    {pujantCert ? "Validant X.509..." : "Validar i Desar Certificat .p12"}
+                  </button>
+                </div>
+              </form>
+            )}
+          </div>
+        </div>
       )}
 
       {/* MODAL NOU SLOT DE JORNADA (POST /gestio/configuracio/slots) */}

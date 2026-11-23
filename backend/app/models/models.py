@@ -115,6 +115,23 @@ class Empresa(Base):
     feature_telegram: Mapped[bool] = mapped_column(
         Boolean, default=True, server_default=text("true")
     )
+    rao_social_fiscal: Mapped[Optional[str]] = mapped_column(String(200))
+    eslogan_activitat: Mapped[Optional[str]] = mapped_column(String(255))
+    codi_postal: Mapped[Optional[str]] = mapped_column(String(15))
+    poblacio: Mapped[Optional[str]] = mapped_column(String(100))
+    provincia: Mapped[Optional[str]] = mapped_column(String(100))
+    telefon_facturacio: Mapped[Optional[str]] = mapped_column(String(40))
+    email_facturacio: Mapped[Optional[str]] = mapped_column(String(200))
+    titular_compte_bancari: Mapped[Optional[str]] = mapped_column(String(200))
+    iban_cobrament_xifrat: Mapped[Optional[str]] = mapped_column(Text)
+    dades_registre_mercantil: Mapped[Optional[str]] = mapped_column(Text)
+    verifactu_entorn: Mapped[str] = mapped_column(
+        String(20), default="PREPRODUCCIO", server_default="PREPRODUCCIO"
+    )
+    verifactu_cert_path: Mapped[Optional[str]] = mapped_column(String(500))
+    verifactu_cert_pass_xifrat: Mapped[Optional[str]] = mapped_column(Text)
+    verifactu_cert_subject: Mapped[Optional[str]] = mapped_column(String(300))
+    verifactu_cert_caducitat: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     data_onboarding: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
@@ -370,6 +387,9 @@ class Client(Base):
     telefon: Mapped[Optional[str]] = mapped_column(String(30))
     email: Mapped[Optional[str]] = mapped_column(String(200))
     adreca_fiscal: Mapped[Optional[str]] = mapped_column(Text)
+    codi_postal: Mapped[Optional[str]] = mapped_column(String(15))
+    poblacio: Mapped[Optional[str]] = mapped_column(String(100))
+    provincia: Mapped[Optional[str]] = mapped_column(String(100))
     estat_canal_telegram: Mapped[str] = mapped_column(
         String(20), default="DESVINCULAT", server_default="DESVINCULAT"
     )
@@ -1428,7 +1448,11 @@ class FacturaCapcalera(Base):
     __tablename__ = "factures_capcalera"
     __table_args__ = (
         UniqueConstraint(
-            "empresa_id", "serie", "numero_factura", name="uq_factures_empresa_serie_num"
+            "empresa_id",
+            "exercici",
+            "serie",
+            "numero_factura",
+            name="uq_factures_empresa_exercici_serie_num",
         ),
     )
 
@@ -1441,8 +1465,17 @@ class FacturaCapcalera(Base):
     empresa_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("empreses.id", ondelete="CASCADE"), nullable=False
     )
+    exercici: Mapped[int] = mapped_column(
+        Integer,
+        default=lambda: datetime.now(timezone.utc).year,
+        server_default=text("EXTRACT(YEAR FROM CURRENT_DATE)::int"),
+        nullable=False,
+    )
     numero_factura: Mapped[int] = mapped_column(Integer, nullable=False)
     serie: Mapped[str] = mapped_column(String(20), default="2026", server_default="2026")
+    num_serie_verifactu: Mapped[Optional[str]] = mapped_column(String(60))
+    tipus_factura: Mapped[str] = mapped_column(String(5), default="F1", server_default="F1")
+    tipus_rectificacio: Mapped[Optional[str]] = mapped_column(String(1))
     client_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("clients.id", ondelete="RESTRICT"), nullable=False
     )
@@ -1451,10 +1484,18 @@ class FacturaCapcalera(Base):
         default=lambda: datetime.now(timezone.utc),
         server_default=text("now()"),
     )
+    data_operacio: Mapped[Optional[date]] = mapped_column(Date)
+    referencia_client: Mapped[Optional[str]] = mapped_column(String(100))
     base_imposable: Mapped[float] = mapped_column(
         Numeric(12, 2), default=0.00, server_default=text("0")
     )
     quota_iva: Mapped[float] = mapped_column(Numeric(12, 2), default=0.00, server_default=text("0"))
+    quota_recarrec_equivalencia: Mapped[float] = mapped_column(
+        Numeric(12, 2), default=0.00, server_default=text("0")
+    )
+    import_total_verifactu: Mapped[float] = mapped_column(
+        Numeric(12, 2), default=0.00, server_default=text("0")
+    )
     import_retencio: Mapped[float] = mapped_column(
         Numeric(12, 2), default=0.00, server_default=text("0")
     )
@@ -1468,10 +1509,11 @@ class FacturaCapcalera(Base):
         String(20), default="PENDENT", server_default="PENDENT"
     )
     estat_enviament: Mapped[str] = mapped_column(
-        String(20), default="PENDENT", server_default="PENDENT"
+        String(30), default="PENDENT", server_default="PENDENT"
     )
     hash_anterior: Mapped[Optional[str]] = mapped_column(String(64))
     hash_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    fecha_hora_huso_gen_registro: Mapped[Optional[str]] = mapped_column(String(35))
     qr_code_path: Mapped[Optional[str]] = mapped_column(String(500))
     pdf_path: Mapped[Optional[str]] = mapped_column(String(500))
     estat_document: Mapped[str] = mapped_column(
@@ -1485,6 +1527,9 @@ class FacturaCapcalera(Base):
     es_inversio_subjecte_passiu: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default=text("false")
     )
+    causa_exempcio: Mapped[Optional[str]] = mapped_column(String(10))
+    mencio_legal: Mapped[Optional[str]] = mapped_column(Text)
+    notes_factura: Mapped[Optional[str]] = mapped_column(Text)
     justificant_suplerts_pdf_path: Mapped[Optional[str]] = mapped_column(String(500))
     import_retencio_garantia_4308: Mapped[float] = mapped_column(
         Numeric(12, 2), default=0.00, server_default=text("0")
@@ -1501,6 +1546,14 @@ class FacturaCapcalera(Base):
     )
     justificant_reclamacio_art80_path: Mapped[Optional[str]] = mapped_column(String(500))
     qr_verifactu_payload: Mapped[Optional[str]] = mapped_column(Text)
+    estat_anulacio: Mapped[str] = mapped_column(
+        String(25), default="ACTIVA", server_default="ACTIVA"
+    )
+    data_anulacio: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    motiu_anulacio: Mapped[Optional[str]] = mapped_column(Text)
+    hash_anulacio_sha256: Mapped[Optional[str]] = mapped_column(String(64))
+    csv_aeat: Mapped[Optional[str]] = mapped_column(String(64))
+    darrer_error_aeat: Mapped[Optional[str]] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
@@ -1511,6 +1564,71 @@ class FacturaCapcalera(Base):
         default=lambda: datetime.now(timezone.utc),
         server_default=text("now()"),
     )
+
+
+VERIFACTU_FACTURA_IMMUTABLE_FN_DDL = DDL(
+    """
+    CREATE OR REPLACE FUNCTION fn_prevent_verifactu_invoice_mutation()
+    RETURNS TRIGGER AS $$
+    BEGIN
+        IF TG_OP = 'DELETE' THEN
+            IF OLD.estat_document = 'EMESA' AND COALESCE(OLD.serie, '') <> 'PRE' THEN
+                RAISE EXCEPTION 'VERIFACTU_IMMUTABLE_VIOLATION: Una factura emesa a Veri*factu és immutable i no es pot eliminar; cal emetre una factura rectificativa o un registre d anul·lació.';
+            END IF;
+            RETURN OLD;
+        ELSIF TG_OP = 'UPDATE' THEN
+            IF OLD.estat_document = 'EMESA' AND COALESCE(OLD.serie, '') <> 'PRE' THEN
+                IF NEW.empresa_id IS DISTINCT FROM OLD.empresa_id
+                   OR NEW.client_id IS DISTINCT FROM OLD.client_id
+                   OR NEW.serie IS DISTINCT FROM OLD.serie
+                   OR NEW.exercici IS DISTINCT FROM OLD.exercici
+                   OR NEW.numero_factura IS DISTINCT FROM OLD.numero_factura
+                   OR (OLD.num_serie_verifactu IS NOT NULL AND NEW.num_serie_verifactu IS DISTINCT FROM OLD.num_serie_verifactu)
+                   OR NEW.data_emissio IS DISTINCT FROM OLD.data_emissio
+                   OR NEW.base_imposable IS DISTINCT FROM OLD.base_imposable
+                   OR NEW.quota_iva IS DISTINCT FROM OLD.quota_iva
+                   OR COALESCE(NEW.quota_recarrec_equivalencia, 0) IS DISTINCT FROM COALESCE(OLD.quota_recarrec_equivalencia, 0)
+                   OR (COALESCE(OLD.import_total_verifactu, 0) <> 0 AND NEW.import_total_verifactu IS DISTINCT FROM OLD.import_total_verifactu)
+                   OR NEW.import_suplits IS DISTINCT FROM OLD.import_suplits
+                   OR NEW.import_retencio IS DISTINCT FROM OLD.import_retencio
+                   OR NEW.import_retencio_garantia_4308 IS DISTINCT FROM OLD.import_retencio_garantia_4308
+                   OR NEW.liquid_exigible IS DISTINCT FROM OLD.liquid_exigible
+                   OR NEW.hash_sha256 IS DISTINCT FROM OLD.hash_sha256
+                   OR NEW.hash_anterior IS DISTINCT FROM OLD.hash_anterior
+                   OR (OLD.fecha_hora_huso_gen_registro IS NOT NULL AND NEW.fecha_hora_huso_gen_registro IS DISTINCT FROM OLD.fecha_hora_huso_gen_registro)
+                   OR (OLD.qr_verifactu_payload IS NOT NULL AND NEW.qr_verifactu_payload IS DISTINCT FROM OLD.qr_verifactu_payload)
+                   OR NEW.estat_document IS DISTINCT FROM OLD.estat_document
+                THEN
+                    RAISE EXCEPTION 'VERIFACTU_IMMUTABLE_VIOLATION: Els camps fiscals i criptogràfics d una factura emesa a Veri*factu són immutables.';
+                END IF;
+                IF OLD.estat_anulacio = 'ANULADA_VERIFACTU'
+                   AND (NEW.estat_anulacio IS DISTINCT FROM OLD.estat_anulacio
+                        OR NEW.hash_anulacio_sha256 IS DISTINCT FROM OLD.hash_anulacio_sha256)
+                THEN
+                    RAISE EXCEPTION 'VERIFACTU_IMMUTABLE_VIOLATION: Un registre d anul·lació Veri*factu no es pot revertir ni alterar.';
+                END IF;
+            END IF;
+            RETURN NEW;
+        END IF;
+        RETURN NULL;
+    END;
+    $$ LANGUAGE plpgsql
+    """
+)
+VERIFACTU_FACTURA_IMMUTABLE_DROP_DDL = DDL(
+    "DROP TRIGGER IF EXISTS trg_factures_verifactu_immutable ON factures_capcalera"
+)
+VERIFACTU_FACTURA_IMMUTABLE_TRG_DDL = DDL(
+    """
+    CREATE TRIGGER trg_factures_verifactu_immutable
+    BEFORE UPDATE OR DELETE ON factures_capcalera
+    FOR EACH ROW EXECUTE FUNCTION fn_prevent_verifactu_invoice_mutation()
+    """
+)
+
+event.listen(FacturaCapcalera.__table__, "after_create", VERIFACTU_FACTURA_IMMUTABLE_FN_DDL)
+event.listen(FacturaCapcalera.__table__, "after_create", VERIFACTU_FACTURA_IMMUTABLE_DROP_DDL)
+event.listen(FacturaCapcalera.__table__, "after_create", VERIFACTU_FACTURA_IMMUTABLE_TRG_DDL)
 
 
 class FacturaLinia(Base):
@@ -1536,12 +1654,19 @@ class FacturaLinia(Base):
         UUID(as_uuid=True), ForeignKey("articles.id", ondelete="SET NULL")
     )
     concepte: Mapped[str] = mapped_column(String(200), nullable=False)
+    descripcio_detall: Mapped[Optional[str]] = mapped_column(Text)
     quantitat: Mapped[float] = mapped_column(Numeric(12, 3), default=1.0, server_default=text("1"))
     preu_venda_unitari: Mapped[float] = mapped_column(
         Numeric(10, 2), default=0.00, server_default=text("0")
     )
     tipus_iva: Mapped[float] = mapped_column(
         Numeric(4, 2), default=21.00, server_default=text("21")
+    )
+    tipus_recarrec_equivalencia: Mapped[float] = mapped_column(
+        Numeric(4, 2), default=0.00, server_default=text("0")
+    )
+    quota_recarrec_linia: Mapped[float] = mapped_column(
+        Numeric(12, 2), default=0.00, server_default=text("0")
     )
     subtotal: Mapped[float] = mapped_column(Numeric(12, 2), default=0.00, server_default=text("0"))
     compte_pgc: Mapped[str] = mapped_column(String(10), default="700000", server_default="700000")
@@ -1576,11 +1701,20 @@ class OutboxEnviamentAEAT(Base):
     factura_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("factures_capcalera.id", ondelete="CASCADE"), nullable=False
     )
+    tipus_registre: Mapped[str] = mapped_column(
+        String(15), default="ALTA", server_default="ALTA"
+    )
     payload_xml_path: Mapped[str] = mapped_column(String(500), nullable=False)
     hash_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
     intents_enviament: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
     estat_enviament: Mapped[str] = mapped_column(
-        String(20), default="PENDENT", server_default="PENDENT"
+        String(30), default="PENDENT", server_default="PENDENT"
+    )
+    proper_reintent_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    codi_resposta_aeat: Mapped[Optional[str]] = mapped_column(String(30))
+    csv_aeat: Mapped[Optional[str]] = mapped_column(String(64))
+    temps_espera_segons: Mapped[int] = mapped_column(
+        Integer, default=60, server_default=text("60")
     )
     darrera_resposta_soap: Mapped[Optional[str]] = mapped_column(Text)
     data_creacio: Mapped[datetime] = mapped_column(
@@ -1589,6 +1723,34 @@ class OutboxEnviamentAEAT(Base):
         server_default=text("now()"),
     )
     data_actualitzacio: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        server_default=text("now()"),
+    )
+
+
+class VerifactuCadenaTenant(Base):
+    """Encadenament global SHA-256 per obligat tributari (empresa_id) segons Art. 13 Ordre HAC/1177/2024."""
+
+    __tablename__ = "verifactu_cadena_tenant"
+    __table_args__ = (
+        UniqueConstraint("empresa_id", name="uq_verifactu_cadena_empresa"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+        server_default=text("gen_random_uuid()"),
+    )
+    empresa_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("empreses.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    ultim_hash_sha256: Mapped[Optional[str]] = mapped_column(String(64))
+    ultim_num_serie: Mapped[Optional[str]] = mapped_column(String(60))
+    ultima_data_expedicio: Mapped[Optional[str]] = mapped_column(String(15))
+    ultim_tipus_registre: Mapped[Optional[str]] = mapped_column(String(15))
+    updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
         server_default=text("now()"),
@@ -2443,8 +2605,17 @@ class SaasFacturaB2B(Base):
     )
     client_nom_snapshot: Mapped[str] = mapped_column(String(150), nullable=False)
     client_nif_snapshot: Mapped[str] = mapped_column(String(20), nullable=False)
+    exercici: Mapped[int] = mapped_column(
+        Integer,
+        default=lambda: datetime.now(timezone.utc).year,
+        server_default=text("EXTRACT(YEAR FROM CURRENT_DATE)::int"),
+        nullable=False,
+    )
     serie: Mapped[str] = mapped_column(String(20), default="SAAS", server_default="SAAS")
     numero_factura: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    num_serie_verifactu: Mapped[Optional[str]] = mapped_column(String(60))
+    tipus_factura: Mapped[str] = mapped_column(String(5), default="F1", server_default="F1")
+    tipus_rectificacio: Mapped[Optional[str]] = mapped_column(String(1))
     estat: Mapped[str] = mapped_column(
         String(30), default="ESBORRANY_PREFACTURA", server_default="ESBORRANY_PREFACTURA"
     )  # ESBORRANY_PREFACTURA, EMESA_VERIFACTU, COBRADA, IMPAGADA
@@ -2484,18 +2655,93 @@ class SaasFacturaB2B(Base):
     import_total: Mapped[float] = mapped_column(
         Numeric(12, 2), default=0.00, server_default=text("0.00")
     )
+    import_total_verifactu: Mapped[float] = mapped_column(
+        Numeric(12, 2), default=0.00, server_default=text("0.00")
+    )
     verificada_per_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True)
     data_verificacio_humana: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     hash_sha256: Mapped[Optional[str]] = mapped_column(String(64))
     hash_anterior: Mapped[Optional[str]] = mapped_column(String(64))
+    fecha_hora_huso_gen_registro: Mapped[Optional[str]] = mapped_column(String(35))
     qr_verifactu: Mapped[Optional[str]] = mapped_column(Text)
     pdf_path: Mapped[Optional[str]] = mapped_column(String(500))
+    xml_path: Mapped[Optional[str]] = mapped_column(String(500))
     data_emissio: Mapped[Optional[date]] = mapped_column(Date)
+    data_operacio: Mapped[Optional[date]] = mapped_column(Date)
+    notes_factura: Mapped[Optional[str]] = mapped_column(Text)
+    estat_enviament_aeat: Mapped[str] = mapped_column(
+        String(30), default="PENDENT", server_default="PENDENT"
+    )
+    csv_aeat: Mapped[Optional[str]] = mapped_column(String(64))
+    darrer_error_aeat: Mapped[Optional[str]] = mapped_column(Text)
+    estat_anulacio: Mapped[str] = mapped_column(
+        String(25), default="ACTIVA", server_default="ACTIVA"
+    )
+    data_anulacio: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    motiu_anulacio: Mapped[Optional[str]] = mapped_column(Text)
+    hash_anulacio_sha256: Mapped[Optional[str]] = mapped_column(String(64))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
         server_default=text("now()"),
     )
+
+
+SAAS_FACTURA_IMMUTABLE_FN_DDL = DDL(
+    """
+    CREATE OR REPLACE FUNCTION fn_prevent_saas_invoice_mutation()
+    RETURNS TRIGGER AS $$
+    BEGIN
+        IF TG_OP = 'DELETE' THEN
+            IF OLD.estat IN ('EMESA_VERIFACTU', 'COBRADA', 'IMPAGADA') THEN
+                RAISE EXCEPTION 'VERIFACTU_IMMUTABLE_VIOLATION: Una factura SaaS B2B emesa a Veri*factu és immutable i no es pot eliminar.';
+            END IF;
+            RETURN OLD;
+        ELSIF TG_OP = 'UPDATE' THEN
+            IF OLD.estat IN ('EMESA_VERIFACTU', 'COBRADA', 'IMPAGADA') THEN
+                IF NEW.serie IS DISTINCT FROM OLD.serie
+                   OR NEW.exercici IS DISTINCT FROM OLD.exercici
+                   OR NEW.numero_factura IS DISTINCT FROM OLD.numero_factura
+                   OR (OLD.num_serie_verifactu IS NOT NULL AND NEW.num_serie_verifactu IS DISTINCT FROM OLD.num_serie_verifactu)
+                   OR NEW.base_imposable IS DISTINCT FROM OLD.base_imposable
+                   OR NEW.quota_iva IS DISTINCT FROM OLD.quota_iva
+                   OR NEW.import_total IS DISTINCT FROM OLD.import_total
+                   OR NEW.hash_sha256 IS DISTINCT FROM OLD.hash_sha256
+                   OR NEW.hash_anterior IS DISTINCT FROM OLD.hash_anterior
+                   OR (OLD.fecha_hora_huso_gen_registro IS NOT NULL AND NEW.fecha_hora_huso_gen_registro IS DISTINCT FROM OLD.fecha_hora_huso_gen_registro)
+                   OR (OLD.qr_verifactu IS NOT NULL AND NEW.qr_verifactu IS DISTINCT FROM OLD.qr_verifactu)
+                   OR NEW.estat = 'ESBORRANY_PREFACTURA'
+                THEN
+                    RAISE EXCEPTION 'VERIFACTU_IMMUTABLE_VIOLATION: Els camps fiscals i criptogràfics d una factura SaaS B2B emesa a Veri*factu són immutables.';
+                END IF;
+                IF OLD.estat_anulacio = 'ANULADA_VERIFACTU'
+                   AND (NEW.estat_anulacio IS DISTINCT FROM OLD.estat_anulacio
+                        OR NEW.hash_anulacio_sha256 IS DISTINCT FROM OLD.hash_anulacio_sha256)
+                THEN
+                    RAISE EXCEPTION 'VERIFACTU_IMMUTABLE_VIOLATION: Un registre d anul·lació SaaS B2B Veri*factu no es pot revertir.';
+                END IF;
+            END IF;
+            RETURN NEW;
+        END IF;
+        RETURN NULL;
+    END;
+    $$ LANGUAGE plpgsql
+    """
+)
+SAAS_FACTURA_IMMUTABLE_DROP_DDL = DDL(
+    "DROP TRIGGER IF EXISTS trg_saas_factures_immutable ON saas_factures_b2b"
+)
+SAAS_FACTURA_IMMUTABLE_TRG_DDL = DDL(
+    """
+    CREATE TRIGGER trg_saas_factures_immutable
+    BEFORE UPDATE OR DELETE ON saas_factures_b2b
+    FOR EACH ROW EXECUTE FUNCTION fn_prevent_saas_invoice_mutation()
+    """
+)
+
+event.listen(SaasFacturaB2B.__table__, "after_create", SAAS_FACTURA_IMMUTABLE_FN_DDL)
+event.listen(SaasFacturaB2B.__table__, "after_create", SAAS_FACTURA_IMMUTABLE_DROP_DDL)
+event.listen(SaasFacturaB2B.__table__, "after_create", SAAS_FACTURA_IMMUTABLE_TRG_DDL)
 
 
 class SaasTiquetSuport(Base):

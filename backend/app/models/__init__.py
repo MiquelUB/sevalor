@@ -37,6 +37,7 @@ from app.models.models import (
     TiquetCarburant,
     Usuari,
     Vehicle,
+    VerifactuCadenaTenant,
 )
 
 __all__ = [
@@ -64,6 +65,7 @@ __all__ = [
     "FacturaCapcalera",
     "FacturaLinia",
     "OutboxEnviamentAEAT",
+    "VerifactuCadenaTenant",
     "ContracteManteniment",
     "ContractesMantenimentFinques",
     "RevisionsContracte",

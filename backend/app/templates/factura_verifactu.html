@@ -1,0 +1,490 @@
+<!DOCTYPE html>
+<html lang="ca">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ titol_document }} {{ num_serie_verifactu }}</title>
+<style>
+  :root {
+    --ink: #1f2a2e;
+    --muted: #667075;
+    --line: #d9dedf;
+    --accent: {{ accent_hsl_css | default('hsl(166, 22%, 24%)') }};
+    --tint: {{ tint_hsl_css | default('hsl(150, 10%, 96%)') }};
+    --paper: #ffffff;
+    --desk: #e9ecec;
+  }
+  * { box-sizing: border-box; }
+  html { background: var(--paper); }
+  body {
+    margin: 0;
+    padding: 0;
+    color: var(--ink);
+    font: 10pt/1.45 "Liberation Sans", "DejaVu Sans", "Helvetica Neue", Helvetica, Arial, sans-serif;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  .page {
+    width: 100%;
+    margin: 0 auto;
+    background: var(--paper);
+    display: block;
+  }
+
+  /* Capçalera: el QR va primer, a dalt i a l'esquerra (Art. 20-21 Ordre HAC/1177/2024) */
+  .head {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 20px;
+    padding-bottom: 12px;
+    border-bottom: 2px solid var(--accent);
+  }
+  .qr-zone { display: flex; align-items: center; gap: 14px; }
+  .qr-wrapper { display: flex; flex-direction: column; align-items: center; }
+  .qr-top-label {
+    font-size: 7.5pt;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    color: var(--ink);
+    margin-bottom: 1.5mm;
+    text-align: center;
+  }
+  .qr-box {
+    width: 35mm;
+    height: 35mm;
+    flex: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 2mm;
+    text-align: center;
+    border: 1px dashed var(--muted);
+    font-size: 8pt;
+    color: var(--muted);
+    background: #ffffff;
+  }
+  .qr-box--filled {
+    border: 0;
+    padding: 0;
+    background: #ffffff;
+  }
+  .qr-box svg, .qr-box img {
+    display: block;
+    width: 35mm;
+    height: 35mm;
+  }
+  .qr-legend {
+    margin: 0;
+    max-width: 48mm;
+    font-size: 8.5pt;
+    line-height: 1.35;
+    color: var(--muted);
+  }
+  .qr-legend strong {
+    display: block;
+    font-size: 11pt;
+    color: var(--ink);
+    letter-spacing: 0.02em;
+  }
+  .draft-badge {
+    display: inline-block;
+    padding: 6px 10px;
+    border: 1px dashed #b45309;
+    background: #fffbeb;
+    color: #92400e;
+    font-size: 8.5pt;
+    font-weight: 600;
+    max-width: 85mm;
+  }
+  .anulada-badge {
+    display: inline-block;
+    padding: 6px 10px;
+    border: 1.5px solid #b91c1c;
+    background: #fef2f2;
+    color: #991b1b;
+    font-size: 9pt;
+    font-weight: 700;
+    max-width: 85mm;
+  }
+
+  .doc-title { text-align: right; }
+  .doc-title h1 {
+    margin: 0;
+    font: 600 24pt/1.05 "Liberation Serif", Georgia, "Times New Roman", serif;
+    color: var(--ink);
+  }
+  .doc-title .num {
+    margin-top: 6px;
+    font-size: 11pt;
+    font-weight: 600;
+    color: var(--muted);
+  }
+
+  .brand-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-top: 12px;
+  }
+  .brand-logo {
+    max-height: 14mm;
+    max-width: 42mm;
+    object-fit: contain;
+  }
+  .brand {
+    font: 600 14.5pt/1.2 "Liberation Serif", Georgia, "Times New Roman", serif;
+    color: var(--accent);
+  }
+  .brand small {
+    display: block;
+    margin-top: 2px;
+    font: 400 8.5pt/1.35 "Liberation Sans", "Helvetica Neue", Arial, sans-serif;
+    color: var(--muted);
+  }
+
+  .parties {
+    display: flex;
+    justify-content: space-between;
+    gap: 24px;
+    margin-top: 16px;
+  }
+  .party { flex: 1; }
+  .party h2, .info h2 {
+    margin: 0 0 5px;
+    font-size: 8.5pt;
+    font-weight: 600;
+    color: var(--muted);
+  }
+  .party p, .info p { margin: 0 0 2.5px; }
+  .party .name { font-weight: 600; font-size: 10.5pt; }
+
+  .meta {
+    display: flex;
+    flex-wrap: wrap;
+    margin: 16px 0 0;
+    border: 1px solid var(--line);
+    background: var(--tint);
+  }
+  .meta div {
+    width: 33.333%;
+    padding: 7px 10px;
+    border-right: 1px solid var(--line);
+    border-bottom: 1px solid var(--line);
+  }
+  .meta div:nth-child(3n) { border-right: 0; }
+  .meta div:nth-last-child(-n+3) { border-bottom: 0; }
+  .meta dt { font-size: 8pt; color: var(--muted); }
+  .meta dd { margin: 2px 0 0; font-weight: 600; font-size: 9.5pt; }
+
+  .rect {
+    margin-top: 12px;
+    padding: 8px 12px;
+    border-left: 3px solid var(--accent);
+    background: var(--tint);
+    font-size: 9pt;
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+  .rect p { margin: 0 0 2px; }
+  .rect p:last-child { margin-bottom: 0; }
+
+  table { border-collapse: collapse; font-variant-numeric: tabular-nums; }
+  .items { width: 100%; margin-top: 18px; }
+  .items thead { display: table-header-group; }
+  .items tr { break-inside: avoid; page-break-inside: avoid; }
+  .items th {
+    padding: 7px 9px;
+    text-align: left;
+    font-size: 8.5pt;
+    font-weight: 600;
+    color: #ffffff;
+    background: var(--accent);
+  }
+  .items th.num { text-align: right; }
+  .items td {
+    padding: 8px 9px;
+    vertical-align: top;
+    border-bottom: 1px solid var(--line);
+    font-size: 9.5pt;
+  }
+  .num { text-align: right; white-space: nowrap; }
+  .items td .sub {
+    display: block;
+    margin-top: 2px;
+    font-size: 8.5pt;
+    color: var(--muted);
+  }
+
+  .bottom {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 20px;
+    margin-top: 16px;
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+  .breakdown { width: 88mm; font-size: 9pt; }
+  .breakdown th {
+    padding: 5px 7px;
+    text-align: left;
+    font-weight: 600;
+    font-size: 8pt;
+    color: var(--muted);
+    border-bottom: 1px solid var(--line);
+  }
+  .breakdown th.num { text-align: right; }
+  .breakdown td { padding: 5px 7px; border-bottom: 1px solid var(--line); }
+
+  .totals { width: 78mm; font-size: 9.5pt; }
+  .totals td { padding: 4.5px 9px; }
+  .totals td:last-child { text-align: right; white-space: nowrap; }
+  .totals tr.total-fiscal td {
+    padding: 7px 9px;
+    font-size: 11.5pt;
+    font-weight: 700;
+    color: var(--accent);
+    border-top: 2px solid var(--accent);
+  }
+  .totals tr.total-liquid td {
+    padding: 7px 9px;
+    font-size: 11.5pt;
+    font-weight: 700;
+    color: var(--ink);
+    background: var(--tint);
+    border-top: 1px solid var(--accent);
+  }
+
+  .info {
+    display: flex;
+    justify-content: space-between;
+    gap: 24px;
+    margin-top: 14px;
+    font-size: 9pt;
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+  .info > div { flex: 1; }
+
+  .foot {
+    margin-top: 14px;
+    padding-top: 8px;
+    border-top: 1px solid var(--line);
+    font-size: 8pt;
+    color: var(--muted);
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+  .foot .hash-trace {
+    display: block;
+    margin-top: 3px;
+    font-family: "Liberation Mono", "DejaVu Sans Mono", monospace;
+    font-size: 7pt;
+    color: var(--muted);
+  }
+
+  @page {
+    size: A4;
+    margin: 12mm 16mm 15mm;
+    @bottom-right {
+      content: "Pàg. " counter(page) " / " counter(pages);
+      font: 7.5pt "Liberation Sans", "DejaVu Sans", Arial, sans-serif;
+      color: #667075;
+    }
+  }
+</style>
+</head>
+<body>
+<main class="page">
+
+  <header class="head">
+    <div class="qr-zone">
+      {% if es_esborrany %}
+      <div class="draft-badge">
+        ESBORRANY / PRE-FACTURA<br>
+        Document no definitiu pendent de validació humana (HITL). Sense validesa fiscal Veri*factu.
+      </div>
+      {% elif es_anulada %}
+      <div class="anulada-badge">
+        FACTURA ANUL·LADA A VERI*FACTU<br>
+        Registre d'anul·lació encadenat a l'AEAT.
+      </div>
+      {% else %}
+      <div class="qr-wrapper">
+        <div class="qr-top-label">QR tributario</div>
+        <div class="qr-box {% if qr_svg %}qr-box--filled{% endif %}">
+          {% if qr_svg %}
+            {{ qr_svg | safe }}
+          {% else %}
+            QR AEAT
+          {% endif %}
+        </div>
+      </div>
+      {% if mostrar_llegenda_verifactu %}
+      <p class="qr-legend">
+        <strong>VERI*FACTU</strong>
+        Factura verificable a la seu electrònica de l'AEAT
+      </p>
+      {% endif %}
+      {% endif %}
+    </div>
+
+    <div class="doc-title">
+      <h1>{{ titol_document }}</h1>
+      <div class="num">N.º {{ num_serie_verifactu }}</div>
+    </div>
+  </header>
+
+  <div class="brand-row">
+    {% if logotip_data_uri %}
+    <img class="brand-logo" src="{{ logotip_data_uri }}" alt="{{ emissor.nom_comercial }}">
+    {% endif %}
+    <div class="brand">
+      {{ emissor.nom_comercial }}
+      {% if emissor.eslogan %}
+      <small>{{ emissor.eslogan }}</small>
+      {% endif %}
+    </div>
+  </div>
+
+  <section class="parties">
+    <div class="party">
+      <h2>Emissor</h2>
+      <p class="name">{{ emissor.rao_social }}</p>
+      <p>NIF/CIF: {{ emissor.nif }}</p>
+      {% if emissor.adreca %}<p>{{ emissor.adreca }}</p>{% endif %}
+      {% if emissor.cp_poblacio_provincia %}<p>{{ emissor.cp_poblacio_provincia }}</p>{% endif %}
+      {% if emissor.contacte_linia %}<p>{{ emissor.contacte_linia }}</p>{% endif %}
+    </div>
+    <div class="party">
+      <h2>Client</h2>
+      <p class="name">{{ client.rao_social }}</p>
+      <p>NIF/CIF: {{ client.nif }}</p>
+      {% if client.adreca %}<p>{{ client.adreca }}</p>{% endif %}
+      {% if client.cp_poblacio_provincia %}<p>{{ client.cp_poblacio_provincia }}</p>{% endif %}
+      {% if client.email %}<p>{{ client.email }}</p>{% endif %}
+    </div>
+  </section>
+
+  <dl class="meta">
+    <div><dt>Data d'expedició</dt><dd>{{ meta.data_expedicio }}</dd></div>
+    <div><dt>Data de l'operació</dt><dd>{{ meta.data_operacio }}</dd></div>
+    <div><dt>Data de venciment</dt><dd>{{ meta.data_venciment }}</dd></div>
+    <div><dt>Tipus de factura</dt><dd>{{ meta.tipus_factura_label }}</dd></div>
+    <div><dt>Referència</dt><dd>{{ meta.referencia }}</dd></div>
+    <div><dt>Forma de pagament</dt><dd>{{ meta.forma_pagament }}</dd></div>
+  </dl>
+
+  {% if rectificativa %}
+  <section class="rect">
+    <p><strong>Factura rectificativa ({{ rectificativa.codi_tipus }}).</strong> Rectifica la factura {{ rectificativa.num_serie_rectificada }}{% if rectificativa.data_rectificada %} de data {{ rectificativa.data_rectificada }}{% endif %}.</p>
+    <p>Tipus de rectificació: {{ rectificativa.modalitat_label }} · Motiu: {{ rectificativa.motiu }}</p>
+  </section>
+  {% endif %}
+
+  <table class="items">
+    <thead>
+      <tr>
+        <th>Descripció</th>
+        <th class="num">Quantitat</th>
+        <th class="num">Preu unitari</th>
+        {% if te_descomptes_linia %}<th class="num">Dto.</th>{% endif %}
+        <th class="num">IVA</th>
+        <th class="num">Import</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for lin in linies %}
+      <tr>
+        <td>
+          {{ lin.concepte }}
+          {% if lin.detall %}<span class="sub">{{ lin.detall }}</span>{% endif %}
+        </td>
+        <td class="num">{{ lin.quantitat_fmt }}</td>
+        <td class="num">{{ lin.preu_unitari_fmt }} €</td>
+        {% if te_descomptes_linia %}<td class="num">{{ lin.descompte_fmt }} %</td>{% endif %}
+        <td class="num">{{ lin.iva_fmt }} %</td>
+        <td class="num">{{ lin.import_fmt }} €</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <section class="bottom">
+    <table class="breakdown">
+      <thead>
+        <tr>
+          <th>Tipus d'IVA</th>
+          <th class="num">Base imposable</th>
+          <th class="num">Quota</th>
+          {% if te_recarrec_equivalencia %}<th class="num">Rec. equiv.</th>{% endif %}
+        </tr>
+      </thead>
+      <tbody>
+        {% for b in desglossament_iva %}
+        <tr>
+          <td>{{ b.tipus_iva_fmt }} %</td>
+          <td class="num">{{ b.base_fmt }} €</td>
+          <td class="num">{{ b.quota_fmt }} €</td>
+          {% if te_recarrec_equivalencia %}<td class="num">{{ b.recarrec_fmt }} €</td>{% endif %}
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+
+    <table class="totals">
+      <tr><td>Base imposable</td><td>{{ totals.base_imposable_fmt }} €</td></tr>
+      {% if totals.te_descompte_global %}
+      <tr><td>Descompte ({{ totals.descompte_pct_fmt }} %)</td><td>-{{ totals.descompte_import_fmt }} €</td></tr>
+      {% endif %}
+      <tr><td>IVA</td><td>{{ totals.quota_iva_fmt }} €</td></tr>
+      {% if totals.te_recarrec %}
+      <tr><td>Recàrrec d'equivalència</td><td>{{ totals.quota_recarrec_fmt }} €</td></tr>
+      {% endif %}
+      <tr class="total-fiscal"><td>Total factura</td><td>{{ totals.import_total_verifactu_fmt }} €</td></tr>
+      {% if totals.te_suplerts %}
+      <tr><td>Suplerts exempts (compte 554)</td><td>+{{ totals.import_suplerts_fmt }} €</td></tr>
+      {% endif %}
+      {% if totals.te_retencio_irpf %}
+      <tr><td>Retenció IRPF{% if totals.irpf_pct_fmt %} ({{ totals.irpf_pct_fmt }} %){% endif %}</td><td>-{{ totals.import_retencio_fmt }} €</td></tr>
+      {% endif %}
+      {% if totals.te_retencio_garantia %}
+      <tr><td>Retenció garantia d'obra (4308)</td><td>-{{ totals.import_retencio_garantia_fmt }} €</td></tr>
+      {% endif %}
+      {% if totals.mostrar_liquid_diferent %}
+      <tr class="total-liquid"><td>Total líquid a pagar</td><td>{{ totals.liquid_exigible_fmt }} €</td></tr>
+      {% endif %}
+    </table>
+  </section>
+
+  <section class="info">
+    <div>
+      <h2>Dades de pagament</h2>
+      <p>Forma de pagament: {{ meta.forma_pagament }}</p>
+      {% if pagament.titular %}<p>Titular: {{ pagament.titular }}</p>{% endif %}
+      {% if pagament.iban %}<p>IBAN: {{ pagament.iban }}</p>{% endif %}
+      <p>Concepte: Factura {{ num_serie_verifactu }}</p>
+    </div>
+    <div>
+      <h2>Notes i mencions legals</h2>
+      {% if notes.mencio_legal %}<p><strong>{{ notes.mencio_legal }}</strong></p>{% endif %}
+      {% if notes.notes_factura %}<p>{{ notes.notes_factura }}</p>{% endif %}
+      {% if not notes.mencio_legal and not notes.notes_factura %}
+      <p>Factura emesa conforme al Reial Decret 1007/2023 i l'Ordre HAC/1177/2024 (Veri*factu).</p>
+      {% endif %}
+    </div>
+  </section>
+
+  <footer class="foot">
+    {{ peu_mercantil }}
+    {% if not es_esborrany and hash_actual %}
+    <span class="hash-trace">
+      Empremta Veri*factu SHA-256: {{ hash_actual }}{% if hash_anterior %} · Ant: {{ hash_anterior[:16] }}…{% else %} · Primer registre{% endif %}{% if csv_aeat %} · CSV AEAT: {{ csv_aeat }}{% endif %}
+    </span>
+    {% endif %}
+  </footer>
+
+</main>
+</body>
+</html>

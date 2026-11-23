@@ -106,6 +106,8 @@ class OperariCreate(BaseModel):
     rol: str = Field("OPERARI", max_length=30)
     especialitat: str = Field("SISTEMES_REG", max_length=50)
     cost_hora_eur: float = Field(22.50)
+    salari_mensual_brut: Optional[float] = Field(default=None, ge=0.0)
+    cost_ss_mensual: Optional[float] = Field(default=None, ge=0.0)
     carnet_conduir: str = Field("B", max_length=20)
     carnet_caducitat: Optional[date] = None
     prl_certificat_vigencia: Optional[date] = None
@@ -127,6 +129,8 @@ class OperariUpdate(BaseModel):
     estat_operatiu: Optional[str] = Field(None, max_length=30)
     estat: Optional[str] = Field(None, max_length=20)
     cost_hora_eur: Optional[float] = None
+    salari_mensual_brut: Optional[float] = Field(default=None, ge=0.0)
+    cost_ss_mensual: Optional[float] = Field(default=None, ge=0.0)
     carnet_conduir: Optional[str] = Field(None, max_length=20)
     carnet_caducitat: Optional[date] = None
     prl_certificat_vigencia: Optional[date] = None
@@ -149,6 +153,8 @@ class OperariResponse(BaseModel):
     estat_operatiu: Optional[str] = "DISPONIBLE"
     estat: str = "ACTIU"
     cost_hora_eur: Optional[float] = 22.50
+    salari_mensual_brut: Optional[float] = None
+    cost_ss_mensual: Optional[float] = None
     carnet_conduir: str = "B"
     carnet_caducitat: Optional[date] = None
     prl_certificat_vigencia: Optional[date] = None
@@ -397,8 +403,14 @@ async def _build_operari_response(
 ) -> OperariResponse:
     """Construeix el DTO complet d'Operari amb eines reals, vehicle 1:1, geolocalització i alertes Copilot."""
     op_resp = OperariResponse.model_validate(op)
-    if (rol or "").strip().upper() == "ENGINYER":
+    rol_norm = (rol or "").strip().upper()
+    if rol_norm == "ENGINYER":
         op_resp.cost_hora_eur = None
+        op_resp.salari_mensual_brut = None
+        op_resp.cost_ss_mensual = None
+    elif rol_norm == "SECRETARIA" and bool(getattr(op, "es_alta_direccio", False)):
+        op_resp.salari_mensual_brut = None
+        op_resp.cost_ss_mensual = None
     op_resp.te_cap_vigent = bool(getattr(op, "te_cap", False))
     op_resp.certificats_prl = list(getattr(op, "_certificats_prl", []))
     alertes, docs_pendents = _calcular_alertes_copilot_operari(op)
@@ -623,6 +635,8 @@ async def alta_operari(
         telefon=operari.telefon.strip(),
         especialitat=operari.especialitat,
         cost_hora_eur=operari.cost_hora_eur,
+        salari_mensual_brut=float(operari.salari_mensual_brut) if operari.salari_mensual_brut is not None else 0.0,
+        cost_ss_mensual=float(operari.cost_ss_mensual) if operari.cost_ss_mensual is not None else 0.0,
         carnet_conduir=operari.carnet_conduir or "B",
         carnet_caducitat=operari.carnet_caducitat,
         prl_certificat_vigencia=operari.prl_certificat_vigencia,
@@ -641,7 +655,8 @@ async def alta_operari(
             db, emp_uuid, nou_usuari, operari.vehicle_assignat_id
         )
 
-    resp_obj = await _build_operari_response(db, emp_uuid, nou_usuari)
+    rol_caller = str(claims.get("rol", "BOSS")).upper()
+    resp_obj = await _build_operari_response(db, emp_uuid, nou_usuari, rol=rol_caller)
     extra_disc = resp_obj.model_dump(mode="json", exclude={"pin_generat"})
     if operari.documents_processats:
         extra_disc["documents_processats"] = operari.documents_processats
@@ -747,6 +762,17 @@ async def actualitzar_operari(
         usuari.estat = payload.estat.strip().upper()
     if payload.cost_hora_eur is not None:
         usuari.cost_hora_eur = float(payload.cost_hora_eur)
+    rol_caller = str(claims.get("rol", "BOSS")).upper()
+    if payload.salari_mensual_brut is not None or payload.cost_ss_mensual is not None:
+        if rol_caller == "SECRETARIA" and bool(getattr(usuari, "es_alta_direccio", False)):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="No tens permisos per modificar el salari d'Alta Direcció.",
+            )
+        if payload.salari_mensual_brut is not None:
+            usuari.salari_mensual_brut = float(payload.salari_mensual_brut)
+        if payload.cost_ss_mensual is not None:
+            usuari.cost_ss_mensual = float(payload.cost_ss_mensual)
     if payload.carnet_conduir is not None and payload.carnet_conduir.strip():
         usuari.carnet_conduir = payload.carnet_conduir.strip()
     if payload.carnet_caducitat is not None or "carnet_caducitat" in payload.model_fields_set:
@@ -774,7 +800,7 @@ async def actualitzar_operari(
 
     usuari.updated_at = datetime.now(timezone.utc)
     await db.flush()
-    resp_obj = await _build_operari_response(db, emp_uuid, usuari)
+    resp_obj = await _build_operari_response(db, emp_uuid, usuari, rol=rol_caller)
     await sincronitzar_operari_al_disc_empresa(
         db, emp_uuid, usuari, resp_obj.model_dump(mode="json", exclude={"pin_generat"})
     )

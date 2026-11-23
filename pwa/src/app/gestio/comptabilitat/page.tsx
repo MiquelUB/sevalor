@@ -43,36 +43,57 @@ interface FacturaLinia {
   centre_de_cost_id?: string;
   article_id?: string | null;
   concepte: string;
+  descripcio_detall?: string | null;
   compte_pgc: string;
   quantitat: number;
   quantitat_merma?: number;
   preu_venda_unitari: number;
   descompte_aplicat_pct: number;
   tipus_iva: number;
+  tipus_recarrec_equivalencia?: number;
   subtotal?: number;
 }
 
 interface Factura {
   id: string;
+  exercici?: number;
   numero_factura: number;
   serie: string;
+  num_serie_verifactu?: string | null;
+  tipus_factura?: string;
+  tipus_rectificacio?: string | null;
   client_id: string;
   client_nom?: string | null;
   estat_document?: string;
+  estat_anulacio?: string;
   data_emissio?: string | null;
+  data_operacio?: string | null;
   data_venciment?: string | null;
   metode_pagament?: string;
+  referencia_client?: string | null;
   es_inversio_subjecte_passiu?: boolean;
+  notes_factura?: string | null;
   base_imposable: number;
   quota_iva: number;
+  quota_recarrec_equivalencia?: number;
+  import_total_verifactu?: number;
   import_retencio: number;
   import_retencio_garantia_4308?: number;
   import_suplits: number;
   liquid_exigible: number;
   hash_sha256: string;
   hash_anterior?: string;
+  hash_anulacio_sha256?: string | null;
+  motiu_anulacio?: string | null;
   estat_cobrament: string;
+  import_cobrat?: number;
+  data_cobrament_real?: string | null;
   estat_enviament: string;
+  estat_aeat?: string;
+  csv_aeat?: string | null;
+  codi_error_aeat?: string | null;
+  descripcio_error_aeat?: string | null;
+  darrer_error_aeat?: string | null;
   linies?: FacturaLinia[];
   ordres_treball_codis?: string[];
 }
@@ -255,6 +276,20 @@ interface DespesaComptableItem {
   created_at: string;
 }
 
+interface DespesaFixaItem {
+  id: string;
+  concepte: string;
+  categoria: "LLOGUER" | "SUBMINISTRAMENTS" | "ASSEGURANCES" | "GESTORIA" | "SOFTWARE" | "ALTRES";
+  import_base: number;
+  quota_iva: number;
+  periodicitat: "MENSUAL" | "TRIMESTRAL" | "ANUAL";
+  import_mensual_normalitzat: number;
+  iva_mensual_normalitzat: number;
+  dia_carrec: number;
+  actiu: boolean;
+  created_at: string;
+}
+
 interface Norma43Moviment {
   data_operacio: string;
   concepte: string;
@@ -267,6 +302,7 @@ interface Norma43Moviment {
 
 type TabKey =
   | "DASHBOARD"
+  | "DESPESES_FIXES"
   | "WIP_CONTROL"
   | "PREFACTURACIO"
   | "VERIFACTU"
@@ -299,7 +335,27 @@ function ComptabilitatContent() {
   const [tiquets, setTiquets] = useState<TiquetDespesa[]>([]);
   const [margesOt, setMargesOt] = useState<OTCostMarge[]>([]);
   const [despesesAnalitiques, setDespesesAnalitiques] = useState<DespesaComptableItem[]>([]);
+  const [despesesFixes, setDespesesFixes] = useState<DespesaFixaItem[]>([]);
   const [desgloseMap, setDesgloseMap] = useState<Record<string, { carb: string; adbl: string }>>({});
+
+  // Modal Registre de Cobrament Manual
+  const [facturaCobrament, setFacturaCobrament] = useState<Factura | null>(null);
+  const [cobramentEstat, setCobramentEstat] = useState<"COBRADA" | "PARCIAL" | "PENDENT" | "IMPAGADA">("COBRADA");
+  const [cobramentImport, setCobramentImport] = useState<string>("");
+  const [cobramentData, setCobramentData] = useState<string>("");
+  const [cobramentNotes, setCobramentNotes] = useState<string>("");
+  const [savingCobrament, setSavingCobrament] = useState(false);
+
+  // Modal / Formulari Despeses Fixes
+  const [modalDespesaFixa, setModalDespesaFixa] = useState(false);
+  const [editingDespesaFixa, setEditingDespesaFixa] = useState<DespesaFixaItem | null>(null);
+  const [dfConcepte, setDfConcepte] = useState("");
+  const [dfCategoria, setDfCategoria] = useState<DespesaFixaItem["categoria"]>("LLOGUER");
+  const [dfImportBase, setDfImportBase] = useState("");
+  const [dfQuotaIva, setDfQuotaIva] = useState("0");
+  const [dfPeriodicitat, setDfPeriodicitat] = useState<DespesaFixaItem["periodicitat"]>("MENSUAL");
+  const [dfDiaCarrec, setDfDiaCarrec] = useState("5");
+  const [savingDespesaFixa, setSavingDespesaFixa] = useState(false);
   const [clientsList, setClientsList] = useState<ClientOption[]>([]);
   const [articlesMagatzem, setArticlesMagatzem] = useState<ArticleMagatzemOption[]>([]);
 
@@ -307,7 +363,7 @@ function ComptabilitatContent() {
   const [textC43, setTextC43] = useState("");
   const [movimentsC43, setMovimentsC43] = useState<Norma43Moviment[]>([]);
 
-  // Modal Emissió Factura Veri*factu & Rectificativa Sèrie R
+  // Modal Emissió Factura Veri*factu, Rectificativa Sèrie R, Anul·lació i Declaració Responsable SIF
   const [modalFactura, setModalFactura] = useState(false);
   const [clientIdInput, setClientIdInput] = useState("");
   const [concepteInput, setConcepteInput] = useState("");
@@ -316,15 +372,26 @@ function ComptabilitatContent() {
   const [retGarantiaPct, setRetGarantiaPct] = useState("0");
   const [facturaRectificar, setFacturaRectificar] = useState<Factura | null>(null);
   const [motiuRectificar, setMotiuRectificar] = useState("");
+  const [tipusRectificar, setTipusRectificar] = useState<"R1" | "R2" | "R3" | "R4">("R1");
+  const [modalitatRectificar, setModalitatRectificar] = useState<"S" | "I">("S");
+  const [facturaAnular, setFacturaAnular] = useState<Factura | null>(null);
+  const [motiuAnular, setMotiuAnular] = useState("");
+  const [reenviantAeatId, setReenviantAeatId] = useState<string | null>(null);
+  const [modalDeclaracioSif, setModalDeclaracioSif] = useState(false);
+  const [declaracioSif, setDeclaracioSif] = useState<Record<string, any> | null>(null);
   const [convertintWipId, setConvertintWipId] = useState<string | null>(null);
 
   // Editor de Pre-factures (ESBORRANY_PREFACTURA)
   const [editingPrefactura, setEditingPrefactura] = useState<Factura | null>(null);
   const [creatingPrefactura, setCreatingPrefactura] = useState(false);
   const [prefClientId, setPrefClientId] = useState("");
+  const [prefTipusFactura, setPrefTipusFactura] = useState("F1");
   const [prefDataEmissio, setPrefDataEmissio] = useState("");
+  const [prefDataOperacio, setPrefDataOperacio] = useState("");
   const [prefDataVenciment, setPrefDataVenciment] = useState("");
   const [prefMetodePagament, setPrefMetodePagament] = useState("TRANSFERENCIA");
+  const [prefReferenciaClient, setPrefReferenciaClient] = useState("");
+  const [prefNotesFactura, setPrefNotesFactura] = useState("");
   const [prefEsIsp, setPrefEsIsp] = useState(false);
   const [prefRetIrpfPct, setPrefRetIrpfPct] = useState("0");
   const [prefRetGarantiaPct, setPrefRetGarantiaPct] = useState("0");
@@ -341,9 +408,13 @@ function ComptabilitatContent() {
     setEditingPrefactura(null);
     setCreatingPrefactura(true);
     setPrefClientId("");
+    setPrefTipusFactura("F1");
     setPrefDataEmissio(avui);
+    setPrefDataOperacio("");
     setPrefDataVenciment(avui);
     setPrefMetodePagament("TRANSFERENCIA");
+    setPrefReferenciaClient("");
+    setPrefNotesFactura("");
     setPrefEsIsp(false);
     setPrefRetIrpfPct("0");
     setPrefRetGarantiaPct("0");
@@ -381,18 +452,22 @@ function ComptabilitatContent() {
     setCreatingPrefactura(false);
     setEditingPrefactura(f);
     setPrefClientId(f.client_id);
+    setPrefTipusFactura(f.tipus_factura || "F1");
     setCercaMaterialPref("");
     setMaterialPrefQt("1");
     setMaterialPrefDropdownOpen(false);
     setPrefDataEmissio(
       f.data_emissio ? String(f.data_emissio).slice(0, 10) : new Date().toISOString().slice(0, 10)
     );
+    setPrefDataOperacio(f.data_operacio ? String(f.data_operacio).slice(0, 10) : "");
     setPrefDataVenciment(
       f.data_venciment
         ? String(f.data_venciment).slice(0, 10)
         : new Date().toISOString().slice(0, 10)
     );
     setPrefMetodePagament(f.metode_pagament || "TRANSFERENCIA");
+    setPrefReferenciaClient(f.referencia_client || "");
+    setPrefNotesFactura(f.notes_factura || "");
     setPrefEsIsp(Boolean(f.es_inversio_subjecte_passiu));
     setPrefRetIrpfPct(String(pctIrpf));
     setPrefRetGarantiaPct(String(pctGar));
@@ -477,6 +552,7 @@ function ComptabilitatContent() {
         tiqRes,
         margesRes,
         despRes,
+        fixesRes,
         cliRes,
         artsRes,
       ] = await Promise.all([
@@ -494,6 +570,7 @@ function ComptabilitatContent() {
         apiFetch<DespesaComptableItem[]>("/gestio/comptabilitat/despeses-analitiques").catch(
           () => []
         ),
+        apiFetch<DespesaFixaItem[]>("/gestio/comptabilitat/despeses-fixes").catch(() => []),
         apiFetch<ClientOption[]>("/gestio/clients?limit=200").catch(() => []),
         apiFetch<ArticleMagatzemOption[]>("/gestio/magatzem/articles?limit=200").catch(() => []),
       ]);
@@ -508,6 +585,7 @@ function ComptabilitatContent() {
       setTiquets(tiqRes || []);
       setMargesOt(margesRes || []);
       setDespesesAnalitiques(despRes || []);
+      setDespesesFixes(Array.isArray(fixesRes) ? fixesRes : []);
       setClientsList(Array.isArray(cliRes) ? cliRes : []);
       setArticlesMagatzem(Array.isArray(artsRes) ? artsRes : []);
     } catch (err: unknown) {
@@ -525,6 +603,7 @@ function ComptabilitatContent() {
       tabParam &&
       [
         "DASHBOARD",
+        "DESPESES_FIXES",
         "WIP_CONTROL",
         "PREFACTURACIO",
         "VERIFACTU",
@@ -701,9 +780,13 @@ function ComptabilitatContent() {
           body: JSON.stringify({
             client_id: prefClientId,
             serie: "PRE",
+            tipus_factura: prefTipusFactura,
             data_emissio: prefDataEmissio || avui,
+            data_operacio: prefDataOperacio || null,
             data_venciment: prefDataVenciment || prefDataEmissio || avui,
             metode_pagament: prefMetodePagament,
+            referencia_client: prefReferenciaClient || null,
+            notes_factura: prefNotesFactura || null,
             es_inversio_subjecte_passiu: prefEsIsp,
             retencio_irpf_pct: Number(prefRetIrpfPct || 0),
             retencio_garantia_pct: Number(prefRetGarantiaPct || 0),
@@ -715,9 +798,13 @@ function ComptabilitatContent() {
         await apiFetch(`/gestio/comptabilitat/prefactures/${editingPrefactura.id}`, {
           method: "PUT",
           body: JSON.stringify({
+            tipus_factura: prefTipusFactura,
             data_emissio: prefDataEmissio || null,
+            data_operacio: prefDataOperacio || null,
             data_venciment: prefDataVenciment || null,
             metode_pagament: prefMetodePagament,
+            referencia_client: prefReferenciaClient || null,
+            notes_factura: prefNotesFactura || null,
             es_inversio_subjecte_passiu: prefEsIsp,
             retencio_irpf_pct: Number(prefRetIrpfPct || 0),
             retencio_garantia_pct: Number(prefRetGarantiaPct || 0),
@@ -802,13 +889,70 @@ function ComptabilitatContent() {
     try {
       await apiFetch(`/gestio/comptabilitat/factures/${facturaRectificar.id}/rectificar`, {
         method: "POST",
-        body: JSON.stringify({ motiu: motiuRectificar.trim() }),
+        body: JSON.stringify({
+          motiu: motiuRectificar.trim(),
+          tipus_factura: tipusRectificar,
+          tipus_rectificacio: modalitatRectificar,
+        }),
       });
       setFacturaRectificar(null);
       setMotiuRectificar("");
+      setSuccessMsg("Factura rectificativa Sèrie R emesa i encadenada a Veri*factu.");
       await carregarDades();
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Error en emetre rectificativa Sèrie R");
+    }
+  };
+
+  const handleAnularFactura = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!facturaAnular) return;
+    try {
+      await apiFetch(`/gestio/comptabilitat/factures/${facturaAnular.id}/anular`, {
+        method: "POST",
+        body: JSON.stringify({
+          motiu: motiuAnular.trim(),
+          confirmacio_humana_hitl: true,
+        }),
+      });
+      setFacturaAnular(null);
+      setMotiuAnular("");
+      setSuccessMsg("Registre d'Anul·lació (RegistroAnulacion) emès i encadenat a Veri*factu.");
+      await carregarDades();
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Error en anul·lar factura a Veri*factu");
+    }
+  };
+
+  const handleReenviarAeat = async (facturaId: string) => {
+    setReenviantAeatId(facturaId);
+    setError(null);
+    setSuccessMsg(null);
+    try {
+      const resp = await apiFetch<any>(
+        `/gestio/comptabilitat/factures/${facturaId}/reenviar-aeat`,
+        { method: "POST" }
+      );
+      await carregarDades();
+      setSuccessMsg(
+        `Enviament AEAT processat (${resp.num_serie_verifactu || facturaId}): estat ${resp.estat_aeat || resp.estat_enviament}${
+          resp.csv_aeat ? ` · CSV: ${resp.csv_aeat}` : ""
+        }`
+      );
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Error en reenviar factura a l'AEAT");
+    } finally {
+      setReenviantAeatId(null);
+    }
+  };
+
+  const obrirDeclaracioResponsableSif = async () => {
+    setModalDeclaracioSif(true);
+    try {
+      const data = await apiFetch<any>("/gestio/comptabilitat/verifactu/declaracio-responsable");
+      setDeclaracioSif(data);
+    } catch {
+      setDeclaracioSif(null);
     }
   };
 
@@ -865,8 +1009,150 @@ function ComptabilitatContent() {
     }
   };
 
+  const obrirModalCobrament = (f: Factura) => {
+    const avui = new Date().toISOString().slice(0, 10);
+    setFacturaCobrament(f);
+    const estatActual = (f.estat_cobrament || "PENDENT").toUpperCase();
+    if (estatActual === "COBRADA" || estatActual === "PARCIAL" || estatActual === "IMPAGADA") {
+      setCobramentEstat(estatActual as "COBRADA" | "PARCIAL" | "IMPAGADA");
+    } else {
+      setCobramentEstat("COBRADA");
+    }
+    const importInicial =
+      f.import_cobrat && Number(f.import_cobrat) > 0
+        ? Number(f.import_cobrat).toFixed(2)
+        : Number(f.liquid_exigible || 0).toFixed(2);
+    setCobramentImport(importInicial);
+    setCobramentData(f.data_cobrament_real || avui);
+    setCobramentNotes("");
+  };
+
+  const handleRegistrarCobrament = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!facturaCobrament) return;
+    setSavingCobrament(true);
+    setError(null);
+    setSuccessMsg(null);
+    try {
+      const payload: Record<string, unknown> = {
+        estat_cobrament: cobramentEstat,
+        data_cobrament_real: cobramentData || null,
+        notes: cobramentNotes.trim() || null,
+      };
+      if (cobramentEstat === "PARCIAL") {
+        payload.import_cobrat = Number(cobramentImport || 0);
+      } else if (cobramentEstat === "COBRADA") {
+        payload.import_cobrat = Number(facturaCobrament.liquid_exigible || 0);
+      } else {
+        payload.import_cobrat = Number(cobramentImport || 0);
+      }
+      await apiFetch(`/gestio/comptabilitat/factures/${facturaCobrament.id}/cobrament`, {
+        method: "PATCH",
+        body: JSON.stringify(payload),
+      });
+      setFacturaCobrament(null);
+      setSuccessMsg("Cobrament registrat. El Cash-Flow, el DSO i el criteri de caixa s'han actualitzat.");
+      await carregarDades();
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Error registrant el cobrament");
+    } finally {
+      setSavingCobrament(false);
+    }
+  };
+
+  const obrirNovaDespesaFixa = () => {
+    setEditingDespesaFixa(null);
+    setDfConcepte("");
+    setDfCategoria("LLOGUER");
+    setDfImportBase("");
+    setDfQuotaIva("0");
+    setDfPeriodicitat("MENSUAL");
+    setDfDiaCarrec("5");
+    setModalDespesaFixa(true);
+  };
+
+  const obrirEditarDespesaFixa = (df: DespesaFixaItem) => {
+    setEditingDespesaFixa(df);
+    setDfConcepte(df.concepte);
+    setDfCategoria(df.categoria);
+    setDfImportBase(String(Number(df.import_base).toFixed(2)));
+    setDfQuotaIva(String(Number(df.quota_iva).toFixed(2)));
+    setDfPeriodicitat(df.periodicitat);
+    setDfDiaCarrec(String(df.dia_carrec || 5));
+    setModalDespesaFixa(true);
+  };
+
+  const handleDesarDespesaFixa = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSavingDespesaFixa(true);
+    setError(null);
+    setSuccessMsg(null);
+    try {
+      const payload = {
+        concepte: dfConcepte.trim(),
+        categoria: dfCategoria,
+        import_base: Number(dfImportBase || 0),
+        quota_iva: Number(dfQuotaIva || 0),
+        periodicitat: dfPeriodicitat,
+        dia_carrec: Number(dfDiaCarrec || 5),
+      };
+      if (editingDespesaFixa) {
+        await apiFetch(`/gestio/comptabilitat/despeses-fixes/${editingDespesaFixa.id}`, {
+          method: "PUT",
+          body: JSON.stringify(payload),
+        });
+        setSuccessMsg("Despesa fixa actualitzada.");
+      } else {
+        await apiFetch("/gestio/comptabilitat/despeses-fixes", {
+          method: "POST",
+          body: JSON.stringify(payload),
+        });
+        setSuccessMsg("Despesa fixa enregistrada. El Break-Even i el Burn Rate s'han recalculat.");
+      }
+      setModalDespesaFixa(false);
+      await carregarDades();
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Error desant la despesa fixa");
+    } finally {
+      setSavingDespesaFixa(false);
+    }
+  };
+
+  const handleToggleDespesaFixa = async (df: DespesaFixaItem) => {
+    setError(null);
+    setSuccessMsg(null);
+    try {
+      if (df.actiu) {
+        await apiFetch(`/gestio/comptabilitat/despeses-fixes/${df.id}`, { method: "DELETE" });
+        setSuccessMsg(`Despesa fixa «${df.concepte}» desactivada.`);
+      } else {
+        await apiFetch(`/gestio/comptabilitat/despeses-fixes/${df.id}`, {
+          method: "PUT",
+          body: JSON.stringify({ actiu: true }),
+        });
+        setSuccessMsg(`Despesa fixa «${df.concepte}» reactivada.`);
+      }
+      await carregarDades();
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Error actualitzant l'estat de la despesa fixa");
+    }
+  };
+
+  const despesesFixesActivesCount = despesesFixes.filter((d) => d.actiu).length;
+  const totalMensualFixes = round2(
+    despesesFixes
+      .filter((d) => d.actiu)
+      .reduce((acc, d) => acc + Number(d.import_mensual_normalitzat || 0), 0)
+  );
+
   const tabs: Array<{ key: TabKey; label: string; icon: React.ReactNode; badge?: number }> = [
     { key: "DASHBOARD", label: "Suite Econòmica & KPIs", icon: <TrendingUp className="h-4 w-4" /> },
+    {
+      key: "DESPESES_FIXES",
+      label: "Despeses Fixes",
+      icon: <Building2 className="h-4 w-4" />,
+      badge: despesesFixesActivesCount,
+    },
     {
       key: "WIP_CONTROL",
       label: "Pendents de Prefacturar",
@@ -1051,6 +1337,52 @@ function ComptabilitatContent() {
             </div>
           </div>
 
+          {/* KPIs Operatius d'Estructura, Flota i Cash-Flow Real */}
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+            <div className="rounded-xl border border-slate-200 bg-white px-5 py-4 flex items-center justify-between gap-3">
+              <div>
+                <p className="text-xs font-medium text-slate-500">Despeses Fixes d&apos;Estructura</p>
+                <p className="mt-1 text-xl font-bold tabular-nums text-slate-900">
+                  {Number(dashboard.despeses_fixes_estructura).toFixed(2)} €
+                </p>
+                <p className="mt-0.5 text-xs text-slate-500">
+                  {despesesFixesActivesCount} partides actives ({totalMensualFixes.toFixed(2)} €/mes base)
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setTabActiva("DESPESES_FIXES")}
+                className="shrink-0 rounded-lg border border-primary/30 bg-primary/10 px-3 py-1.5 text-xs font-semibold text-primary hover:bg-primary/20 transition"
+              >
+                Gestionar
+              </button>
+            </div>
+
+            <div className="rounded-xl border border-slate-200 bg-white px-5 py-4">
+              <p className="text-xs font-medium text-slate-500">Cost Real de Flota per Km</p>
+              <p className="mt-1 text-xl font-bold tabular-nums text-slate-900">
+                {Number(dashboard.cost_flota_eur_km_mitja).toFixed(2)} €/km
+              </p>
+              <p className="mt-0.5 text-xs text-slate-500">
+                Quotes mensuals + manteniments de taller i km imputats
+              </p>
+            </div>
+
+            <div className="rounded-xl border border-slate-200 bg-white px-5 py-4">
+              <p className="text-xs font-medium text-slate-500">Cash-Flow Operatiu Real</p>
+              <p
+                className={`mt-1 text-xl font-bold tabular-nums ${
+                  Number(dashboard.cash_flow_operatiu_real) >= 0 ? "text-emerald-700" : "text-rose-700"
+                }`}
+              >
+                {Number(dashboard.cash_flow_operatiu_real).toFixed(2)} €
+              </p>
+              <p className="mt-0.5 text-xs text-slate-500">
+                Cobraments reals menys pagaments a proveïdors i tiquets
+              </p>
+            </div>
+          </div>
+
           {/* Alertes Estratègiques (Pareto + Erosió Marge + Capital Immobilitzat) */}
           {(dashboard.alerta_concentracio_pareto_25pct ||
             dashboard.alertes_erosio_marge.length > 0 ||
@@ -1094,17 +1426,152 @@ function ComptabilitatContent() {
         </div>
       )}
 
+      {/* TAB: DESPESES FIXES D'ESTRUCTURA (CRUD REAL) */}
+      {tabActiva === "DESPESES_FIXES" && (
+        <div className="space-y-5">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between rounded-xl border border-slate-200 bg-white p-5">
+            <div>
+              <h2 className="text-base font-bold text-slate-900">
+                Despeses Fixes d&apos;Estructura
+              </h2>
+              <p className="mt-0.5 text-xs text-slate-500">
+                Lloguers, subministraments, assegurances, gestoria i software que alimenten el Break-Even, el Burn Rate i el Guardacaixa IVA 303.
+              </p>
+            </div>
+            <div className="flex items-center gap-4">
+              <div className="text-right">
+                <p className="text-xs text-slate-500">Total mensual normalitzat</p>
+                <p className="text-lg font-bold tabular-nums text-primary">
+                  {totalMensualFixes.toFixed(2)} €/mes
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={obrirNovaDespesaFixa}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-4 py-2 text-xs font-semibold text-white hover:opacity-90 transition"
+              >
+                <Plus className="h-4 w-4" /> Afegir Despesa Fixa
+              </button>
+            </div>
+          </div>
+
+          <div className="rounded-xl border border-slate-200 bg-white overflow-hidden">
+            {despesesFixes.length === 0 ? (
+              <div className="p-10 text-center space-y-3">
+                <p className="text-sm font-medium text-slate-700">
+                  Encara no hi ha cap despesa fixa d&apos;estructura registrada.
+                </p>
+                <p className="text-xs text-slate-500 max-w-md mx-auto">
+                  Afegeix les partides recurrents de l&apos;empresa (lloguer de nau, llum, assegurances, gestoria) perquè el Dashboard calculi el llindar de rendibilitat (Break-Even) i el Burn Rate reals.
+                </p>
+                <button
+                  type="button"
+                  onClick={obrirNovaDespesaFixa}
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-4 py-2 text-xs font-semibold text-white hover:opacity-90"
+                >
+                  <Plus className="h-4 w-4" /> Enregistrar primera despesa fixa
+                </button>
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs">
+                  <thead className="bg-slate-50 text-slate-600">
+                    <tr>
+                      <th className="px-4 py-3">Concepte</th>
+                      <th className="px-4 py-3">Categoria</th>
+                      <th className="px-4 py-3">Periodicitat</th>
+                      <th className="px-4 py-3 text-right">Base + IVA</th>
+                      <th className="px-4 py-3 text-right">Cost Mensual</th>
+                      <th className="px-4 py-3 text-center">Dia càrrec</th>
+                      <th className="px-4 py-3">Estat</th>
+                      <th className="px-4 py-3 text-right">Accions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {despesesFixes.map((df) => (
+                      <tr key={df.id} className={`hover:bg-slate-50 ${!df.actiu ? "opacity-60 bg-slate-50/60" : ""}`}>
+                        <td className="px-4 py-3 font-medium text-slate-900">{df.concepte}</td>
+                        <td className="px-4 py-3">
+                          <span className="rounded-md bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-700">
+                            {df.categoria}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3 text-slate-600">{df.periodicitat}</td>
+                        <td className="px-4 py-3 text-right tabular-nums text-slate-700">
+                          {Number(df.import_base).toFixed(2)} €
+                          {Number(df.quota_iva) > 0 && (
+                            <span className="block text-[10px] text-slate-500">
+                              + {Number(df.quota_iva).toFixed(2)} € IVA
+                            </span>
+                          )}
+                        </td>
+                        <td className="px-4 py-3 text-right tabular-nums font-semibold text-slate-900">
+                          {Number(df.import_mensual_normalitzat).toFixed(2)} €/mes
+                        </td>
+                        <td className="px-4 py-3 text-center tabular-nums text-slate-600">
+                          Dia {df.dia_carrec}
+                        </td>
+                        <td className="px-4 py-3">
+                          <span
+                            className={`inline-block rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                              df.actiu
+                                ? "bg-emerald-100 text-emerald-800"
+                                : "bg-slate-200 text-slate-600"
+                            }`}
+                          >
+                            {df.actiu ? "Activa" : "Desactivada"}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3 text-right whitespace-nowrap space-x-2">
+                          <button
+                            type="button"
+                            onClick={() => obrirEditarDespesaFixa(df)}
+                            className="rounded-md border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-medium text-slate-700 hover:bg-slate-50"
+                          >
+                            Editar
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleToggleDespesaFixa(df)}
+                            className={`rounded-md border px-2.5 py-1 text-[11px] font-medium ${
+                              df.actiu
+                                ? "border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100"
+                                : "border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
+                            }`}
+                          >
+                            {df.actiu ? "Desactivar" : "Reactivar"}
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* TAB 2: VERIFACTU, ART. 80 LIVA I RETENCIONS 5% */}
       {tabActiva === "VERIFACTU" && (
         <div className="space-y-6">
           <div className="rounded-xl border border-slate-200 bg-white overflow-hidden">
-            <div className="border-b border-slate-100 px-5 py-3 flex items-center justify-between">
+            <div className="border-b border-slate-100 px-5 py-3 flex flex-wrap items-center justify-between gap-2">
               <h2 className="text-sm font-semibold text-slate-900">
-                Factures Emeses (Encadenament SHA-256 Veri*factu)
+                Factures Emeses (Encadenament SHA-256 Veri*factu · Ordre HAC/1177/2024)
               </h2>
-              <span className="inline-flex items-center gap-1 text-xs text-emerald-700 font-medium">
-                <ShieldCheck className="h-4 w-4" /> SIF Inalterable
-              </span>
+              <div className="flex items-center gap-3">
+                <button
+                  type="button"
+                  onClick={obrirDeclaracioResponsableSif}
+                  className="inline-flex items-center gap-1 rounded-lg border border-primary/30 bg-primary/10 px-2.5 py-1 text-xs font-semibold text-primary hover:bg-primary/20 cursor-pointer"
+                >
+                  <ShieldCheck className="h-3.5 w-3.5" /> Declaració Responsable SIF (Art. 15)
+                </button>
+                <span className="inline-flex items-center gap-1 text-xs text-emerald-700 font-medium">
+                  <ShieldCheck className="h-4 w-4" /> SIF Inalterable
+                </span>
+              </div>
             </div>
             {facturesEmeses.length === 0 ? (
               <div className="p-8 text-center text-sm text-slate-500">
@@ -1115,75 +1582,180 @@ function ComptabilitatContent() {
                 <table className="w-full text-left text-xs">
                   <thead className="bg-slate-50 text-slate-600">
                     <tr>
-                      <th className="px-4 py-3">Número</th>
+                      <th className="px-4 py-3">Núm. Veri*factu</th>
                       <th className="px-4 py-3">Client / OTs</th>
                       <th className="px-4 py-3">Base</th>
                       <th className="px-4 py-3">IVA</th>
-                      <th className="px-4 py-3">Líquid Exigible</th>
-                      <th className="px-4 py-3">Estat</th>
-                      <th className="px-4 py-3">Hash SHA-256</th>
-                      <th className="px-4 py-3 text-right">Descàrregues</th>
+                      <th className="px-4 py-3">Total AEAT / Líquid</th>
+                      <th className="px-4 py-3">Estat &amp; AEAT</th>
+                      <th className="px-4 py-3">Empremta SHA-256</th>
+                      <th className="px-4 py-3 text-right">Accions i Descàrregues</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
-                    {facturesEmeses.map((f) => (
-                      <tr key={f.id} className="hover:bg-slate-50">
-                        <td className="px-4 py-3 font-semibold text-slate-900">
-                          {f.serie}-{f.numero_factura}
-                        </td>
-                        <td className="px-4 py-3">
-                          <p className="font-medium text-slate-800">{f.client_nom || "—"}</p>
-                          {f.ordres_treball_codis && f.ordres_treball_codis.length > 0 && (
-                            <p className="font-mono text-[10px] text-primary">
-                              {f.ordres_treball_codis.join(", ")}
-                            </p>
-                          )}
-                        </td>
-                        <td className="px-4 py-3 tabular-nums">{Number(f.base_imposable).toFixed(2)} €</td>
-                        <td className="px-4 py-3 tabular-nums">{Number(f.quota_iva).toFixed(2)} €</td>
-                        <td className="px-4 py-3 font-semibold tabular-nums">
-                          {Number(f.liquid_exigible).toFixed(2)} €
-                        </td>
-                        <td className="px-4 py-3">
-                          <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium">
-                            {f.estat_cobrament}
-                          </span>
-                        </td>
-                        <td className="px-4 py-3 font-mono text-[11px] text-slate-500">
-                          {f.hash_sha256.slice(0, 14)}...
-                        </td>
-                        <td className="px-4 py-3 text-right space-x-2">
-                          <a
-                            href={`${getApiBaseUrl()}/gestio/comptabilitat/factures/${f.id}/pdf`}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="inline-flex items-center gap-1 text-primary hover:underline"
-                          >
-                            <Download className="h-3.5 w-3.5" /> PDF
-                          </a>
-                          <a
-                            href={`${getApiBaseUrl()}/gestio/comptabilitat/factures/${f.id}/xml`}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="inline-flex items-center gap-1 text-slate-600 hover:underline"
-                          >
-                            <FileText className="h-3.5 w-3.5" /> XML
-                          </a>
-                          {!f.serie.toUpperCase().startsWith("R") && (
+                    {facturesEmeses.map((f) => {
+                      const numCanonic = f.num_serie_verifactu || `${f.serie}-${f.exercici || 2026}-${String(f.numero_factura).padStart(4, "0")}`;
+                      const esAnulada = f.estat_anulacio === "ANULADA_VERIFACTU";
+                      const estatAeat = f.estat_aeat || f.estat_enviament || "PENDENT";
+                      return (
+                        <tr key={f.id} className={`hover:bg-slate-50 ${esAnulada ? "bg-rose-50/40" : ""}`}>
+                          <td className="px-4 py-3">
+                            <span className="font-mono font-bold text-slate-900">{numCanonic}</span>
+                            <span className="ml-1.5 rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-slate-600">
+                              {f.tipus_factura || "F1"}
+                              {f.tipus_rectificacio ? `·${f.tipus_rectificacio}` : ""}
+                            </span>
+                            {esAnulada && (
+                              <span className="mt-1 block rounded bg-rose-100 px-1.5 py-0.5 text-[10px] font-bold text-rose-800 w-fit">
+                                ANUL·LADA VERI*FACTU
+                              </span>
+                            )}
+                          </td>
+                          <td className="px-4 py-3">
+                            <p className="font-medium text-slate-800">{f.client_nom || "—"}</p>
+                            {f.ordres_treball_codis && f.ordres_treball_codis.length > 0 && (
+                              <p className="font-mono text-[10px] text-primary">
+                                {f.ordres_treball_codis.join(", ")}
+                              </p>
+                            )}
+                          </td>
+                          <td className="px-4 py-3 tabular-nums">{Number(f.base_imposable).toFixed(2)} €</td>
+                          <td className="px-4 py-3 tabular-nums">{Number(f.quota_iva).toFixed(2)} €</td>
+                          <td className="px-4 py-3 tabular-nums">
+                            <span className="font-semibold text-slate-900">
+                              {Number(f.liquid_exigible).toFixed(2)} €
+                            </span>
+                            {f.import_total_verifactu !== undefined &&
+                              Number(f.import_total_verifactu) !== Number(f.liquid_exigible) && (
+                                <span className="block text-[10px] text-slate-500">
+                                  AEAT: {Number(f.import_total_verifactu).toFixed(2)} €
+                                </span>
+                              )}
+                          </td>
+                          <td className="px-4 py-3 space-y-1">
+                            <span
+                              className={`inline-block rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                                f.estat_cobrament === "COBRADA"
+                                  ? "bg-emerald-100 text-emerald-800"
+                                  : f.estat_cobrament === "PARCIAL"
+                                  ? "bg-amber-100 text-amber-800"
+                                  : f.estat_cobrament === "IMPAGADA"
+                                  ? "bg-rose-100 text-rose-800"
+                                  : "bg-slate-100 text-slate-700"
+                              }`}
+                            >
+                              {f.estat_cobrament}
+                            </span>
+                            {Number(f.import_cobrat || 0) > 0 && (
+                              <span className="block text-[10px] tabular-nums text-emerald-700 font-medium">
+                                Cobrat: {Number(f.import_cobrat).toFixed(2)} €
+                                {f.data_cobrament_real ? ` (${f.data_cobrament_real})` : ""}
+                              </span>
+                            )}
+                            <div>
+                              <span
+                                className={`inline-block rounded-full px-2 py-0.5 text-[10px] font-bold ${
+                                  estatAeat === "ACCEPTADA_AEAT"
+                                    ? "bg-emerald-100 text-emerald-800"
+                                    : estatAeat === "ACCEPTADA_AMB_ERRORS"
+                                    ? "bg-amber-100 text-amber-800"
+                                    : estatAeat === "REBUTJADA_AEAT" || estatAeat === "ERROR_PERMANENT"
+                                    ? "bg-rose-100 text-rose-800"
+                                    : "bg-slate-100 text-slate-700"
+                                }`}
+                                title={f.darrer_error_aeat || estatAeat}
+                              >
+                                AEAT: {estatAeat}
+                              </span>
+                              {f.csv_aeat && (
+                                <span className="block font-mono text-[10px] text-emerald-700 font-semibold">
+                                  CSV: {f.csv_aeat}
+                                </span>
+                              )}
+                              {f.darrer_error_aeat && (
+                                <span className="block text-[10px] text-rose-700 max-w-[200px] truncate" title={f.darrer_error_aeat}>
+                                  {f.darrer_error_aeat}
+                                </span>
+                              )}
+                            </div>
+                          </td>
+                          <td className="px-4 py-3 font-mono text-[11px] text-slate-500">
+                            {f.hash_sha256.slice(0, 14)}...
+                            {f.hash_anulacio_sha256 && (
+                              <span className="block text-[10px] text-rose-700">
+                                Anul: {f.hash_anulacio_sha256.slice(0, 10)}...
+                              </span>
+                            )}
+                          </td>
+                          <td className="px-4 py-3 text-right whitespace-nowrap space-x-1.5">
+                            <a
+                              href={`${getApiBaseUrl()}/gestio/comptabilitat/factures/${f.id}/pdf`}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="inline-flex items-center gap-1 text-primary hover:underline font-semibold"
+                            >
+                              <Download className="h-3.5 w-3.5" /> PDF
+                            </a>
+                            <a
+                              href={`${getApiBaseUrl()}/gestio/comptabilitat/factures/${f.id}/xml`}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="inline-flex items-center gap-1 text-slate-600 hover:underline"
+                            >
+                              <FileText className="h-3.5 w-3.5" /> XML
+                            </a>
                             <button
                               type="button"
-                              onClick={() => {
-                                setFacturaRectificar(f);
-                                setMotiuRectificar("");
-                              }}
-                              className="inline-flex items-center gap-1 rounded-md border border-amber-300 bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-800 hover:bg-amber-100"
+                              disabled={reenviantAeatId === f.id}
+                              onClick={() => handleReenviarAeat(f.id)}
+                              className="inline-flex items-center gap-1 rounded-md border border-slate-200 bg-white px-2 py-0.5 text-[10px] font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                              title="Enviar o reintentar enviament SOAP a l'AEAT"
                             >
-                              Rectificativa R
+                              <RefreshCw className={`h-3 w-3 ${reenviantAeatId === f.id ? "animate-spin" : ""}`} />
+                              AEAT
                             </button>
-                          )}
-                        </td>
-                      </tr>
-                    ))}
+                            {!esAnulada && (
+                              <button
+                                type="button"
+                                onClick={() => obrirModalCobrament(f)}
+                                className="inline-flex items-center gap-1 rounded-md border border-emerald-300 bg-emerald-50 px-2 py-0.5 text-[11px] font-semibold text-emerald-800 hover:bg-emerald-100"
+                                title="Registrar cobrament total, parcial o impagament"
+                              >
+                                <Banknote className="h-3 w-3" />
+                                {f.estat_cobrament === "COBRADA" ? "Cobrament" : "Registrar Cobrament"}
+                              </button>
+                            )}
+                            {!f.serie.toUpperCase().startsWith("R") && !esAnulada && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setFacturaRectificar(f);
+                                  setMotiuRectificar("");
+                                  setTipusRectificar("R1");
+                                  setModalitatRectificar("S");
+                                }}
+                                className="inline-flex items-center gap-1 rounded-md border border-amber-300 bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-800 hover:bg-amber-100"
+                              >
+                                Rectificativa R
+                              </button>
+                            )}
+                            {!esAnulada && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setFacturaAnular(f);
+                                  setMotiuAnular("");
+                                }}
+                                className="inline-flex items-center gap-1 rounded-md border border-rose-200 bg-rose-50 px-2 py-0.5 text-[11px] font-semibold text-rose-700 hover:bg-rose-100"
+                                title="Emetre Registre d'Anul·lació (RegistroAnulacion)"
+                              >
+                                Anul·lar
+                              </button>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
@@ -2503,13 +3075,13 @@ function ComptabilitatContent() {
         </div>
       )}
 
-      {/* MODAL RECTIFICATIVA SÈRIE R (Spec 007 RF-14) */}
+      {/* MODAL RECTIFICATIVA SÈRIE R (Spec 007 RF-14 i Ordre HAC/1177/2024) */}
       {facturaRectificar && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4">
           <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl">
             <div className="mb-4 flex items-center justify-between">
               <h3 className="text-base font-bold text-slate-900">
-                Emetre Rectificativa Sèrie R ({facturaRectificar.serie}-{facturaRectificar.numero_factura})
+                Emetre Rectificativa Sèrie R ({facturaRectificar.num_serie_verifactu || `${facturaRectificar.serie}-${facturaRectificar.numero_factura}`})
               </h3>
               <button onClick={() => setFacturaRectificar(null)}>
                 <X className="h-5 w-5 text-slate-400" />
@@ -2517,9 +3089,39 @@ function ComptabilitatContent() {
             </div>
             <form onSubmit={handleEmetreRectificativa} className="space-y-3 text-xs">
               <p className="text-slate-600">
-                Es generarà una factura rectificativa Sèrie R encadenada a Veri*factu per revertir{" "}
+                Es generarà una factura rectificativa Sèrie R encadenada a Veri*factu per a la factura original de{" "}
                 <strong>{Number(facturaRectificar.liquid_exigible).toFixed(2)} €</strong>.
               </p>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-medium text-slate-700 mb-1">
+                    Tipus Rectificativa AEAT
+                  </label>
+                  <select
+                    value={tipusRectificar}
+                    onChange={(e) => setTipusRectificar(e.target.value as any)}
+                    className="w-full rounded-lg border border-slate-200 bg-white px-2.5 py-2"
+                  >
+                    <option value="R1">R1 · Error fonamentat en dret / Art. 80.1, 80.2 i 80.6</option>
+                    <option value="R2">R2 · Concurs de creditors (Art. 80.3 LIVA)</option>
+                    <option value="R3">R3 · Crèdit incobrable (Art. 80.4 LIVA)</option>
+                    <option value="R4">R4 · Resta de causes de rectificació</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block font-medium text-slate-700 mb-1">
+                    Modalitat (Art. 15 RD 1619/2012)
+                  </label>
+                  <select
+                    value={modalitatRectificar}
+                    onChange={(e) => setModalitatRectificar(e.target.value as "S" | "I")}
+                    className="w-full rounded-lg border border-slate-200 bg-white px-2.5 py-2"
+                  >
+                    <option value="S">S · Per Substitució</option>
+                    <option value="I">I · Per Diferències (abono negatiu)</option>
+                  </select>
+                </div>
+              </div>
               <div>
                 <label className="block font-medium text-slate-700 mb-1">
                   Motiu legal de rectificació
@@ -2529,7 +3131,7 @@ function ComptabilitatContent() {
                   minLength={3}
                   value={motiuRectificar}
                   onChange={(e) => setMotiuRectificar(e.target.value)}
-                  placeholder="Ex: Error en base imposable o anul·lació del servei"
+                  placeholder="Ex: Error en base imposable o devolució parcial de partida"
                   className="w-full rounded-lg border border-slate-200 px-3 py-2"
                 />
               </div>
@@ -2549,6 +3151,327 @@ function ComptabilitatContent() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL ANUL·LACIÓ DE FACTURA (RegistroAnulacion Art. 13.2 Ordre HAC/1177/2024) */}
+      {facturaAnular && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4">
+          <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl">
+            <div className="mb-4 flex items-center justify-between">
+              <h3 className="text-base font-bold text-rose-800">
+                Anul·lar Factura a Veri*factu ({facturaAnular.num_serie_verifactu || `${facturaAnular.serie}-${facturaAnular.numero_factura}`})
+              </h3>
+              <button onClick={() => setFacturaAnular(null)}>
+                <X className="h-5 w-5 text-slate-400" />
+              </button>
+            </div>
+            <form onSubmit={handleAnularFactura} className="space-y-3 text-xs">
+              <p className="text-slate-600">
+                S&apos;emetrà un <strong>Registre d&apos;Anul·lació (RegistroAnulacion)</strong> encadenat criptogràficament amb SHA-256 a la cadena del SIF segons l&apos;Art. 13.2 de l&apos;Ordre HAC/1177/2024. La factura original es conservarà marcada com anul·lada.
+              </p>
+              <div>
+                <label className="block font-medium text-slate-700 mb-1">
+                  Motiu de l&apos;anul·lació
+                </label>
+                <input
+                  required
+                  minLength={3}
+                  value={motiuAnular}
+                  onChange={(e) => setMotiuAnular(e.target.value)}
+                  placeholder="Ex: Factura emesa per error abans de lliurament al destinatari"
+                  className="w-full rounded-lg border border-slate-200 px-3 py-2"
+                />
+              </div>
+              <div className="flex justify-end gap-2 pt-3">
+                <button
+                  type="button"
+                  onClick={() => setFacturaAnular(null)}
+                  className="rounded-lg border border-slate-200 px-4 py-2 font-medium"
+                >
+                  Cancel·lar
+                </button>
+                <button
+                  type="submit"
+                  className="rounded-lg bg-rose-600 px-4 py-2 font-semibold text-white hover:bg-rose-500"
+                >
+                  Confirmar RegistroAnulacion
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL REGISTRAR COBRAMENT MANUAL */}
+      {facturaCobrament && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4">
+          <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
+                <Banknote className="h-5 w-5 text-emerald-600" />
+                Registrar Cobrament —{" "}
+                {facturaCobrament.num_serie_verifactu ||
+                  `${facturaCobrament.serie}-${facturaCobrament.numero_factura}`}
+              </h3>
+              <button type="button" onClick={() => setFacturaCobrament(null)}>
+                <X className="h-5 w-5 text-slate-400" />
+              </button>
+            </div>
+            <p className="text-xs text-slate-600 mb-4">
+              Líquid exigible:{" "}
+              <strong className="tabular-nums text-slate-900">
+                {Number(facturaCobrament.liquid_exigible).toFixed(2)} €
+              </strong>
+              {" · "}Client: <strong>{facturaCobrament.client_nom || "—"}</strong>
+            </p>
+            <form onSubmit={handleRegistrarCobrament} className="space-y-3 text-xs">
+              <div>
+                <label className="block font-medium text-slate-700 mb-1">Estat de cobrament</label>
+                <select
+                  value={cobramentEstat}
+                  onChange={(e) => {
+                    const nou = e.target.value as "COBRADA" | "PARCIAL" | "PENDENT" | "IMPAGADA";
+                    setCobramentEstat(nou);
+                    if (nou === "COBRADA") {
+                      setCobramentImport(Number(facturaCobrament.liquid_exigible || 0).toFixed(2));
+                    } else if (nou === "PENDENT" || nou === "IMPAGADA") {
+                      setCobramentImport("0.00");
+                    }
+                  }}
+                  className="w-full rounded-lg border border-slate-200 px-3 py-2"
+                >
+                  <option value="COBRADA">COBRADA (Totalitat del líquid exigible)</option>
+                  <option value="PARCIAL">PARCIAL (Cobrament a compte)</option>
+                  <option value="PENDENT">PENDENT</option>
+                  <option value="IMPAGADA">IMPAGADA</option>
+                </select>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-medium text-slate-700 mb-1">Import cobrat (€)</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    max={Number(facturaCobrament.liquid_exigible || 0)}
+                    disabled={cobramentEstat === "COBRADA"}
+                    required
+                    value={cobramentImport}
+                    onChange={(e) => setCobramentImport(e.target.value)}
+                    className="w-full rounded-lg border border-slate-200 px-3 py-2 tabular-nums disabled:bg-slate-50"
+                  />
+                </div>
+                <div>
+                  <label className="block font-medium text-slate-700 mb-1">Data cobrament real</label>
+                  <input
+                    type="date"
+                    value={cobramentData}
+                    onChange={(e) => setCobramentData(e.target.value)}
+                    className="w-full rounded-lg border border-slate-200 px-3 py-2"
+                  />
+                </div>
+              </div>
+              <div>
+                <label className="block font-medium text-slate-700 mb-1">Notes / Referència bancària (opcional)</label>
+                <input
+                  type="text"
+                  maxLength={500}
+                  value={cobramentNotes}
+                  onChange={(e) => setCobramentNotes(e.target.value)}
+                  placeholder="Ex: Transferència CaixaBank 23/11"
+                  className="w-full rounded-lg border border-slate-200 px-3 py-2"
+                />
+              </div>
+              <div className="flex justify-end gap-2 pt-3">
+                <button
+                  type="button"
+                  onClick={() => setFacturaCobrament(null)}
+                  className="rounded-lg border border-slate-200 px-4 py-2 font-medium"
+                >
+                  Cancel·lar
+                </button>
+                <button
+                  type="submit"
+                  disabled={savingCobrament}
+                  className="rounded-lg bg-primary px-4 py-2 font-semibold text-white hover:opacity-90 disabled:opacity-50"
+                >
+                  {savingCobrament ? "Desant..." : "Confirmar Cobrament"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL ALTA / EDICIÓ DESPESA FIXA D'ESTRUCTURA */}
+      {modalDespesaFixa && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4">
+          <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-base font-bold text-slate-900">
+                {editingDespesaFixa ? "Editar Despesa Fixa" : "Nova Despesa Fixa d'Estructura"}
+              </h3>
+              <button type="button" onClick={() => setModalDespesaFixa(false)}>
+                <X className="h-5 w-5 text-slate-400" />
+              </button>
+            </div>
+            <form onSubmit={handleDesarDespesaFixa} className="space-y-3 text-xs">
+              <div>
+                <label className="block font-medium text-slate-700 mb-1">Concepte</label>
+                <input
+                  type="text"
+                  required
+                  minLength={2}
+                  maxLength={255}
+                  value={dfConcepte}
+                  onChange={(e) => setDfConcepte(e.target.value)}
+                  placeholder="Ex: Lloguer nau industrial, Gestoria fiscal..."
+                  className="w-full rounded-lg border border-slate-200 px-3 py-2"
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-medium text-slate-700 mb-1">Categoria</label>
+                  <select
+                    value={dfCategoria}
+                    onChange={(e) => setDfCategoria(e.target.value as DespesaFixaItem["categoria"])}
+                    className="w-full rounded-lg border border-slate-200 px-3 py-2"
+                  >
+                    <option value="LLOGUER">Lloguer</option>
+                    <option value="SUBMINISTRAMENTS">Subministraments</option>
+                    <option value="ASSEGURANCES">Assegurances</option>
+                    <option value="GESTORIA">Gestoria</option>
+                    <option value="SOFTWARE">Software</option>
+                    <option value="ALTRES">Altres</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block font-medium text-slate-700 mb-1">Periodicitat</label>
+                  <select
+                    value={dfPeriodicitat}
+                    onChange={(e) => setDfPeriodicitat(e.target.value as DespesaFixaItem["periodicitat"])}
+                    className="w-full rounded-lg border border-slate-200 px-3 py-2"
+                  >
+                    <option value="MENSUAL">Mensual (×1)</option>
+                    <option value="TRIMESTRAL">Trimestral (÷3/mes)</option>
+                    <option value="ANUAL">Anual (÷12/mes)</option>
+                  </select>
+                </div>
+              </div>
+              <div className="grid grid-cols-3 gap-3">
+                <div>
+                  <label className="block font-medium text-slate-700 mb-1">Base (€)</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0.01"
+                    required
+                    value={dfImportBase}
+                    onChange={(e) => setDfImportBase(e.target.value)}
+                    className="w-full rounded-lg border border-slate-200 px-3 py-2 tabular-nums"
+                  />
+                </div>
+                <div>
+                  <label className="block font-medium text-slate-700 mb-1">Quota IVA (€)</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    value={dfQuotaIva}
+                    onChange={(e) => setDfQuotaIva(e.target.value)}
+                    className="w-full rounded-lg border border-slate-200 px-3 py-2 tabular-nums"
+                  />
+                </div>
+                <div>
+                  <label className="block font-medium text-slate-700 mb-1">Dia càrrec</label>
+                  <input
+                    type="number"
+                    min="1"
+                    max="28"
+                    required
+                    value={dfDiaCarrec}
+                    onChange={(e) => setDfDiaCarrec(e.target.value)}
+                    className="w-full rounded-lg border border-slate-200 px-3 py-2 tabular-nums"
+                  />
+                </div>
+              </div>
+              <div className="flex justify-end gap-2 pt-3">
+                <button
+                  type="button"
+                  onClick={() => setModalDespesaFixa(false)}
+                  className="rounded-lg border border-slate-200 px-4 py-2 font-medium"
+                >
+                  Cancel·lar
+                </button>
+                <button
+                  type="submit"
+                  disabled={savingDespesaFixa}
+                  className="rounded-lg bg-primary px-4 py-2 font-semibold text-white hover:opacity-90 disabled:opacity-50"
+                >
+                  {savingDespesaFixa ? "Desant..." : editingDespesaFixa ? "Desar canvis" : "Enregistrar despesa"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL DECLARACIÓ RESPONSABLE DEL SIF (Art. 15 Ordre HAC/1177/2024) */}
+      {modalDeclaracioSif && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4">
+          <div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-xl space-y-4 text-xs">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
+                <ShieldCheck className="h-5 w-5 text-primary" />
+                Declaració Responsable del Sistema Informàtic de Facturació
+              </h3>
+              <button onClick={() => setModalDeclaracioSif(false)}>
+                <X className="h-5 w-5 text-slate-400" />
+              </button>
+            </div>
+            <div className="space-y-2 text-slate-700">
+              <p>
+                <strong>Normativa aplicable:</strong>{" "}
+                {declaracioSif?.normativa || "Reial Decret 1007/2023 i Ordre Ministerial HAC/1177/2024"}
+              </p>
+              <p>
+                <strong>Nom del Sistema Informàtic (SIF):</strong>{" "}
+                <span className="font-mono">{declaracioSif?.nom_sistema || "SEVALOR_SUITE_SIF"}</span> (ID:{" "}
+                <span className="font-mono">{declaracioSif?.id_sistema || "SV"}</span> · Versió:{" "}
+                <span className="font-mono">{declaracioSif?.versio || "2.5.0"}</span>)
+              </p>
+              <p>
+                <strong>Productor del Sistema:</strong>{" "}
+                {declaracioSif?.productor_nom || "Sevalor Technologies SL"} (NIF:{" "}
+                <span className="font-mono">{declaracioSif?.productor_nif || "B00000000"}</span>)
+              </p>
+              <p>
+                <strong>Modalitat d&apos;operació:</strong>{" "}
+                <span className="rounded bg-emerald-100 px-2 py-0.5 font-mono font-bold text-emerald-800">
+                  {declaracioSif?.modalitat || "VERI*FACTU"}
+                </span>{" "}
+                · Entorn: <span className="font-mono font-bold">{declaracioSif?.entorn_actiu || "PREPRODUCCIO"}</span>
+              </p>
+              <p>
+                <strong>Algoritme d&apos;encadenament i empremta:</strong>{" "}
+                {declaracioSif?.algoritme_empremta || "SHA-256 (TipoHuella 01 - Art. 13 Ordre HAC/1177/2024)"}
+              </p>
+              <p>
+                <strong>Especificació del codi QR tributari:</strong>{" "}
+                {declaracioSif?.especificacio_qr || "ISO/IEC 18004 Nivell M (35x35 mm - Art. 20-21 Ordre HAC/1177/2024)"}
+              </p>
+            </div>
+            <div className="flex justify-end pt-2 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setModalDeclaracioSif(false)}
+                className="rounded-lg bg-primary px-4 py-2 font-semibold text-white"
+              >
+                Tancar
+              </button>
+            </div>
           </div>
         </div>
       )}

@@ -65,6 +65,8 @@ interface OperariItem {
   vehicle_assignat_id?: string | null;
   vehicle_habitual: VehicleHabitual | null;
   cost_hora_eur?: number | null;
+  salari_mensual_brut?: number | null;
+  cost_ss_mensual?: number | null;
   carnet_conduir: string;
   carnet_caducitat: string | null;
   prl_certificat_vigencia: string | null;
@@ -164,6 +166,8 @@ export default function GestioOperarisPage() {
   const [nouRol, setNouRol] = useState<"OPERARI" | "CAP_DE_COLLA">("OPERARI");
   const [novaEspecialitat, setNovaEspecialitat] = useState<string>("SISTEMES_REG");
   const [nouCostHora, setNouCostHora] = useState<number>(22.50);
+  const [nouSalariBrut, setNouSalariBrut] = useState<string>("");
+  const [nouCostSs, setNouCostSs] = useState<string>("");
   const [nouCarnet, setNouCarnet] = useState<string>("B");
   const [nouCarnetCaducitat, setNouCarnetCaducitat] = useState<string>("");
   const [novaPrlVigencia, setNovaPrlVigencia] = useState<string>("");
@@ -230,6 +234,8 @@ export default function GestioOperarisPage() {
   const [editEspecialitat, setEditEspecialitat] = useState<string>("SISTEMES_REG");
   const [editEstatOperatiu, setEditEstatOperatiu] = useState<"DISPONIBLE" | "EN_FEINA" | "VACANCES" | "BAIXA">("DISPONIBLE");
   const [editCostHora, setEditCostHora] = useState<number>(22.50);
+  const [editSalariBrut, setEditSalariBrut] = useState<string>("");
+  const [editCostSs, setEditCostSs] = useState<string>("");
   const [editCarnet, setEditCarnet] = useState<string>("B");
   const [editCarnetCaducitat, setEditCarnetCaducitat] = useState<string>("");
   const [editPrlVigencia, setEditPrlVigencia] = useState<string>("");
@@ -295,6 +301,8 @@ export default function GestioOperarisPage() {
         vehicle_assignat_id: op.vehicle_assignat_id || op.vehicle_habitual?.id || null,
         vehicle_habitual: op.vehicle_habitual || null,
         cost_hora_eur: op.cost_hora_eur != null ? Number(op.cost_hora_eur) : null,
+        salari_mensual_brut: op.salari_mensual_brut != null ? Number(op.salari_mensual_brut) : null,
+        cost_ss_mensual: op.cost_ss_mensual != null ? Number(op.cost_ss_mensual) : null,
         carnet_conduir: op.carnet_conduir || "B",
         carnet_caducitat: op.carnet_caducitat || null,
         prl_certificat_vigencia: op.prl_certificat_vigencia || null,
@@ -385,6 +393,8 @@ export default function GestioOperarisPage() {
           rol: nouRol,
           especialitat: novaEspecialitat,
           cost_hora_eur: nouCostHora,
+          salari_mensual_brut: nouSalariBrut.trim() !== "" ? parseFloat(nouSalariBrut) : null,
+          cost_ss_mensual: nouCostSs.trim() !== "" ? parseFloat(nouCostSs) : null,
           carnet_conduir: nouCarnet,
           carnet_caducitat: nouCarnetCaducitat || null,
           prl_certificat_vigencia: novaPrlVigencia || null,
@@ -443,6 +453,16 @@ export default function GestioOperarisPage() {
     setEditEspecialitat(op.especialitat || "SISTEMES_REG");
     setEditEstatOperatiu(op.estat_operatiu || "DISPONIBLE");
     setEditCostHora(Number(op.cost_hora_eur) || 22.50);
+    setEditSalariBrut(
+      op.salari_mensual_brut != null && Number(op.salari_mensual_brut) > 0
+        ? String(op.salari_mensual_brut)
+        : ""
+    );
+    setEditCostSs(
+      op.cost_ss_mensual != null && Number(op.cost_ss_mensual) > 0
+        ? String(op.cost_ss_mensual)
+        : ""
+    );
     setEditCarnet(op.carnet_conduir || "B");
     setEditCarnetCaducitat(op.carnet_caducitat || "");
     setEditPrlVigencia(op.prl_certificat_vigencia || "");
@@ -501,6 +521,8 @@ export default function GestioOperarisPage() {
           estat_operatiu: editEstatOperatiu,
           estat: editEstatOperatiu === "BAIXA" ? "INACTIU" : "ACTIU",
           cost_hora_eur: editCostHora,
+          salari_mensual_brut: editSalariBrut.trim() !== "" ? parseFloat(editSalariBrut) : 0,
+          cost_ss_mensual: editCostSs.trim() !== "" ? parseFloat(editCostSs) : 0,
           carnet_conduir: editCarnet,
           carnet_caducitat: editCarnetCaducitat || null,
           prl_certificat_vigencia: editPrlVigencia || null,
@@ -527,6 +549,8 @@ export default function GestioOperarisPage() {
           estat_operatiu: editEstatOperatiu,
           actiu: editEstatOperatiu !== "BAIXA",
           cost_hora_eur: editCostHora,
+          salari_mensual_brut: editSalariBrut.trim() !== "" ? parseFloat(editSalariBrut) : 0,
+          cost_ss_mensual: editCostSs.trim() !== "" ? parseFloat(editCostSs) : 0,
           carnet_conduir: editCarnet,
           carnet_caducitat: editCarnetCaducitat || null,
           prl_certificat_vigencia: editPrlVigencia || null,
@@ -1618,6 +1642,35 @@ export default function GestioOperarisPage() {
                 </div>
               </div>
 
+              {rolActiu !== "ENGINYER" && (
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-[10px] text-slate-400">Salari Brut Mensual (€/mes, opcional)</label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      placeholder="Ex: 1950.00"
+                      value={nouSalariBrut}
+                      onChange={(e) => setNouSalariBrut(e.target.value)}
+                      className="w-full px-3 py-1.5 rounded-lg bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs mt-1 tabular-nums"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[10px] text-slate-400">Seguretat Social Empresa (€/mes, opcional)</label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      placeholder="Ex: 620.00"
+                      value={nouCostSs}
+                      onChange={(e) => setNouCostSs(e.target.value)}
+                      className="w-full px-3 py-1.5 rounded-lg bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs mt-1 tabular-nums"
+                    />
+                  </div>
+                </div>
+              )}
+
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="text-[10px] text-slate-400">Caducitat Carnet (Opcional / OCR)</label>
@@ -1849,6 +1902,35 @@ export default function GestioOperarisPage() {
                 </div>
                 )}
               </div>
+
+              {potEditarOperari && (
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-[10px] text-slate-400">Salari Brut Mensual (€/mes, opcional)</label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      placeholder="Ex: 1950.00"
+                      value={editSalariBrut}
+                      onChange={(e) => setEditSalariBrut(e.target.value)}
+                      className="w-full px-3 py-1.5 rounded-lg bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs mt-1 tabular-nums"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[10px] text-slate-400">Seguretat Social Empresa (€/mes, opcional)</label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      placeholder="Ex: 620.00"
+                      value={editCostSs}
+                      onChange={(e) => setEditCostSs(e.target.value)}
+                      className="w-full px-3 py-1.5 rounded-lg bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs mt-1 tabular-nums"
+                    />
+                  </div>
+                </div>
+              )}
 
               <div className="grid grid-cols-3 gap-3">
                 <div>

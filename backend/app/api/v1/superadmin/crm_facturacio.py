@@ -1,6 +1,5 @@
 """Router CRM SaaS, Facturació B2B Veri*factu amb Human-in-the-Loop i Tiquets d'Incidència."""
 
-import io
 import logging
 import os
 import uuid
@@ -14,6 +13,7 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.superadmin.tenants import _resolve_empresa
+from app.core.config import settings
 from app.core.db import get_db_with_tenant_context
 from app.core.security import require_roles
 from app.models.models import (
@@ -24,7 +24,18 @@ from app.models.models import (
 )
 from app.services.sovereign_storage import SuperadminStorageGateway
 from app.services.vault_tunnel import empresa_target_key, vault_tunnel_broker
-from app.services.verifactu import generar_qr_verifactu, generar_sha256_encadenat
+from app.services.verifactu import (
+    calcular_huella_alta_hac1177,
+    calcular_huella_anulacio_hac1177,
+    format_num_serie,
+    generar_url_qr_aeat_hac1177,
+    renderitzar_pdf_factura_verifactu_bytes,
+)
+from app.services.verifactu_xml import (
+    construir_element_registro_alta,
+    construir_element_registro_anulacion,
+    embolcallar_soap_suministro_aeat,
+)
 
 logger = logging.getLogger("superadmin.crm_facturacio")
 
@@ -34,8 +45,8 @@ router = APIRouter(
     dependencies=[Depends(require_roles(["SUPERADMIN"]))],
 )
 
-SEVALOR_EMISSOR_NOM = "SEVALOR SUITE S.L."
-SEVALOR_EMISSOR_NIF = "B99887766"
+SEVALOR_EMISSOR_NOM = settings.SUPERADMIN_EMISSOR_NOM
+SEVALOR_EMISSOR_NIF = settings.SUPERADMIN_EMISSOR_NIF
 
 
 class EquipIADetallItem(BaseModel):
@@ -157,8 +168,20 @@ def _serialitzar_factura_b2b(f: SaasFacturaB2B) -> Dict[str, Any]:
         "client_nom_snapshot": f.client_nom_snapshot,
         "client_nif_snapshot": f.client_nif_snapshot,
         "serie": f.serie,
+        "exercici": int(f.exercici or (f.data_emissio.year if f.data_emissio else 2026)),
         "numero_factura": codi_oficial,
         "numero_correlatiu": f.numero_factura,
+        "num_serie_verifactu": f.num_serie_verifactu
+        or (
+            format_num_serie(
+                f.serie,
+                int(f.exercici or (f.data_emissio.year if f.data_emissio else 2026)),
+                int(f.numero_factura),
+            )
+            if f.numero_factura is not None
+            else None
+        ),
+        "tipus_factura": str(getattr(f, "tipus_factura", None) or "F1"),
         "codi_factura": (
             codi_oficial
             if codi_oficial is not None
@@ -166,6 +189,12 @@ def _serialitzar_factura_b2b(f: SaasFacturaB2B) -> Dict[str, Any]:
         ),
         "estat": "EMESA_VERIFACTU" if f.numero_factura is not None and f.estat != "ESBORRANY_PREFACTURA" else f.estat,
         "estat_cobrament": estat_cobrament,
+        "estat_anulacio": str(getattr(f, "estat_anulacio", None) or "ACTIVA"),
+        "estat_enviament_aeat": str(getattr(f, "estat_enviament_aeat", None) or "PENDENT"),
+        "csv_aeat": getattr(f, "csv_aeat", None),
+        "hash_anulacio_sha256": getattr(f, "hash_anulacio_sha256", None),
+        "motiu_anulacio": getattr(f, "motiu_anulacio", None),
+        "fecha_hora_huso_gen_registro": getattr(f, "fecha_hora_huso_gen_registro", None),
         "periode": f.periode,
         "periode_facturacio": f.periode,
         "concepte_onboarding_desc": f.concepte_onboarding_desc,
@@ -518,7 +547,9 @@ async def verificar_i_emetre_verifactu_b2b(
 
     nou_num = ultim_num + 1
     data_avui = date.today()
+    exercici_int = data_avui.year
     data_emissio_str = data_avui.isoformat()
+    num_serie_vf = format_num_serie(pref.serie, exercici_int, nou_num)
 
     fitxes_map, _, factures_map = await _carregar_mapes_facturacio_superadmin()
     fac_disc = factures_map.get(str(pref.id), {})
@@ -533,26 +564,21 @@ async def verificar_i_emetre_verifactu_b2b(
         fac_disc.get("client_nif_snapshot") or fitxa_emp.get("nif") or pref.client_nif_snapshot
     )
 
-    hash_actual = generar_sha256_encadenat(
-        empresa_nif=SEVALOR_EMISSOR_NIF,
-        client_nif=client_nif_real,
-        serie=pref.serie,
-        numero_factura=nou_num,
-        base_imposable=float(pref.base_imposable),
-        quota_iva=float(pref.quota_iva),
-        import_total=float(pref.import_total),
-        data_emissio=data_emissio_str,
+    hash_actual, _, ts_huso = calcular_huella_alta_hac1177(
+        nif_emissor=SEVALOR_EMISSOR_NIF,
+        num_serie_factura=num_serie_vf,
+        fecha_expedicion=data_avui,
+        tipus_factura="F1",
+        cuota_total=float(pref.quota_iva),
+        importe_total=float(pref.import_total),
         hash_anterior=hash_anterior,
     )
 
-    qr_content = generar_qr_verifactu(
+    qr_content = generar_url_qr_aeat_hac1177(
         nif_emissor=SEVALOR_EMISSOR_NIF,
-        nif_destinatari=client_nif_real,
-        serie=pref.serie,
-        numero=nou_num,
-        hash_sha256=hash_actual,
-        import_total=float(pref.import_total),
-        data_emissio=data_emissio_str,
+        num_serie_factura=num_serie_vf,
+        fecha_expedicion=data_avui,
+        importe_total=float(pref.import_total),
     )
 
     pdf_bytes = _generar_pdf_b2b_reportlab_bytes(
@@ -564,6 +590,7 @@ async def verificar_i_emetre_verifactu_b2b(
         hash_actual=hash_actual,
         hash_anterior=hash_anterior,
         qr_content=qr_content,
+        num_serie_verifactu=num_serie_vf,
     )
     pdf_path = await SuperadminStorageGateway.pujar_fitxer_binari(
         "saas_factures_pdf",
@@ -580,13 +607,18 @@ async def verificar_i_emetre_verifactu_b2b(
         except ValueError:
             verificador_uuid = None
 
+    pref.exercici = exercici_int
     pref.numero_factura = nou_num
+    pref.num_serie_verifactu = num_serie_vf
+    pref.tipus_factura = "F1"
+    pref.import_total_verifactu = float(pref.import_total)
     pref.estat = "EMESA_VERIFACTU"
     pref.verificada_per_id = verificador_uuid
     pref.data_verificacio_humana = datetime.now(timezone.utc)
     pref.data_emissio = data_avui
     pref.hash_sha256 = hash_actual
     pref.hash_anterior = hash_anterior
+    pref.fecha_hora_huso_gen_registro = ts_huso
     pref.qr_verifactu = qr_content
     pref.pdf_path = pdf_path
 
@@ -610,110 +642,107 @@ def _generar_pdf_b2b_reportlab_bytes(
     hash_actual: str,
     hash_anterior: Optional[str],
     qr_content: str,
+    num_serie_verifactu: Optional[str] = None,
 ) -> bytes:
-    from reportlab.graphics.barcode import qr  # type: ignore[import-untyped]
-    from reportlab.lib.colors import HexColor  # type: ignore[import-untyped]
-    from reportlab.lib.pagesizes import A4  # type: ignore[import-untyped]
-    from reportlab.pdfgen import canvas  # type: ignore[import-untyped]
-
-    buf = io.BytesIO()
-    c = canvas.Canvas(buf, pagesize=A4)
-    c.setFont("Helvetica-Bold", 14)
-    c.setFillColor(HexColor("#065f46"))
-    c.drawString(30, A4[1] - 50, SEVALOR_EMISSOR_NOM)
-    c.setFont("Helvetica", 10)
-    c.setFillColor(HexColor("#333333"))
-    c.drawString(30, A4[1] - 68, f"NIF Emissor: {SEVALOR_EMISSOR_NIF} • Facturació SaaS B2B Veri*factu")
-    c.line(30, A4[1] - 78, A4[0] - 30, A4[1] - 78)
-
-    c.setFont("Helvetica-Bold", 11)
-    c.drawString(30, A4[1] - 105, "CLIENT EMPRESA (TENANT):")
-    c.setFont("Helvetica", 10)
-    c.drawString(30, A4[1] - 122, f"{client_nom_real} (NIF: {client_nif_real})")
-
-    c.setFont("Helvetica-Bold", 12)
-    c.drawString(
-        30, A4[1] - 155, f"FACTURA OFICIAL {pref.serie}-{numero_factura:05d} (Període: {pref.periode})"
-    )
-    c.setFont("Helvetica", 9)
-    c.drawString(30, A4[1] - 172, f"Data d'emissió: {data_emissio_str} • Verificada per humà (HITL)")
-
-    y = A4[1] - 205
-    c.setFont("Helvetica-Bold", 10)
-    c.drawString(30, y, "CONCEPTES FACTURATS:")
-    y -= 18
-    c.setFont("Helvetica", 9)
+    """Renderitza el PDF de factura SaaS B2B utilitzant la plantilla HTML oficial Veri*factu amb WeasyPrint."""
+    iva_pct = float(pref.tipus_iva_percent or 21.0)
+    linies_b2b: List[Dict[str, Any]] = []
 
     if float(pref.import_onboarding or 0.0) > 0:
-        desc_onb = pref.concepte_onboarding_desc or "Onboarding / Llicència Plataforma"
-        c.drawString(40, y, f"1. {desc_onb}: {float(pref.import_onboarding):.2f} €")
-        y -= 15
-
-    if float(pref.import_config_ia or 0.0) > 0:
-        desc_ia = pref.concepte_config_ia_desc or "Configuració IA"
-        c.drawString(40, y, f"2. {desc_ia}: {float(pref.import_config_ia):.2f} €")
-        y -= 15
-
-    if float(pref.import_equips_ia or 0.0) > 0:
-        c.drawString(40, y, f"3. Venda d'Equips IA ( Total: {float(pref.import_equips_ia):.2f} € ):")
-        y -= 14
-        for item in pref.equips_ia_detall or []:
-            c.drawString(
-                55,
-                y,
-                f"- {item.get('concepte', 'Equip IA')} (VENDA) x {item.get('unitats', 1)} u. a {float(item.get('preu_unitari', 0.0)):.2f} €",
-            )
-            y -= 13
-
-    if float(pref.import_operaris or 0.0) > 0:
-        c.drawString(
-            40,
-            y,
-            f"4. Llicència d'Operaris: {int(pref.num_operaris_facturats or 0)} operaris x {float(pref.preu_unitari_operari or 0.0):.2f} € = {float(pref.import_operaris):.2f} €",
+        linies_b2b.append(
+            {
+                "concepte": pref.concepte_onboarding_desc or "Onboarding / Llicència Plataforma",
+                "descripcio_detall": f"Període {pref.periode}",
+                "quantitat": 1,
+                "preu_venda_unitari": float(pref.import_onboarding),
+                "tipus_iva": iva_pct,
+                "subtotal": float(pref.import_onboarding),
+            }
         )
-        y -= 18
+    if float(pref.import_config_ia or 0.0) > 0:
+        linies_b2b.append(
+            {
+                "concepte": pref.concepte_config_ia_desc or "Configuració IA Local",
+                "quantitat": 1,
+                "preu_venda_unitari": float(pref.import_config_ia),
+                "tipus_iva": iva_pct,
+                "subtotal": float(pref.import_config_ia),
+            }
+        )
+    if float(pref.import_equips_ia or 0.0) > 0:
+        if pref.equips_ia_detall:
+            for item in pref.equips_ia_detall:
+                u = int(item.get("unitats", 1))
+                p = float(item.get("preu_unitari", 0.0))
+                linies_b2b.append(
+                    {
+                        "concepte": f"{item.get('concepte') or item.get('nom') or 'Equip IA'} (VENDA)",
+                        "quantitat": u,
+                        "preu_venda_unitari": p,
+                        "tipus_iva": iva_pct,
+                        "subtotal": round(u * p, 2),
+                    }
+                )
+        else:
+            linies_b2b.append(
+                {
+                    "concepte": "Venda d'Equips IA",
+                    "quantitat": 1,
+                    "preu_venda_unitari": float(pref.import_equips_ia),
+                    "tipus_iva": iva_pct,
+                    "subtotal": float(pref.import_equips_ia),
+                }
+            )
+    if float(pref.import_operaris or 0.0) > 0:
+        linies_b2b.append(
+            {
+                "concepte": f"Llicència SaaS d'Operaris ({pref.periode})",
+                "quantitat": max(1, int(pref.num_operaris_facturats or 1)),
+                "preu_venda_unitari": float(pref.preu_unitari_operari or pref.import_operaris),
+                "tipus_iva": iva_pct,
+                "subtotal": float(pref.import_operaris),
+            }
+        )
 
-    y -= 10
-    c.line(30, y, A4[0] - 140, y)
-    y -= 18
-    c.setFont("Helvetica", 10)
-    c.drawString(30, y, f"Base Imposable: {float(pref.base_imposable):.2f} €")
-    y -= 16
-    c.drawString(
-        30, y, f"Quota IVA ({float(pref.tipus_iva_percent):.1f}%): {float(pref.quota_iva):.2f} €"
+    exercici_int = int(pref.exercici or int(data_emissio_str[:4]))
+    num_serie = num_serie_verifactu or pref.num_serie_verifactu or format_num_serie(pref.serie, exercici_int, numero_factura)
+
+    return renderitzar_pdf_factura_verifactu_bytes(
+        empresa_nom=SEVALOR_EMISSOR_NOM,
+        empresa_rao_social=SEVALOR_EMISSOR_NOM,
+        empresa_eslogan=settings.SUPERADMIN_EMISSOR_ESLOGAN,
+        empresa_nif=SEVALOR_EMISSOR_NIF,
+        empresa_adreca=settings.SUPERADMIN_EMISSOR_ADRECA,
+        empresa_cp=settings.SUPERADMIN_EMISSOR_CP,
+        empresa_poblacio=settings.SUPERADMIN_EMISSOR_POBLACIO,
+        empresa_provincia=settings.SUPERADMIN_EMISSOR_PROVINCIA,
+        empresa_telefon=settings.SUPERADMIN_EMISSOR_TELEFON,
+        empresa_email=settings.SUPERADMIN_EMISSOR_EMAIL,
+        empresa_registre_mercantil=settings.SUPERADMIN_EMISSOR_REGISTRE_MERCANTIL,
+        empresa_titular_compte=settings.SUPERADMIN_EMISSOR_TITULAR_COMPTE,
+        empresa_iban=settings.SUPERADMIN_EMISSOR_IBAN,
+        primari_hsl="162 88% 20%",
+        client_nom=client_nom_real,
+        client_nif=client_nif_real,
+        serie=pref.serie,
+        numero_factura=numero_factura,
+        exercici=exercici_int,
+        num_serie_verifactu=num_serie,
+        tipus_factura=str(getattr(pref, "tipus_factura", None) or "F1"),
+        data_emissio=data_emissio_str,
+        referencia_comanda=f"Període {pref.periode}",
+        estat_document="ESBORRANY_PREFACTURA" if pref.estat == "ESBORRANY_PREFACTURA" else "EMESA",
+        estat_anulacio=str(getattr(pref, "estat_anulacio", None) or "ACTIVA"),
+        linies=linies_b2b,
+        base_imposable=float(pref.base_imposable),
+        quota_iva=float(pref.quota_iva),
+        import_total_verifactu=float(pref.import_total),
+        import_total=float(pref.import_total),
+        hash_actual=hash_actual,
+        hash_anterior=hash_anterior,
+        qr_content=qr_content,
+        csv_aeat=getattr(pref, "csv_aeat", None),
     )
-    y -= 20
-    c.setFont("Helvetica-Bold", 12)
-    c.drawString(30, y, f"IMPORT TOTAL: {float(pref.import_total):.2f} €")
-
-    try:
-        qr_code = qr.QrCodeWidget(qr_content, barWidth=65, barHeight=65)
-        bounds = qr_code.getBounds()
-        qr_w = bounds[2] - bounds[0]
-        qr_h = bounds[3] - bounds[1]
-        qr_scale = 65 / max(qr_w, qr_h)
-        c.saveState()
-        c.translate(A4[0] - 105, A4[1] - 235)
-        c.scale(qr_scale, qr_scale)
-        qr_code.drawOn(c, 0, 0)
-        c.restoreState()
-        c.setFont("Helvetica", 6)
-        c.setFillColor(HexColor("#666666"))
-        c.drawString(A4[0] - 105, A4[1] - 242, "Veri*factu AEAT QR")
-    except Exception as exc:
-        logger.warning("No s'ha pogut incrustar QR al PDF B2B: %s", exc)
-
-    c.setFont("Helvetica", 7)
-    c.setFillColor(HexColor("#777777"))
-    c.drawString(30, 50, f"Veri*factu Hash SHA-256: {hash_actual}")
-    c.drawString(
-        30,
-        36,
-        f"Hash Anterior: {hash_anterior or '(Primera factura de la sèrie SAAS)'}",
-    )
-    c.showPage()
-    c.save()
-    return buf.getvalue()
 
 
 @router.patch("/factures/{factura_id}/estat-cobrament", response_model=Dict[str, Any])
@@ -775,6 +804,61 @@ async def canviar_estat_cobrament_factura(
     return out
 
 
+class AnularFacturaB2BRequest(BaseModel):
+    motiu: str = Field(..., min_length=3, max_length=300)
+    confirmacio_humana: bool = True
+
+
+@router.post("/factures/{factura_id}/anular", response_model=Dict[str, Any])
+async def anular_factura_b2b_verifactu(
+    factura_id: str,
+    payload: AnularFacturaB2BRequest,
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+) -> Dict[str, Any]:
+    """Emet un Registre d'Anul·lació (RegistroAnulacion) per a una factura SaaS B2B (Art. 13.2 Ordre HAC/1177/2024)."""
+    if not payload.confirmacio_humana:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Verificació humana obligatòria (HITL) per anul·lar una factura B2B.",
+        )
+    try:
+        f_uuid = uuid.UUID(factura_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="UUID de factura invàlid.")
+
+    res = await db.execute(select(SaasFacturaB2B).where(SaasFacturaB2B.id == f_uuid))
+    fac = res.scalars().first()
+    if not fac:
+        raise HTTPException(status_code=404, detail="Factura no trobada.")
+    if fac.estat == "ESBORRANY_PREFACTURA" or fac.numero_factura is None:
+        raise HTTPException(
+            status_code=422,
+            detail="Només es poden anul·lar factures ja emeses a Veri*factu.",
+        )
+    if getattr(fac, "estat_anulacio", "ACTIVA") == "ANULADA_VERIFACTU":
+        raise HTTPException(status_code=409, detail="La factura ja es troba anul·lada.")
+
+    num_serie = fac.num_serie_verifactu or format_num_serie(
+        fac.serie, int(fac.exercici or 2026), int(fac.numero_factura)
+    )
+    huella_anul, _, _ = calcular_huella_anulacio_hac1177(
+        nif_emissor=SEVALOR_EMISSOR_NIF,
+        num_serie_anulada=num_serie,
+        fecha_expedicion_anulada=fac.data_emissio or date.today(),
+        hash_anterior=fac.hash_sha256,
+    )
+    fac.estat_anulacio = "ANULADA_VERIFACTU"
+    fac.data_anulacio = datetime.now(timezone.utc)
+    fac.motiu_anulacio = payload.motiu.strip()
+    fac.hash_anulacio_sha256 = huella_anul
+    await db.commit()
+
+    fitxes_map, _, factures_map = await _carregar_mapes_facturacio_superadmin()
+    out = _enriquir_factura_amb_disc(_serialitzar_factura_b2b(fac), fitxes_map, factures_map)
+    await _desar_superadmin_segur("saas_factures_json", str(fac.id), out)
+    return out
+
+
 @router.get("/factures/{factura_id}/pdf")
 async def descarregar_pdf_factura_b2b(
     factura_id: str,
@@ -811,6 +895,98 @@ async def descarregar_pdf_factura_b2b(
                     )
             raise
     raise HTTPException(status_code=404, detail="Fitxer PDF de la factura no trobat.")
+
+
+@router.get("/factures/{factura_id}/xml")
+async def descarregar_xml_factura_b2b(
+    factura_id: str,
+    tipus_registre: Optional[str] = Query(None),
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+) -> Response:
+    """Exporta l'XML oficial Veri*factu (SuministroLR.xsd) per a una factura SaaS B2B de Superadmin."""
+    try:
+        f_uuid = uuid.UUID(factura_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="UUID de factura invàlid.")
+
+    res = await db.execute(select(SaasFacturaB2B).where(SaasFacturaB2B.id == f_uuid))
+    fac = res.scalars().first()
+    if not fac or fac.numero_factura is None:
+        raise HTTPException(status_code=404, detail="Factura B2B emesa no trobada.")
+
+    exercici_int = int(fac.exercici or (fac.data_emissio.year if fac.data_emissio else 2026))
+    num_serie = fac.num_serie_verifactu or format_num_serie(
+        fac.serie, exercici_int, int(fac.numero_factura)
+    )
+    tipus_reg = (
+        tipus_registre.strip().upper()
+        if tipus_registre
+        else ("ANULACION" if getattr(fac, "estat_anulacio", "ACTIVA") == "ANULADA_VERIFACTU" else "ALTA")
+    )
+
+    if tipus_reg == "ANULACION":
+        el = construir_element_registro_anulacion(
+            nif_emissor=SEVALOR_EMISSOR_NIF,
+            nom_emissor=SEVALOR_EMISSOR_NOM,
+            num_serie_anulada=num_serie,
+            fecha_expedicion_anulada=fac.data_emissio or date.today(),
+            hash_anterior=fac.hash_sha256,
+            num_serie_anterior=num_serie,
+            fecha_expedicion_anterior=fac.data_emissio or date.today(),
+            hash_anulacio_sha256=str(fac.hash_anulacio_sha256 or fac.hash_sha256 or ("0" * 64)),
+            fecha_hora_huso_gen_registro=fac.fecha_hora_huso_gen_registro,
+        )
+    else:
+        el = construir_element_registro_alta(
+            nif_emissor=SEVALOR_EMISSOR_NIF,
+            nom_emissor=SEVALOR_EMISSOR_NOM,
+            num_serie_factura=num_serie,
+            fecha_expedicion=fac.data_emissio or date.today(),
+            tipus_factura=str(fac.tipus_factura or "F1"),
+            descripcio_operacio=f"Facturació SaaS Sevalor Suite ({fac.periode})",
+            client_nom=fac.client_nom_snapshot,
+            client_nif=fac.client_nif_snapshot,
+            linies=[
+                {
+                    "concepte": f"Llicència SaaS Sevalor Suite ({fac.periode})",
+                    "quantitat": 1,
+                    "preu_venda_unitari": float(fac.base_imposable or 0),
+                    "tipus_iva": float(fac.tipus_iva_percent or 21.0),
+                    "subtotal": float(fac.base_imposable or 0),
+                }
+            ],
+            base_imposable=float(fac.base_imposable or 0),
+            quota_iva=float(fac.quota_iva or 0),
+            import_total_verifactu=float(fac.import_total_verifactu or fac.import_total or 0),
+            hash_anterior=fac.hash_anterior,
+            hash_sha256=str(fac.hash_sha256 or ("0" * 64)),
+            fecha_hora_huso_gen_registro=fac.fecha_hora_huso_gen_registro,
+        )
+
+    xml_str = embolcallar_soap_suministro_aeat(
+        nom_emissor=SEVALOR_EMISSOR_NOM,
+        nif_emissor=SEVALOR_EMISSOR_NIF,
+        registres_elements=[el],
+    )
+    return Response(content=xml_str, media_type="application/xml")
+
+
+@router.get("/verifactu/declaracio-responsable")
+async def obtenir_declaracio_responsable_superadmin() -> Dict[str, Any]:
+    """Declaració Responsable del SIF Veri*factu per a Superadmin B2B (Art. 15 Ordre HAC/1177/2024)."""
+    return {
+        "nom_sistema": settings.VERIFACTU_SIF_NOMBRE,
+        "id_sistema": settings.VERIFACTU_SIF_ID,
+        "versio": settings.VERIFACTU_SIF_VERSION,
+        "numero_instalacio": settings.VERIFACTU_SIF_NUM_INSTALACION,
+        "productor_nom": settings.VERIFACTU_SIF_NOM_PRODUCTOR,
+        "productor_nif": settings.VERIFACTU_SIF_NIF_PRODUCTOR,
+        "emissor_nom": SEVALOR_EMISSOR_NOM,
+        "emissor_nif": SEVALOR_EMISSOR_NIF,
+        "modalitat": "VERI*FACTU",
+        "entorn_actiu": settings.VERIFACTU_ENV,
+        "normativa": "Reial Decret 1007/2023 i Ordre Ministerial HAC/1177/2024",
+    }
 
 
 async def _comprovar_pc_local_empresa(empresa_id: uuid.UUID) -> bool:

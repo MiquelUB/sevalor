@@ -36,3 +36,10 @@ selectolax>=0.3.21
 extruct>=0.17.0
 phonenumbers>=8.13.0
 python-stdnum>=1.20
+
+# Motor Facturació Legal Veri*factu (HAC/1177/2024: HTML->PDF, QR SVG M, XML XSD & PKCS#12 mTLS)
+weasyprint>=62.0
+Jinja2>=3.1.4
+segno>=1.6.1
+lxml>=5.2.0
+cryptography>=42.0.0
