@@ -142,6 +142,7 @@ interface AlbaraPendentItem {
   numero_albara: string;
   data_albara?: string | null;
   estat: string;
+  ja_te_stock_aplicat?: boolean;
   linies: Array<{
     referencia: string;
     nom: string;
@@ -532,6 +533,7 @@ function MagatzemContent() {
       await apiFetch("/gestio/magatzem/albara/confirmar", {
         method: "POST",
         body: JSON.stringify({
+          ...(resultatOcr.albara_id ? { albara_id: resultatOcr.albara_id } : {}),
           proveidor: {
             nif: provNif,
             nom: provNom,
@@ -562,6 +564,30 @@ function MagatzemContent() {
     } finally {
       setProcessantOcr(false);
     }
+  };
+
+  const handleRevisarAlbaraPendent = (alb: AlbaraPendentItem) => {
+    setError(null);
+    setResultatOcr({
+      albara_id: alb.id,
+      proveidor: {
+        nif: alb.proveidor_nif || "B00000000",
+        nom: alb.proveidor_nom || "Proveïdor per revisar",
+      },
+      numero_document: alb.numero_albara,
+      tipus_document: "ALBARA",
+      data_document: alb.data_albara || new Date().toISOString().split("T")[0],
+      linies: (alb.linies || []).map((l) => ({
+        referencia: l.referencia || "",
+        nom: l.nom || "",
+        quantitat: Number(l.quantitat) || 1,
+        preu: Number(l.preu || 0),
+        descompte_percent: Number(l.descompte_percent || 0),
+        tipus: l.tipus || "MATERIAL",
+      })),
+      numero_albarans_vinculats: [],
+    });
+    setModalOcr(true);
   };
 
   const handleDesarAlbaraPendent = async () => {
@@ -614,6 +640,9 @@ function MagatzemContent() {
       await apiFetch(`/gestio/magatzem/albarans/${albaraId}/consolidar`, {
         method: "POST",
       });
+      setAlbaransPendents((prev) =>
+        prev.map((a) => (a.id === albaraId ? { ...a, estat: "CONSOLIDAT" } : a))
+      );
       await carregarArticles();
     } catch (err: any) {
       setError(err.message || "Error consolidant l'albarà a estoc");
@@ -1906,21 +1935,39 @@ function MagatzemContent() {
                                   {alb.data_albara}
                                 </span>
                               )}
+                              {alb.estat === "PENDENT_AUDITORIA" && alb.ja_te_stock_aplicat && (
+                                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-sky-100 text-sky-800 dark:bg-sky-900/40 dark:text-sky-300">
+                                  Estoc ja aplicat (no es duplicarà)
+                                </span>
+                              )}
                             </div>
                             {alb.estat === "PENDENT_AUDITORIA" && (
-                              <button
-                                type="button"
-                                disabled={consolidantAlbaraId === alb.id}
-                                onClick={() => handleConsolidarAlbara(alb.id)}
-                                className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold inline-flex items-center gap-1.5 disabled:opacity-50"
-                              >
-                                <CheckCircle2 className="w-3.5 h-3.5" />
-                                <span>
-                                  {consolidantAlbaraId === alb.id
-                                    ? "Consolidant..."
-                                    : "Consolidar i Augmentar Estoc"}
-                                </span>
-                              </button>
+                              <div className="flex flex-wrap items-center gap-2">
+                                <button
+                                  type="button"
+                                  disabled={consolidantAlbaraId === alb.id}
+                                  onClick={() => handleRevisarAlbaraPendent(alb)}
+                                  className="px-3 py-1.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200 text-xs font-bold inline-flex items-center gap-1.5 disabled:opacity-50"
+                                >
+                                  <Edit3 className="w-3.5 h-3.5" />
+                                  <span>Revisar / Auditar</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={consolidantAlbaraId === alb.id}
+                                  onClick={() => handleConsolidarAlbara(alb.id)}
+                                  className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold inline-flex items-center gap-1.5 disabled:opacity-50"
+                                >
+                                  <CheckCircle2 className="w-3.5 h-3.5" />
+                                  <span>
+                                    {consolidantAlbaraId === alb.id
+                                      ? "Consolidant..."
+                                      : alb.ja_te_stock_aplicat
+                                        ? "Marcar Consolidat (sense duplicar estoc)"
+                                        : "Consolidar i Augmentar Estoc"}
+                                  </span>
+                                </button>
+                              </div>
                             )}
                           </div>
                           {alb.linies && alb.linies.length > 0 && (
@@ -2282,6 +2329,23 @@ function MagatzemContent() {
                         {resultatOcr.linies?.map((lin: any, idx: number) => {
                           const costNetUnitari = Number(lin.preu || 0) * (1 - (Number(lin.descompte_percent || 0) / 100));
                           const netTotal = Number(lin.quantitat || 0) * costNetUnitari;
+                          const ocrNif = String(resultatOcr.proveidor?.nif || "").trim().toUpperCase();
+                          const ocrNom = String(resultatOcr.proveidor?.nom || "").trim().toLowerCase();
+                          const provMatch = proveidors.find(
+                            (p) =>
+                              (ocrNif && ocrNif !== "B00000000" && String(p.nif || "").trim().toUpperCase() === ocrNif) ||
+                              (ocrNom && String(p.rao_social || "").trim().toLowerCase() === ocrNom)
+                          );
+                          const refTrim = String(lin.referencia || "").trim();
+                          const artMatch =
+                            !esEnginyer && provMatch && refTrim && lin.tipus !== "EINA"
+                              ? articles.find(
+                                  (a) =>
+                                    a.referencia_inventari === refTrim &&
+                                    a.proveidor_id === provMatch.id &&
+                                    Number(a.marge_guanys || 0) > 0
+                                )
+                              : undefined;
                           return (
                             <tr key={idx} className="hover:bg-slate-50/60 dark:hover:bg-slate-800/40">
                               <td className="p-2">
@@ -2364,7 +2428,12 @@ function MagatzemContent() {
                                 />
                               </td>
                               <td className="p-2 text-right font-mono text-slate-500">
-                                {costNetUnitari.toFixed(2)} €
+                                <div>{costNetUnitari.toFixed(2)} €</div>
+                                {artMatch && (
+                                  <div className="text-[10px] font-sans font-bold text-emerald-600 dark:text-emerald-400">
+                                    Marge +{Number(artMatch.marge_guanys)}% auto
+                                  </div>
+                                )}
                               </td>
                               <td className="p-2 text-right font-mono font-bold text-slate-800 dark:text-slate-200">
                                 {netTotal.toFixed(2)} €
@@ -2412,15 +2481,17 @@ function MagatzemContent() {
                       >
                         Tornar
                       </button>
-                      <button
-                        type="button"
-                        onClick={handleDesarAlbaraPendent}
-                        disabled={processantOcr}
-                        className="px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-600 text-white text-xs font-bold shadow flex items-center gap-1.5 disabled:opacity-50"
-                      >
-                        <ClipboardCheck className="w-3.5 h-3.5" />
-                        <span>Desar Pendent d&apos;Auditoria</span>
-                      </button>
+                      {!resultatOcr.albara_id && (
+                        <button
+                          type="button"
+                          onClick={handleDesarAlbaraPendent}
+                          disabled={processantOcr}
+                          className="px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-600 text-white text-xs font-bold shadow flex items-center gap-1.5 disabled:opacity-50"
+                        >
+                          <ClipboardCheck className="w-3.5 h-3.5" />
+                          <span>Desar Pendent d&apos;Auditoria</span>
+                        </button>
+                      )}
                       <button
                         onClick={handleConfirmarOcr}
                         disabled={processantOcr}

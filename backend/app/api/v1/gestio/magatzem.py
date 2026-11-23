@@ -2,7 +2,7 @@ import logging
 import uuid
 from datetime import date, datetime, timezone
 from decimal import Decimal
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence
 
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
 from pydantic import BaseModel, ConfigDict, Field
@@ -85,6 +85,7 @@ class ConfirmarDocumentRequest(BaseModel):
     data_document: date
     numero_albarans_vinculats: List[str] = []
     linies: List[LiniaOcr]
+    albara_id: Optional[uuid.UUID] = None
 
 
 class ArticleCreate(BaseModel):
@@ -1351,9 +1352,13 @@ async def _aplicar_linies_albara_a_estoc(
             if linia.referencia
             else f"REF-{uuid.uuid4().hex[:8].upper()}"
         )
-        stmt_art = select(Article).where(
-            Article.empresa_id == empresa_id,
-            Article.referencia_inventari == ref_neta,
+        stmt_art = (
+            select(Article)
+            .where(
+                Article.empresa_id == empresa_id,
+                Article.referencia_inventari == ref_neta,
+            )
+            .with_for_update()
         )
         article = (await db.execute(stmt_art)).scalars().first()
 
@@ -1368,11 +1373,17 @@ async def _aplicar_linies_albara_a_estoc(
                 proveidor_id=prov.id,
                 descompte_proveidor=float(linia.descompte_percent),
                 preu_cost=nou_preu,
+                pmp_actual=nou_preu,
+                preu_cost_mitja=nou_preu,
+                preu_cost_ultim=nou_preu,
+                ultim_preu_compra=nou_preu,
+                estoc_total_actual=float(linia.quantitat),
             )
             db.add(article)
             await db.flush()
             articles_creats += 1
         else:
+            proveidor_coincideix = article.proveidor_id == prov.id
             if not article.proveidor_id:
                 article.proveidor_id = prov.id
             article.descompte_proveidor = float(linia.descompte_percent)
@@ -1392,15 +1403,35 @@ async def _aplicar_linies_albara_a_estoc(
                     estoc_total_actual + float(linia.quantitat)
                 )
                 article.preu_cost = pmp
+                article.pmp_actual = pmp
+                article.preu_cost_mitja = pmp
             elif nou_preu > 0 and estoc_total_actual <= 0:
                 article.preu_cost = nou_preu
+                article.pmp_actual = nou_preu
+                article.preu_cost_mitja = nou_preu
+            if nou_preu > 0:
+                article.preu_cost_ultim = nou_preu
+                article.ultim_preu_compra = nou_preu
+            article.estoc_total_actual = max(0.0, estoc_total_actual) + float(linia.quantitat)
+
+            # Si coincideixen proveïdor i referència de producte, aplicar el marge automàticament al PVP
+            marge_art = float(getattr(article, "marge_guanys", 0.0) or 0.0)
+            if proveidor_coincideix and marge_art > 0.0 and float(article.preu_cost or 0.0) > 0.0:
+                article.preu_venda = round(
+                    float(article.preu_cost) * (1.0 + (marge_art / 100.0)),
+                    2,
+                )
 
         articles_afectats.append(article)
 
-        stmt_estoc = select(EstocMagatzem).where(
-            EstocMagatzem.empresa_id == empresa_id,
-            EstocMagatzem.magatzem_id == magatzem.id,
-            EstocMagatzem.article_id == article.id,
+        stmt_estoc = (
+            select(EstocMagatzem)
+            .where(
+                EstocMagatzem.empresa_id == empresa_id,
+                EstocMagatzem.magatzem_id == magatzem.id,
+                EstocMagatzem.article_id == article.id,
+            )
+            .with_for_update()
         )
         estoc = (await db.execute(stmt_estoc)).scalars().first()
         if not estoc:
@@ -1434,16 +1465,75 @@ async def _aplicar_linies_albara_a_estoc(
     return articles_creats, moviments_creats, articles_afectats
 
 
+async def _albara_ja_te_stock_aplicat(
+    db: AsyncSession,
+    empresa_id: uuid.UUID,
+    numero_albara: str,
+    proveidor_id: Optional[uuid.UUID] = None,
+    albara_id_exclos: Optional[uuid.UUID] = None,
+    extra_proveidor_ids: Optional[Sequence[uuid.UUID]] = None,
+) -> bool:
+    """Comprova de forma estricta si un albarà ja ha incrementat l'estoc o ja consta consolidat (evita duplicats)."""
+    num_clean = (numero_albara or "").strip()
+    if not num_clean:
+        return False
+
+    prov_ids: List[uuid.UUID] = []
+    if proveidor_id is not None:
+        prov_ids.append(proveidor_id)
+    for pid in extra_proveidor_ids or ():
+        if pid not in prov_ids:
+            prov_ids.append(pid)
+
+    # 1. Algun altre registre d'AlbaraProveidor ja consolidat amb el mateix número i proveïdor
+    stmt_cons = select(AlbaraProveidor.id).where(
+        AlbaraProveidor.empresa_id == empresa_id,
+        AlbaraProveidor.numero_albara == num_clean,
+        AlbaraProveidor.estat == "CONSOLIDAT",
+    )
+    if prov_ids:
+        stmt_cons = stmt_cons.where(AlbaraProveidor.proveidor_id.in_(prov_ids))
+    if albara_id_exclos is not None:
+        stmt_cons = stmt_cons.where(AlbaraProveidor.id != albara_id_exclos)
+    if (await db.execute(stmt_cons)).scalar_one_or_none():
+        return True
+
+    # 2. Moviments d'entrada ja enregistrats per aquest número d'albarà i proveïdor
+    stmt_mov = (
+        select(MovimentEstoc.id)
+        .outerjoin(Article, MovimentEstoc.article_id == Article.id)
+        .where(
+            MovimentEstoc.empresa_id == empresa_id,
+            MovimentEstoc.tipus_moviment == "ENTRADA",
+            MovimentEstoc.referencia_document == num_clean,
+            or_(
+                MovimentEstoc.notes.ilike("Albarà Proveïdor%"),
+                MovimentEstoc.notes.ilike("Entrada PMP%"),
+            ),
+        )
+    )
+    if prov_ids:
+        stmt_mov = stmt_mov.where(
+            or_(
+                Article.proveidor_id.in_(prov_ids),
+                Article.proveidor_id.is_(None),
+            )
+        )
+    return (await db.execute(stmt_mov.limit(1))).scalar_one_or_none() is not None
+
+
 @router.post("/albara/confirmar", status_code=status.HTTP_201_CREATED)
 async def confirmar_document(
     request: Request,
     payload: ConfirmarDocumentRequest,
+    claims: dict = Depends(get_current_user_claims),
     db: AsyncSession = Depends(get_db_with_tenant_context),
 ):
-    raw_emp = getattr(request.state, "empresa_id", None)
+    raw_emp = getattr(request.state, "empresa_id", None) or claims.get("empresa_id")
     if not raw_emp or raw_emp in ("undefined", "null", "None"):
         raise HTTPException(status_code=401, detail="No identificat")
     empresa_id = valida_uuid(str(raw_emp))
+    rol_usuari = str(claims.get("rol") or "BOSS").upper()
 
     # 1. Buscar o crear Proveïdor dins del tenant (per NIF o nom)
     prov = await _resoldre_o_crear_proveidor_albara(db, empresa_id, payload.proveidor)
@@ -1580,37 +1670,107 @@ async def confirmar_document(
         }
 
     else:
-        stmt_alb_check = select(AlbaraProveidor).where(
-            AlbaraProveidor.empresa_id == empresa_id,
-            AlbaraProveidor.proveidor_id == prov.id,
-            AlbaraProveidor.numero_albara == payload.numero_document,
-        )
-        if (await db.execute(stmt_alb_check)).scalars().first():
+        albara_existent: Optional[AlbaraProveidor] = None
+        if payload.albara_id is not None:
+            albara_existent = (
+                await db.execute(
+                    select(AlbaraProveidor)
+                    .where(
+                        AlbaraProveidor.id == payload.albara_id,
+                        AlbaraProveidor.empresa_id == empresa_id,
+                    )
+                    .with_for_update()
+                )
+            ).scalars().first()
+            if not albara_existent:
+                raise HTTPException(status_code=404, detail="Albarà pendent no trobat.")
+
+        if albara_existent is None:
+            stmt_alb_check = (
+                select(AlbaraProveidor)
+                .where(
+                    AlbaraProveidor.empresa_id == empresa_id,
+                    AlbaraProveidor.proveidor_id == prov.id,
+                    AlbaraProveidor.numero_albara == payload.numero_document,
+                )
+                .with_for_update()
+            )
+            albara_existent = (await db.execute(stmt_alb_check)).scalars().first()
+
+        # També cerquem si existia un esborrany PENDENT_AUDITORIA amb el mateix número d'albarà i proveïdor genèric
+        if albara_existent is None:
+            stmt_pend_num = (
+                select(AlbaraProveidor)
+                .where(
+                    AlbaraProveidor.empresa_id == empresa_id,
+                    AlbaraProveidor.numero_albara == payload.numero_document,
+                    AlbaraProveidor.estat == "PENDENT_AUDITORIA",
+                )
+                .with_for_update()
+            )
+            cand_pend = (await db.execute(stmt_pend_num)).scalars().first()
+            if cand_pend is not None:
+                prov_cand = (
+                    await db.execute(
+                        select(Proveidor).where(
+                            Proveidor.id == cand_pend.proveidor_id,
+                            Proveidor.empresa_id == empresa_id,
+                        )
+                    )
+                ).scalars().first()
+                if (
+                    cand_pend.proveidor_id == prov.id
+                    or (prov_cand and prov_cand.nif in ("B00000000", ""))
+                ):
+                    albara_existent = cand_pend
+
+        if albara_existent is not None and albara_existent.estat == "CONSOLIDAT":
             raise HTTPException(
                 status_code=400,
-                detail="Albarà ja pujat. Aquest document ja consta al sistema per aquest proveïdor.",
+                detail="Albarà ja pujat. Aquest document ja consta consolidat al sistema per aquest proveïdor.",
             )
 
-        nou_albara = AlbaraProveidor(
-            empresa_id=empresa_id,
-            proveidor_id=prov.id,
-            numero_albara=payload.numero_document,
-            data_albara=payload.data_document,
-            estat="CONSOLIDAT",
-        )
-        db.add(nou_albara)
-        articles_creats, moviments_creats, articles_afectats = await _aplicar_linies_albara_a_estoc(
+        ja_aplicat = await _albara_ja_te_stock_aplicat(
             db=db,
             empresa_id=empresa_id,
-            prov=prov,
-            magatzem=magatzem,
-            numero_document=payload.numero_document,
-            linies=payload.linies,
+            numero_albara=payload.numero_document,
+            proveidor_id=prov.id,
+            albara_id_exclos=albara_existent.id if albara_existent else None,
         )
+
+        articles_afectats: List[Article] = []
+        if albara_existent is not None:
+            albara_existent.proveidor_id = prov.id
+            albara_existent.numero_albara = payload.numero_document
+            albara_existent.data_albara = payload.data_document
+            albara_existent.estat = "CONSOLIDAT"
+            nou_albara = albara_existent
+        else:
+            nou_albara = AlbaraProveidor(
+                empresa_id=empresa_id,
+                proveidor_id=prov.id,
+                numero_albara=payload.numero_document,
+                data_albara=payload.data_document,
+                estat="CONSOLIDAT",
+            )
+            db.add(nou_albara)
+
+        if not ja_aplicat:
+            articles_creats, moviments_creats, articles_afectats = await _aplicar_linies_albara_a_estoc(
+                db=db,
+                empresa_id=empresa_id,
+                prov=prov,
+                magatzem=magatzem,
+                numero_document=payload.numero_document,
+                linies=payload.linies,
+            )
 
         await db.commit()
 
         try:
+            from app.core.db import set_tenant_context
+
+            await set_tenant_context(db, str(empresa_id), role=rol_usuari)
             ruta_sobirana_proveidor = await SovereignStorageGateway.desar_entitat_json(
                 db=db,
                 empresa_id=empresa_id,
@@ -1754,7 +1914,11 @@ async def llistar_albarans_proveidor(
         stmt = stmt.where(AlbaraProveidor.estat == estat.upper())
 
     rows = (await db.execute(stmt)).all()
-    json_albarans = await SovereignStorageGateway.llegir_entitats_json(db, emp_uuid, "albarans")
+    try:
+        json_albarans = await SovereignStorageGateway.llegir_entitats_json(db, emp_uuid, "albarans")
+    except Exception as exc:
+        logger.warning("No s'han pogut llegir els JSON d'albarans del disc sobirà (%s): %s", emp_uuid, exc)
+        json_albarans = []
     drafts_map: Dict[str, Dict[str, Any]] = {}
     for item in json_albarans:
         if not isinstance(item, dict):
@@ -1762,6 +1926,25 @@ async def llistar_albarans_proveidor(
         alb_key = str(item.get("id") or "")
         if alb_key:
             drafts_map[alb_key] = item
+
+    # Detectar referències d'albarà que ja tenen moviments ENTRADA reals a PostgreSQL
+    nums_alb = list({alb.numero_albara for alb, _, _, _ in rows if alb.numero_albara})
+    refs_amb_movs: set[str] = set()
+    if nums_alb:
+        res_refs = await db.execute(
+            select(MovimentEstoc.referencia_document)
+            .where(
+                MovimentEstoc.empresa_id == emp_uuid,
+                MovimentEstoc.tipus_moviment == "ENTRADA",
+                MovimentEstoc.referencia_document.in_(nums_alb),
+                or_(
+                    MovimentEstoc.notes.ilike("Albarà Proveïdor%"),
+                    MovimentEstoc.notes.ilike("Entrada PMP%"),
+                ),
+            )
+            .distinct()
+        )
+        refs_amb_movs = {str(r) for r in res_refs.scalars().all() if r}
 
     resultat: List[Dict[str, Any]] = []
     for alb, prov_nom, prov_nif, prov_email in rows:
@@ -1787,6 +1970,7 @@ async def llistar_albarans_proveidor(
                 "numero_albara": alb.numero_albara,
                 "data_albara": alb.data_albara.isoformat() if alb.data_albara else None,
                 "estat": alb.estat,
+                "ja_te_stock_aplicat": alb.numero_albara in refs_amb_movs,
                 "linies": linies_out,
                 "created_at": alb.created_at.isoformat() if alb.created_at else None,
             }
@@ -1799,20 +1983,24 @@ async def consolidar_albara_pendent(
     request: Request,
     albara_id: uuid.UUID,
     payload: Optional[ConfirmarDocumentRequest] = None,
+    claims: dict = Depends(get_current_user_claims),
     db: AsyncSession = Depends(get_db_with_tenant_context),
 ):
-    """Consolida manualment un albarà PENDENT_AUDITORIA i aplica l'increment físic d'estoc (T024)."""
-    raw_emp = getattr(request.state, "empresa_id", None)
+    """Consolida manualment un albarà PENDENT_AUDITORIA amb bloqueig pessimista i protecció antiduplicat d'estoc."""
+    raw_emp = getattr(request.state, "empresa_id", None) or claims.get("empresa_id")
     if not raw_emp or raw_emp in ("undefined", "null", "None"):
         raise HTTPException(status_code=401, detail="No identificat")
     emp_uuid = valida_uuid(str(raw_emp))
+    rol_usuari = str(claims.get("rol") or "BOSS").upper()
 
     albara = (
         await db.execute(
-            select(AlbaraProveidor).where(
+            select(AlbaraProveidor)
+            .where(
                 AlbaraProveidor.id == albara_id,
                 AlbaraProveidor.empresa_id == emp_uuid,
             )
+            .with_for_update()
         )
     ).scalars().first()
     if not albara:
@@ -1839,7 +2027,11 @@ async def consolidar_albara_pendent(
         if not prov_trobat:
             raise HTTPException(status_code=404, detail="Proveïdor de l'albarà no trobat")
         prov = prov_trobat
-        json_albarans = await SovereignStorageGateway.llegir_entitats_json(db, emp_uuid, "albarans")
+        try:
+            json_albarans = await SovereignStorageGateway.llegir_entitats_json(db, emp_uuid, "albarans")
+        except Exception as exc:
+            logger.warning("No s'han pogut llegir els JSON d'albarans per consolidar %s: %s", albara.id, exc)
+            json_albarans = []
         esborrany = next(
             (x for x in json_albarans if isinstance(x, dict) and str(x.get("id") or "") == str(albara.id)),
             None,
@@ -1847,28 +2039,41 @@ async def consolidar_albara_pendent(
         if esborrany and isinstance(esborrany.get("linies"), list):
             linies_aplicar = [LiniaOcr(**lin) for lin in esborrany["linies"]]
 
-    if not linies_aplicar:
-        raise HTTPException(
-            status_code=422,
-            detail="L'albarà pendent no conté cap línia d'article per consolidar.",
-        )
-
-    magatzem = await _obtenir_nau_central(db, emp_uuid)
-    articles_creats, moviments_creats, articles_afectats = await _aplicar_linies_albara_a_estoc(
+    ja_aplicat = await _albara_ja_te_stock_aplicat(
         db=db,
         empresa_id=emp_uuid,
-        prov=prov,
-        magatzem=magatzem,
-        numero_document=albara.numero_albara,
-        linies=linies_aplicar,
+        numero_albara=albara.numero_albara,
+        proveidor_id=prov.id,
+        albara_id_exclos=albara.id,
     )
+
+    if not linies_aplicar and not ja_aplicat:
+        raise HTTPException(
+            status_code=422,
+            detail="L'albarà pendent no conté cap línia d'article per consolidar. Revisa'l i afegeix les línies abans de consolidar.",
+        )
+
+    articles_creats = 0
+    moviments_creats = 0
+    articles_afectats: List[Article] = []
+    if not ja_aplicat and linies_aplicar:
+        magatzem = await _obtenir_nau_central(db, emp_uuid)
+        articles_creats, moviments_creats, articles_afectats = await _aplicar_linies_albara_a_estoc(
+            db=db,
+            empresa_id=emp_uuid,
+            prov=prov,
+            magatzem=magatzem,
+            numero_document=albara.numero_albara,
+            linies=linies_aplicar,
+        )
+
     albara.estat = "CONSOLIDAT"
     await db.commit()
 
     try:
         from app.core.db import set_tenant_context
 
-        await set_tenant_context(db, str(emp_uuid))
+        await set_tenant_context(db, str(emp_uuid), role=rol_usuari)
         await SovereignStorageGateway.desar_entitat_json(
             db=db,
             empresa_id=emp_uuid,
@@ -1877,6 +2082,12 @@ async def consolidar_albara_pendent(
             dades={
                 "id": str(albara.id),
                 "proveidor_id": str(prov.id),
+                "proveidor": {
+                    "nif": prov.nif,
+                    "nom": prov.rao_social,
+                    "telefon": prov.telefon,
+                    "email": prov.email,
+                },
                 "numero_albara": albara.numero_albara,
                 "data_albara": albara.data_albara.isoformat(),
                 "estat": "CONSOLIDAT",
@@ -1890,10 +2101,15 @@ async def consolidar_albara_pendent(
 
     return {
         "estat": "CONSOLIDAT",
-        "missatge": "Albarà consolidat manualment i estoc incrementat.",
+        "missatge": (
+            "L'albarà ja tenia l'estoc aplicat prèviament; s'ha actualitzat a CONSOLIDAT sense duplicar estoc."
+            if ja_aplicat
+            else "Albarà consolidat manualment i estoc incrementat."
+        ),
         "albara_id": str(albara.id),
         "articles_creats": articles_creats,
         "moviments_realitzats": moviments_creats,
+        "stock_duplicat_evitat": ja_aplicat,
     }
 
 

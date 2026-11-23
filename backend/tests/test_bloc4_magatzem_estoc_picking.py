@@ -3,7 +3,7 @@
 import json
 import shutil
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -1226,3 +1226,244 @@ async def test_bloc4_celery_task_comprovar_trencament_estoc():
             await session.execute(delete(Empresa).where(Empresa.id == emp_id))
             await session.commit()
         await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_bloc4_revisar_pendent_via_confirmar_i_antiduplicat_stock(
+    admin_session, tmp_path: Path
+):
+    """
+    1. Si un albarà és PENDENT_AUDITORIA i es revisa/confirma via /albara/confirmar (amb o sense albara_id),
+       actualitza el registre existent a CONSOLIDAT sense deixar cap PENDENT_AUDITORIA ni duplicar estoc.
+    2. Si un albarà PENDENT_AUDITORIA ja tenia MovimentEstoc d'ENTRADA aplicat al magatzem, consolidar-lo
+       actualitza l'estat a CONSOLIDAT sense incrementar ni duplicar l'estoc.
+    """
+    emp_id, nau, _, boss_headers, _ = await _seed_empresa_amb_usuaris(
+        admin_session, tmp_path / "disc_alb_dup"
+    )
+    payload_pend = {
+        "proveidor": {
+            "nif": "B77889900",
+            "nom": "Hidràulica Segrià S.L.",
+            "email": "alb@segria.cat",
+        },
+        "numero_document": "ALB-REV-2026-01",
+        "tipus_document": "ALBARA",
+        "data_document": "2026-11-20",
+        "linies": [
+            {
+                "referencia": "REF-NODUP-01",
+                "nom": "Comptador Woltman DN50",
+                "quantitat": 5.0,
+                "preu": 120.0,
+                "descompte_percent": 0.0,
+                "tipus": "MATERIAL",
+            }
+        ],
+    }
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        # 1. Desem com a PENDENT_AUDITORIA
+        r_pend = await ac.post(
+            "/api/v1/gestio/magatzem/albarans/desar-pendent",
+            json=payload_pend,
+            headers=boss_headers,
+        )
+        assert r_pend.status_code == 201, r_pend.text
+        alb_id = r_pend.json()["id"]
+
+        # 2. Revisar-lo/confirmar-lo directament via /albara/confirmar passant albara_id -> passa a CONSOLIDAT
+        r_conf = await ac.post(
+            "/api/v1/gestio/magatzem/albara/confirmar",
+            json={
+                **payload_pend,
+                "albara_id": alb_id,
+                "linies": [
+                    {
+                        **payload_pend["linies"][0],
+                        "quantitat": 6.0,
+                    }
+                ],
+            },
+            headers=boss_headers,
+        )
+        assert r_conf.status_code == 201, r_conf.text
+        assert r_conf.json()["albara_id"] == alb_id
+
+        # No ha de quedar cap PENDENT_AUDITORIA i l'estoc ha de ser exactament 6.0 (mai 12.0)
+        r_pend_list = await ac.get(
+            "/api/v1/gestio/magatzem/albarans?estat=PENDENT_AUDITORIA", headers=boss_headers
+        )
+        assert r_pend_list.status_code == 200
+        assert not any(a["id"] == alb_id for a in r_pend_list.json())
+
+        r_arts = await ac.get("/api/v1/gestio/magatzem/articles", headers=boss_headers)
+        art = next(a for a in r_arts.json() if a["referencia_inventari"] == "REF-NODUP-01")
+        assert art["estoc_fisic"] == 6.0
+
+        # Intentar consolidar o tornar a confirmar després -> 400 sense duplicar
+        r_cons_dup = await ac.post(
+            f"/api/v1/gestio/magatzem/albarans/{alb_id}/consolidar", headers=boss_headers
+        )
+        assert r_cons_dup.status_code == 400
+
+        # 3. Cas llegat: un albarà PENDENT_AUDITORIA que ja té MovimentEstoc d'ENTRADA aplicat
+        prov_id = uuid.UUID(r_pend.json()["proveidor_id"])
+        alb_legacy = AlbaraProveidor(
+            empresa_id=emp_id,
+            proveidor_id=prov_id,
+            numero_albara="ALB-LEGACY-99",
+            data_albara=date(2026, 11, 10),
+            estat="PENDENT_AUDITORIA",
+        )
+        admin_session.add(alb_legacy)
+        admin_session.add(
+            MovimentEstoc(
+                empresa_id=emp_id,
+                magatzem_id=nau.id,
+                article_id=uuid.UUID(art["id"]),
+                tipus_moviment="ENTRADA",
+                quantitat=4.0,
+                referencia_document="ALB-LEGACY-99",
+                notes="Albarà Proveïdor OCR",
+            )
+        )
+        await admin_session.flush()
+
+        # Llistat indica ja_te_stock_aplicat=True
+        r_list_all = await ac.get("/api/v1/gestio/magatzem/albarans", headers=boss_headers)
+        legacy_row = next(a for a in r_list_all.json() if a["id"] == str(alb_legacy.id))
+        assert legacy_row["estat"] == "PENDENT_AUDITORIA"
+        assert legacy_row["ja_te_stock_aplicat"] is True
+
+        # En consolidar, passa a CONSOLIDAT sense tornar a sumar estoc
+        r_cons_leg = await ac.post(
+            f"/api/v1/gestio/magatzem/albarans/{alb_legacy.id}/consolidar",
+            headers=boss_headers,
+        )
+        assert r_cons_leg.status_code == 200, r_cons_leg.text
+        d_leg = r_cons_leg.json()
+        assert d_leg["estat"] == "CONSOLIDAT"
+        assert d_leg["stock_duplicat_evitat"] is True
+        assert d_leg["moviments_realitzats"] == 0
+
+        r_arts_after = await ac.get("/api/v1/gestio/magatzem/articles", headers=boss_headers)
+        art_after = next(a for a in r_arts_after.json() if a["referencia_inventari"] == "REF-NODUP-01")
+        assert art_after["estoc_fisic"] == 6.0
+
+
+@pytest.mark.asyncio
+async def test_bloc4_albara_aplica_marge_automatic_si_coincideix_proveidor_i_referencia(
+    admin_session, tmp_path: Path
+):
+    """
+    Si en entrar un nou albarà coincideixen proveïdor (proveidor_id) i referència del producte,
+    s'aplica automàticament el marge_guanys de l'article per recalcular preu_venda.
+    Si el proveïdor és diferent, NO sobreescriu el preu_venda.
+    """
+    emp_id, nau, _, boss_headers, _ = await _seed_empresa_amb_usuaris(
+        admin_session, tmp_path / "disc_alb_marge"
+    )
+    prov_a = Proveidor(
+        empresa_id=emp_id,
+        codi="PRV-MRG-A",
+        rao_social="Proveïdor Marge A S.L.",
+        nif="B11223399",
+    )
+    prov_b = Proveidor(
+        empresa_id=emp_id,
+        codi="PRV-MRG-B",
+        rao_social="Proveïdor Alien B S.L.",
+        nif="B99887711",
+    )
+    admin_session.add_all([prov_a, prov_b])
+    await admin_session.flush()
+
+    art_match = Article(
+        empresa_id=emp_id,
+        referencia_inventari="REF-MARGE-01",
+        nom="Electrovalvula 2 polzades",
+        unitat_mesura="UNITAT",
+        familia="REG",
+        proveidor_id=prov_a.id,
+        estoc_optim=20.0,
+        estoc_minim=2.0,
+        preu_cost=100.0,
+        marge_guanys=30.0,
+        preu_venda=130.0,
+    )
+    art_altre_prov = Article(
+        empresa_id=emp_id,
+        referencia_inventari="REF-MARGE-ALTRE",
+        nom="Tub PE100 DN63",
+        unitat_mesura="METRE",
+        familia="TUBERIA",
+        proveidor_id=prov_b.id,
+        estoc_optim=50.0,
+        estoc_minim=5.0,
+        preu_cost=10.0,
+        marge_guanys=40.0,
+        preu_venda=14.0,
+    )
+    admin_session.add_all([art_match, art_altre_prov])
+    await admin_session.flush()
+
+    # Estoc previ = 10 unitats a 100 EUR -> valor = 1000 EUR
+    admin_session.add(
+        EstocMagatzem(
+            empresa_id=emp_id,
+            magatzem_id=nau.id,
+            article_id=art_match.id,
+            quantitat_fisica=10.0,
+            quantitat_virtual_reservada=0.0,
+        )
+    )
+    await admin_session.flush()
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        # Entrem nou albarà de Proveïdor A amb 10 unitats de REF-MARGE-01 a 120 EUR (descompte 0%)
+        # PMP nou = (10*100 + 10*120) / 20 = 110.00 EUR -> PVP amb marge 30% = 110 * 1.30 = 143.00 EUR
+        # I una línia per REF-MARGE-ALTRE (que pertany a Proveïdor B): NO ha de tocar el preu_venda 14.0
+        r_conf = await ac.post(
+            "/api/v1/gestio/magatzem/albara/confirmar",
+            json={
+                "proveidor": {
+                    "nif": "B11223399",
+                    "nom": "Proveïdor Marge A S.L.",
+                },
+                "numero_document": "ALB-MRG-2026-01",
+                "tipus_document": "ALBARA",
+                "data_document": "2026-11-23",
+                "linies": [
+                    {
+                        "referencia": "REF-MARGE-01",
+                        "nom": "Electrovalvula 2 polzades",
+                        "quantitat": 10.0,
+                        "preu": 120.0,
+                        "descompte_percent": 0.0,
+                        "tipus": "MATERIAL",
+                    },
+                    {
+                        "referencia": "REF-MARGE-ALTRE",
+                        "nom": "Tub PE100 DN63",
+                        "quantitat": 10.0,
+                        "preu": 20.0,
+                        "descompte_percent": 0.0,
+                        "tipus": "MATERIAL",
+                    },
+                ],
+            },
+            headers=boss_headers,
+        )
+        assert r_conf.status_code == 201, r_conf.text
+
+        r_arts = await ac.get("/api/v1/gestio/magatzem/articles", headers=boss_headers)
+        assert r_arts.status_code == 200
+        arts_by_ref = {a["referencia_inventari"]: a for a in r_arts.json()}
+
+        assert arts_by_ref["REF-MARGE-01"]["preu_cost"] == pytest.approx(110.0)
+        assert arts_by_ref["REF-MARGE-01"]["marge_guanys"] == pytest.approx(30.0)
+        assert arts_by_ref["REF-MARGE-01"]["preu_venda"] == pytest.approx(143.0)
+
+        # Proveïdor no coincident: conserva el PVP original 14.0
+        assert arts_by_ref["REF-MARGE-ALTRE"]["preu_venda"] == pytest.approx(14.0)
