@@ -1784,24 +1784,27 @@ async def generar_pressupost_ia(
         f"Articles coincidents al catàleg del disc: {len(linies)}. "
         f"Feines històriques similars: {len(hist_match)}."
     )
+    # Pressupost de temps ampli (65s-78s, dins els 90s del proxy Next.js i 180s de Nginx)
+    # per suportar inferència local CPU/iGPU en mini-PCs dedicats sense falsos 503 per timeout.
     budget_s = min(
-        max(12.0, float(getattr(cfg_copilot, "timeout_budget_s", None) or 20.0)),
-        22.0,
+        max(65.0, float(getattr(cfg_copilot, "timeout_budget_s", None) or 65.0)),
+        78.0,
     )
 
     try:
         llm_summary = await cridar_lm_studio(
             pregunta=(
-                f"Redacta en català una justificació tècnica clara i concisa (màxim 5 línies) "
-                f"per incloure a la descripció del pressupost d'aquesta feina: {prompt_eff[:800]}"
+                f"Redacta en català una justificació tècnica clara i concisa (màxim 4 línies) "
+                f"per incloure a la descripció del pressupost d'aquesta feina: {prompt_eff[:600]}"
             ),
             vertical=empresa.vertical or "SEVALOR",
             context_addicional=context_str,
             empresa=empresa,
             db=db,
-            max_tokens=240,
+            max_tokens=180,
             timeout_s=budget_s,
             raise_on_timeout=True,
+            concise_system=True,
         )
     except VaultTunnelTimeoutError as exc:
         raise HTTPException(
@@ -1809,18 +1812,37 @@ async def generar_pressupost_ia(
             detail={
                 "code": "NODE_IA_TIMEOUT",
                 "message": (
-                    f"El Copilot IA local no ha respost en {int(budget_s)} s. "
+                    f"El Copilot IA local no ha completat la resposta en {int(budget_s)} s. "
                     "Verifica a LM Studio del PC dedicat que el model estigui carregat en memòria i no hi hagi cues."
                 ),
             },
         ) from exc
 
     if llm_summary is None:
+        models_vius: List[str] = []
+        llm_port_ok = False
+        try:
+            m_probe = await vault_tunnel_broker.call_llm_models(target_key, timeout=3.5)
+            llm_port_ok = True
+            models_vius = [
+                str(m.get("id"))
+                for m in m_probe.get("data", [])
+                if isinstance(m, dict) and m.get("id") and "embed" not in str(m.get("id")).lower()
+            ]
+        except Exception:
+            pass
+
+        msg_503 = (
+            "LM Studio al PC de l'empresa respon al port 1234, però no té cap model de xat carregat en memòria. "
+            "Carrega un model a LM Studio i torna-ho a provar."
+            if (llm_port_ok and not models_vius)
+            else "El PC de l'empresa està connectat, però LM Studio/Ollama local no respon a 127.0.0.1:1234 (comprova que 'Local Server' estigui iniciat). Zero fallback a Hetzner."
+        )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail={
                 "code": "NODE_IA_OFFLINE",
-                "message": "El PC de l'empresa està connectat, però LM Studio/Ollama local no respon a 127.0.0.1:1234. Zero fallback a Hetzner.",
+                "message": msg_503,
             },
         )
 

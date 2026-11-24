@@ -127,7 +127,7 @@ def _normalize_timeout_budget(raw: Any, hw_profile: HardwareProfile) -> float:
         parsed = float(raw)
     except (TypeError, ValueError):
         return default_s
-    return max(8.0, min(parsed, 30.0))
+    return max(8.0, min(parsed, 90.0))
 
 
 def _profile_from_dict(empresa_id: UUID, doc: Dict[str, Any], prompt_txt_fallback: str = "") -> SovereignCopilotProfile:

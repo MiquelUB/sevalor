@@ -14,6 +14,7 @@ import {
   Mail,
   MapPin,
   MessageCircle,
+  Minus,
   Navigation,
   Package,
   Plus,
@@ -190,6 +191,7 @@ interface DesplacamentSlotState {
 }
 
 interface SelectedEinaConfig {
+  localId: string;
   id: string;
   nom: string;
   model?: string | null;
@@ -197,6 +199,15 @@ interface SelectedEinaConfig {
   quantitat: string;
   unitat: "h" | "dia" | "ut";
   cost_eur: string;
+}
+
+interface EditablePressupostLinia
+  extends Omit<PressupostLinia, "quantitat" | "preu_unitari" | "descompte_pct"> {
+  localLineId: string;
+  sourceSlotId?: string;
+  quantitat: string;
+  preu_unitari: string;
+  descompte_pct: string;
 }
 
 export interface ArticleMagatzemOption {
@@ -367,8 +378,80 @@ function nouSlotDesplacament(fixDefault = ""): DesplacamentSlotState {
   };
 }
 
+function nouSlotEina(nomInicial = ""): SelectedEinaConfig {
+  return {
+    localId: `eina-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    id: "",
+    nom: nomInicial,
+    model: null,
+    numero_serie: null,
+    quantitat: "1",
+    unitat: "h",
+    cost_eur: "",
+  };
+}
+
 function r2(val: number): number {
   return Math.round((val + Number.EPSILON) * 100) / 100;
+}
+
+function sanitizeDecimalInput(raw: string): string {
+  const cleaned = raw.replace(/[^0-9.,]/g, "");
+  const normalized = cleaned.replace(/,/g, ".");
+  const firstDot = normalized.indexOf(".");
+  if (firstDot === -1) return cleaned;
+  let seenSep = false;
+  let out = "";
+  for (const ch of cleaned) {
+    if (ch === "." || ch === ",") {
+      if (!seenSep) {
+        out += ch;
+        seenSep = true;
+      }
+    } else {
+      out += ch;
+    }
+  }
+  return out;
+}
+
+function parseDecimal(val: string | number | null | undefined, fallback = 0): number {
+  if (val === null || val === undefined) return fallback;
+  if (typeof val === "number") return Number.isFinite(val) ? val : fallback;
+  const trimmed = val.trim();
+  if (!trimmed) return fallback;
+  const parsed = Number(trimmed.replace(/,/g, "."));
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function stepDecimalString(current: string, delta: number, minVal = 0, maxVal?: number): string {
+  const cur = parseDecimal(current, 0);
+  let next = r2(cur + delta);
+  if (next < minVal) next = minVal;
+  if (maxVal !== undefined && next > maxVal) next = maxVal;
+  return Number.isInteger(next) ? String(next) : String(next);
+}
+
+function toEditableLinia(
+  lin: Partial<PressupostLinia> & { concepte: string; sourceSlotId?: string },
+  idxHint = 0
+): EditablePressupostLinia {
+  return {
+    localLineId: `lin-${Date.now()}-${idxHint}-${Math.random().toString(36).slice(2, 7)}`,
+    sourceSlotId: lin.sourceSlotId,
+    article_id: lin.article_id ?? null,
+    vehicle_id: lin.vehicle_id ?? null,
+    eina_id: lin.eina_id ?? null,
+    operari_id: lin.operari_id ?? null,
+    seccio: lin.seccio ?? null,
+    tipus_linia: lin.tipus_linia || "ALTRE",
+    concepte: lin.concepte || "",
+    detall: lin.detall ?? "",
+    quantitat: lin.quantitat != null ? String(lin.quantitat) : "1",
+    preu_unitari: lin.preu_unitari != null ? String(lin.preu_unitari) : "0",
+    descompte_pct: lin.descompte_pct != null ? String(lin.descompte_pct) : "0",
+    tipus_iva: lin.tipus_iva ?? 21,
+  };
 }
 
 function buildAuthHeaders(): Record<string, string> {
@@ -1065,64 +1148,76 @@ export function PressupostModal({
 
   const [selectedEines, setSelectedEines] = useState<SelectedEinaConfig[]>(() => {
     if (editingTarget?.eines_resum && editingTarget.eines_resum.length > 0) {
-      return editingTarget.eines_resum.map((e) => ({
-        id: e.id,
+      return editingTarget.eines_resum.map((e, i) => ({
+        localId: `eina-init-${i}`,
+        id: e.id || "",
         nom: e.nom,
         model: e.model ?? null,
         numero_serie: e.numero_serie ?? null,
         quantitat: e.quantitat != null ? String(e.quantitat) : "1",
-        unitat: (e.unitat === "h" || e.unitat === "dia" || e.unitat === "ut" ? e.unitat : "ut"),
+        unitat: (e.unitat === "h" || e.unitat === "dia" || e.unitat === "ut" ? e.unitat : "h"),
         cost_eur: e.cost_eur != null ? String(e.cost_eur) : "",
       }));
     }
     if (editingTarget?.eines_ids && editingTarget.eines_ids.length > 0) {
-      return editingTarget.eines_ids.map((id) => ({
+      return editingTarget.eines_ids.map((id, i) => ({
+        localId: `eina-init-${i}`,
         id,
         nom: "Eina seleccionada",
         quantitat: "1",
-        unitat: "ut",
+        unitat: "h",
         cost_eur: "",
       }));
     }
-    return [];
+    return [nouSlotEina("")];
   });
   const [cercaEina, setCercaEina] = useState("");
   const [einaDropdownOpen, setEinaDropdownOpen] = useState(false);
   const einaBoxRef = useRef<HTMLDivElement>(null);
+  const [recursosFeedback, setRecursosFeedback] = useState<{
+    tone: "ok" | "warn";
+    text: string;
+  } | null>(null);
 
   // Partides i totals
   const [formDescompteGlobal, setFormDescompteGlobal] = useState(
     String(editingTarget?.descompte_global_pct ?? 0)
   );
-  const [formLinies, setFormLinies] = useState<PressupostLinia[]>(() => {
+  const [formLinies, setFormLinies] = useState<EditablePressupostLinia[]>(() => {
     if (editingTarget?.linies && editingTarget.linies.length > 0) {
-      return editingTarget.linies.map((l) => ({ ...l }));
+      return editingTarget.linies.map((l, idx) => toEditableLinia(l, idx));
     }
     if (editingTarget) {
       return [
-        {
-          seccio: "Treballs tècnics",
-          tipus_linia: "MA_OBRA",
-          concepte: editingTarget.titol || `Pressupost ${editingTarget.numero}`,
-          detall: "",
-          quantitat: 1,
-          preu_unitari: Number(editingTarget.total || 0),
-          descompte_pct: 0,
-          tipus_iva: 0,
-        },
+        toEditableLinia(
+          {
+            seccio: "Treballs tècnics",
+            tipus_linia: "MA_OBRA",
+            concepte: editingTarget.titol || `Pressupost ${editingTarget.numero}`,
+            detall: "",
+            quantitat: 1,
+            preu_unitari: Number(editingTarget.total || 0),
+            descompte_pct: 0,
+            tipus_iva: 0,
+          },
+          0
+        ),
       ];
     }
     return [
-      {
-        seccio: "Mà d'obra i instal·lació",
-        tipus_linia: "MA_OBRA",
-        concepte: "",
-        detall: "",
-        quantitat: 1,
-        preu_unitari: 0,
-        descompte_pct: 0,
-        tipus_iva: 21,
-      },
+      toEditableLinia(
+        {
+          seccio: "Mà d'obra i instal·lació",
+          tipus_linia: "MA_OBRA",
+          concepte: "",
+          detall: "",
+          quantitat: 1,
+          preu_unitari: 0,
+          descompte_pct: 0,
+          tipus_iva: 21,
+        },
+        0
+      ),
     ];
   });
 
@@ -1474,7 +1569,7 @@ export function PressupostModal({
   }, [articles, cercaMaterial]);
 
   const selectedEinaIdsSet = useMemo(
-    () => new Set(selectedEines.map((e) => e.id)),
+    () => new Set(selectedEines.map((e) => e.id).filter(Boolean)),
     [selectedEines]
   );
 
@@ -1510,15 +1605,15 @@ export function PressupostModal({
     const basesBrutesPerIva: Record<string, number> = {};
     for (const l of formLinies) {
       const sub = r2(
-        Number(l.quantitat || 0) *
-          Number(l.preu_unitari || 0) *
-          (1 - Number(l.descompte_pct || 0) / 100)
+        Math.max(0, parseDecimal(l.quantitat, 0)) *
+          Math.max(0, parseDecimal(l.preu_unitari, 0)) *
+          (1 - Math.min(100, Math.max(0, parseDecimal(l.descompte_pct, 0))) / 100)
       );
       const key = String(Number(l.tipus_iva ?? 21));
       basesBrutesPerIva[key] = (basesBrutesPerIva[key] || 0) + sub;
     }
     const subtotalBrut = r2(Object.values(basesBrutesPerIva).reduce((a, b) => a + b, 0));
-    const dtoGlobalPct = Math.min(100, Math.max(0, Number(formDescompteGlobal || 0)));
+    const dtoGlobalPct = Math.min(100, Math.max(0, parseDecimal(formDescompteGlobal, 0)));
     const factorGlobal = 1 - dtoGlobalPct / 100;
 
     let base = 0;
@@ -1532,7 +1627,7 @@ export function PressupostModal({
     iva = r2(iva);
     const descompteGlobalImport = r2(subtotalBrut - base);
     const total = r2(base + iva);
-    const pctAcompte = Math.min(100, Math.max(0, Number(formPercentatgeAcompte || 0)));
+    const pctAcompte = Math.min(100, Math.max(0, parseDecimal(formPercentatgeAcompte, 0)));
     const importAcompte = r2((total * pctAcompte) / 100);
     return {
       subtotalBrut,
@@ -1545,22 +1640,40 @@ export function PressupostModal({
     };
   }, [formLinies, formDescompteGlobal, formPercentatgeAcompte]);
 
-  const afegirLinies = (novesLinies: PressupostLinia[]) => {
+  const afegirLinies = (
+    novesLinies: Array<Partial<PressupostLinia> & { concepte: string; sourceSlotId?: string }>
+  ) => {
     if (novesLinies.length === 0) return;
     setFormLinies((prev) => {
-      if (prev.length === 1 && !prev[0].concepte.trim() && Number(prev[0].preu_unitari) === 0) {
-        return [...novesLinies];
+      const preparades = novesLinies.map((nl, idx) => toEditableLinia(nl, prev.length + idx));
+      const esTaulaBuida =
+        prev.length === 1 && !prev[0].concepte.trim() && parseDecimal(prev[0].preu_unitari, 0) === 0;
+      if (esTaulaBuida) {
+        return preparades;
       }
-      return [...prev, ...novesLinies];
+      const next = [...prev];
+      for (const item of preparades) {
+        if (item.sourceSlotId) {
+          const idxExist = next.findIndex((x) => x.sourceSlotId === item.sourceSlotId);
+          if (idxExist !== -1) {
+            next[idxExist] = { ...item, localLineId: next[idxExist].localLineId };
+            continue;
+          }
+        }
+        next.push(item);
+      }
+      return next;
     });
   };
 
-  const afegirLinia = (novaLinia: PressupostLinia) => {
+  const afegirLinia = (
+    novaLinia: Partial<PressupostLinia> & { concepte: string; sourceSlotId?: string }
+  ) => {
     afegirLinies([novaLinia]);
   };
 
   const afegirMaterialMagatzem = (art: ArticleMagatzemOption) => {
-    const qt = Math.max(0.01, Number(materialQt || 1));
+    const qt = Math.max(0.01, parseDecimal(materialQt, 1));
     afegirLinia({
       article_id: art.id,
       seccio: "Materials i subministraments",
@@ -1577,23 +1690,26 @@ export function PressupostModal({
     setMaterialDropdownOpen(false);
   };
 
-  const construirLiniesSlotDesplacament = (slot: DesplacamentSlotState): PressupostLinia[] => {
-    const km = Number(slot.km || 0);
-    const preuKm = Number(slot.preu_km || 0);
-    const fix = Number(slot.import_fix || 0);
-    const hores = Number(slot.hores || 0);
-    const preuHora = Number(slot.preu_hora || 0);
+  const construirLiniesSlotDesplacament = (
+    slot: DesplacamentSlotState
+  ): Array<Partial<PressupostLinia> & { concepte: string; sourceSlotId?: string }> => {
+    const km = parseDecimal(slot.km, 0);
+    const preuKm = parseDecimal(slot.preu_km, 0);
+    const fix = parseDecimal(slot.import_fix, 0);
+    const hores = parseDecimal(slot.hores, 0);
+    const preuHora = parseDecimal(slot.preu_hora, 0);
     const vehObj = vehicles.find((v) => v.id === slot.vehicle_id) || null;
     const vehLabel = vehObj
       ? [vehObj.matricula, vehObj.marca, vehObj.model].filter(Boolean).join(" · ")
       : "";
 
-    const noves: PressupostLinia[] = [];
+    const noves: Array<Partial<PressupostLinia> & { concepte: string; sourceSlotId?: string }> = [];
     const teTrajecte = km > 0 || fix > 0 || hores <= 0;
 
     if (teTrajecte) {
       if (km > 0 && preuKm > 0) {
         noves.push({
+          sourceSlotId: `${slot.localId}:km`,
           vehicle_id: slot.vehicle_id || null,
           seccio: "Desplaçament i vehicle",
           tipus_linia: "DESPLACAMENT",
@@ -1608,6 +1724,7 @@ export function PressupostModal({
         });
       } else {
         noves.push({
+          sourceSlotId: `${slot.localId}:km`,
           vehicle_id: slot.vehicle_id || null,
           seccio: "Desplaçament i vehicle",
           tipus_linia: "DESPLACAMENT",
@@ -1624,6 +1741,7 @@ export function PressupostModal({
 
     if (hores > 0) {
       noves.push({
+        sourceSlotId: `${slot.localId}:hores`,
         vehicle_id: slot.vehicle_id || null,
         seccio: "Desplaçament i vehicle",
         tipus_linia: "MAQUINARIA",
@@ -1643,58 +1761,125 @@ export function PressupostModal({
   const afegirPartidaDesplacamentSlot = (slot: DesplacamentSlotState) => {
     const noves = construirLiniesSlotDesplacament(slot);
     afegirLinies(noves);
-    setInfoMsg(
+    const msg =
       noves.length > 1
-        ? "Partides de trajecte i cost per hora afegides a sota de l'última línia."
-        : "Partida de desplaçament / maquinària afegida a sota de l'última línia."
+        ? "Partides de trajecte i cost per hora afegides/actualitzades a Partides del pressupost."
+        : "Partida de desplaçament / maquinària afegida/actualitzada a Partides del pressupost.";
+    setInfoMsg(msg);
+    setRecursosFeedback({ tone: "ok", text: msg });
+  };
+
+  const updateEinaSlot = (localId: string, patch: Partial<SelectedEinaConfig>) => {
+    setSelectedEines((prev) =>
+      prev.map((it) => (it.localId === localId ? { ...it, ...patch } : it))
     );
   };
 
+  const handleSelectEinaCatalogSlot = (localId: string, einaId: string) => {
+    if (!einaId) {
+      updateEinaSlot(localId, { id: "", model: null, numero_serie: null });
+      return;
+    }
+    const found = eines.find((e) => e.id === einaId);
+    if (!found) return;
+    updateEinaSlot(localId, {
+      id: found.id,
+      nom: found.nom,
+      model: found.model ?? null,
+      numero_serie: found.numero_serie ?? null,
+    });
+  };
+
+  const obrirNouSlotEina = () => {
+    const textCerca = cercaEina.trim();
+    const nou = nouSlotEina(textCerca);
+    if (textCerca && eines.length > 0) {
+      const exact = eines.find(
+        (e) =>
+          e.nom.toLowerCase() === textCerca.toLowerCase() &&
+          !selectedEinaIdsSet.has(e.id)
+      );
+      if (exact) {
+        nou.id = exact.id;
+        nou.nom = exact.nom;
+        nou.model = exact.model ?? null;
+        nou.numero_serie = exact.numero_serie ?? null;
+      }
+    }
+    setSelectedEines((prev) => [...prev, nou]);
+    if (textCerca) setCercaEina("");
+    setEinaDropdownOpen(false);
+    setRecursosFeedback(null);
+  };
+
+  const construirLiniaEinaSlot = (
+    eina: SelectedEinaConfig
+  ): (Partial<PressupostLinia> & { concepte: string; sourceSlotId: string }) | null => {
+    const nomNet = eina.nom.trim();
+    if (!nomNet) return null;
+    const qt = Math.max(0.01, parseDecimal(eina.quantitat, 1));
+    const cost = esEnginyer ? 0 : Math.max(0, parseDecimal(eina.cost_eur, 0));
+    const detParts = [
+      eina.model || null,
+      eina.numero_serie ? `S/N ${eina.numero_serie}` : null,
+      `Unitat: ${eina.unitat}`,
+    ].filter(Boolean);
+    return {
+      sourceSlotId: eina.localId,
+      eina_id: eina.id && !eina.id.startsWith("custom-") ? eina.id : null,
+      seccio: "Eines i maquinària",
+      tipus_linia: "EINA",
+      concepte: `Ús d'eina / maquinària: ${nomNet}`,
+      detall: detParts.join(" · "),
+      quantitat: qt,
+      preu_unitari: cost,
+      descompte_pct: 0,
+      tipus_iva: 21,
+    };
+  };
+
+  const afegirSlotEinaAPartides = (eina: SelectedEinaConfig) => {
+    const linia = construirLiniaEinaSlot(eina);
+    if (!linia) {
+      setRecursosFeedback({
+        tone: "warn",
+        text: "Selecciona una eina de l'inventari o escriu el nom de l'eina/maquinària abans de passar-la a partides.",
+      });
+      return;
+    }
+    afegirLinia(linia);
+    const msg = `Partida «${eina.nom.trim()}» (${linia.quantitat} ${eina.unitat}) afegida a Partides del pressupost.`;
+    setInfoMsg(msg);
+    setRecursosFeedback({ tone: "ok", text: msg });
+  };
+
   const afegirPartidaEines = () => {
-    if (selectedEines.length === 0) {
-      afegirLinia({
-        seccio: "Eines i maquinària",
-        tipus_linia: "EINA",
-        concepte: "Ús d'eines i maquinària especialitzada",
-        detall: "",
-        quantitat: 1,
-        preu_unitari: 0,
-        descompte_pct: 0,
-        tipus_iva: 21,
+    const liniesEines = selectedEines
+      .map((e) => construirLiniaEinaSlot(e))
+      .filter(
+        (x): x is Partial<PressupostLinia> & { concepte: string; sourceSlotId: string } =>
+          x !== null
+      );
+
+    if (liniesEines.length === 0) {
+      setRecursosFeedback({
+        tone: "warn",
+        text: "Indica el nom o selecciona una eina al slot abans de passar les eines a partides.",
       });
       return;
     }
 
-    const noves: PressupostLinia[] = selectedEines.map((eina) => {
-      const qt = Math.max(0.01, Number(eina.quantitat || 1));
-      const cost = esEnginyer ? 0 : Math.max(0, Number(eina.cost_eur || 0));
-      const detParts = [
-        eina.model || null,
-        eina.numero_serie ? `S/N ${eina.numero_serie}` : null,
-        `Unitat: ${eina.unitat}`,
-      ].filter(Boolean);
-      return {
-        eina_id: eina.id.startsWith("custom-") ? null : eina.id,
-        seccio: "Eines i maquinària",
-        tipus_linia: "EINA",
-        concepte: `Ús d'eina / maquinària: ${eina.nom}`,
-        detall: detParts.join(" · "),
-        quantitat: qt,
-        preu_unitari: cost,
-        descompte_pct: 0,
-        tipus_iva: 21,
-      };
-    });
-    afegirLinies(noves);
-    setInfoMsg(
-      noves.length === 1
-        ? "Partida d'eina amb cost assignat afegida a la taula."
-        : `${noves.length} partides d'eines i maquinària amb cost assignat afegides a la taula.`
-    );
+    afegirLinies(liniesEines);
+    const msg =
+      liniesEines.length === 1
+        ? `Partida d'eina «${liniesEines[0].concepte}» passada a Partides del pressupost.`
+        : `${liniesEines.length} partides d'eines i maquinària passades a Partides del pressupost.`;
+    setInfoMsg(msg);
+    setRecursosFeedback({ tone: "ok", text: msg });
   };
 
   const afegirPartidaMaObra = () => {
-    const hores = Math.max(0.25, Number(maObraHores || 1));
+    const hores = Math.max(0.25, parseDecimal(maObraHores, 1));
     const op = selectedOperariObj;
     const nomOp = op
       ? (op.nom_complet || `${op.nom} ${op.cognoms || ""}`.trim())
@@ -1709,7 +1894,7 @@ export function PressupostModal({
         : "Mà d'obra tècnica especialitzada",
       detall: op
         ? `Imputació d'obra (${hores} h · Cost/h fitxa: ${preuHora.toFixed(2)} €/h)`
-        : "Hores de muntatge, instal·lació i posada en marxa",
+        : `Hores de muntatge, instal·lació i posada en marxa (${hores} h)`,
       quantitat: hores,
       preu_unitari: preuHora,
       descompte_pct: 0,
@@ -1717,8 +1902,8 @@ export function PressupostModal({
     });
     setInfoMsg(
       op
-        ? `Partida de mà d'obra de ${nomOp} (${preuHora.toFixed(2)} €/h) afegida a la taula.`
-        : "Partida de mà d'obra afegida a la taula."
+        ? `Partida de mà d'obra de ${nomOp} (${hores} h · ${preuHora.toFixed(2)} €/h) afegida a la taula.`
+        : `Partida de mà d'obra (${hores} h) afegida a la taula.`
     );
   };
 
@@ -1754,28 +1939,40 @@ export function PressupostModal({
         }),
       });
 
+      const aplicarResumCopilot = (resum?: string) => {
+        const cleanResum = (resum || "").trim();
+        if (!cleanResum) return;
+        setFormDescripcio((prev) => {
+          const cur = prev.trim();
+          if (!cur) return cleanResum;
+          if (cur.includes(cleanResum)) return prev;
+          return `${cur}\n\nJustificació tècnica:\n${cleanResum}`;
+        });
+      };
+
       if (res?.draft?.linies && res.draft.linies.length > 0) {
         setFormLinies(
-          res.draft.linies.map((l) => ({
-            article_id: l.article_id || null,
-            seccio: l.seccio || "Materials i subministraments",
-            tipus_linia: l.tipus_linia || "ALTRE",
-            concepte: l.concepte,
-            detall: "",
-            quantitat: Math.max(0.01, Number(l.quantitat || 1)),
-            preu_unitari: esEnginyer ? 0 : Number(l.preu_unitari ?? 0),
-            descompte_pct: 0,
-            tipus_iva: 21,
-          }))
+          res.draft.linies.map((l, idx) =>
+            toEditableLinia(
+              {
+                article_id: l.article_id || null,
+                seccio: l.seccio || "Materials i subministraments",
+                tipus_linia: l.tipus_linia || "ALTRE",
+                concepte: l.concepte,
+                detall: "",
+                quantitat: Math.max(0.01, Number(l.quantitat || 1)),
+                preu_unitari: esEnginyer ? 0 : Number(l.preu_unitari ?? 0),
+                descompte_pct: 0,
+                tipus_iva: 21,
+              },
+              idx
+            )
+          )
         );
-        if (res.draft.resum_tecnic) {
-          setFormDescripcio((prev) =>
-            prev.trim() ? prev : res.draft?.resum_tecnic || ""
-          );
-        }
+        aplicarResumCopilot(res.draft.resum_tecnic);
         setInfoMsg(res.missatge || "Partides proposades pel Copilot IA carregades per revisió HITL.");
       } else if (res?.draft?.resum_tecnic) {
-        setFormDescripcio((prev) => (prev.trim() ? prev : res.draft?.resum_tecnic || ""));
+        aplicarResumCopilot(res.draft.resum_tecnic);
         setInfoMsg(res.missatge || "Justificació tècnica proposada pel Copilot IA carregada.");
       }
     } catch (err: unknown) {
@@ -1807,9 +2004,9 @@ export function PressupostModal({
         tipus_linia: l.tipus_linia || "ALTRE",
         concepte: l.concepte.trim(),
         detall: l.detall?.trim() || null,
-        quantitat: Math.max(0.01, Number(l.quantitat || 1)),
-        preu_unitari: Math.max(0, Number(l.preu_unitari || 0)),
-        descompte_pct: Math.min(100, Math.max(0, Number(l.descompte_pct || 0))),
+        quantitat: Math.max(0.01, parseDecimal(l.quantitat, 1)),
+        preu_unitari: Math.max(0, parseDecimal(l.preu_unitari, 0)),
+        descompte_pct: Math.min(100, Math.max(0, parseDecimal(l.descompte_pct, 0))),
         tipus_iva: Math.max(0, Number(l.tipus_iva ?? 21)),
       }));
 
@@ -1822,11 +2019,11 @@ export function PressupostModal({
           return {
             vehicle_id: sl.vehicle_id || null,
             vehicle_nom: vNom,
-            km: sl.km !== "" ? Number(sl.km) : null,
-            preu_km: sl.preu_km !== "" ? Number(sl.preu_km) : null,
-            import_fix: sl.import_fix !== "" ? Number(sl.import_fix) : null,
-            hores: sl.hores !== "" ? Number(sl.hores) : null,
-            preu_hora: sl.preu_hora !== "" ? Number(sl.preu_hora) : null,
+            km: sl.km.trim() !== "" ? parseDecimal(sl.km, 0) : null,
+            preu_km: sl.preu_km.trim() !== "" ? parseDecimal(sl.preu_km, 0) : null,
+            import_fix: sl.import_fix.trim() !== "" ? parseDecimal(sl.import_fix, 0) : null,
+            hores: sl.hores.trim() !== "" ? parseDecimal(sl.hores, 0) : null,
+            preu_hora: sl.preu_hora.trim() !== "" ? parseDecimal(sl.preu_hora, 0) : null,
           };
         })
         .filter(
@@ -1840,14 +2037,17 @@ export function PressupostModal({
         );
       const firstSlotPayload = vehiclesSlotsPayload[0] || null;
 
-      const einesAssignadesPayload = selectedEines.map((e) => ({
-        id: e.id.startsWith("custom-") ? null : e.id,
-        nom: e.nom,
+      const einesValides = selectedEines.filter(
+        (e) => Boolean(e.id) || e.nom.trim().length > 0
+      );
+      const einesAssignadesPayload = einesValides.map((e) => ({
+        id: e.id && !e.id.startsWith("custom-") ? e.id : null,
+        nom: e.nom.trim() || "Eina",
         model: e.model || null,
         numero_serie: e.numero_serie || null,
-        quantitat: Math.max(0.01, Number(e.quantitat || 1)),
-        unitat: e.unitat || "ut",
-        cost_eur: e.cost_eur !== "" ? Math.max(0, Number(e.cost_eur)) : null,
+        quantitat: Math.max(0.01, parseDecimal(e.quantitat, 1)),
+        unitat: e.unitat || "h",
+        cost_eur: e.cost_eur.trim() !== "" ? Math.max(0, parseDecimal(e.cost_eur, 0)) : null,
       }));
 
       const commonBody = {
@@ -1874,8 +2074,8 @@ export function PressupostModal({
         adreca_obra: formAdrecaObra.trim() || null,
         vehicle_id: firstSlotPayload?.vehicle_id || null,
         vehicle_nom: firstSlotPayload?.vehicle_nom || null,
-        eines_ids: selectedEines
-          .filter((e) => !e.id.startsWith("custom-"))
+        eines_ids: einesValides
+          .filter((e) => Boolean(e.id) && !e.id.startsWith("custom-"))
           .map((e) => e.id),
         eines_assignades: einesAssignadesPayload,
         desplacament_km: firstSlotPayload?.km ?? null,
@@ -1884,9 +2084,9 @@ export function PressupostModal({
         desplacament_hores: firstSlotPayload?.hores ?? null,
         desplacament_preu_hora: firstSlotPayload?.preu_hora ?? null,
         vehicles_desplacaments: vehiclesSlotsPayload,
-        descompte_global_pct: Math.min(100, Math.max(0, Number(formDescompteGlobal || 0))),
+        descompte_global_pct: Math.min(100, Math.max(0, parseDecimal(formDescompteGlobal, 0))),
         forma_pagament: formFormaPagament.trim() || null,
-        percentatge_acompte: Math.min(100, Math.max(0, Number(formPercentatgeAcompte || 0))),
+        percentatge_acompte: Math.min(100, Math.max(0, parseDecimal(formPercentatgeAcompte, 0))),
         termini_execucio: formTerminiExecucio.trim() || null,
         notes_exclusions: formNotesExclusions.trim() || null,
         mencio_legal: formMencioLegal.trim() || null,
@@ -2321,10 +2521,24 @@ export function PressupostModal({
 
           {/* 3. RECURSOS OPERATIUS: VEHICLE, MAQUINÀRIA, DESPLAÇAMENT I EINES */}
           <section className="rounded-xl border border-outline-variant/40 bg-surface p-4 space-y-3">
-            <h4 className="font-bold text-on-surface flex items-center gap-2 text-xs">
-              <Truck className="w-4 h-4 text-primary" />
-              Recursos previstos: vehicle, maquinària, desplaçament i eines
-            </h4>
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              <h4 className="font-bold text-on-surface flex items-center gap-2 text-xs">
+                <Truck className="w-4 h-4 text-primary" />
+                Recursos previstos: vehicle, maquinària, desplaçament i eines
+              </h4>
+              {recursosFeedback && (
+                <div
+                  className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-[11px] font-medium ${
+                    recursosFeedback.tone === "ok"
+                      ? "bg-emerald-50 text-emerald-800 border border-emerald-200"
+                      : "bg-amber-50 text-amber-800 border border-amber-200"
+                  }`}
+                >
+                  {recursosFeedback.tone === "ok" && <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />}
+                  <span>{recursosFeedback.text}</span>
+                </div>
+              )}
+            </div>
 
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
               {/* Vehicle, Maquinària i Desplaçament (Multi-slot + Trajecte + Cost per hora) */}
@@ -2345,20 +2559,25 @@ export function PressupostModal({
 
                 <div className="space-y-2.5">
                   {desplacamentSlots.map((slot, slotIdx) => {
-                    const kmVal = Number(slot.km || 0);
-                    const pKmVal = Number(slot.preu_km || 0);
-                    const fixVal = Number(slot.import_fix || 0);
-                    const horesVal = Number(slot.hores || 0);
-                    const pHoraVal = Number(slot.preu_hora || 0);
+                    const kmVal = parseDecimal(slot.km, 0);
+                    const pKmVal = parseDecimal(slot.preu_km, 0);
+                    const fixVal = parseDecimal(slot.import_fix, 0);
+                    const horesVal = parseDecimal(slot.hores, 0);
+                    const pHoraVal = parseDecimal(slot.preu_hora, 0);
                     const subSlot = r2(
                       (kmVal > 0 && pKmVal > 0 ? kmVal * pKmVal : 0) +
                         Math.max(0, fixVal) +
                         (horesVal > 0 && pHoraVal > 0 ? horesVal * pHoraVal : 0)
                     );
+                    const jaEnPartides = formLinies.some(
+                      (l) =>
+                        l.sourceSlotId === `${slot.localId}:km` ||
+                        l.sourceSlotId === `${slot.localId}:hores`
+                    );
                     return (
                       <div
                         key={slot.localId}
-                        className="rounded-lg border border-outline-variant/40 bg-surface p-2.5 space-y-2"
+                        className="rounded-lg border border-outline-variant/40 bg-surface p-3 space-y-2.5"
                       >
                         <div className="flex items-center justify-between gap-2 flex-wrap">
                           <span className="text-[11px] font-semibold text-on-surface">
@@ -2373,9 +2592,17 @@ export function PressupostModal({
                             <button
                               type="button"
                               onClick={() => afegirPartidaDesplacamentSlot(slot)}
-                              className="inline-flex items-center gap-1 rounded-md border border-primary/40 bg-primary/10 px-2 py-0.5 text-[10px] font-semibold text-primary hover:bg-primary/20 cursor-pointer"
+                              className="inline-flex items-center gap-1 rounded-md border border-primary/40 bg-primary/10 px-2.5 py-1 text-[10px] font-semibold text-primary hover:bg-primary/20 cursor-pointer"
                             >
-                              <Plus className="w-3 h-3" /> Passar a partides
+                              {jaEnPartides ? (
+                                <>
+                                  <CheckCircle2 className="w-3 h-3" /> Actualitzar a partides
+                                </>
+                              ) : (
+                                <>
+                                  <Plus className="w-3 h-3" /> Passar a partides
+                                </>
+                              )}
                             </button>
                             {desplacamentSlots.length > 1 && (
                               <button
@@ -2419,89 +2646,125 @@ export function PressupostModal({
                           </select>
                         </div>
 
-                        <div className="grid grid-cols-3 gap-2">
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                           <div>
-                            <label className="block text-[10px] text-on-surface-variant mb-0.5">
+                            <label className="block text-[10px] font-medium text-on-surface-variant mb-0.5">
                               Distància (km)
                             </label>
                             <input
-                              type="number"
-                              min="0"
-                              step="0.5"
+                              type="text"
+                              inputMode="decimal"
                               value={slot.km}
                               onChange={(e) =>
-                                updateDesplacamentSlot(slot.localId, { km: e.target.value })
+                                updateDesplacamentSlot(slot.localId, {
+                                  km: sanitizeDecimalInput(e.target.value),
+                                })
                               }
                               placeholder="Ex: 40"
-                              className="w-full rounded-md border border-outline-variant/60 bg-surface-container-lowest px-2 py-1 tabular-nums text-on-surface"
+                              className="w-full rounded-md border border-outline-variant/60 bg-surface-container-lowest px-2.5 py-1.5 font-mono tabular-nums text-on-surface"
                             />
                           </div>
                           <div>
-                            <label className="block text-[10px] text-on-surface-variant mb-0.5">
-                              Preu €/km
+                            <label className="block text-[10px] font-medium text-on-surface-variant mb-0.5">
+                              Preu (€/km)
                             </label>
                             <input
-                              type="number"
-                              min="0"
-                              step="0.01"
+                              type="text"
+                              inputMode="decimal"
                               value={slot.preu_km}
                               onChange={(e) =>
-                                updateDesplacamentSlot(slot.localId, { preu_km: e.target.value })
+                                updateDesplacamentSlot(slot.localId, {
+                                  preu_km: sanitizeDecimalInput(e.target.value),
+                                })
                               }
                               placeholder="Ex: 0.45"
-                              className="w-full rounded-md border border-outline-variant/60 bg-surface-container-lowest px-2 py-1 tabular-nums text-on-surface"
+                              className="w-full rounded-md border border-outline-variant/60 bg-surface-container-lowest px-2.5 py-1.5 font-mono tabular-nums text-on-surface"
                             />
                           </div>
                           <div>
-                            <label className="block text-[10px] text-on-surface-variant mb-0.5">
+                            <label className="block text-[10px] font-medium text-on-surface-variant mb-0.5">
                               Tarifa fixa (€)
                             </label>
                             <input
-                              type="number"
-                              min="0"
-                              step="0.5"
+                              type="text"
+                              inputMode="decimal"
                               value={slot.import_fix}
                               onChange={(e) =>
-                                updateDesplacamentSlot(slot.localId, { import_fix: e.target.value })
+                                updateDesplacamentSlot(slot.localId, {
+                                  import_fix: sanitizeDecimalInput(e.target.value),
+                                })
                               }
                               placeholder="Ex: 35.00"
-                              className="w-full rounded-md border border-outline-variant/60 bg-surface-container-lowest px-2 py-1 tabular-nums text-on-surface"
+                              className="w-full rounded-md border border-outline-variant/60 bg-surface-container-lowest px-2.5 py-1.5 font-mono tabular-nums text-on-surface"
                             />
                           </div>
                         </div>
 
-                        <div className="grid grid-cols-2 gap-2 pt-1 border-t border-outline-variant/25">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1.5 border-t border-outline-variant/25">
                           <div>
-                            <label className="block text-[10px] text-on-surface-variant mb-0.5">
+                            <label className="block text-[10px] font-medium text-on-surface-variant mb-0.5">
                               Ús per hores (h · ex: excavadora)
                             </label>
-                            <input
-                              type="number"
-                              min="0"
-                              step="0.5"
-                              value={slot.hores}
-                              onChange={(e) =>
-                                updateDesplacamentSlot(slot.localId, { hores: e.target.value })
-                              }
-                              placeholder="Ex: 4"
-                              className="w-full rounded-md border border-outline-variant/60 bg-surface-container-lowest px-2 py-1 tabular-nums text-on-surface"
-                            />
+                            <div className="flex items-stretch rounded-md border border-outline-variant/60 bg-surface-container-lowest overflow-hidden">
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  updateDesplacamentSlot(slot.localId, {
+                                    hores: stepDecimalString(slot.hores, -0.5, 0),
+                                  })
+                                }
+                                className="px-2 text-on-surface-variant hover:bg-surface-container cursor-pointer border-r border-outline-variant/40"
+                                title="Restar 0,5 h"
+                              >
+                                <Minus className="w-3 h-3" />
+                              </button>
+                              <input
+                                type="text"
+                                inputMode="decimal"
+                                value={slot.hores}
+                                onChange={(e) =>
+                                  updateDesplacamentSlot(slot.localId, {
+                                    hores: sanitizeDecimalInput(e.target.value),
+                                  })
+                                }
+                                placeholder="Ex: 4"
+                                className="w-full min-w-0 bg-transparent px-2 py-1.5 text-center font-mono tabular-nums text-on-surface focus:outline-none"
+                              />
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  updateDesplacamentSlot(slot.localId, {
+                                    hores: stepDecimalString(slot.hores, 0.5, 0),
+                                  })
+                                }
+                                className="px-2 text-on-surface-variant hover:bg-surface-container cursor-pointer border-l border-outline-variant/40"
+                                title="Sumar 0,5 h"
+                              >
+                                <Plus className="w-3 h-3" />
+                              </button>
+                            </div>
                           </div>
                           <div>
-                            <label className="block text-[10px] text-on-surface-variant mb-0.5">
+                            <label className="block text-[10px] font-medium text-on-surface-variant mb-0.5">
                               Cost per hora (€/h)
                             </label>
-                            <input
-                              type="number"
-                              min="0"
-                              step="0.5"
-                              value={slot.preu_hora}
-                              onChange={(e) =>
-                                updateDesplacamentSlot(slot.localId, { preu_hora: e.target.value })
-                              }
-                              placeholder="Ex: 65.00"
-                              className="w-full rounded-md border border-outline-variant/60 bg-surface-container-lowest px-2 py-1 tabular-nums text-on-surface"
-                            />
+                            <div className="relative">
+                              <input
+                                type="text"
+                                inputMode="decimal"
+                                value={slot.preu_hora}
+                                onChange={(e) =>
+                                  updateDesplacamentSlot(slot.localId, {
+                                    preu_hora: sanitizeDecimalInput(e.target.value),
+                                  })
+                                }
+                                placeholder="Ex: 65.00"
+                                className="w-full rounded-md border border-outline-variant/60 bg-surface-container-lowest pl-2.5 pr-9 py-1.5 font-mono tabular-nums text-on-surface"
+                              />
+                              <span className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-[10px] font-semibold text-on-surface-variant">
+                                €/h
+                              </span>
+                            </div>
                           </div>
                         </div>
                       </div>
@@ -2510,7 +2773,7 @@ export function PressupostModal({
                 </div>
               </div>
 
-              {/* Eines i Maquinària (amb camp d'assignació de cost per eina) */}
+              {/* Eines i Maquinària prevista (Multi-slot + inventari o manual + configuració numèrica neta) */}
               <div
                 className="rounded-lg border border-outline-variant/40 bg-surface-container-lowest p-3 space-y-2.5"
                 ref={einaBoxRef}
@@ -2520,191 +2783,317 @@ export function PressupostModal({
                     <Wrench className="w-3.5 h-3.5 text-primary" />
                     Eines i maquinària prevista
                   </span>
-                  <button
-                    type="button"
-                    onClick={afegirPartidaEines}
-                    className="inline-flex items-center gap-1 rounded-md bg-primary/10 px-2.5 py-1 text-[11px] font-semibold text-primary hover:bg-primary/20 cursor-pointer"
-                  >
-                    <Plus className="w-3 h-3" /> Afegir partida eines
-                  </button>
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    {selectedEines.filter((e) => e.nom.trim().length > 0).length > 1 && (
+                      <button
+                        type="button"
+                        onClick={afegirPartidaEines}
+                        className="inline-flex items-center gap-1 rounded-md border border-primary/40 bg-surface px-2 py-1 text-[10px] font-semibold text-primary hover:bg-primary/10 cursor-pointer"
+                      >
+                        <CheckCircle2 className="w-3 h-3" /> Passar totes a partides
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={obrirNouSlotEina}
+                      className="inline-flex items-center gap-1 rounded-md bg-primary/10 px-2.5 py-1 text-[11px] font-semibold text-primary hover:bg-primary/20 cursor-pointer"
+                    >
+                      <Plus className="w-3 h-3" /> Afegir partida eina
+                    </button>
+                  </div>
                 </div>
 
-                <div className="relative">
-                  <Search className="w-3.5 h-3.5 text-on-surface-variant absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
-                  <input
-                    type="text"
-                    value={cercaEina}
-                    onFocus={() => setEinaDropdownOpen(true)}
-                    onChange={(e) => {
-                      setCercaEina(e.target.value);
-                      setEinaDropdownOpen(true);
-                    }}
-                    placeholder={
-                      eines.length > 0
-                        ? "Cercar eina o maquinària de l'inventari..."
-                        : "No hi ha eines registrades al magatzem"
-                    }
-                    className="w-full pl-8 pr-3 py-1.5 rounded-lg border border-outline-variant/60 bg-surface text-on-surface"
-                  />
-                  {einaDropdownOpen && einesFiltrades.length > 0 && (
-                    <div className="absolute left-0 right-0 top-full mt-1 z-30 max-h-44 overflow-y-auto rounded-xl border border-outline-variant/60 bg-surface-container-lowest shadow-xl divide-y divide-outline-variant/20">
-                      {einesFiltrades.map((eina) => (
-                        <button
-                          key={eina.id}
-                          type="button"
-                          onClick={() => {
-                            setSelectedEines((prev) => [
-                              ...prev,
-                              {
-                                id: eina.id,
-                                nom: eina.nom,
-                                model: eina.model ?? null,
-                                numero_serie: eina.numero_serie ?? null,
-                                quantitat: "1",
-                                unitat: "h",
-                                cost_eur: "",
-                              },
-                            ]);
-                            setCercaEina("");
-                            setEinaDropdownOpen(false);
-                          }}
-                          className="w-full px-3 py-2 text-left hover:bg-surface-container flex items-center justify-between gap-2 cursor-pointer"
-                        >
-                          <div className="min-w-0">
-                            <span className="font-medium text-on-surface">{eina.nom}</span>
-                            {eina.model && (
-                              <span className="ml-1.5 text-[10px] text-on-surface-variant">
-                                ({eina.model})
-                              </span>
-                            )}
-                          </div>
-                          {eina.numero_serie && (
-                            <span className="font-mono text-[10px] text-on-surface-variant shrink-0">
-                              S/N {eina.numero_serie}
-                            </span>
-                          )}
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
-
-                {selectedEines.length > 0 ? (
-                  <div className="space-y-2 pt-1">
-                    {selectedEines.map((eina) => {
-                      const subEina = r2(
-                        Math.max(0, Number(eina.quantitat || 0)) *
-                          Math.max(0, Number(eina.cost_eur || 0))
-                      );
-                      return (
-                        <div
-                          key={eina.id}
-                          className="rounded-lg border border-outline-variant/40 bg-surface p-2 space-y-1.5"
-                        >
-                          <div className="flex items-center justify-between gap-2">
+                {eines.length > 0 && (
+                  <div className="relative">
+                    <Search className="w-3.5 h-3.5 text-on-surface-variant absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                    <input
+                      type="text"
+                      value={cercaEina}
+                      onFocus={() => setEinaDropdownOpen(true)}
+                      onChange={(e) => {
+                        setCercaEina(e.target.value);
+                        setEinaDropdownOpen(true);
+                      }}
+                      placeholder="Cerca ràpida a l'inventari d'eines per afegir..."
+                      className="w-full pl-8 pr-3 py-1.5 rounded-lg border border-outline-variant/60 bg-surface text-on-surface"
+                    />
+                    {einaDropdownOpen && einesFiltrades.length > 0 && (
+                      <div className="absolute left-0 right-0 top-full mt-1 z-30 max-h-44 overflow-y-auto rounded-xl border border-outline-variant/60 bg-surface-container-lowest shadow-xl divide-y divide-outline-variant/20">
+                        {einesFiltrades.map((einaCat) => (
+                          <button
+                            key={einaCat.id}
+                            type="button"
+                            onClick={() => {
+                              setSelectedEines((prev) => {
+                                const emptyIdx = prev.findIndex(
+                                  (sl) => !sl.id && !sl.nom.trim() && !sl.cost_eur.trim()
+                                );
+                                if (emptyIdx !== -1) {
+                                  return prev.map((sl, i) =>
+                                    i === emptyIdx
+                                      ? {
+                                          ...sl,
+                                          id: einaCat.id,
+                                          nom: einaCat.nom,
+                                          model: einaCat.model ?? null,
+                                          numero_serie: einaCat.numero_serie ?? null,
+                                        }
+                                      : sl
+                                  );
+                                }
+                                return [
+                                  ...prev,
+                                  {
+                                    ...nouSlotEina(einaCat.nom),
+                                    id: einaCat.id,
+                                    model: einaCat.model ?? null,
+                                    numero_serie: einaCat.numero_serie ?? null,
+                                  },
+                                ];
+                              });
+                              setCercaEina("");
+                              setEinaDropdownOpen(false);
+                            }}
+                            className="w-full px-3 py-2 text-left hover:bg-surface-container flex items-center justify-between gap-2 cursor-pointer"
+                          >
                             <div className="min-w-0">
-                              <span className="font-semibold text-on-surface text-[11px] block truncate">
-                                {eina.nom}
-                                {eina.model ? ` · ${eina.model}` : ""}
-                              </span>
-                              {eina.numero_serie && (
-                                <span className="font-mono text-[10px] text-on-surface-variant">
-                                  S/N {eina.numero_serie}
+                              <span className="font-medium text-on-surface">{einaCat.nom}</span>
+                              {einaCat.model && (
+                                <span className="ml-1.5 text-[10px] text-on-surface-variant">
+                                  ({einaCat.model})
                                 </span>
                               )}
                             </div>
+                            {einaCat.numero_serie && (
+                              <span className="font-mono text-[10px] text-on-surface-variant shrink-0">
+                                S/N {einaCat.numero_serie}
+                              </span>
+                            )}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                <div className="space-y-2.5">
+                  {selectedEines.map((eina, einaIdx) => {
+                    const qtVal = Math.max(0, parseDecimal(eina.quantitat, 0));
+                    const costVal = Math.max(0, parseDecimal(eina.cost_eur, 0));
+                    const subEina = r2(qtVal * costVal);
+                    const stepQt = eina.unitat === "h" ? 0.5 : 1;
+                    const minQt = eina.unitat === "h" ? 0.5 : 1;
+                    const jaEnPartides = formLinies.some((l) => l.sourceSlotId === eina.localId);
+
+                    return (
+                      <div
+                        key={eina.localId}
+                        className="rounded-lg border border-outline-variant/40 bg-surface p-3 space-y-2.5"
+                      >
+                        <div className="flex items-center justify-between gap-2 flex-wrap">
+                          <span className="text-[11px] font-semibold text-on-surface">
+                            Eina / Maquinària #{einaIdx + 1}
+                            {!esEnginyer && subEina > 0 && (
+                              <span className="ml-2 font-mono text-primary tabular-nums">
+                                ({subEina.toFixed(2)} €)
+                              </span>
+                            )}
+                          </span>
+                          <div className="flex items-center gap-1.5">
                             <button
                               type="button"
-                              onClick={() =>
-                                setSelectedEines((prev) => prev.filter((item) => item.id !== eina.id))
-                              }
-                              className="p-1 text-on-surface-variant hover:text-rose-600 cursor-pointer shrink-0"
-                              title="Treure eina"
+                              onClick={() => afegirSlotEinaAPartides(eina)}
+                              className="inline-flex items-center gap-1 rounded-md border border-primary/40 bg-primary/10 px-2.5 py-1 text-[10px] font-semibold text-primary hover:bg-primary/20 cursor-pointer"
                             >
-                              <X className="w-3.5 h-3.5" />
+                              {jaEnPartides ? (
+                                <>
+                                  <CheckCircle2 className="w-3 h-3" /> Actualitzar a partides
+                                </>
+                              ) : (
+                                <>
+                                  <Plus className="w-3 h-3" /> Passar a partides
+                                </>
+                              )}
                             </button>
-                          </div>
-                          <div className="grid grid-cols-12 gap-1.5 items-end">
-                            <div className="col-span-3">
-                              <label className="block text-[10px] text-on-surface-variant mb-0.5">
-                                Quantitat
-                              </label>
-                              <input
-                                type="number"
-                                min="0.01"
-                                step="0.5"
-                                value={eina.quantitat}
-                                onChange={(e) =>
+                            {selectedEines.length > 1 ? (
+                              <button
+                                type="button"
+                                onClick={() =>
                                   setSelectedEines((prev) =>
-                                    prev.map((it) =>
-                                      it.id === eina.id ? { ...it, quantitat: e.target.value } : it
-                                    )
+                                    prev.filter((item) => item.localId !== eina.localId)
                                   )
                                 }
-                                className="w-full rounded-md border border-outline-variant/60 bg-surface-container-lowest px-2 py-1 tabular-nums text-on-surface"
-                              />
-                            </div>
-                            <div className="col-span-3">
-                              <label className="block text-[10px] text-on-surface-variant mb-0.5">
-                                Unitat
-                              </label>
-                              <select
-                                value={eina.unitat}
-                                onChange={(e) =>
-                                  setSelectedEines((prev) =>
-                                    prev.map((it) =>
-                                      it.id === eina.id
-                                        ? { ...it, unitat: e.target.value as "h" | "dia" | "ut" }
-                                        : it
-                                    )
-                                  )
-                                }
-                                className="w-full rounded-md border border-outline-variant/60 bg-surface-container-lowest px-1.5 py-1 text-on-surface"
+                                className="rounded p-1 text-rose-600 hover:bg-rose-50 cursor-pointer"
+                                title="Eliminar aquest slot d'eina"
                               >
-                                <option value="h">Hores (h)</option>
-                                <option value="dia">Dies (dia)</option>
-                                <option value="ut">Unitats (ut)</option>
-                              </select>
-                            </div>
-                            {!esEnginyer && (
-                              <>
-                                <div className="col-span-4">
-                                  <label className="block text-[10px] text-on-surface-variant mb-0.5">
-                                    Cost assignat (€/{eina.unitat})
-                                  </label>
-                                  <input
-                                    type="number"
-                                    min="0"
-                                    step="0.5"
-                                    value={eina.cost_eur}
-                                    onChange={(e) =>
-                                      setSelectedEines((prev) =>
-                                        prev.map((it) =>
-                                          it.id === eina.id
-                                            ? { ...it, cost_eur: e.target.value }
-                                            : it
-                                        )
-                                      )
-                                    }
-                                    placeholder="Ex: 25.00"
-                                    className="w-full rounded-md border border-outline-variant/60 bg-surface-container-lowest px-2 py-1 tabular-nums text-on-surface"
-                                  />
-                                </div>
-                                <div className="col-span-2 text-right font-mono font-semibold text-[11px] text-primary tabular-nums pb-1">
-                                  {subEina.toFixed(2)} €
-                                </div>
-                              </>
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            ) : (
+                              (eina.nom || eina.id || eina.cost_eur) && (
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    updateEinaSlot(eina.localId, {
+                                      id: "",
+                                      nom: "",
+                                      model: null,
+                                      numero_serie: null,
+                                      quantitat: "1",
+                                      unitat: "h",
+                                      cost_eur: "",
+                                    })
+                                  }
+                                  className="rounded p-1 text-on-surface-variant hover:text-rose-600 cursor-pointer"
+                                  title="Buidar eina"
+                                >
+                                  <X className="w-3.5 h-3.5" />
+                                </button>
+                              )
                             )}
                           </div>
                         </div>
-                      );
-                    })}
-                  </div>
-                ) : (
-                  <p className="text-[11px] text-on-surface-variant">
-                    Selecciona eines de l&apos;inventari, assigna&apos;ls el cost (per hora, dia o unitat) i prem «Afegir partida eines».
-                  </p>
-                )}
+
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                          {eines.length > 0 && (
+                            <div>
+                              <label className="block text-[10px] font-medium text-on-surface-variant mb-0.5">
+                                Inventari d&apos;eines
+                              </label>
+                              <select
+                                value={eina.id}
+                                onChange={(e) =>
+                                  handleSelectEinaCatalogSlot(eina.localId, e.target.value)
+                                }
+                                className="w-full rounded-md border border-outline-variant/60 bg-surface-container-lowest px-2.5 py-1.5 text-on-surface"
+                              >
+                                <option value="">Eina manual / lloguer extern...</option>
+                                {eines.map((opt) => (
+                                  <option key={opt.id} value={opt.id}>
+                                    {opt.nom}
+                                    {opt.model ? ` (${opt.model})` : ""}
+                                    {opt.numero_serie ? ` · S/N ${opt.numero_serie}` : ""}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+                          )}
+                          <div className={eines.length > 0 ? "" : "sm:col-span-2"}>
+                            <label className="block text-[10px] font-medium text-on-surface-variant mb-0.5">
+                              Nom de l&apos;eina o maquinària
+                            </label>
+                            <input
+                              type="text"
+                              value={eina.nom}
+                              onChange={(e) =>
+                                updateEinaSlot(eina.localId, { nom: e.target.value })
+                              }
+                              placeholder="Ex: Ahoyadora hidràulica, desbrossadora, compressor..."
+                              className="w-full rounded-md border border-outline-variant/60 bg-surface-container-lowest px-2.5 py-1.5 text-on-surface"
+                            />
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-1.5 border-t border-outline-variant/25">
+                          <div>
+                            <label className="block text-[10px] font-medium text-on-surface-variant mb-0.5">
+                              Quantitat ({eina.unitat})
+                            </label>
+                            <div className="flex items-stretch rounded-md border border-outline-variant/60 bg-surface-container-lowest overflow-hidden">
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  updateEinaSlot(eina.localId, {
+                                    quantitat: stepDecimalString(
+                                      eina.quantitat,
+                                      -stepQt,
+                                      minQt
+                                    ),
+                                  })
+                                }
+                                className="px-2 text-on-surface-variant hover:bg-surface-container cursor-pointer border-r border-outline-variant/40"
+                                title={`Restar ${stepQt}`}
+                              >
+                                <Minus className="w-3 h-3" />
+                              </button>
+                              <input
+                                type="text"
+                                inputMode="decimal"
+                                value={eina.quantitat}
+                                onChange={(e) =>
+                                  updateEinaSlot(eina.localId, {
+                                    quantitat: sanitizeDecimalInput(e.target.value),
+                                  })
+                                }
+                                placeholder="1"
+                                className="w-full min-w-0 bg-transparent px-2 py-1.5 text-center font-mono tabular-nums text-on-surface focus:outline-none"
+                              />
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  updateEinaSlot(eina.localId, {
+                                    quantitat: stepDecimalString(
+                                      eina.quantitat,
+                                      stepQt,
+                                      minQt
+                                    ),
+                                  })
+                                }
+                                className="px-2 text-on-surface-variant hover:bg-surface-container cursor-pointer border-l border-outline-variant/40"
+                                title={`Sumar ${stepQt}`}
+                              >
+                                <Plus className="w-3 h-3" />
+                              </button>
+                            </div>
+                          </div>
+
+                          <div>
+                            <label className="block text-[10px] font-medium text-on-surface-variant mb-0.5">
+                              Unitat de càlcul
+                            </label>
+                            <select
+                              value={eina.unitat}
+                              onChange={(e) =>
+                                updateEinaSlot(eina.localId, {
+                                  unitat: e.target.value as "h" | "dia" | "ut",
+                                })
+                              }
+                              className="w-full rounded-md border border-outline-variant/60 bg-surface-container-lowest px-2.5 py-1.5 text-on-surface"
+                            >
+                              <option value="h">Hores (h)</option>
+                              <option value="dia">Dies (dia)</option>
+                              <option value="ut">Unitats (ut)</option>
+                            </select>
+                          </div>
+
+                          {!esEnginyer && (
+                            <div>
+                              <label className="block text-[10px] font-medium text-on-surface-variant mb-0.5">
+                                Cost assignat (€/{eina.unitat})
+                              </label>
+                              <div className="relative">
+                                <input
+                                  type="text"
+                                  inputMode="decimal"
+                                  value={eina.cost_eur}
+                                  onChange={(e) =>
+                                    updateEinaSlot(eina.localId, {
+                                      cost_eur: sanitizeDecimalInput(e.target.value),
+                                    })
+                                  }
+                                  placeholder="Ex: 25.00"
+                                  className="w-full rounded-md border border-outline-variant/60 bg-surface-container-lowest pl-2.5 pr-11 py-1.5 font-mono tabular-nums text-on-surface"
+                                />
+                                <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[10px] font-semibold text-on-surface-variant">
+                                  €/{eina.unitat}
+                                </span>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
             </div>
           </section>
@@ -2726,7 +3115,7 @@ export function PressupostModal({
                       className="inline-flex items-center gap-1 rounded-lg bg-secondary-container px-2.5 py-1.5 font-semibold text-on-secondary-container hover:opacity-90 cursor-pointer disabled:opacity-50"
                     >
                       <Sparkles className="w-3.5 h-3.5" />
-                      {copilotLoading ? "Consultant IA..." : "Proposta Copilot IA"}
+                      {copilotLoading ? "Consultant Copilot IA..." : "Proposta Copilot IA"}
                     </button>
                   )}
                   <button
@@ -2734,16 +3123,19 @@ export function PressupostModal({
                     onClick={() =>
                       setFormLinies((prev) => [
                         ...prev,
-                        {
-                          seccio: prev[prev.length - 1]?.seccio || "Altres conceptes",
-                          tipus_linia: "ALTRE",
-                          concepte: "",
-                          detall: "",
-                          quantitat: 1,
-                          preu_unitari: 0,
-                          descompte_pct: 0,
-                          tipus_iva: 21,
-                        },
+                        toEditableLinia(
+                          {
+                            seccio: prev[prev.length - 1]?.seccio || "Altres conceptes",
+                            tipus_linia: "ALTRE",
+                            concepte: "",
+                            detall: "",
+                            quantitat: 1,
+                            preu_unitari: 0,
+                            descompte_pct: 0,
+                            tipus_iva: 21,
+                          },
+                          prev.length
+                        ),
                       ])
                     }
                     className="inline-flex items-center gap-1 rounded-lg bg-primary/10 px-2.5 py-1.5 font-semibold text-primary hover:bg-primary/20 cursor-pointer"
@@ -2754,7 +3146,7 @@ export function PressupostModal({
               </div>
 
               {/* Selector de Mà d'obra llegint Cost/Hora Imputació d'Obra (€/h) de la fitxa de l'operari o tècnic */}
-              <div className="flex flex-col sm:flex-row items-stretch sm:items-end gap-2 rounded-lg border border-outline-variant/40 bg-surface-container-lowest p-2.5">
+              <div className="flex flex-col sm:flex-row items-stretch sm:items-end gap-2.5 rounded-lg border border-outline-variant/40 bg-surface-container-lowest p-3">
                 <div className="flex-1 min-w-0">
                   <label className="block text-[10px] font-semibold text-on-surface-variant mb-0.5 flex items-center gap-1">
                     <UserCheck className="w-3 h-3 text-primary" />
@@ -2785,25 +3177,47 @@ export function PressupostModal({
                     })}
                   </select>
                 </div>
-                <div className="w-full sm:w-24">
+                <div className="w-full sm:w-40">
                   <label className="block text-[10px] font-semibold text-on-surface-variant mb-0.5">
                     Hores (h)
                   </label>
-                  <input
-                    type="number"
-                    min="0.25"
-                    step="0.5"
-                    value={maObraHores}
-                    onChange={(e) => setMaObraHores(e.target.value)}
-                    className="w-full rounded-md border border-outline-variant/60 bg-surface px-2.5 py-1.5 tabular-nums text-on-surface"
-                  />
+                  <div className="flex items-stretch rounded-md border border-outline-variant/60 bg-surface overflow-hidden">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setMaObraHores((prev) => stepDecimalString(prev, -0.5, 0.5))
+                      }
+                      className="px-2.5 text-on-surface-variant hover:bg-surface-container cursor-pointer border-r border-outline-variant/40"
+                      title="Restar 0,5 h"
+                    >
+                      <Minus className="w-3.5 h-3.5" />
+                    </button>
+                    <input
+                      type="text"
+                      inputMode="decimal"
+                      value={maObraHores}
+                      onChange={(e) => setMaObraHores(sanitizeDecimalInput(e.target.value))}
+                      placeholder="1"
+                      className="w-full min-w-0 bg-transparent px-2 py-1.5 text-center font-mono font-semibold tabular-nums text-on-surface focus:outline-none"
+                    />
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setMaObraHores((prev) => stepDecimalString(prev, 0.5, 0.5))
+                      }
+                      className="px-2.5 text-on-surface-variant hover:bg-surface-container cursor-pointer border-l border-outline-variant/40"
+                      title="Sumar 0,5 h"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
                 </div>
                 <button
                   type="button"
                   onClick={afegirPartidaMaObra}
-                  className="inline-flex items-center justify-center gap-1 rounded-lg border border-outline-variant/60 bg-surface px-3 py-1.5 font-semibold text-on-surface hover:bg-surface-container cursor-pointer shrink-0"
+                  className="inline-flex items-center justify-center gap-1.5 rounded-lg bg-primary/10 border border-primary/30 px-3.5 py-1.5 font-semibold text-primary hover:bg-primary/20 cursor-pointer shrink-0"
                 >
-                  <Plus className="w-3.5 h-3.5 text-primary" /> Mà d&apos;obra
+                  <Plus className="w-3.5 h-3.5" /> Afegir mà d&apos;obra
                   {!esEnginyer && costHoraMaObraActiu > 0
                     ? ` (${costHoraMaObraActiu.toFixed(2)} €/h)`
                     : ""}
@@ -2856,16 +3270,15 @@ export function PressupostModal({
                       </div>
                     )}
                   </div>
-                  <div className="w-24">
+                  <div className="w-full sm:w-28">
                     <input
-                      type="number"
-                      step="0.01"
-                      min="0.01"
+                      type="text"
+                      inputMode="decimal"
                       value={materialQt}
-                      onChange={(e) => setMaterialQt(e.target.value)}
+                      onChange={(e) => setMaterialQt(sanitizeDecimalInput(e.target.value))}
                       title="Quantitat a afegir"
-                      placeholder="Qt."
-                      className="w-full rounded-lg border border-outline-variant/60 bg-surface-container-lowest px-2.5 py-2 tabular-nums text-on-surface"
+                      placeholder="Qt. (1)"
+                      className="w-full rounded-lg border border-outline-variant/60 bg-surface-container-lowest px-2.5 py-2 text-center font-mono tabular-nums text-on-surface"
                     />
                   </div>
                 </div>
@@ -2912,12 +3325,12 @@ export function PressupostModal({
                 <thead className="bg-surface-container-low text-on-surface-variant">
                   <tr>
                     <th className="px-2.5 py-2 w-40">Secció</th>
-                    <th className="px-2.5 py-2 min-w-[230px]">Concepte i detall</th>
-                    <th className="px-2 py-2 w-20">Qt.</th>
+                    <th className="px-2.5 py-2 min-w-[220px]">Concepte i detall</th>
+                    <th className="px-2 py-2 w-24">Qt. / Hores</th>
                     {!esEnginyer && (
                       <>
-                        <th className="px-2 py-2 w-24">Preu u. (€)</th>
-                        <th className="px-2 py-2 w-16">Dto %</th>
+                        <th className="px-2 py-2 w-28">Preu u. (€)</th>
+                        <th className="px-2 py-2 w-20">Dto %</th>
                         <th className="px-2 py-2 w-20">IVA %</th>
                         <th className="px-2 py-2 w-24 text-right">Import</th>
                       </>
@@ -2928,12 +3341,12 @@ export function PressupostModal({
                 <tbody className="divide-y divide-outline-variant/25">
                   {formLinies.map((lin, idx) => {
                     const sub = r2(
-                      Number(lin.quantitat || 0) *
-                        Number(lin.preu_unitari || 0) *
-                        (1 - Number(lin.descompte_pct || 0) / 100)
+                      Math.max(0, parseDecimal(lin.quantitat, 0)) *
+                        Math.max(0, parseDecimal(lin.preu_unitari, 0)) *
+                        (1 - Math.min(100, Math.max(0, parseDecimal(lin.descompte_pct, 0))) / 100)
                     );
                     return (
-                      <tr key={idx} className="align-top">
+                      <tr key={lin.localLineId} className="align-top">
                         <td className="px-2.5 py-2">
                           <input
                             type="text"
@@ -2988,57 +3401,64 @@ export function PressupostModal({
                         </td>
                         <td className="px-2 py-2">
                           <input
-                            type="number"
-                            step="0.01"
-                            min="0.01"
+                            type="text"
+                            inputMode="decimal"
                             value={lin.quantitat}
                             onChange={(e) =>
                               setFormLinies((prev) =>
                                 prev.map((it, i) =>
-                                  i === idx ? { ...it, quantitat: Number(e.target.value) } : it
+                                  i === idx
+                                    ? { ...it, quantitat: sanitizeDecimalInput(e.target.value) }
+                                    : it
                                 )
                               )
                             }
-                            className="w-full rounded border border-outline-variant/60 bg-surface-container-lowest px-2 py-1 tabular-nums text-on-surface"
+                            placeholder="1"
+                            className="w-full rounded border border-outline-variant/60 bg-surface-container-lowest px-2 py-1 text-right font-mono tabular-nums text-on-surface"
                           />
                         </td>
                         {!esEnginyer && (
                           <>
                             <td className="px-2 py-2">
                               <input
-                                type="number"
-                                step="0.01"
-                                min="0"
+                                type="text"
+                                inputMode="decimal"
                                 value={lin.preu_unitari}
                                 onChange={(e) =>
                                   setFormLinies((prev) =>
                                     prev.map((it, i) =>
                                       i === idx
-                                        ? { ...it, preu_unitari: Number(e.target.value) }
+                                        ? {
+                                            ...it,
+                                            preu_unitari: sanitizeDecimalInput(e.target.value),
+                                          }
                                         : it
                                     )
                                   )
                                 }
-                                className="w-full rounded border border-outline-variant/60 bg-surface-container-lowest px-2 py-1 tabular-nums text-on-surface"
+                                placeholder="0.00"
+                                className="w-full rounded border border-outline-variant/60 bg-surface-container-lowest px-2 py-1 text-right font-mono tabular-nums text-on-surface"
                               />
                             </td>
                             <td className="px-2 py-2">
                               <input
-                                type="number"
-                                step="0.1"
-                                min="0"
-                                max="100"
+                                type="text"
+                                inputMode="decimal"
                                 value={lin.descompte_pct}
                                 onChange={(e) =>
                                   setFormLinies((prev) =>
                                     prev.map((it, i) =>
                                       i === idx
-                                        ? { ...it, descompte_pct: Number(e.target.value) }
+                                        ? {
+                                            ...it,
+                                            descompte_pct: sanitizeDecimalInput(e.target.value),
+                                          }
                                         : it
                                     )
                                   )
                                 }
-                                className="w-full rounded border border-outline-variant/60 bg-surface-container-lowest px-2 py-1 tabular-nums text-on-surface"
+                                placeholder="0"
+                                className="w-full rounded border border-outline-variant/60 bg-surface-container-lowest px-2 py-1 text-right font-mono tabular-nums text-on-surface"
                               />
                             </td>
                             <td className="px-2 py-2">
@@ -3059,7 +3479,7 @@ export function PressupostModal({
                                 <option value={0}>0%</option>
                               </select>
                             </td>
-                            <td className="px-2 py-2 text-right font-semibold tabular-nums text-on-surface">
+                            <td className="px-2 py-2 text-right font-semibold font-mono tabular-nums text-on-surface">
                               {sub.toFixed(2)} €
                             </td>
                           </>
@@ -3091,13 +3511,14 @@ export function PressupostModal({
                       Descompte global (%)
                     </label>
                     <input
-                      type="number"
-                      min="0"
-                      max="100"
-                      step="0.5"
+                      type="text"
+                      inputMode="decimal"
                       value={formDescompteGlobal}
-                      onChange={(e) => setFormDescompteGlobal(e.target.value)}
-                      className="w-24 rounded-md border border-outline-variant/60 bg-surface-container-lowest px-2.5 py-1 tabular-nums text-on-surface"
+                      onChange={(e) =>
+                        setFormDescompteGlobal(sanitizeDecimalInput(e.target.value))
+                      }
+                      placeholder="0"
+                      className="w-24 rounded-md border border-outline-variant/60 bg-surface-container-lowest px-2.5 py-1 text-right font-mono tabular-nums text-on-surface"
                     />
                   </div>
                   <div>
@@ -3166,13 +3587,14 @@ export function PressupostModal({
                   )}
                 </label>
                 <input
-                  type="number"
-                  min="0"
-                  max="100"
-                  step="5"
+                  type="text"
+                  inputMode="decimal"
                   value={formPercentatgeAcompte}
-                  onChange={(e) => setFormPercentatgeAcompte(e.target.value)}
-                  className="w-full rounded-lg border border-outline-variant/60 bg-surface-container-lowest px-3 py-2 tabular-nums text-on-surface"
+                  onChange={(e) =>
+                    setFormPercentatgeAcompte(sanitizeDecimalInput(e.target.value))
+                  }
+                  placeholder="0"
+                  className="w-full rounded-lg border border-outline-variant/60 bg-surface-container-lowest px-3 py-2 font-mono tabular-nums text-on-surface"
                 />
               </div>
               <div>

@@ -641,7 +641,17 @@ async def test_pressupost_codi_client_excavadora_hores_cost_eines_operaris_i_ia_
             assert "65,00 €/h" in res_html.text
             assert "25,00 €/h" in res_html.text
 
-            # 5. Copilot IA accepta JSON body (amb caràcters especials i client_id) sense 504
+            # 5. Copilot IA accepta JSON body, resol automàticament el model viu encara que el perfil tingui un model antic
+            #    i aplica pressupost de timeout >= 65s (evitant 503 prematurs en inferència CPU local)
+            await save_strict_copilot_config(
+                db=admin_session,
+                empresa_id=emp_uuid,
+                system_prompt="Ets el Copilot tècnic de pressupostos de Tancaments i Obra SL.\n\n" + ("Detall extens de context. " * 120),
+                rag_prompt="Instruccions RAG llargues per xat general.",
+                subagent_prompts={},
+                llm_chat_model="model-antic-no-carregat",
+                timeout_budget_s=18.0,
+            )
             res_ia = await client.post(
                 "/api/v1/gestio/pressupostos/generar-ia",
                 json={
@@ -652,3 +662,38 @@ async def test_pressupost_codi_client_excavadora_hores_cost_eines_operaris_i_ia_
             )
             assert res_ia.status_code == 200, res_ia.text
             assert res_ia.json()["status"] == "PENDENT_AUDITORIA"
+            assert res_ia.json()["draft"]["resum_tecnic"]
+
+            # 6. Eines manuals/lloguer (id=None) amb decimals també es persisteixen i es mostren a l'HTML
+            res_upd = await client.put(
+                f"/api/v1/gestio/pressupostos/{p_data['id']}",
+                json={
+                    "client_id": str(cli_id),
+                    "numero": "P-2026/042",
+                    "titol": "Reparació tanca perimetral 2 km",
+                    "eines_assignades": [
+                        {
+                            "id": str(eina_id),
+                            "nom": "Clavadora de pilons hidràulica",
+                            "quantitat": 4.5,
+                            "unitat": "h",
+                            "cost_eur": 25.0,
+                        },
+                        {
+                            "id": None,
+                            "nom": "Ahoyadora tèrmica lloguer",
+                            "quantitat": 2.5,
+                            "unitat": "h",
+                            "cost_eur": 18.75,
+                        },
+                    ],
+                    "linies": p_data["linies"],
+                },
+                headers=headers,
+            )
+            assert res_upd.status_code == 200, res_upd.text
+            upd_data = res_upd.json()
+            assert len(upd_data["eines_resum"]) == 2
+            assert upd_data["eines_resum"][1]["nom"] == "Ahoyadora tèrmica lloguer"
+            assert upd_data["eines_resum"][1]["quantitat"] == 2.5
+            assert upd_data["eines_resum"][1]["cost_eur"] == 18.75
