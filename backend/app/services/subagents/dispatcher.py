@@ -1462,6 +1462,25 @@ class CopilotDispatcher:
                 "declinat_per_vertical": False,
             }
 
+    async def extraure_clients_csv(
+        self,
+        db: AsyncSession,
+        empresa_id: uuid.UUID,
+        csv_bytes: bytes,
+    ) -> Dict[str, Any]:
+        """Delega l'extracció intel·ligent de clients CSV al SubagentOcrVision (Copilot via WSS)."""
+        ocr_subagent = next(
+            (s for s in self.subagents if isinstance(s, SubagentOcrVision)),
+            None,
+        )
+        if ocr_subagent is None:
+            ocr_subagent = SubagentOcrVision()
+        return await ocr_subagent.extraure_clients_des_de_csv(
+            db=db,
+            empresa_id=empresa_id,
+            csv_bytes=csv_bytes,
+        )
+
 
 # Instància singleton exportada per defecte
 copilot_dispatcher = CopilotDispatcher()

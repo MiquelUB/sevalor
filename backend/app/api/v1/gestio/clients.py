@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Optional, Sequence
 import filetype  # type: ignore[import-untyped]
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, ValidationError, field_validator
 from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -15,36 +15,9 @@ from app.core.db import get_db_with_tenant_context
 from app.core.security import require_roles
 from app.models.models import Client, Finca
 from app.services.codis_service import generar_seguent_codi
-from app.services.csv_service import (
-    CsvImportResult,
-    generate_csv_content,
-    parse_and_validate_csv_with_rows,
-)
+from app.services.csv_service import CsvImportResult, generate_csv_content
 from app.services.sovereign_storage import SovereignStorageGateway
-
-_CLIENT_CSV_ALIASES: Dict[str, str] = {
-    "rao_social": "rao_social",
-    "raosocial": "rao_social",
-    "nom": "rao_social",
-    "nom_client": "rao_social",
-    "client": "rao_social",
-    "empresa": "rao_social",
-    "nif": "nif",
-    "cif": "nif",
-    "nif_cif": "nif",
-    "dni": "nif",
-    "telefon": "telefon",
-    "tel": "telefon",
-    "mobil": "telefon",
-    "email": "email",
-    "correu": "email",
-    "correu_electronic": "email",
-    "adreca_fiscal": "adreca_fiscal",
-    "adreca": "adreca_fiscal",
-    "direccio": "adreca_fiscal",
-    "iban": "iban",
-    "codi": "codi",
-}
+from app.services.subagents.dispatcher import copilot_dispatcher
 
 logger = logging.getLogger("sevalor.clients")
 
@@ -80,6 +53,9 @@ def _serialitzar_client(c: Client, rol: str) -> dict[str, Any]:
         "telefon": c.telefon,
         "email": c.email,
         "adreca_fiscal": c.adreca_fiscal,
+        "web": c.web,
+        "persona_contacte": c.persona_contacte,
+        "dades_contacte": c.dades_contacte,
         "iban": None if is_enginyer else c.iban_xifrat_simetric,
         "estat_canal_telegram": c.estat_canal_telegram or "INACTIU",
         "actiu": bool(c.actiu) if c.actiu is not None else True,
@@ -93,6 +69,9 @@ class ClientCreate(BaseModel):
     telefon: Optional[str] = Field(None, max_length=30)
     email: Optional[str] = Field(None, max_length=200)
     adreca_fiscal: Optional[str] = Field(None)
+    web: Optional[str] = Field(None, max_length=255)
+    persona_contacte: Optional[str] = Field(None, max_length=150)
+    dades_contacte: Optional[str] = Field(None)
     iban: Optional[str] = Field(None, max_length=34)
 
     @field_validator("nif")
@@ -100,11 +79,11 @@ class ClientCreate(BaseModel):
     def validate_nif(cls, v: str) -> str:
         import re
 
-        v = v.upper().replace("-", "").replace(" ", "")
+        v = v.upper().replace("-", "").replace(" ", "").replace(".", "")
+        if len(v) == 11 and v.startswith("ES"):
+            v = v[2:]
         if not re.match(r"^[A-Z0-9]{9}$", v):
             raise ValueError("El NIF/CIF ha de tenir 9 caràcters alfanumèrics")
-        # Validació bàsica per a NIE/NIF/CIF
-        # Let's keep it simple as it's a basic Spanish format check
         return v
 
     @field_validator("iban")
@@ -132,12 +111,36 @@ class ClientCreate(BaseModel):
         return v
 
 
-class ClientResponse(ClientCreate):
+class ClientResponse(BaseModel):
     id: uuid.UUID
     codi: str
+    rao_social: str
+    nif: str = ""
+    telefon: Optional[str] = None
+    email: Optional[str] = None
+    adreca_fiscal: Optional[str] = None
+    web: Optional[str] = None
+    persona_contacte: Optional[str] = None
+    dades_contacte: Optional[str] = None
+    iban: Optional[str] = None
     estat_canal_telegram: str
     actiu: bool
     model_config = {"from_attributes": True}
+
+
+class ClientCsvImportRow(BaseModel):
+    """Esquema tolerant per a importació CSV: cap camp buit o null atura l'extracció."""
+
+    codi: Optional[str] = None
+    rao_social: Optional[str] = None
+    nif: Optional[str] = None
+    telefon: Optional[str] = None
+    email: Optional[str] = None
+    adreca_fiscal: Optional[str] = None
+    web: Optional[str] = None
+    persona_contacte: Optional[str] = None
+    dades_contacte: Optional[str] = None
+    iban: Optional[str] = None
 
 
 class ClientAmbIBANResponse(BaseModel):
@@ -211,6 +214,9 @@ async def alta_client(
         telefon=client.telefon,
         email=client.email,
         adreca_fiscal=client.adreca_fiscal,
+        web=client.web,
+        persona_contacte=client.persona_contacte,
+        dades_contacte=client.dades_contacte,
         iban_xifrat_simetric=None if rol == "ENGINYER" else client.iban,
     )
 
@@ -231,6 +237,9 @@ async def alta_client(
                 "telefon": nou_client.telefon,
                 "email": nou_client.email,
                 "adreca_fiscal": nou_client.adreca_fiscal,
+                "web": nou_client.web,
+                "persona_contacte": nou_client.persona_contacte,
+                "dades_contacte": nou_client.dades_contacte,
             },
         )
         if not str(ruta).startswith("transit://"):
@@ -280,6 +289,9 @@ async def modificar_client(
     client_db.telefon = payload.telefon
     client_db.email = payload.email
     client_db.adreca_fiscal = payload.adreca_fiscal
+    client_db.web = payload.web
+    client_db.persona_contacte = payload.persona_contacte
+    client_db.dades_contacte = payload.dades_contacte
     if rol != "ENGINYER" and payload.iban is not None:
         client_db.iban_xifrat_simetric = payload.iban or None
 
@@ -299,6 +311,9 @@ async def modificar_client(
                 "telefon": client_db.telefon,
                 "email": client_db.email,
                 "adreca_fiscal": client_db.adreca_fiscal,
+                "web": client_db.web,
+                "persona_contacte": client_db.persona_contacte,
+                "dades_contacte": client_db.dades_contacte,
             },
         )
         if not str(ruta).startswith("transit://"):
@@ -741,6 +756,9 @@ async def obtenir_fitxa_360_client(
         telefon=client.telefon,
         email=client.email,
         adreca_fiscal=client.adreca_fiscal,
+        web=client.web,
+        persona_contacte=client.persona_contacte,
+        dades_contacte=client.dades_contacte,
         iban=None if is_enginyer else client.iban_xifrat_simetric,
         estat_canal_telegram=client.estat_canal_telegram,
         actiu=client.actiu,
@@ -763,6 +781,7 @@ async def obtenir_fitxa_360_client(
 async def importar_clients_csv(
     request: Request,
     file: UploadFile = File(...),
+    claims: Dict[str, Any] = Depends(require_roles(["BOSS", "SECRETARIA", "ENGINYER"])),
     db: AsyncSession = Depends(get_db_with_tenant_context),
 ) -> CsvImportResult:
     if not file.filename or not file.filename.lower().endswith(".csv"):
@@ -779,43 +798,113 @@ async def importar_clients_csv(
             detail=f"Format de fitxer invàlid ({kind.mime}). Puja un fitxer CSV de text pla.",
         )
 
-    valid_rows, errors = parse_and_validate_csv_with_rows(
-        content, ClientCreate, column_aliases=_CLIENT_CSV_ALIASES
+    emp_uuid = _resolve_emp_uuid(request, claims)
+    rol = str(claims.get("rol", "")).upper()
+
+    # Delegar l'extracció i mapeig semàntic al Copilot (estructura agent/subagents)
+    extraction = await copilot_dispatcher.extraure_clients_csv(
+        db=db,
+        empresa_id=emp_uuid,
+        csv_bytes=content,
     )
+    copilot_usat = bool(extraction.get("copilot_usat", False))
+    mapping_aplicat: Dict[str, List[str]] = extraction.get("mapping_aplicat") or {}
+    errors: List[Dict[str, Any]] = list(extraction.get("errors") or [])
+    extracted_rows: List[tuple[int, Dict[str, Optional[str]]]] = extraction.get("rows") or []
+
+    valid_rows: List[tuple[int, ClientCsvImportRow]] = []
+    for row_num, raw_record in extracted_rows:
+        # Ometre només files totalment buides (si almenys un camp té dades, no aturem l'extracció)
+        if not any((v or "").strip() for v in raw_record.values()):
+            continue
+        try:
+            row_obj = ClientCsvImportRow(**raw_record)
+        except ValidationError as exc:
+            for err in exc.errors():
+                col_name = str(err["loc"][0]) if err.get("loc") else "desconeguda"
+                motiu = err.get("msg", "Error de validació")
+                valor_original = raw_record.get(col_name, "")
+                errors.append(
+                    {
+                        "fila": row_num,
+                        "columna": col_name,
+                        "valor": str(valor_original) if valor_original is not None else "",
+                        "motiu": motiu,
+                    }
+                )
+            continue
+
+        # Normalització tolerant sense descartar la fila si algun camp és buit/null
+        nif_clean = (row_obj.nif or "").strip().upper().replace("-", "").replace(" ", "").replace(".", "")
+        if len(nif_clean) == 11 and nif_clean.startswith("ES"):
+            nif_clean = nif_clean[2:]
+        row_obj.nif = nif_clean[:20]
+
+        rao_clean = (row_obj.rao_social or "").strip()
+        if not rao_clean:
+            rao_clean = (
+                (row_obj.persona_contacte or "").strip()
+                or (row_obj.email or "").strip()
+                or (row_obj.web or "").strip()
+                or nif_clean
+                or f"Client fila {row_num}"
+            )
+        row_obj.rao_social = rao_clean[:200]
+
+        tel_clean = (row_obj.telefon or "").strip() or None
+        dades_clean = (row_obj.dades_contacte or "").strip() or None
+        if tel_clean and len(tel_clean) > 30:
+            dades_clean = f"{dades_clean} · Tel: {tel_clean}" if dades_clean else f"Tel: {tel_clean}"
+            tel_clean = tel_clean[:30]
+        row_obj.telefon = tel_clean
+        row_obj.dades_contacte = dades_clean
+        row_obj.email = ((row_obj.email or "").strip()[:200]) or None
+        row_obj.adreca_fiscal = (row_obj.adreca_fiscal or "").strip() or None
+        row_obj.web = ((row_obj.web or "").strip()[:255]) or None
+        row_obj.persona_contacte = ((row_obj.persona_contacte or "").strip()[:150]) or None
+        row_obj.iban = ((row_obj.iban or "").strip().upper().replace(" ", "")[:34]) or None
+
+        valid_rows.append((row_num, row_obj))
 
     inserits = 0
     total_processats = len(valid_rows) + len({e["fila"] for e in errors})
 
-    emp_uuid = _resolve_emp_uuid(request)
-
     # Processar els vàlids un a un amb enumeració automàtica CLI-XXXX i SAVEPOINT per fila
     for row_num, record in valid_rows:
-        dup_nif = (
-            await db.execute(
-                select(Client.id).where(
-                    Client.empresa_id == emp_uuid,
-                    Client.nif == record.nif,
+        nif_val = record.nif or ""
+        if nif_val:
+            dup_nif = (
+                await db.execute(
+                    select(Client.id).where(
+                        Client.empresa_id == emp_uuid,
+                        Client.nif == nif_val,
+                    )
                 )
-            )
-        ).first()
-        if dup_nif:
-            errors.append(
-                {
-                    "fila": row_num,
-                    "columna": "nif",
-                    "valor": record.nif,
-                    "motiu": "Ja existeix un client amb aquest NIF",
-                }
-            )
-            continue
+            ).first()
+            if dup_nif:
+                errors.append(
+                    {
+                        "fila": row_num,
+                        "columna": "nif",
+                        "valor": nif_val,
+                        "motiu": "Ja existeix un client amb aquest NIF",
+                    }
+                )
+                continue
 
-        dades_client = record.model_dump(exclude={"codi", "iban"})
         codi_auto = await generar_seguent_codi(db, Client, emp_uuid, "CLI")
         client_db = Client(
             empresa_id=emp_uuid,
             codi=codi_auto,
-            iban_xifrat_simetric=record.iban,
-            **dades_client,
+            rao_social=record.rao_social or f"Client fila {row_num}",
+            nif=nif_val,
+            telefon=record.telefon,
+            email=record.email,
+            adreca_fiscal=record.adreca_fiscal,
+            web=record.web,
+            persona_contacte=record.persona_contacte,
+            dades_contacte=record.dades_contacte,
+            iban_xifrat_simetric=None if rol == "ENGINYER" else record.iban,
         )
         try:
             async with db.begin_nested():
@@ -827,7 +916,7 @@ async def importar_clients_csv(
                 {
                     "fila": row_num,
                     "columna": "nif/codi",
-                    "valor": record.nif,
+                    "valor": nif_val,
                     "motiu": "Ja existeix un client amb aquest NIF o Codi",
                 }
             )
@@ -835,7 +924,11 @@ async def importar_clients_csv(
     await db.commit()
 
     return CsvImportResult(
-        total_processats=total_processats, inserits=inserits, errors_detectats=errors
+        total_processats=total_processats,
+        inserits=inserits,
+        errors_detectats=errors,
+        copilot_usat=copilot_usat,
+        mapping_aplicat=mapping_aplicat,
     )
 
 
@@ -847,7 +940,18 @@ async def exportar_clients_csv(
     result = await db.execute(select(Client).where(Client.empresa_id == emp_uuid))
     clients = result.scalars().all()
 
-    fieldnames = ["codi", "rao_social", "nif", "telefon", "email", "adreca_fiscal", "actiu"]
+    fieldnames = [
+        "codi",
+        "rao_social",
+        "nif",
+        "telefon",
+        "email",
+        "adreca_fiscal",
+        "web",
+        "persona_contacte",
+        "dades_contacte",
+        "actiu",
+    ]
     records = []
     for c in clients:
         records.append(
@@ -858,6 +962,9 @@ async def exportar_clients_csv(
                 "telefon": c.telefon or "",
                 "email": c.email or "",
                 "adreca_fiscal": c.adreca_fiscal or "",
+                "web": c.web or "",
+                "persona_contacte": c.persona_contacte or "",
+                "dades_contacte": c.dades_contacte or "",
                 "actiu": str(c.actiu),
             }
         )

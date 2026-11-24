@@ -510,6 +510,18 @@ TOOL_REGISTRY: Dict[str, ToolSpec] = {
         allowed_roles=ROLES_GESTIO_I_CAMP,
         is_hitl_action=True,
     ),
+    "extract_clients_csv": ToolSpec(
+        name="extract_clients_csv",
+        subagent_id="subagent_ocr_vision",
+        description=(
+            "Analitza un fitxer CSV de clients amb el Copilot local per mapejar i extreure "
+            "raó social, NIF/CIF, adreça, email, telèfon, web, persona de contacte i dades de contacte."
+        ),
+        args_model=ExtractOcrTextArgs,
+        handler_method="tool_extract_clients_csv",
+        allowed_roles=ROLES_GESTIO_I_CAMP,
+        is_hitl_action=True,
+    ),
     # 6. Client Final & Canal Telegram (Zero import_total al LLM)
     "notify_technician_arrival": ToolSpec(
         name="notify_technician_arrival",

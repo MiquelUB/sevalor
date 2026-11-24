@@ -66,6 +66,7 @@ SCHEMA_EXTRACT_VEHICLE_TECH_CARD: Dict[str, Any] = to_openai_tool(
     TOOL_REGISTRY["extract_vehicle_tech_card"]
 )
 SCHEMA_EXTRACT_FUEL_RECEIPT: Dict[str, Any] = to_openai_tool(TOOL_REGISTRY["extract_fuel_receipt"])
+SCHEMA_EXTRACT_CLIENTS_CSV: Dict[str, Any] = to_openai_tool(TOOL_REGISTRY["extract_clients_csv"])
 SCHEMAS_OCR_VISION: List[Dict[str, Any]] = get_openai_tools_for_subagent("subagent_ocr_vision")
 
 # ── 6. Client Final & Canal Telegram (Zero import_total al LLM) ──────────────

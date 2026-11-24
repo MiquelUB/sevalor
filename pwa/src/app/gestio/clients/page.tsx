@@ -33,6 +33,9 @@ interface Client {
   telefon?: string;
   email?: string;
   adreca_fiscal?: string;
+  web?: string;
+  persona_contacte?: string;
+  dades_contacte?: string;
   iban?: string;
   estat_canal_telegram?: string;
   actiu?: boolean;
@@ -106,6 +109,9 @@ export default function GestioClientsPage() {
     telefon: "",
     email: "",
     adreca_fiscal: "",
+    web: "",
+    persona_contacte: "",
+    dades_contacte: "",
     iban: "",
   });
 
@@ -206,6 +212,9 @@ export default function GestioClientsPage() {
           telefon: clientEditant.telefon || null,
           email: clientEditant.email || null,
           adreca_fiscal: clientEditant.adreca_fiscal || null,
+          web: clientEditant.web || null,
+          persona_contacte: clientEditant.persona_contacte || null,
+          dades_contacte: clientEditant.dades_contacte || null,
           iban: esEnginyer ? null : (clientEditant.iban || null),
         }),
       });
@@ -290,6 +299,9 @@ export default function GestioClientsPage() {
         telefon: "",
         email: "",
         adreca_fiscal: "",
+        web: "",
+        persona_contacte: "",
+        dades_contacte: "",
         iban: "",
       });
       await carregarClients();
@@ -510,10 +522,31 @@ export default function GestioClientsPage() {
                 </div>
               </div>
 
-              {clientSeleccionat.adreca_fiscal && (
-                <div className="pt-3 border-t border-slate-100 dark:border-slate-800 flex items-center gap-2 text-xs text-slate-600 dark:text-slate-400">
-                  <MapPin className="w-4 h-4 text-slate-400 shrink-0" />
-                  <span>{clientSeleccionat.adreca_fiscal}</span>
+              {(clientSeleccionat.adreca_fiscal || clientSeleccionat.web || clientSeleccionat.persona_contacte || clientSeleccionat.dades_contacte) && (
+                <div className="pt-3 border-t border-slate-100 dark:border-slate-800 space-y-1.5 text-xs text-slate-600 dark:text-slate-400">
+                  {clientSeleccionat.adreca_fiscal && (
+                    <div className="flex items-center gap-2">
+                      <MapPin className="w-4 h-4 text-slate-400 shrink-0" />
+                      <span>{clientSeleccionat.adreca_fiscal}</span>
+                    </div>
+                  )}
+                  <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+                    {clientSeleccionat.web && (
+                      <span>
+                        Web: <strong className="text-slate-700 dark:text-slate-300">{clientSeleccionat.web}</strong>
+                      </span>
+                    )}
+                    {clientSeleccionat.persona_contacte && (
+                      <span>
+                        Contacte: <strong className="text-slate-700 dark:text-slate-300">{clientSeleccionat.persona_contacte}</strong>
+                      </span>
+                    )}
+                    {clientSeleccionat.dades_contacte && (
+                      <span className="text-slate-500">
+                        ({clientSeleccionat.dades_contacte})
+                      </span>
+                    )}
+                  </div>
                 </div>
               )}
             </div>
@@ -911,6 +944,46 @@ export default function GestioClientsPage() {
                 />
               </div>
 
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-400 mb-1">
+                    Web
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="https://www.empresa.cat"
+                    value={nouClient.web}
+                    onChange={(e) => setNouClient({ ...nouClient, web: e.target.value })}
+                    className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-400 mb-1">
+                    Persona de Contacte
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="Joan Puig"
+                    value={nouClient.persona_contacte}
+                    onChange={(e) => setNouClient({ ...nouClient, persona_contacte: e.target.value })}
+                    className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-400 mb-1">
+                  Dades del Contacte
+                </label>
+                <input
+                  type="text"
+                  placeholder="Càrrec, horari, telèfon directe o notes de contacte"
+                  value={nouClient.dades_contacte}
+                  onChange={(e) => setNouClient({ ...nouClient, dades_contacte: e.target.value })}
+                  className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs"
+                />
+              </div>
+
               {!esEnginyer && (
                 <div>
                   <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-400 mb-1">
@@ -1039,6 +1112,35 @@ export default function GestioClientsPage() {
                   type="text"
                   value={clientEditant.adreca_fiscal || ""}
                   onChange={(e) => setClientEditant({ ...clientEditant, adreca_fiscal: e.target.value })}
+                  className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs"
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-400 mb-1">Web</label>
+                  <input
+                    type="text"
+                    value={clientEditant.web || ""}
+                    onChange={(e) => setClientEditant({ ...clientEditant, web: e.target.value })}
+                    className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-400 mb-1">Persona de Contacte</label>
+                  <input
+                    type="text"
+                    value={clientEditant.persona_contacte || ""}
+                    onChange={(e) => setClientEditant({ ...clientEditant, persona_contacte: e.target.value })}
+                    className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs"
+                  />
+                </div>
+              </div>
+              <div>
+                <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-400 mb-1">Dades del Contacte</label>
+                <input
+                  type="text"
+                  value={clientEditant.dades_contacte || ""}
+                  onChange={(e) => setClientEditant({ ...clientEditant, dades_contacte: e.target.value })}
                   className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs"
                 />
               </div>

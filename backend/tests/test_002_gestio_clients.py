@@ -190,8 +190,11 @@ async def test_enumeracio_automatica_clients_i_aillament_tenant(admin_session, h
 
 
 def test_parse_csv_excel_semicolon_latin1_and_short_rows():
-    from app.api.v1.gestio.clients import _CLIENT_CSV_ALIASES, ClientCreate
+    from app.api.v1.gestio.clients import ClientCreate
     from app.services.csv_service import parse_and_validate_csv_with_rows
+    from app.services.subagents.subagent_ocr_vision import (
+        CLIENT_HEADER_ALIASES as _CLIENT_CSV_ALIASES,
+    )
 
     # Excel català: punt i coma, codificació cp1252, capçaleres amb accents, fila curta i línia buida
     raw_text = (
@@ -292,3 +295,134 @@ async def test_import_csv_clients_robustesa_i_rls(admin_session, headers, boss_t
             headers=headers,
         )
         assert r_ext.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_import_csv_clients_tots_els_camps_i_copilot_wss(admin_session, headers, boss_token, tmp_path):
+    """Verifica l'extracció dels 8 camps de clients via Copilot (subagent OCR sobre túnel WSS real)."""
+    import json
+
+    from tests.wss_test_helpers import live_empresa_wss_context
+
+    _, empresa_id = boss_token
+    emp_uuid = uuid.UUID(empresa_id)
+    vault_token = f"svlt_csv_{uuid.uuid4().hex[:12]}"
+    admin_session.add(
+        Empresa(
+            id=emp_uuid,
+            nom="Copilot CSV Emp",
+            nif="B" + str(uuid.uuid4())[:8].upper(),
+            subdomini="csvcop-" + str(uuid.uuid4())[:5],
+            pla_subscripcio="ENTERPRISE",
+            estat_pagament="ACTIU",
+            disc_dur_url=f"wss-tunnel://{emp_uuid}",
+            node_ia_url=f"wss-tunnel://{emp_uuid}",
+            vault_token=vault_token,
+            node_ia_actiu=True,
+            feature_copilot_ia=True,
+        )
+    )
+    await admin_session.flush()
+
+    copilot_mapping_json = json.dumps(
+        {
+            "te_capcalera": True,
+            "mapping": {
+                "rao_social": [0],
+                "nif": [1],
+                "adreca_fiscal": [2, 3],
+                "email": [4],
+                "telefon": [5],
+                "web": [6],
+                "persona_contacte": [7],
+                "dades_contacte": [8],
+                "codi": [],
+                "iban": [],
+            },
+        }
+    )
+
+    # Capçaleres arbitràries que només el Copilot pot mapejar semànticament
+    csv_arbitrari = (
+        "ColA;ColB;ColC;ColD;ColE;ColF;ColG;ColH;ColI\n"
+        "Finca Els Olivers SL;ESB81234567;C/ del Pi 4;08720 Vilafranca;info@olivers.cat;612345678;https://olivers.cat;Marta Soler;Directora compres · Matins\n"
+    ).encode("utf-8")
+
+    async with live_empresa_wss_context(
+        empresa_id=emp_uuid,
+        vault_token=vault_token,
+        disk_a=tmp_path / "disk_a",
+        default_reply=copilot_mapping_json,
+    ) as ctx:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+            r_imp = await ac.post(
+                "/api/v1/gestio/clients/import",
+                files={"file": ("clients_crm.csv", csv_arbitrari, "text/csv")},
+                headers=headers,
+            )
+            assert r_imp.status_code == 200, r_imp.text
+            res_json = r_imp.json()
+            assert res_json["copilot_usat"] is True
+            assert res_json["inserits"] == 1
+            assert res_json["errors_detectats"] == []
+            assert len(ctx["llm_calls"]) >= 1
+
+            r_list = await ac.get("/api/v1/gestio/clients", headers=headers)
+            assert r_list.status_code == 200
+            clients = r_list.json()
+            assert len(clients) == 1
+            c = clients[0]
+            assert c["rao_social"] == "Finca Els Olivers SL"
+            assert c["nif"] == "B81234567"
+            assert c["adreca_fiscal"] == "C/ del Pi 4, 08720 Vilafranca"
+            assert c["email"] == "info@olivers.cat"
+            assert c["telefon"] == "612345678"
+            assert c["web"] == "https://olivers.cat"
+            assert c["persona_contacte"] == "Marta Soler"
+            assert c["dades_contacte"] == "Directora compres · Matins"
+
+
+@pytest.mark.asyncio
+async def test_import_csv_clients_camps_buits_no_atura_extraccio(admin_session, headers, boss_token):
+    """Si algun camp (inclòs NIF o raó social) ve buit/null, no s'atura l'extracció ni falla el llistat."""
+    _, empresa_id = boss_token
+    admin_session.add(
+        Empresa(
+            id=uuid.UUID(empresa_id),
+            nom="Tolerant CSV Emp",
+            nif="B" + str(uuid.uuid4())[:8].upper(),
+            subdomini="tolcsv-" + str(uuid.uuid4())[:5],
+            pla_subscripcio="STARTER",
+            estat_pagament="ACTIU",
+        )
+    )
+    await admin_session.flush()
+
+    csv_parcial = (
+        "Raó Social;NIF;Adreça;Email;Telèfon;Web;Persona de contacte;Dades del contacte\n"
+        "Client Sense NIF;;Carrer Nou 1;a@ex.cat;600111222;;;\n"
+        "Altre Sense NIF;;;b@ex.cat;;https://b.cat;;\n"
+        ";;;c@ex.cat;600333444;;Pere Puig;Només contacte\n"
+        "Només Nom;;;;;;;\n"
+    ).encode("utf-8")
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        r_imp = await ac.post(
+            "/api/v1/gestio/clients/import",
+            files={"file": ("parcial.csv", csv_parcial, "text/csv")},
+            headers=headers,
+        )
+        assert r_imp.status_code == 200, r_imp.text
+        data = r_imp.json()
+        assert data["inserits"] == 4
+        assert data["errors_detectats"] == []
+
+        r_list = await ac.get("/api/v1/gestio/clients", headers=headers)
+        assert r_list.status_code == 200, r_list.text
+        clients = r_list.json()
+        assert len(clients) == 4
+        noms = {c["rao_social"] for c in clients}
+        assert "Client Sense NIF" in noms
+        assert "Altre Sense NIF" in noms
+        assert "Pere Puig" in noms
+        assert "Només Nom" in noms

@@ -245,6 +245,24 @@ async def _ensure_schema_columns() -> None:
                             """
                         )
                     )
+            res_cli = await session.execute(
+                text(
+                    "SELECT 1 FROM information_schema.columns "
+                    "WHERE table_schema = 'public' AND table_name = 'clients' AND column_name = 'web'"
+                )
+            )
+            if not res_cli.scalar():
+                await session.execute(
+                    text(
+                        """
+                        ALTER TABLE public.clients
+                            ADD COLUMN IF NOT EXISTS web VARCHAR(255),
+                            ADD COLUMN IF NOT EXISTS persona_contacte VARCHAR(150),
+                            ADD COLUMN IF NOT EXISTS dades_contacte TEXT;
+                        """
+                    )
+                )
+
             await session.commit()
     except Exception:
         pass

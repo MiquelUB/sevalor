@@ -4,7 +4,7 @@ import re
 import unicodedata
 from typing import Any, Dict, List, Optional, Tuple, Type, TypeVar
 
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, Field, ValidationError
 
 TModel = TypeVar("TModel", bound=BaseModel)
 
@@ -13,6 +13,8 @@ class CsvImportResult(BaseModel):
     total_processats: int
     inserits: int
     errors_detectats: List[Dict[str, Any]]
+    copilot_usat: bool = False
+    mapping_aplicat: Dict[str, List[str]] = Field(default_factory=dict)
 
 
 def _decode_csv_bytes(file_content: bytes) -> str:

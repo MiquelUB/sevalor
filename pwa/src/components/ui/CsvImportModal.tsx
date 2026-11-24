@@ -15,6 +15,8 @@ interface CsvImportModalProps {
 interface ImportResult {
   total_processats: number;
   inserits: number;
+  copilot_usat?: boolean;
+  mapping_aplicat?: Record<string, string[]>;
   errors_detectats: Array<{
     fila: number | string;
     columna: string;
@@ -165,6 +167,11 @@ export function CsvImportModal({ isOpen, onClose, resourceName, endpoint, onSucc
             </div>
           ) : (
             <div className="flex flex-col space-y-4">
+              {result.copilot_usat && (
+                <div className="rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2 text-xs font-medium text-indigo-800 dark:border-indigo-900/50 dark:bg-indigo-900/20 dark:text-indigo-300">
+                  Mapeig de columnes analitzat automàticament pel Copilot local.
+                </div>
+              )}
               <div className="grid grid-cols-2 gap-4">
                 <div className="flex items-center space-x-3 rounded-lg border border-emerald-200 bg-emerald-50 p-4 dark:border-emerald-900/50 dark:bg-emerald-900/20">
                   <CheckCircle2 className="h-8 w-8 text-emerald-600 dark:text-emerald-500" />
