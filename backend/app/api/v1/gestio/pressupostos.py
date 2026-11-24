@@ -1,5 +1,6 @@
 """Endpoints per a la gestió completa de Pressupostos, plantilla HTML/PDF WeasyPrint, edició prèvia i enviament multi-canal."""
 
+import asyncio
 import logging
 import re
 import uuid
@@ -7,7 +8,7 @@ from datetime import date, datetime, timezone
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, status
 from fastapi.responses import HTMLResponse, Response
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
@@ -16,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.db import get_db_with_tenant_context
 from app.core.security import get_current_user_claims, require_roles
 from app.models.models import (
+    Article,
     Client,
     EinaCustodia,
     Empresa,
@@ -32,8 +34,10 @@ from app.services.pressupost_service import (
     construir_mailto_url,
     desar_detalls_pressupost_disc,
     enviar_pressupost_email_smtp,
+    extreure_contacte_fallback,
     generar_pdf_pressupost_bytes,
     generar_token_acceptacio_pressupost,
+    parsejar_adreca_fiscal,
     renderitzar_html_pressupost,
 )
 from app.services.sovereign_storage import SovereignStorageGateway
@@ -57,6 +61,7 @@ class PressupostLiniaIn(BaseModel):
     article_id: Optional[uuid.UUID] = None
     vehicle_id: Optional[uuid.UUID] = None
     eina_id: Optional[uuid.UUID] = None
+    operari_id: Optional[uuid.UUID] = None
     seccio: Optional[str] = Field(None, max_length=120)
     tipus_linia: str = Field(default="ALTRE", max_length=30)
     concepte: str = Field(..., min_length=1, max_length=200)
@@ -71,6 +76,7 @@ class PressupostLiniaOut(BaseModel):
     article_id: Optional[str] = None
     vehicle_id: Optional[str] = None
     eina_id: Optional[str] = None
+    operari_id: Optional[str] = None
     seccio: Optional[str] = None
     tipus_linia: str = "ALTRE"
     concepte: str
@@ -82,11 +88,54 @@ class PressupostLiniaOut(BaseModel):
     subtotal: float = 0.0
 
 
+class EinaAssignadaIn(BaseModel):
+    id: Optional[uuid.UUID] = None
+    nom: Optional[str] = Field(None, max_length=200)
+    model: Optional[str] = Field(None, max_length=120)
+    numero_serie: Optional[str] = Field(None, max_length=120)
+    quantitat: float = Field(default=1.0, gt=0)
+    unitat: str = Field(default="ut", max_length=20)
+    cost_eur: Optional[float] = Field(default=None, ge=0.0)
+
+
 class EinaResumOut(BaseModel):
     id: str
     nom: str
     model: Optional[str] = None
     numero_serie: Optional[str] = None
+    quantitat: float = 1.0
+    unitat: str = "ut"
+    cost_eur: Optional[float] = None
+
+
+class VehicleDesplacamentSlotIn(BaseModel):
+    vehicle_id: Optional[uuid.UUID] = None
+    vehicle_nom: Optional[str] = Field(None, max_length=200)
+    km: Optional[float] = Field(None, ge=0.0)
+    preu_km: Optional[float] = Field(None, ge=0.0)
+    import_fix: Optional[float] = Field(None, ge=0.0)
+    hores: Optional[float] = Field(None, ge=0.0)
+    preu_hora: Optional[float] = Field(None, ge=0.0)
+
+
+class VehicleDesplacamentSlotOut(BaseModel):
+    vehicle_id: Optional[str] = None
+    vehicle_nom: Optional[str] = None
+    km: Optional[float] = None
+    preu_km: Optional[float] = None
+    import_fix: Optional[float] = None
+    hores: Optional[float] = None
+    preu_hora: Optional[float] = None
+
+
+class OperariImputacioOut(BaseModel):
+    id: str
+    nom: str
+    cognoms: str = ""
+    nom_complet: str
+    rol: str
+    especialitat: Optional[str] = None
+    cost_hora_eur: Optional[float] = None
 
 
 class PressupostCreate(BaseModel):
@@ -101,6 +150,7 @@ class PressupostCreate(BaseModel):
     elaborat_per: Optional[str] = Field(None, max_length=150)
 
     # Dades de client autocompletables i editables per a aquest pressupost
+    client_codi: Optional[str] = Field(None, max_length=30)
     client_rao_social: Optional[str] = Field(None, max_length=200)
     client_nif: Optional[str] = Field(None, max_length=30)
     client_adreca: Optional[str] = Field(None, max_length=300)
@@ -108,6 +158,7 @@ class PressupostCreate(BaseModel):
     client_poblacio: Optional[str] = Field(None, max_length=100)
     client_provincia: Optional[str] = Field(None, max_length=100)
     client_persona_contacte: Optional[str] = Field(None, max_length=150)
+    client_dades_contacte: Optional[str] = Field(None, max_length=500)
     client_email: Optional[str] = Field(None, max_length=200)
     client_telefon: Optional[str] = Field(None, max_length=40)
 
@@ -117,9 +168,13 @@ class PressupostCreate(BaseModel):
     vehicle_id: Optional[uuid.UUID] = None
     vehicle_nom: Optional[str] = Field(None, max_length=200)
     eines_ids: List[uuid.UUID] = Field(default_factory=list)
+    eines_assignades: Optional[List[EinaAssignadaIn]] = None
     desplacament_km: Optional[float] = Field(None, ge=0.0)
     desplacament_preu_km: Optional[float] = Field(None, ge=0.0)
     desplacament_import_fix: Optional[float] = Field(None, ge=0.0)
+    desplacament_hores: Optional[float] = Field(None, ge=0.0)
+    desplacament_preu_hora: Optional[float] = Field(None, ge=0.0)
+    vehicles_desplacaments: Optional[List[VehicleDesplacamentSlotIn]] = None
 
     # Econòmics, condicions i notes (plantilla oficial)
     descompte_global_pct: float = Field(default=0.0, ge=0.0, le=100.0)
@@ -143,6 +198,7 @@ class PressupostUpdate(BaseModel):
     referencia_client: Optional[str] = Field(None, max_length=120)
     elaborat_per: Optional[str] = Field(None, max_length=150)
 
+    client_codi: Optional[str] = Field(None, max_length=30)
     client_rao_social: Optional[str] = Field(None, max_length=200)
     client_nif: Optional[str] = Field(None, max_length=30)
     client_adreca: Optional[str] = Field(None, max_length=300)
@@ -150,6 +206,7 @@ class PressupostUpdate(BaseModel):
     client_poblacio: Optional[str] = Field(None, max_length=100)
     client_provincia: Optional[str] = Field(None, max_length=100)
     client_persona_contacte: Optional[str] = Field(None, max_length=150)
+    client_dades_contacte: Optional[str] = Field(None, max_length=500)
     client_email: Optional[str] = Field(None, max_length=200)
     client_telefon: Optional[str] = Field(None, max_length=40)
 
@@ -158,9 +215,13 @@ class PressupostUpdate(BaseModel):
     vehicle_id: Optional[uuid.UUID] = None
     vehicle_nom: Optional[str] = Field(None, max_length=200)
     eines_ids: Optional[List[uuid.UUID]] = None
+    eines_assignades: Optional[List[EinaAssignadaIn]] = None
     desplacament_km: Optional[float] = Field(None, ge=0.0)
     desplacament_preu_km: Optional[float] = Field(None, ge=0.0)
     desplacament_import_fix: Optional[float] = Field(None, ge=0.0)
+    desplacament_hores: Optional[float] = Field(None, ge=0.0)
+    desplacament_preu_hora: Optional[float] = Field(None, ge=0.0)
+    vehicles_desplacaments: Optional[List[VehicleDesplacamentSlotIn]] = None
 
     descompte_global_pct: Optional[float] = Field(None, ge=0.0, le=100.0)
     forma_pagament: Optional[str] = Field(None, max_length=200)
@@ -192,10 +253,16 @@ class PressupostConvertirOTRequest(BaseModel):
     forcar_si_pendent: bool = False
 
 
+class GenerarPressupostIABody(BaseModel):
+    prompt: Optional[str] = Field(None, max_length=2000)
+    client_id: Optional[uuid.UUID] = None
+
+
 class PressupostResponse(BaseModel):
     id: uuid.UUID
     empresa_id: uuid.UUID
     client_id: uuid.UUID
+    client_codi: Optional[str] = None
     client_nom: Optional[str] = None
     client_rao_social: Optional[str] = None
     client_nif: Optional[str] = None
@@ -204,6 +271,7 @@ class PressupostResponse(BaseModel):
     client_poblacio: Optional[str] = None
     client_provincia: Optional[str] = None
     client_persona_contacte: Optional[str] = None
+    client_dades_contacte: Optional[str] = None
     client_email: Optional[str] = None
     client_telefon: Optional[str] = None
     client_te_telegram: bool = False
@@ -225,6 +293,9 @@ class PressupostResponse(BaseModel):
     desplacament_km: Optional[float] = None
     desplacament_preu_km: Optional[float] = None
     desplacament_import_fix: Optional[float] = None
+    desplacament_hores: Optional[float] = None
+    desplacament_preu_hora: Optional[float] = None
+    vehicles_desplacaments: List[VehicleDesplacamentSlotOut] = Field(default_factory=list)
 
     subtotal_brut: float = 0.0
     descompte_global_pct: float = 0.0
@@ -310,31 +381,109 @@ async def _resoldre_vehicle_nom(
 
 
 async def _resoldre_eines_resum(
-    db: AsyncSession, empresa_id: uuid.UUID, eines_ids: List[uuid.UUID]
-) -> List[Dict[str, Any]]:
-    if not eines_ids:
-        return []
-    rows = (
-        await db.execute(
-            select(EinaCustodia).where(
-                EinaCustodia.empresa_id == empresa_id,
-                EinaCustodia.id.in_(eines_ids),
+    db: AsyncSession,
+    empresa_id: uuid.UUID,
+    eines_ids: List[uuid.UUID],
+    eines_assignades: Optional[List[EinaAssignadaIn]] = None,
+) -> tuple[List[str], List[Dict[str, Any]]]:
+    """Resol l'inventari d'eines seleccionades preservant quantitat, unitat i cost assignat (€)."""
+    all_uuids: List[uuid.UUID] = list(eines_ids or [])
+    if eines_assignades:
+        for ea in eines_assignades:
+            if ea.id and ea.id not in all_uuids:
+                all_uuids.append(ea.id)
+
+    by_id: Dict[uuid.UUID, EinaCustodia] = {}
+    if all_uuids:
+        rows = (
+            await db.execute(
+                select(EinaCustodia).where(
+                    EinaCustodia.empresa_id == empresa_id,
+                    EinaCustodia.id.in_(all_uuids),
+                )
             )
-        )
-    ).scalars().all()
-    by_id = {e.id: e for e in rows}
+        ).scalars().all()
+        by_id = {e.id: e for e in rows}
+
     out: List[Dict[str, Any]] = []
-    for eid in eines_ids:
+    seen_ids: List[str] = []
+
+    if eines_assignades is not None:
+        for idx, ea in enumerate(eines_assignades):
+            eina_db = by_id.get(ea.id) if ea.id else None
+            e_id = str(ea.id) if ea.id else f"custom-{idx + 1}"
+            nom = (ea.nom or (eina_db.nom if eina_db else "") or "").strip()
+            if not nom:
+                continue
+            if ea.id:
+                seen_ids.append(str(ea.id))
+            out.append(
+                {
+                    "id": e_id,
+                    "nom": nom,
+                    "model": (ea.model or (eina_db.model if eina_db else None)),
+                    "numero_serie": (
+                        ea.numero_serie or (eina_db.numero_serie if eina_db else None)
+                    ),
+                    "quantitat": float(ea.quantitat or 1.0),
+                    "unitat": (ea.unitat or "ut").strip()[:20] or "ut",
+                    "cost_eur": float(ea.cost_eur) if ea.cost_eur is not None else None,
+                }
+            )
+        return seen_ids, out
+
+    for eid in all_uuids:
         eina = by_id.get(eid)
         if eina:
+            seen_ids.append(str(eina.id))
             out.append(
                 {
                     "id": str(eina.id),
                     "nom": eina.nom,
                     "model": eina.model,
                     "numero_serie": eina.numero_serie,
+                    "quantitat": 1.0,
+                    "unitat": "ut",
+                    "cost_eur": None,
                 }
             )
+    return seen_ids, out
+
+
+async def _resoldre_vehicles_desplacaments(
+    db: AsyncSession,
+    empresa_id: uuid.UUID,
+    slots: Optional[List[VehicleDesplacamentSlotIn]],
+) -> List[Dict[str, Any]]:
+    if not slots:
+        return []
+    out: List[Dict[str, Any]] = []
+    for sl in slots:
+        v_nom = await _resoldre_vehicle_nom(db, empresa_id, sl.vehicle_id, sl.vehicle_nom)
+        if not any(
+            x is not None
+            for x in (
+                sl.vehicle_id,
+                v_nom,
+                sl.km,
+                sl.preu_km,
+                sl.import_fix,
+                sl.hores,
+                sl.preu_hora,
+            )
+        ):
+            continue
+        out.append(
+            {
+                "vehicle_id": str(sl.vehicle_id) if sl.vehicle_id else None,
+                "vehicle_nom": v_nom,
+                "km": sl.km,
+                "preu_km": sl.preu_km,
+                "import_fix": sl.import_fix,
+                "hores": sl.hores,
+                "preu_hora": sl.preu_hora,
+            }
+        )
     return out
 
 
@@ -379,16 +528,31 @@ def _construir_snapshot_client(
                 return str(c_val).strip() or None
         return None
 
+    raw_adr = pick("client_adreca", "adreca_fiscal")
+    raw_cp = pick("client_codi_postal", "codi_postal")
+    raw_pob = pick("client_poblacio", "poblacio")
+    raw_prov = pick("client_provincia", "provincia")
+    parsed_adr = parsejar_adreca_fiscal(raw_adr, raw_cp, raw_pob, raw_prov)
+
+    dades_contacte = pick("client_dades_contacte", "dades_contacte")
+    em_fb, tel_fb = extreure_contacte_fallback(
+        pick("client_email", "email"),
+        pick("client_telefon", "telefon"),
+        dades_contacte,
+    )
+
     return {
+        "client_codi": pick("client_codi", "codi"),
         "client_rao_social": pick("client_rao_social", "rao_social"),
         "client_nif": pick("client_nif", "nif"),
-        "client_adreca": pick("client_adreca", "adreca_fiscal"),
-        "client_codi_postal": pick("client_codi_postal", "codi_postal"),
-        "client_poblacio": pick("client_poblacio", "poblacio"),
-        "client_provincia": pick("client_provincia", "provincia"),
+        "client_adreca": parsed_adr["adreca"],
+        "client_codi_postal": parsed_adr["codi_postal"],
+        "client_poblacio": parsed_adr["poblacio"],
+        "client_provincia": parsed_adr["provincia"],
         "client_persona_contacte": pick("client_persona_contacte", "persona_contacte"),
-        "client_email": pick("client_email", "email"),
-        "client_telefon": pick("client_telefon", "telefon"),
+        "client_dades_contacte": dades_contacte,
+        "client_email": em_fb,
+        "client_telefon": tel_fb,
     }
 
 
@@ -407,6 +571,7 @@ def _serialitzar_pressupost(
             article_id=lin.get("article_id"),
             vehicle_id=lin.get("vehicle_id"),
             eina_id=lin.get("eina_id"),
+            operari_id=lin.get("operari_id"),
             seccio=lin.get("seccio"),
             tipus_linia=str(lin.get("tipus_linia") or "ALTRE"),
             concepte=str(lin.get("concepte") or ""),
@@ -449,31 +614,65 @@ def _serialitzar_pressupost(
             nom=str(e.get("nom") or ""),
             model=e.get("model"),
             numero_serie=e.get("numero_serie"),
+            quantitat=float(e.get("quantitat") or 1.0),
+            unitat=str(e.get("unitat") or "ut"),
+            cost_eur=(
+                None
+                if amagar_imports or e.get("cost_eur") is None
+                else float(e["cost_eur"])
+            ),
         )
         for e in (detalls.get("eines_resum") or [])
         if isinstance(e, dict) and e.get("nom")
     ]
 
+    raw_slots = detalls.get("vehicles_desplacaments") or []
+    vehicles_slots_out = [
+        VehicleDesplacamentSlotOut(
+            vehicle_id=str(sl["vehicle_id"]) if sl.get("vehicle_id") else None,
+            vehicle_nom=sl.get("vehicle_nom"),
+            km=sl.get("km"),
+            preu_km=None if amagar_imports else sl.get("preu_km"),
+            import_fix=None if amagar_imports else sl.get("import_fix"),
+            hores=sl.get("hores"),
+            preu_hora=None if amagar_imports else sl.get("preu_hora"),
+        )
+        for sl in raw_slots
+        if isinstance(sl, dict)
+    ]
+
+    cli_codi = detalls.get("client_codi") or (getattr(client, "codi", None) if client else None)
     cli_rao = detalls.get("client_rao_social") or (client.rao_social if client else None)
-    cli_email = detalls.get("client_email") or (client.email if client else None)
-    cli_tel = detalls.get("client_telefon") or (client.telefon if client else None)
+    cli_dades_contacte = detalls.get("client_dades_contacte") or (
+        getattr(client, "dades_contacte", None) if client else None
+    )
+    cli_email, cli_tel = extreure_contacte_fallback(
+        detalls.get("client_email") or (client.email if client else None),
+        detalls.get("client_telefon") or (client.telefon if client else None),
+        cli_dades_contacte,
+    )
+    parsed_adr = parsejar_adreca_fiscal(
+        detalls.get("client_adreca") or (client.adreca_fiscal if client else None),
+        detalls.get("client_codi_postal") or (getattr(client, "codi_postal", None) if client else None),
+        detalls.get("client_poblacio") or (getattr(client, "poblacio", None) if client else None),
+        detalls.get("client_provincia") or (getattr(client, "provincia", None) if client else None),
+    )
 
     return PressupostResponse(
         id=pressupost.id,
         empresa_id=pressupost.empresa_id,
         client_id=pressupost.client_id,
+        client_codi=cli_codi,
         client_nom=cli_rao,
         client_rao_social=cli_rao,
         client_nif=detalls.get("client_nif") or (client.nif if client else None),
-        client_adreca=detalls.get("client_adreca") or (client.adreca_fiscal if client else None),
-        client_codi_postal=detalls.get("client_codi_postal")
-        or (getattr(client, "codi_postal", None) if client else None),
-        client_poblacio=detalls.get("client_poblacio")
-        or (getattr(client, "poblacio", None) if client else None),
-        client_provincia=detalls.get("client_provincia")
-        or (getattr(client, "provincia", None) if client else None),
+        client_adreca=parsed_adr["adreca"],
+        client_codi_postal=parsed_adr["codi_postal"],
+        client_poblacio=parsed_adr["poblacio"],
+        client_provincia=parsed_adr["provincia"],
         client_persona_contacte=detalls.get("client_persona_contacte")
         or (getattr(client, "persona_contacte", None) if client else None),
+        client_dades_contacte=cli_dades_contacte,
         client_email=cli_email,
         client_telefon=cli_tel,
         client_te_telegram=bool(
@@ -485,7 +684,7 @@ def _serialitzar_pressupost(
         data_pressupost=detalls.get("data_pressupost")
         or (pressupost.created_at.date().isoformat() if pressupost.created_at else None),
         validesa_dies=int(detalls.get("validesa_dies") or DEFAULT_VALIDESA_DIES),
-        referencia_client=detalls.get("referencia_client"),
+        referencia_client=detalls.get("referencia_client") or cli_codi,
         elaborat_per=detalls.get("elaborat_per"),
         finca_id=detalls.get("finca_id"),
         adreca_obra=detalls.get("adreca_obra"),
@@ -496,6 +695,9 @@ def _serialitzar_pressupost(
         desplacament_km=detalls.get("desplacament_km"),
         desplacament_preu_km=detalls.get("desplacament_preu_km"),
         desplacament_import_fix=detalls.get("desplacament_import_fix"),
+        desplacament_hores=detalls.get("desplacament_hores"),
+        desplacament_preu_hora=detalls.get("desplacament_preu_hora"),
+        vehicles_desplacaments=vehicles_slots_out,
         subtotal_brut=subtotal_brut_val,
         descompte_global_pct=dto_global_pct,
         descompte_global_import=dto_global_imp,
@@ -581,6 +783,51 @@ async def obtenir_seguent_numero_pressupost(
         "sequencia": max_seq + 1,
         "elaborat_per": elaborat_per,
     }
+
+
+@router.get("/operaris-imputacio", response_model=List[OperariImputacioOut])
+async def llistar_operaris_imputacio_pressupost(
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+    claims: Dict[str, Any] = Depends(get_current_user_claims),
+) -> List[OperariImputacioOut]:
+    """Llista operaris i tècnics actius amb el seu 'Cost/Hora Imputació d'Obra (€/h)' per imputar mà d'obra al pressupost."""
+    empresa_id_str = claims.get("empresa_id")
+    if not empresa_id_str:
+        raise HTTPException(status_code=400, detail="Falta el tenant al token.")
+    empresa_id = uuid.UUID(empresa_id_str)
+    rol_caller = str(claims.get("rol") or "").upper()
+    amagar_cost_intern = rol_caller == "ENGINYER"
+
+    stmt = (
+        select(Usuari)
+        .where(
+            Usuari.empresa_id == empresa_id,
+            Usuari.rol.in_(["OPERARI", "CAP_DE_COLLA", "ENGINYER", "BOSS"]),
+            Usuari.estat == "ACTIU",
+        )
+        .order_by(Usuari.nom.asc(), Usuari.cognoms.asc())
+    )
+    rows = (await db.execute(stmt)).scalars().all()
+    out: List[OperariImputacioOut] = []
+    for u in rows:
+        nom_complet = f"{u.nom or ''} {u.cognoms or ''}".strip() or (u.email or "Operari")
+        cost_val: Optional[float] = (
+            None
+            if amagar_cost_intern
+            else (float(u.cost_hora_eur) if u.cost_hora_eur is not None else None)
+        )
+        out.append(
+            OperariImputacioOut(
+                id=str(u.id),
+                nom=u.nom or "",
+                cognoms=u.cognoms or "",
+                nom_complet=nom_complet,
+                rol=u.rol or "OPERARI",
+                especialitat=u.especialitat,
+                cost_hora_eur=cost_val,
+            )
+        )
+    return out
 
 
 @router.get("", response_model=List[PressupostResponse])
@@ -689,8 +936,49 @@ async def crear_pressupost(
     elaborat_per = (dades.elaborat_per or "").strip() or await _resoldre_nom_elaborador(
         db, empresa_id, claims
     )
-    vehicle_nom = await _resoldre_vehicle_nom(db, empresa_id, dades.vehicle_id, dades.vehicle_nom)
-    eines_resum = await _resoldre_eines_resum(db, empresa_id, dades.eines_ids)
+    vehicles_slots = await _resoldre_vehicles_desplacaments(
+        db, empresa_id, dades.vehicles_desplacaments
+    )
+    first_slot = vehicles_slots[0] if vehicles_slots else None
+    eff_vehicle_id = dades.vehicle_id or (
+        uuid.UUID(first_slot["vehicle_id"])
+        if first_slot and first_slot.get("vehicle_id")
+        else None
+    )
+    vehicle_nom = await _resoldre_vehicle_nom(
+        db,
+        empresa_id,
+        eff_vehicle_id,
+        dades.vehicle_nom or (first_slot.get("vehicle_nom") if first_slot else None),
+    )
+    eff_desp_km = (
+        dades.desplacament_km
+        if dades.desplacament_km is not None
+        else (first_slot.get("km") if first_slot else None)
+    )
+    eff_desp_pkm = (
+        dades.desplacament_preu_km
+        if dades.desplacament_preu_km is not None
+        else (first_slot.get("preu_km") if first_slot else None)
+    )
+    eff_desp_fix = (
+        dades.desplacament_import_fix
+        if dades.desplacament_import_fix is not None
+        else (first_slot.get("import_fix") if first_slot else None)
+    )
+    eff_desp_hores = (
+        dades.desplacament_hores
+        if dades.desplacament_hores is not None
+        else (first_slot.get("hores") if first_slot else None)
+    )
+    eff_desp_phora = (
+        dades.desplacament_preu_hora
+        if dades.desplacament_preu_hora is not None
+        else (first_slot.get("preu_hora") if first_slot else None)
+    )
+    eines_ids_str, eines_resum = await _resoldre_eines_resum(
+        db, empresa_id, dades.eines_ids, dades.eines_assignades
+    )
 
     nou_pressupost = Pressupost(
         id=uuid.uuid4(),
@@ -704,23 +992,31 @@ async def crear_pressupost(
     await db.commit()
 
     client_snap = _construir_snapshot_client(client, dades)
+    ref_cli = (
+        dades.referencia_client.strip()
+        if dades.referencia_client and dades.referencia_client.strip()
+        else client_snap.get("client_codi")
+    )
     detalls: Dict[str, Any] = {
         **client_snap,
         "titol": dades.titol.strip() if dades.titol else f"Pressupost {dades.numero.strip()}",
         "descripcio": dades.descripcio.strip() if dades.descripcio else None,
         "data_pressupost": (dades.data_pressupost or date.today()).isoformat(),
         "validesa_dies": dades.validesa_dies,
-        "referencia_client": dades.referencia_client.strip() if dades.referencia_client else None,
+        "referencia_client": ref_cli,
         "elaborat_per": elaborat_per,
         "finca_id": str(dades.finca_id) if dades.finca_id else None,
         "adreca_obra": dades.adreca_obra.strip() if dades.adreca_obra else None,
-        "vehicle_id": str(dades.vehicle_id) if dades.vehicle_id else None,
+        "vehicle_id": str(eff_vehicle_id) if eff_vehicle_id else None,
         "vehicle_nom": vehicle_nom,
-        "eines_ids": [str(eid) for eid in dades.eines_ids],
+        "eines_ids": eines_ids_str,
         "eines_resum": eines_resum,
-        "desplacament_km": dades.desplacament_km,
-        "desplacament_preu_km": dades.desplacament_preu_km,
-        "desplacament_import_fix": dades.desplacament_import_fix,
+        "desplacament_km": eff_desp_km,
+        "desplacament_preu_km": eff_desp_pkm,
+        "desplacament_import_fix": eff_desp_fix,
+        "desplacament_hores": eff_desp_hores,
+        "desplacament_preu_hora": eff_desp_phora,
+        "vehicles_desplacaments": vehicles_slots,
         "linies": linies_norm,
         "subtotal_brut": subtotal_brut,
         "descompte_global_pct": dto_global_pct,
@@ -848,6 +1144,27 @@ async def editar_pressupost(
         detalls["validesa_dies"] = dades.validesa_dies
     if "finca_id" in fields_set:
         detalls["finca_id"] = str(dades.finca_id) if dades.finca_id else None
+    if "vehicles_desplacaments" in fields_set:
+        resolved_slots = await _resoldre_vehicles_desplacaments(
+            db, empresa_id, dades.vehicles_desplacaments
+        )
+        detalls["vehicles_desplacaments"] = resolved_slots
+        if resolved_slots:
+            sl0 = resolved_slots[0]
+            if "vehicle_id" not in fields_set:
+                detalls["vehicle_id"] = sl0.get("vehicle_id")
+            if "vehicle_nom" not in fields_set:
+                detalls["vehicle_nom"] = sl0.get("vehicle_nom")
+            if "desplacament_km" not in fields_set:
+                detalls["desplacament_km"] = sl0.get("km")
+            if "desplacament_preu_km" not in fields_set:
+                detalls["desplacament_preu_km"] = sl0.get("preu_km")
+            if "desplacament_import_fix" not in fields_set:
+                detalls["desplacament_import_fix"] = sl0.get("import_fix")
+            if "desplacament_hores" not in fields_set:
+                detalls["desplacament_hores"] = sl0.get("hores")
+            if "desplacament_preu_hora" not in fields_set:
+                detalls["desplacament_preu_hora"] = sl0.get("preu_hora")
     if "vehicle_id" in fields_set or "vehicle_nom" in fields_set:
         v_id = dades.vehicle_id if "vehicle_id" in fields_set else (
             uuid.UUID(detalls["vehicle_id"]) if detalls.get("vehicle_id") else None
@@ -855,15 +1172,20 @@ async def editar_pressupost(
         v_nom_in = dades.vehicle_nom if "vehicle_nom" in fields_set else None
         detalls["vehicle_id"] = str(v_id) if v_id else None
         detalls["vehicle_nom"] = await _resoldre_vehicle_nom(db, empresa_id, v_id, v_nom_in)
-    if "eines_ids" in fields_set:
-        e_ids = dades.eines_ids or []
-        detalls["eines_ids"] = [str(eid) for eid in e_ids]
-        detalls["eines_resum"] = await _resoldre_eines_resum(db, empresa_id, e_ids)
+    if "eines_ids" in fields_set or "eines_assignades" in fields_set:
+        e_ids = dades.eines_ids if "eines_ids" in fields_set and dades.eines_ids is not None else []
+        e_ids_str, e_resum = await _resoldre_eines_resum(
+            db, empresa_id, e_ids, dades.eines_assignades if "eines_assignades" in fields_set else None
+        )
+        detalls["eines_ids"] = e_ids_str
+        detalls["eines_resum"] = e_resum
 
     for num_field in (
         "desplacament_km",
         "desplacament_preu_km",
         "desplacament_import_fix",
+        "desplacament_hores",
+        "desplacament_preu_hora",
         "percentatge_acompte",
     ):
         if num_field in fields_set:
@@ -1336,12 +1658,21 @@ async def convertir_pressupost_a_ordre_treball(
 
 @router.post("/generar-ia")
 async def generar_pressupost_ia(
-    prompt: str = Query(..., description="Descripció del pressupost per a la IA"),
+    prompt: Optional[str] = Query(None, description="Descripció del pressupost per a la IA"),
     client_id: Optional[uuid.UUID] = Query(None, description="Client opcional"),
+    body: Optional[GenerarPressupostIABody] = Body(default=None),
     db: AsyncSession = Depends(get_db_with_tenant_context),
     claims: Dict[str, Any] = Depends(get_current_user_claims),
 ):
     """Genera un esborrany de pressupost via Node IA Local + Catàleg al Disc de l'Empresa (Zero Fallback / Zero Mock)."""
+    prompt_eff = ((body.prompt if body and body.prompt else prompt) or "").strip()
+    client_id_eff = (body.client_id if body and body.client_id else client_id)
+    if not prompt_eff:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Cal indicar una descripció o títol de la feina per generar la proposta amb el Copilot IA.",
+        )
+
     empresa_id_str = claims.get("empresa_id")
     if not empresa_id_str:
         raise HTTPException(status_code=400, detail="Falta el tenant al token.")
@@ -1350,6 +1681,7 @@ async def generar_pressupost_ia(
 
     res_emp = await db.execute(select(Empresa).where(Empresa.id == empresa_id))
     empresa = res_emp.scalar_one_or_none()
+    await SovereignStorageGateway.autocurar_config_tunel_empresa(db, empresa, commit=True)
     if (
         not empresa
         or not getattr(empresa, "feature_copilot_ia", False)
@@ -1363,14 +1695,55 @@ async def generar_pressupost_ia(
             },
         )
 
-    articles_disc = await SovereignStorageGateway.llegir_entitats_json(
-        db, empresa_id, "magatzem_articles"
-    )
-    ots_hist = await SovereignStorageGateway.llegir_entitats_json(
-        db, empresa_id, "ots_historic"
+    from app.api.v1.gestio.copilot import cridar_lm_studio
+    from app.services.copilot_config_service import get_strict_copilot_config
+    from app.services.vault_tunnel import (
+        VaultTunnelTimeoutError,
+        empresa_target_key,
+        vault_tunnel_broker,
     )
 
-    tokens = [t for t in re.split(r"[\s,;:.!?]+", prompt.lower()) if len(t) >= 3]
+    target_key = empresa_target_key(empresa_id)
+    if not await vault_tunnel_broker.is_online(target_key):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "NODE_IA_OFFLINE",
+                "message": "L'ordinador dedicat de l'empresa no està connectat al túnel WSS de Sevalor. Zero fallback a Hetzner.",
+            },
+        )
+
+    # Lectures del disc dedicat en paral·lel per minimitzar latència i evitar timeouts 504 de proxy
+    articles_res, ots_res, cfg_res = await asyncio.gather(
+        SovereignStorageGateway.llegir_entitats_json(db, empresa_id, "magatzem_articles"),
+        SovereignStorageGateway.llegir_entitats_json(db, empresa_id, "ots_historic"),
+        get_strict_copilot_config(db, empresa_id),
+        return_exceptions=True,
+    )
+    articles_disc: List[Dict[str, Any]] = articles_res if isinstance(articles_res, list) else []
+    ots_hist: List[Dict[str, Any]] = ots_res if isinstance(ots_res, list) else []
+    cfg_copilot = None if isinstance(cfg_res, BaseException) else cfg_res
+
+    # Si al disc encara no s'ha sincronitzat el catàleg d'articles, consultem els articles reals de BD del tenant
+    if not articles_disc:
+        db_arts = (
+            await db.execute(
+                select(Article)
+                .where(Article.empresa_id == empresa_id, Article.actiu.is_(True))
+                .limit(200)
+            )
+        ).scalars().all()
+        articles_disc = [
+            {
+                "id": str(a.id),
+                "nom": a.nom,
+                "referencia_inventari": a.referencia_inventari,
+                "preu_venda": float(a.preu_venda) if a.preu_venda is not None else None,
+            }
+            for a in db_arts
+        ]
+
+    tokens = [t for t in re.split(r"[\s,;:.!?—\-/]+", prompt_eff.lower()) if len(t) >= 3]
     linies: List[Dict[str, Any]] = []
     total_calculat = 0.0
     te_preus_reals = True
@@ -1389,7 +1762,8 @@ async def generar_pressupost_ia(
                 total_calculat += pvp
             linies.append(
                 {
-                    "seccio": "Materials",
+                    "article_id": str(art["id"]) if art.get("id") else None,
+                    "seccio": "Materials i subministraments",
                     "tipus_linia": "MATERIAL",
                     "concepte": nom_art or ref_art,
                     "quantitat": 1,
@@ -1406,36 +1780,47 @@ async def generar_pressupost_ia(
         if any(tok in f"{o.get('titol', '')} {o.get('descripcio', '')}".lower() for tok in tokens)
     ]
 
-    llm_summary: Optional[str] = None
-    from app.api.v1.gestio.copilot import cridar_lm_studio
-    from app.services.vault_tunnel import empresa_target_key, vault_tunnel_broker
+    context_str = (
+        f"Articles coincidents al catàleg del disc: {len(linies)}. "
+        f"Feines històriques similars: {len(hist_match)}."
+    )
+    budget_s = min(
+        max(12.0, float(getattr(cfg_copilot, "timeout_budget_s", None) or 20.0)),
+        22.0,
+    )
 
-    if await vault_tunnel_broker.is_online(empresa_target_key(empresa_id)):
-        context_str = (
-            f"Articles coincidents al catàleg del disc: {len(linies)}. "
-            f"Feines històriques similars: {len(hist_match)}."
-        )
+    try:
         llm_summary = await cridar_lm_studio(
-            pregunta=f"Redacta una breu justificació tècnica de pressupost per a: {prompt}",
+            pregunta=(
+                f"Redacta en català una justificació tècnica clara i concisa (màxim 5 línies) "
+                f"per incloure a la descripció del pressupost d'aquesta feina: {prompt_eff[:800]}"
+            ),
             vertical=empresa.vertical or "SEVALOR",
             context_addicional=context_str,
             empresa=empresa,
             db=db,
+            max_tokens=240,
+            timeout_s=budget_s,
+            raise_on_timeout=True,
         )
-        if llm_summary is None:
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail={
-                    "code": "NODE_IA_OFFLINE",
-                    "message": "El PC de l'empresa està connectat, però LM Studio/Ollama local no respon a 127.0.0.1:1234. Zero fallback a Hetzner.",
-                },
-            )
-    else:
+    except VaultTunnelTimeoutError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "NODE_IA_TIMEOUT",
+                "message": (
+                    f"El Copilot IA local no ha respost en {int(budget_s)} s. "
+                    "Verifica a LM Studio del PC dedicat que el model estigui carregat en memòria i no hi hagi cues."
+                ),
+            },
+        ) from exc
+
+    if llm_summary is None:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail={
                 "code": "NODE_IA_OFFLINE",
-                "message": "L'ordinador dedicat de l'empresa no està connectat al túnel WSS de Sevalor. Zero fallback a Hetzner.",
+                "message": "El PC de l'empresa està connectat, però LM Studio/Ollama local no respon a 127.0.0.1:1234. Zero fallback a Hetzner.",
             },
         )
 
@@ -1443,9 +1828,9 @@ async def generar_pressupost_ia(
         te_preus_reals = False
         linies.append(
             {
-                "seccio": "Treballs tècnics",
+                "seccio": "Mà d'obra i instal·lació",
                 "tipus_linia": "MA_OBRA",
-                "concepte": prompt.strip()[:120],
+                "concepte": prompt_eff[:120],
                 "quantitat": 1,
                 "preu_unitari": None,
                 "total": None,
@@ -1455,7 +1840,7 @@ async def generar_pressupost_ia(
     draft_id = str(uuid.uuid4())
     total_estimat = round(total_calculat, 2) if (pot_veure_preus and te_preus_reals and total_calculat > 0) else None
     draft_payload: Dict[str, Any] = {
-        "titol": f"Esborrany Pressupost Copilot — {prompt.strip()[:60]}",
+        "titol": f"Esborrany Pressupost Copilot — {prompt_eff[:60]}",
         "resum_tecnic": llm_summary,
         "feines_historiques_similars": len(hist_match),
         "linies": linies,
@@ -1469,10 +1854,10 @@ async def generar_pressupost_ia(
         item_id=f"draft_{draft_id}",
         dades={
             "id": draft_id,
-            "client_id": str(client_id) if client_id else None,
+            "client_id": str(client_id_eff) if client_id_eff else None,
             "estat": "PENDENT_AUDITORIA",
             "origen": "COPILOT_IA",
-            "prompt": prompt,
+            "prompt": prompt_eff,
             "draft": draft_payload,
             "created_at": datetime.now(timezone.utc).isoformat(),
         },

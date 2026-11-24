@@ -4,6 +4,7 @@ import base64
 import hashlib
 import hmac
 import logging
+import re
 import smtplib
 import time
 import urllib.parse
@@ -91,6 +92,146 @@ def _parse_date(val: Optional[str | date | datetime]) -> date:
     return datetime.now(timezone.utc).date()
 
 
+# Mapa oficial INE de províncies per prefix de 2 dígits del Codi Postal espanyol
+PROVINCIES_PER_PREFIX_CP: Dict[str, str] = {
+    "01": "Àlava",
+    "02": "Albacete",
+    "03": "Alacant",
+    "04": "Almeria",
+    "05": "Àvila",
+    "06": "Badajoz",
+    "07": "Illes Balears",
+    "08": "Barcelona",
+    "09": "Burgos",
+    "10": "Càceres",
+    "11": "Cadis",
+    "12": "Castelló",
+    "13": "Ciudad Real",
+    "14": "Còrdova",
+    "15": "La Corunya",
+    "16": "Conca",
+    "17": "Girona",
+    "18": "Granada",
+    "19": "Guadalajara",
+    "20": "Guipúscoa",
+    "21": "Huelva",
+    "22": "Osca",
+    "23": "Jaén",
+    "24": "Lleó",
+    "25": "Lleida",
+    "26": "La Rioja",
+    "27": "Lugo",
+    "28": "Madrid",
+    "29": "Màlaga",
+    "30": "Múrcia",
+    "31": "Navarra",
+    "32": "Ourense",
+    "33": "Astúries",
+    "34": "Palència",
+    "35": "Las Palmas",
+    "36": "Pontevedra",
+    "37": "Salamanca",
+    "38": "Santa Cruz de Tenerife",
+    "39": "Cantàbria",
+    "40": "Segòvia",
+    "41": "Sevilla",
+    "42": "Sòria",
+    "43": "Tarragona",
+    "44": "Terol",
+    "45": "Toledo",
+    "46": "València",
+    "47": "Valladolid",
+    "48": "Biscaia",
+    "49": "Zamora",
+    "50": "Saragossa",
+    "51": "Ceuta",
+    "52": "Melilla",
+}
+
+_RE_CP_ES = re.compile(r"\b((?:0[1-9]|[1-4]\d|5[0-2])\d{3})\b")
+_RE_EMAIL_FALLBACK = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+_RE_TEL_FALLBACK = re.compile(r"(?:\+?34[\s.-]*)?(?:[6789]\d{2}[\s.-]?\d{2,3}[\s.-]?\d{2,3}(?:[\s.-]?\d{2})?)")
+
+
+def parsejar_adreca_fiscal(
+    adreca_fiscal: Optional[str],
+    codi_postal: Optional[str] = None,
+    poblacio: Optional[str] = None,
+    provincia: Optional[str] = None,
+) -> Dict[str, Optional[str]]:
+    """Separa una adreça fiscal composta (ex: 'C/ Major 12, 08500 Vic (Barcelona)') en carrer, CP, població i província.
+
+    Respecta sempre els camps explícits (`codi_postal`, `poblacio`, `provincia`) quan ja venen informats.
+    """
+    raw_adr = (adreca_fiscal or "").strip()
+    cp_out = (codi_postal or "").strip() or None
+    pob_out = (poblacio or "").strip() or None
+    prov_out = (provincia or "").strip() or None
+    carrer_out: Optional[str] = raw_adr or None
+
+    if raw_adr and (not cp_out or not pob_out or not prov_out):
+        m_cp = _RE_CP_ES.search(raw_adr)
+        if m_cp:
+            cp_detectat = m_cp.group(1)
+            abans = raw_adr[: m_cp.start()].strip(" ,;-/\n\t")
+            despres = raw_adr[m_cp.end() :].strip(" ,;-/\n\t")
+
+            if not cp_out:
+                cp_out = cp_detectat
+            if abans:
+                carrer_out = abans
+
+            # Extreure província entre parèntesis si hi és: "Vic (Barcelona)"
+            m_paren = re.search(r"\(([^()]{2,60})\)\s*$", despres)
+            if m_paren:
+                if not prov_out:
+                    prov_out = m_paren.group(1).strip()
+                despres = despres[: m_paren.start()].strip(" ,;-/")
+
+            # Si queden parts separades per coma: "Valls, Tarragona" o "Valls, Tarragona, Espanya"
+            if despres:
+                segments = [s.strip() for s in re.split(r"[,;/]", despres) if s.strip()]
+                # Descartar país genèric al final
+                if len(segments) >= 2 and segments[-1].lower() in ("espanya", "españa", "spain", "catalunya"):
+                    segments.pop()
+                if segments:
+                    if not pob_out:
+                        pob_out = segments[0]
+                    if len(segments) >= 2 and not prov_out:
+                        prov_out = segments[1]
+
+    if cp_out and not prov_out:
+        prov_out = PROVINCIES_PER_PREFIX_CP.get(cp_out[:2])
+
+    return {
+        "adreca": carrer_out,
+        "codi_postal": cp_out,
+        "poblacio": pob_out,
+        "provincia": prov_out,
+    }
+
+
+def extreure_contacte_fallback(
+    email: Optional[str],
+    telefon: Optional[str],
+    dades_contacte: Optional[str],
+) -> Tuple[Optional[str], Optional[str]]:
+    """Si email o telèfon falten al client però figuren a `dades_contacte`, els recupera netament."""
+    em = (email or "").strip() or None
+    tel = (telefon or "").strip() or None
+    dades = (dades_contacte or "").strip()
+    if dades:
+        if not em:
+            m_em = _RE_EMAIL_FALLBACK.search(dades)
+            if m_em:
+                em = m_em.group(0).strip()
+        if not tel:
+            m_tel = _RE_TEL_FALLBACK.search(dades)
+            if m_tel:
+                tel = m_tel.group(0).strip()
+    return em, tel
+
+
 def _construir_cp_poblacio_provincia(
     cp: Optional[str], poblacio: Optional[str], provincia: Optional[str]
 ) -> Optional[str]:
@@ -145,6 +286,7 @@ def calcular_totals_pressupost_complet(
                 "article_id": str(raw["article_id"]) if raw.get("article_id") else None,
                 "vehicle_id": str(raw["vehicle_id"]) if raw.get("vehicle_id") else None,
                 "eina_id": str(raw["eina_id"]) if raw.get("eina_id") else None,
+                "operari_id": str(raw["operari_id"]) if raw.get("operari_id") else None,
                 "seccio": seccio_raw or None,
                 "tipus_linia": tipus_linia,
                 "concepte": concepte,
@@ -338,7 +480,10 @@ def renderitzar_html_pressupost(
     emp_contacte_parts = [p for p in (emp_tel, emp_mail) if p]
     emp_rm = (getattr(empresa, "dades_registre_mercantil", None) or "").strip() if empresa else ""
 
-    # Client (prioritza snapshot del pressupost amb fallback a fitxa del client)
+    # Client (prioritza snapshot del pressupost amb fallback a fitxa del client i parser d'adreça fiscal)
+    cli_codi = str(
+        detalls.get("client_codi") or (getattr(client, "codi", None) if client else None) or ""
+    ).strip() or None
     cli_rao = str(
         detalls.get("client_rao_social")
         or (client.rao_social if client else None)
@@ -347,24 +492,36 @@ def renderitzar_html_pressupost(
     cli_nif = str(
         detalls.get("client_nif") or (client.nif if client else None) or ""
     ).strip() or None
-    cli_adreca = str(
+    cli_adreca_raw = str(
         detalls.get("client_adreca") or (client.adreca_fiscal if client else None) or ""
     ).strip() or None
-    cli_cp = detalls.get("client_codi_postal") or (getattr(client, "codi_postal", None) if client else None)
-    cli_pob = detalls.get("client_poblacio") or (getattr(client, "poblacio", None) if client else None)
-    cli_prov = detalls.get("client_provincia") or (getattr(client, "provincia", None) if client else None)
-    cli_cp_pob = _construir_cp_poblacio_provincia(cli_cp, cli_pob, cli_prov)
+    cli_cp_raw = detalls.get("client_codi_postal") or (getattr(client, "codi_postal", None) if client else None)
+    cli_pob_raw = detalls.get("client_poblacio") or (getattr(client, "poblacio", None) if client else None)
+    cli_prov_raw = detalls.get("client_provincia") or (getattr(client, "provincia", None) if client else None)
+    parsed_adr = parsejar_adreca_fiscal(cli_adreca_raw, cli_cp_raw, cli_pob_raw, cli_prov_raw)
+    cli_adreca = parsed_adr["adreca"]
+    cli_cp_pob = _construir_cp_poblacio_provincia(
+        parsed_adr["codi_postal"], parsed_adr["poblacio"], parsed_adr["provincia"]
+    )
     cli_persona = str(
         detalls.get("client_persona_contacte")
         or (getattr(client, "persona_contacte", None) if client else None)
         or ""
     ).strip()
-    cli_email = str(
+    cli_dades_contacte = str(
+        detalls.get("client_dades_contacte")
+        or (getattr(client, "dades_contacte", None) if client else None)
+        or ""
+    ).strip() or None
+    cli_email_raw = str(
         detalls.get("client_email") or (client.email if client else None) or ""
     ).strip()
-    cli_tel = str(
+    cli_tel_raw = str(
         detalls.get("client_telefon") or (client.telefon if client else None) or ""
     ).strip()
+    cli_email_fb, cli_tel_fb = extreure_contacte_fallback(cli_email_raw, cli_tel_raw, cli_dades_contacte)
+    cli_email = cli_email_fb or ""
+    cli_tel = cli_tel_fb or ""
 
     cli_contacte_parts: List[str] = []
     if cli_persona:
@@ -378,7 +535,7 @@ def renderitzar_html_pressupost(
     data_pres_dt = _parse_date(detalls.get("data_pressupost") or pressupost.created_at)
     dies_validesa = int(detalls.get("validesa_dies") or DEFAULT_VALIDESA_DIES)
     data_validesa_dt = data_pres_dt + timedelta(days=dies_validesa)
-    referencia_client = str(detalls.get("referencia_client") or "").strip() or "—"
+    referencia_client = str(detalls.get("referencia_client") or "").strip() or cli_codi or "—"
     elaborat_per = str(detalls.get("elaborat_per") or "").strip() or emp_nom
 
     # Objecte
@@ -386,20 +543,47 @@ def renderitzar_html_pressupost(
     descripcio = str(detalls.get("descripcio") or "").strip() or None
     adreca_obra = str(detalls.get("adreca_obra") or "").strip() or None
 
-    # Recursos operatius
-    vehicle_nom = str(detalls.get("vehicle_nom") or "").strip() or None
-    desp_km = detalls.get("desplacament_km")
-    desp_preu_km = detalls.get("desplacament_preu_km")
-    desp_fix = detalls.get("desplacament_import_fix")
-    desp_parts: List[str] = []
-    if desp_km and float(desp_km) > 0:
-        if desp_preu_km and float(desp_preu_km) > 0:
-            desp_parts.append(f"{_fmt_qty(desp_km)} km ({_fmt_eur(desp_preu_km)} €/km)")
-        else:
-            desp_parts.append(f"{_fmt_qty(desp_km)} km")
-    if desp_fix and float(desp_fix) > 0:
-        desp_parts.append(f"tarifa fixa {_fmt_eur(desp_fix)} €")
-    desplacament_resum = " + ".join(desp_parts) if desp_parts else None
+    # Recursos operatius (suport multi-slot vehicle/maquinària pesant + km + hores)
+    def _format_slot_desplacament(slot: Dict[str, Any]) -> Tuple[Optional[str], Optional[str]]:
+        v_nom = str(slot.get("vehicle_nom") or "").strip() or None
+        s_km = slot.get("km") if "km" in slot else slot.get("desplacament_km")
+        s_pkm = slot.get("preu_km") if "preu_km" in slot else slot.get("desplacament_preu_km")
+        s_fix = slot.get("import_fix") if "import_fix" in slot else slot.get("desplacament_import_fix")
+        s_hores = slot.get("hores") if "hores" in slot else slot.get("desplacament_hores")
+        s_phora = slot.get("preu_hora") if "preu_hora" in slot else slot.get("desplacament_preu_hora")
+        parts: List[str] = []
+        if s_km and float(s_km) > 0:
+            if s_pkm and float(s_pkm) > 0:
+                parts.append(f"{_fmt_qty(s_km)} km ({_fmt_eur(s_pkm)} €/km)")
+            else:
+                parts.append(f"{_fmt_qty(s_km)} km")
+        if s_fix and float(s_fix) > 0:
+            parts.append(f"tarifa fixa {_fmt_eur(s_fix)} €")
+        if s_hores and float(s_hores) > 0:
+            if s_phora and float(s_phora) > 0:
+                parts.append(f"{_fmt_qty(s_hores)} h ({_fmt_eur(s_phora)} €/h)")
+            else:
+                parts.append(f"{_fmt_qty(s_hores)} h")
+        return v_nom, (" + ".join(parts) if parts else None)
+
+    raw_slots = detalls.get("vehicles_desplacaments") or []
+    vehicles_resums: List[str] = []
+    desp_resums: List[str] = []
+    if isinstance(raw_slots, list) and raw_slots:
+        for sl in raw_slots:
+            if not isinstance(sl, dict):
+                continue
+            v_n, d_r = _format_slot_desplacament(sl)
+            if v_n and d_r:
+                vehicles_resums.append(f"{v_n}: {d_r}")
+            elif v_n:
+                vehicles_resums.append(v_n)
+            elif d_r:
+                desp_resums.append(d_r)
+        vehicle_nom = " | ".join(vehicles_resums) if vehicles_resums else (str(detalls.get("vehicle_nom") or "").strip() or None)
+        desplacament_resum = " | ".join(desp_resums) if desp_resums else None
+    else:
+        vehicle_nom, desplacament_resum = _format_slot_desplacament(detalls)
 
     eines_resum_list = detalls.get("eines_resum") or []
     eines_labels: List[str] = []
@@ -407,10 +591,19 @@ def renderitzar_html_pressupost(
         if isinstance(eina, dict):
             nom_e = str(eina.get("nom") or "").strip()
             mod_e = str(eina.get("model") or "").strip()
-            if nom_e and mod_e:
-                eines_labels.append(f"{nom_e} ({mod_e})")
-            elif nom_e:
-                eines_labels.append(nom_e)
+            qt_e = eina.get("quantitat")
+            ut_e = str(eina.get("unitat") or "").strip()
+            cost_e = eina.get("cost_eur")
+            if nom_e:
+                base_lbl = f"{nom_e} ({mod_e})" if mod_e else nom_e
+                extra_e: List[str] = []
+                if qt_e and float(qt_e) > 0 and (ut_e or (cost_e and float(cost_e) > 0)):
+                    extra_e.append(f"{_fmt_qty(qt_e)} {ut_e or 'ut'}")
+                if cost_e and float(cost_e) > 0:
+                    extra_e.append(f"{_fmt_eur(cost_e)} €/{ut_e or 'ut'}")
+                if extra_e:
+                    base_lbl = f"{base_lbl} — {' · '.join(extra_e)}"
+                eines_labels.append(base_lbl)
         elif isinstance(eina, str) and eina.strip():
             eines_labels.append(eina.strip())
     eines_text = ", ".join(eines_labels) if eines_labels else None
@@ -526,11 +719,13 @@ def renderitzar_html_pressupost(
             "contacte_linia": " · ".join(emp_contacte_parts) if emp_contacte_parts else None,
         },
         client={
+            "codi": cli_codi,
             "rao_social": cli_rao,
             "nif": cli_nif,
             "adreca": cli_adreca,
             "cp_poblacio_provincia": cli_cp_pob,
             "contacte_linia": " · ".join(cli_contacte_parts) if cli_contacte_parts else None,
+            "dades_contacte": cli_dades_contacte,
         },
         meta={
             "data_pressupost": _fmt_date_ca(data_pres_dt),

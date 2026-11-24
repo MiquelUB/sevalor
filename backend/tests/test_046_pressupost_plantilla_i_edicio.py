@@ -370,3 +370,285 @@ async def test_flux_complet_pressupost_autocompletat_edicio_html_pdf_i_ot(
             assert ot_db.vehicle_id == vehicle_id
             assert ot_db.adreca == "Estació Bombament Nord, Lleida"
             assert "Trepant Percutor Hilti" in (ot_db.descripcio or "")
+
+
+def test_parsejar_adreca_fiscal_i_contacte_fallback() -> None:
+    """Verifica el desglossament automàtic d'adreça fiscal (carrer, CP, població, província) i fallback de contacte."""
+    from app.services.pressupost_service import (
+        extreure_contacte_fallback,
+        parsejar_adreca_fiscal,
+    )
+
+    p1 = parsejar_adreca_fiscal("Carrer Major, 12, 08500 Vic (Barcelona)")
+    assert p1["adreca"] == "Carrer Major, 12"
+    assert p1["codi_postal"] == "08500"
+    assert p1["poblacio"] == "Vic"
+    assert p1["provincia"] == "Barcelona"
+
+    p2 = parsejar_adreca_fiscal("Pol. Ind. Les Guixeres, nau 4, 17600 Figueres")
+    assert p2["adreca"] == "Pol. Ind. Les Guixeres, nau 4"
+    assert p2["codi_postal"] == "17600"
+    assert p2["poblacio"] == "Figueres"
+    assert p2["provincia"] == "Girona"
+
+    p3 = parsejar_adreca_fiscal("Av. Catalunya 10, 43800 Valls, Tarragona")
+    assert p3["adreca"] == "Av. Catalunya 10"
+    assert p3["codi_postal"] == "43800"
+    assert p3["poblacio"] == "Valls"
+    assert p3["provincia"] == "Tarragona"
+
+    em, tel = extreure_contacte_fallback(None, None, "Cap d'obra: 612 345 678 / obra@tanca.cat")
+    assert em == "obra@tanca.cat"
+    assert tel == "612 345 678"
+
+
+@pytest.mark.asyncio
+async def test_pressupost_codi_client_excavadora_hores_cost_eines_operaris_i_ia_json(
+    admin_session, headers, boss_token, tmp_path
+) -> None:
+    """Verifica codi client, dades contacte, multi-slot vehicle+excavadora/hores, cost eines, operaris Cost/Hora i generar-ia JSON."""
+    from app.core.security import create_access_token
+    from app.models.models import Usuari
+    from app.services.copilot_config_service import save_strict_copilot_config
+    from tests.wss_test_helpers import live_empresa_wss_context
+
+    _, empresa_id = boss_token
+    emp_uuid = uuid.UUID(empresa_id)
+    vault_token = f"svlt_p46b_{uuid.uuid4().hex[:12]}"
+    disc_root = tmp_path / "disc_pres_46b"
+    inicialitzar_arbre_carpetes_disc(disc_root)
+
+    emp = Empresa(
+        id=emp_uuid,
+        nom="Tancaments i Obra SL",
+        nif="B" + str(uuid.uuid4())[:8].upper(),
+        subdomini="pres46b-" + str(uuid.uuid4())[:5],
+        pla_subscripcio="PRO",
+        estat_pagament="ACTIU",
+        disc_dur_url=f"wss-tunnel://{emp_uuid}",
+        node_ia_url=f"wss-tunnel://{emp_uuid}",
+        vault_token=vault_token,
+        feature_copilot_ia=True,
+        node_ia_actiu=True,
+    )
+    admin_session.add(emp)
+    await admin_session.flush()
+
+    cli_id = uuid.uuid4()
+    veh_furg_id = uuid.uuid4()
+    veh_exc_id = uuid.uuid4()
+    eina_id = uuid.uuid4()
+    op_id = uuid.uuid4()
+    eng_id = uuid.uuid4()
+
+    admin_session.add_all(
+        [
+            Client(
+                id=cli_id,
+                empresa_id=emp_uuid,
+                codi="CLI-0042",
+                rao_social="Masia La Serra SL",
+                nif="B44556677",
+                adreca_fiscal="Camí de la Serra, 8, 08500 Vic",
+                codi_postal=None,
+                poblacio=None,
+                provincia=None,
+                persona_contacte="Marc Serra",
+                dades_contacte="Encarregat finca · horari 8-14h · marc@masia.cat · 699 112 233",
+                email=None,
+                telefon=None,
+            ),
+            Vehicle(
+                id=veh_furg_id,
+                empresa_id=emp_uuid,
+                matricula="1111-FUR",
+                marca="Renault",
+                model="Master",
+                tipus="THERMIC",
+            ),
+            Vehicle(
+                id=veh_exc_id,
+                empresa_id=emp_uuid,
+                matricula="E-9900-EXC",
+                marca="Kubota",
+                model="KX027 Mini-Excavadora",
+                tipus="MAQUINARIA",
+                tarifa_diaria_eur=520.0,
+            ),
+            EinaCustodia(
+                id=eina_id,
+                empresa_id=emp_uuid,
+                nom="Foradadora de Pilons Hidràulica",
+                model="FP-200",
+                numero_serie="FP-2026-01",
+            ),
+            Usuari(
+                id=op_id,
+                empresa_id=emp_uuid,
+                nif="12345678A",
+                nom="Oriol",
+                cognoms="Casals",
+                telefon="600222333",
+                rol="OPERARI",
+                estat="ACTIU",
+                especialitat="CONDUCTOR_MAQUINARIA",
+                cost_hora_eur=34.50,
+            ),
+            Usuari(
+                id=eng_id,
+                empresa_id=emp_uuid,
+                nif="87654321B",
+                nom="Laia",
+                cognoms="Vidal",
+                email="laia@tancaments.cat",
+                rol="ENGINYER",
+                estat="ACTIU",
+                cost_hora_eur=48.00,
+            ),
+        ]
+    )
+    await admin_session.commit()
+
+    await save_strict_copilot_config(
+        db=admin_session,
+        empresa_id=emp_uuid,
+        system_prompt="Ets el Copilot tècnic de pressupostos de Tancaments i Obra SL.",
+        rag_prompt="",
+        subagent_prompts={},
+    )
+
+    eng_headers = {
+        "Authorization": f"Bearer {create_access_token({'sub': str(eng_id), 'rol': 'ENGINYER', 'empresa_id': empresa_id})}",
+        "X-Empresa-ID": empresa_id,
+    }
+
+    async with live_empresa_wss_context(emp_uuid, vault_token, disc_root):
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            # 1. GET /gestio/clients ha de resoldre codi, CP, població i província des d'adreca_fiscal
+            res_cli = await client.get("/api/v1/gestio/clients", headers=headers)
+            assert res_cli.status_code == 200
+            cli_item = next(c for c in res_cli.json() if c["id"] == str(cli_id))
+            assert cli_item["codi"] == "CLI-0042"
+            assert cli_item["codi_postal"] == "08500"
+            assert cli_item["poblacio"] == "Vic"
+            assert cli_item["provincia"] == "Barcelona"
+            assert "Encarregat finca" in (cli_item["dades_contacte"] or "")
+
+            # 2. GET /gestio/pressupostos/operaris-imputacio retorna Cost/Hora Imputació d'Obra per BOSS i l'oculta a ENGINYER
+            res_ops = await client.get("/api/v1/gestio/pressupostos/operaris-imputacio", headers=headers)
+            assert res_ops.status_code == 200, res_ops.text
+            ops_boss = res_ops.json()
+            op_oriol = next(o for o in ops_boss if o["id"] == str(op_id))
+            assert op_oriol["cost_hora_eur"] == 34.50
+            assert op_oriol["nom_complet"] == "Oriol Casals"
+
+            res_ops_eng = await client.get(
+                "/api/v1/gestio/pressupostos/operaris-imputacio", headers=eng_headers
+            )
+            assert res_ops_eng.status_code == 200
+            op_oriol_eng = next(o for o in res_ops_eng.json() if o["id"] == str(op_id))
+            assert op_oriol_eng["cost_hora_eur"] is None
+
+            # 3. Crear pressupost amb multi-slot (furgoneta km + excavadora hores) + eina amb cost + mà d'obra operari
+            res_p = await client.post(
+                "/api/v1/gestio/pressupostos",
+                json={
+                    "client_id": str(cli_id),
+                    "numero": "P-2026/042",
+                    "titol": "Reparació tanca perimetral 2 km",
+                    "vehicles_desplacaments": [
+                        {
+                            "vehicle_id": str(veh_furg_id),
+                            "km": 60,
+                            "preu_km": 0.45,
+                            "import_fix": 20.0,
+                        },
+                        {
+                            "vehicle_id": str(veh_exc_id),
+                            "hores": 6.0,
+                            "preu_hora": 65.0,
+                        },
+                    ],
+                    "eines_ids": [str(eina_id)],
+                    "eines_assignades": [
+                        {
+                            "id": str(eina_id),
+                            "quantitat": 4.0,
+                            "unitat": "h",
+                            "cost_eur": 25.0,
+                        }
+                    ],
+                    "linies": [
+                        {
+                            "operari_id": str(op_id),
+                            "seccio": "Mà d'obra i instal·lació",
+                            "tipus_linia": "MA_OBRA",
+                            "concepte": "Mà d'obra — Oriol Casals",
+                            "quantitat": 8,
+                            "preu_unitari": 34.50,
+                            "tipus_iva": 21.0,
+                        },
+                        {
+                            "vehicle_id": str(veh_exc_id),
+                            "seccio": "Desplaçament i vehicle",
+                            "tipus_linia": "MAQUINARIA",
+                            "concepte": "Ús per hores (E-9900-EXC · Kubota KX027)",
+                            "quantitat": 6,
+                            "preu_unitari": 65.0,
+                            "tipus_iva": 21.0,
+                        },
+                        {
+                            "eina_id": str(eina_id),
+                            "seccio": "Eines i maquinària",
+                            "tipus_linia": "EINA",
+                            "concepte": "Ús d'eina: Foradadora de Pilons Hidràulica",
+                            "quantitat": 4,
+                            "preu_unitari": 25.0,
+                            "tipus_iva": 21.0,
+                        },
+                    ],
+                },
+                headers=headers,
+            )
+            assert res_p.status_code == 201, res_p.text
+            p_data = res_p.json()
+            assert p_data["client_codi"] == "CLI-0042"
+            assert p_data["referencia_client"] == "CLI-0042"
+            assert p_data["client_adreca"] == "Camí de la Serra, 8"
+            assert p_data["client_codi_postal"] == "08500"
+            assert p_data["client_poblacio"] == "Vic"
+            assert p_data["client_provincia"] == "Barcelona"
+            assert p_data["client_email"] == "marc@masia.cat"
+            assert p_data["client_telefon"] == "699 112 233"
+            assert "Encarregat finca" in (p_data["client_dades_contacte"] or "")
+            assert len(p_data["vehicles_desplacaments"]) == 2
+            assert p_data["vehicles_desplacaments"][1]["hores"] == 6.0
+            assert p_data["vehicles_desplacaments"][1]["preu_hora"] == 65.0
+            assert p_data["eines_resum"][0]["cost_eur"] == 25.0
+            assert p_data["eines_resum"][0]["quantitat"] == 4.0
+            assert p_data["eines_resum"][0]["unitat"] == "h"
+            assert p_data["linies"][0]["operari_id"] == str(op_id)
+
+            # 4. HTML renderitza codi client, dades contacte, excavadora hores i cost d'eina
+            res_html = await client.get(
+                f"/api/v1/gestio/pressupostos/{p_data['id']}/html", headers=headers
+            )
+            assert res_html.status_code == 200
+            assert "Codi client: CLI-0042" in res_html.text
+            assert "08500 Vic (Barcelona)" in res_html.text
+            assert "marc@masia.cat" in res_html.text
+            assert "E-9900-EXC" in res_html.text
+            assert "65,00 €/h" in res_html.text
+            assert "25,00 €/h" in res_html.text
+
+            # 5. Copilot IA accepta JSON body (amb caràcters especials i client_id) sense 504
+            res_ia = await client.post(
+                "/api/v1/gestio/pressupostos/generar-ia",
+                json={
+                    "prompt": "Reparació canvi de tanca perimetral — malla 10x10x160 i pilons acàcia 20x190, 2 Km",
+                    "client_id": str(cli_id),
+                },
+                headers=headers,
+            )
+            assert res_ia.status_code == 200, res_ia.text
+            assert res_ia.json()["status"] == "PENDENT_AUDITORIA"

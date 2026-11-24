@@ -282,10 +282,13 @@
     <div class="party">
       <h2>Client</h2>
       <p class="name">{{ client.rao_social }}</p>
-      {% if client.nif %}<p>NIF/CIF: {{ client.nif }}</p>{% endif %}
+      {% if client.codi or client.nif %}
+      <p>{% if client.codi %}Codi client: {{ client.codi }}{% endif %}{% if client.codi and client.nif %} · {% endif %}{% if client.nif %}NIF/CIF: {{ client.nif }}{% endif %}</p>
+      {% endif %}
       {% if client.adreca %}<p>{{ client.adreca }}</p>{% endif %}
       {% if client.cp_poblacio_provincia %}<p>{{ client.cp_poblacio_provincia }}</p>{% endif %}
       {% if client.contacte_linia %}<p>{{ client.contacte_linia }}</p>{% endif %}
+      {% if client.dades_contacte %}<p>{{ client.dades_contacte }}</p>{% endif %}
     </div>
   </section>
 

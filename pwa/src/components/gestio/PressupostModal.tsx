@@ -17,11 +17,13 @@ import {
   Navigation,
   Package,
   Plus,
+  RefreshCw,
   Search,
   Send,
   Sparkles,
   Trash2,
   Truck,
+  UserCheck,
   Wrench,
   X,
 } from "lucide-react";
@@ -31,6 +33,7 @@ export interface PressupostLinia {
   article_id?: string | null;
   vehicle_id?: string | null;
   eina_id?: string | null;
+  operari_id?: string | null;
   seccio?: string | null;
   tipus_linia?: string;
   concepte: string;
@@ -47,11 +50,25 @@ export interface EinaResumItem {
   nom: string;
   model?: string | null;
   numero_serie?: string | null;
+  quantitat?: number;
+  unitat?: string;
+  cost_eur?: number | null;
+}
+
+export interface VehicleDesplacamentSlotItem {
+  vehicle_id?: string | null;
+  vehicle_nom?: string | null;
+  km?: number | null;
+  preu_km?: number | null;
+  import_fix?: number | null;
+  hores?: number | null;
+  preu_hora?: number | null;
 }
 
 export interface PressupostItem {
   id: string;
   client_id: string;
+  client_codi?: string | null;
   client_nom?: string | null;
   client_rao_social?: string | null;
   client_nif?: string | null;
@@ -60,6 +77,7 @@ export interface PressupostItem {
   client_poblacio?: string | null;
   client_provincia?: string | null;
   client_persona_contacte?: string | null;
+  client_dades_contacte?: string | null;
   client_email?: string | null;
   client_telefon?: string | null;
   client_te_telegram: boolean;
@@ -81,6 +99,9 @@ export interface PressupostItem {
   desplacament_km?: number | null;
   desplacament_preu_km?: number | null;
   desplacament_import_fix?: number | null;
+  desplacament_hores?: number | null;
+  desplacament_preu_hora?: number | null;
+  vehicles_desplacaments?: VehicleDesplacamentSlotItem[];
 
   subtotal_brut?: number;
   descompte_global_pct?: number;
@@ -134,8 +155,10 @@ export interface VehicleOption {
   matricula: string;
   marca?: string | null;
   model?: string | null;
+  tipus?: string | null;
   estat_semafor?: string | null;
   cost_per_km_eur?: number | null;
+  tarifa_diaria_eur?: number | null;
 }
 
 export interface EinaOption {
@@ -144,6 +167,36 @@ export interface EinaOption {
   model?: string | null;
   numero_serie?: string | null;
   estat?: string | null;
+}
+
+export interface OperariImputacioOption {
+  id: string;
+  nom: string;
+  cognoms?: string;
+  nom_complet?: string;
+  rol?: string;
+  especialitat?: string | null;
+  cost_hora_eur?: number | null;
+}
+
+interface DesplacamentSlotState {
+  localId: string;
+  vehicle_id: string;
+  km: string;
+  preu_km: string;
+  import_fix: string;
+  hores: string;
+  preu_hora: string;
+}
+
+interface SelectedEinaConfig {
+  id: string;
+  nom: string;
+  model?: string | null;
+  numero_serie?: string | null;
+  quantitat: string;
+  unitat: "h" | "dia" | "ut";
+  cost_eur: string;
 }
 
 export interface ArticleMagatzemOption {
@@ -169,6 +222,150 @@ const SECCIONS_SUGGERIDES = [
   "Eines i maquinària",
   "Altres conceptes",
 ];
+
+const PROVINCIES_PER_PREFIX_CP: Record<string, string> = {
+  "01": "Àlava",
+  "02": "Albacete",
+  "03": "Alacant",
+  "04": "Almeria",
+  "05": "Àvila",
+  "06": "Badajoz",
+  "07": "Illes Balears",
+  "08": "Barcelona",
+  "09": "Burgos",
+  "10": "Càceres",
+  "11": "Cadis",
+  "12": "Castelló",
+  "13": "Ciudad Real",
+  "14": "Còrdova",
+  "15": "La Corunya",
+  "16": "Conca",
+  "17": "Girona",
+  "18": "Granada",
+  "19": "Guadalajara",
+  "20": "Guipúscoa",
+  "21": "Huelva",
+  "22": "Osca",
+  "23": "Jaén",
+  "24": "Lleó",
+  "25": "Lleida",
+  "26": "La Rioja",
+  "27": "Lugo",
+  "28": "Madrid",
+  "29": "Màlaga",
+  "30": "Múrcia",
+  "31": "Navarra",
+  "32": "Ourense",
+  "33": "Astúries",
+  "34": "Palència",
+  "35": "Las Palmas",
+  "36": "Pontevedra",
+  "37": "Salamanca",
+  "38": "Santa Cruz de Tenerife",
+  "39": "Cantàbria",
+  "40": "Segòvia",
+  "41": "Sevilla",
+  "42": "Sòria",
+  "43": "Tarragona",
+  "44": "Terol",
+  "45": "Toledo",
+  "46": "València",
+  "47": "Valladolid",
+  "48": "Biscaia",
+  "49": "Zamora",
+  "50": "Saragossa",
+  "51": "Ceuta",
+  "52": "Melilla",
+};
+
+function parsejarAdrecaFiscal(
+  adrecaFiscal?: string | null,
+  codiPostal?: string | null,
+  poblacio?: string | null,
+  provincia?: string | null
+): { adreca: string; codi_postal: string; poblacio: string; provincia: string } {
+  const raw = (adrecaFiscal || "").trim();
+  let cp = (codiPostal || "").trim();
+  let pob = (poblacio || "").trim();
+  let prov = (provincia || "").trim();
+  let carrer = raw;
+
+  if (raw && (!cp || !pob || !prov)) {
+    const mCp = raw.match(/\b((?:0[1-9]|[1-4]\d|5[0-2])\d{3})\b/);
+    if (mCp && mCp.index !== undefined) {
+      const cpDet = mCp[1];
+      const abans = raw.slice(0, mCp.index).replace(/^[\s,;\-/]+|[\s,;\-/]+$/g, "");
+      let despres = raw
+        .slice(mCp.index + mCp[0].length)
+        .replace(/^[\s,;\-/]+|[\s,;\-/]+$/g, "");
+
+      if (!cp) cp = cpDet;
+      if (abans) carrer = abans;
+
+      const mParen = despres.match(/\(([^()]{2,60})\)\s*$/);
+      if (mParen && mParen.index !== undefined) {
+        if (!prov) prov = mParen[1].trim();
+        despres = despres.slice(0, mParen.index).replace(/^[\s,;\-/]+|[\s,;\-/]+$/g, "");
+      }
+
+      if (despres) {
+        const segs = despres
+          .split(/[,;/]/)
+          .map((s) => s.trim())
+          .filter(Boolean);
+        if (
+          segs.length >= 2 &&
+          ["espanya", "españa", "spain", "catalunya"].includes(segs[segs.length - 1].toLowerCase())
+        ) {
+          segs.pop();
+        }
+        if (segs.length > 0 && !pob) pob = segs[0];
+        if (segs.length >= 2 && !prov) prov = segs[1];
+      }
+    }
+  }
+
+  if (cp && !prov) {
+    prov = PROVINCIES_PER_PREFIX_CP[cp.slice(0, 2)] || "";
+  }
+
+  return { adreca: carrer, codi_postal: cp, poblacio: pob, provincia: prov };
+}
+
+function extreureContacteFallback(
+  email?: string | null,
+  telefon?: string | null,
+  dadesContacte?: string | null
+): { email: string; telefon: string } {
+  let em = (email || "").trim();
+  let tel = (telefon || "").trim();
+  const dades = (dadesContacte || "").trim();
+  if (dades) {
+    if (!em) {
+      const mEm = dades.match(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/);
+      if (mEm) em = mEm[0].trim();
+    }
+    if (!tel) {
+      const mTel = dades.match(
+        /(?:\+?34[\s.-]*)?(?:[6789]\d{2}[\s.-]?\d{2,3}[\s.-]?\d{2,3}(?:[\s.-]?\d{2})?)/
+      );
+      if (mTel) tel = mTel[0].trim();
+    }
+  }
+  return { email: em, telefon: tel };
+}
+
+function nouSlotDesplacament(fixDefault = ""): DesplacamentSlotState {
+  return {
+    localId: `slot-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    vehicle_id: "",
+    km: "",
+    preu_km: "",
+    import_fix: fixDefault,
+    hores: "",
+    preu_hora: "",
+  };
+}
 
 function r2(val: number): number {
   return Math.round((val + Number.EPSILON) * 100) / 100;
@@ -757,6 +954,9 @@ export function PressupostModal({
   const [articles, setArticles] = useState<ArticleMagatzemOption[]>([]);
   const [vehicles, setVehicles] = useState<VehicleOption[]>([]);
   const [eines, setEines] = useState<EinaOption[]>([]);
+  const [operaris, setOperaris] = useState<OperariImputacioOption[]>([]);
+  const [selectedOperariId, setSelectedOperariId] = useState<string>("");
+  const [maObraHores, setMaObraHores] = useState<string>("1");
   const [barema, setBarema] = useState<BaremaConfigOption | null>(null);
   const [copilotActiu, setCopilotActiu] = useState(false);
 
@@ -773,24 +973,39 @@ export function PressupostModal({
   );
   const [formValidesa, setFormValidesa] = useState(String(editingTarget?.validesa_dies || 30));
   const [formReferenciaClient, setFormReferenciaClient] = useState(
-    editingTarget?.referencia_client || ""
+    editingTarget?.referencia_client || editingTarget?.client_codi || ""
   );
   const [formElaboratPer, setFormElaboratPer] = useState(editingTarget?.elaborat_per || "");
 
   // Dades autocompletades del client (editables per a aquest document)
+  const initialParsedAdr = parsejarAdrecaFiscal(
+    editingTarget?.client_adreca,
+    editingTarget?.client_codi_postal,
+    editingTarget?.client_poblacio,
+    editingTarget?.client_provincia
+  );
+  const initialContacteFb = extreureContacteFallback(
+    editingTarget?.client_email,
+    editingTarget?.client_telefon,
+    editingTarget?.client_dades_contacte
+  );
+  const [clientCodi, setClientCodi] = useState(editingTarget?.client_codi || "");
   const [clientRaoSocial, setClientRaoSocial] = useState(
     editingTarget?.client_rao_social || editingTarget?.client_nom || ""
   );
   const [clientNif, setClientNif] = useState(editingTarget?.client_nif || "");
-  const [clientAdreca, setClientAdreca] = useState(editingTarget?.client_adreca || "");
-  const [clientCodiPostal, setClientCodiPostal] = useState(editingTarget?.client_codi_postal || "");
-  const [clientPoblacio, setClientPoblacio] = useState(editingTarget?.client_poblacio || "");
-  const [clientProvincia, setClientProvincia] = useState(editingTarget?.client_provincia || "");
+  const [clientAdreca, setClientAdreca] = useState(initialParsedAdr.adreca);
+  const [clientCodiPostal, setClientCodiPostal] = useState(initialParsedAdr.codi_postal);
+  const [clientPoblacio, setClientPoblacio] = useState(initialParsedAdr.poblacio);
+  const [clientProvincia, setClientProvincia] = useState(initialParsedAdr.provincia);
   const [clientPersonaContacte, setClientPersonaContacte] = useState(
     editingTarget?.client_persona_contacte || ""
   );
-  const [clientEmail, setClientEmail] = useState(editingTarget?.client_email || "");
-  const [clientTelefon, setClientTelefon] = useState(editingTarget?.client_telefon || "");
+  const [clientDadesContacte, setClientDadesContacte] = useState(
+    editingTarget?.client_dades_contacte || ""
+  );
+  const [clientEmail, setClientEmail] = useState(initialContacteFb.email);
+  const [clientTelefon, setClientTelefon] = useState(initialContacteFb.telefon);
   const [clientAutofilledBadge, setClientAutofilledBadge] = useState(false);
 
   // Objecte i ubicació de la feina
@@ -799,18 +1014,78 @@ export function PressupostModal({
   const [formFincaId, setFormFincaId] = useState(editingTarget?.finca_id || "");
   const [formAdrecaObra, setFormAdrecaObra] = useState(editingTarget?.adreca_obra || "");
 
-  // Recursos operatius: Vehicle, Desplaçament, Eines
-  const [formVehicleId, setFormVehicleId] = useState(editingTarget?.vehicle_id || "");
-  const [formDesplacamentKm, setFormDesplacamentKm] = useState(
-    editingTarget?.desplacament_km != null ? String(editingTarget.desplacament_km) : ""
-  );
-  const [formDesplacamentPreuKm, setFormDesplacamentPreuKm] = useState(
-    editingTarget?.desplacament_preu_km != null ? String(editingTarget.desplacament_preu_km) : ""
-  );
-  const [formDesplacamentFix, setFormDesplacamentFix] = useState(
-    editingTarget?.desplacament_import_fix != null ? String(editingTarget.desplacament_import_fix) : ""
-  );
-  const [selectedEinaIds, setSelectedEinaIds] = useState<string[]>(editingTarget?.eines_ids || []);
+  // Recursos operatius: Multi-slot Vehicle/Maquinària/Desplaçament + Eines amb assignació de cost
+  const [desplacamentSlots, setDesplacamentSlots] = useState<DesplacamentSlotState[]>(() => {
+    if (editingTarget?.vehicles_desplacaments && editingTarget.vehicles_desplacaments.length > 0) {
+      return editingTarget.vehicles_desplacaments.map((sl, i) => ({
+        localId: `slot-init-${i}`,
+        vehicle_id: sl.vehicle_id || "",
+        km: sl.km != null ? String(sl.km) : "",
+        preu_km: sl.preu_km != null ? String(sl.preu_km) : "",
+        import_fix: sl.import_fix != null ? String(sl.import_fix) : "",
+        hores: sl.hores != null ? String(sl.hores) : "",
+        preu_hora: sl.preu_hora != null ? String(sl.preu_hora) : "",
+      }));
+    }
+    if (
+      editingTarget &&
+      (editingTarget.vehicle_id ||
+        editingTarget.desplacament_km != null ||
+        editingTarget.desplacament_preu_km != null ||
+        editingTarget.desplacament_import_fix != null ||
+        editingTarget.desplacament_hores != null ||
+        editingTarget.desplacament_preu_hora != null)
+    ) {
+      return [
+        {
+          localId: "slot-init-0",
+          vehicle_id: editingTarget.vehicle_id || "",
+          km: editingTarget.desplacament_km != null ? String(editingTarget.desplacament_km) : "",
+          preu_km:
+            editingTarget.desplacament_preu_km != null
+              ? String(editingTarget.desplacament_preu_km)
+              : "",
+          import_fix:
+            editingTarget.desplacament_import_fix != null
+              ? String(editingTarget.desplacament_import_fix)
+              : "",
+          hores:
+            editingTarget.desplacament_hores != null
+              ? String(editingTarget.desplacament_hores)
+              : "",
+          preu_hora:
+            editingTarget.desplacament_preu_hora != null
+              ? String(editingTarget.desplacament_preu_hora)
+              : "",
+        },
+      ];
+    }
+    return [nouSlotDesplacament("")];
+  });
+
+  const [selectedEines, setSelectedEines] = useState<SelectedEinaConfig[]>(() => {
+    if (editingTarget?.eines_resum && editingTarget.eines_resum.length > 0) {
+      return editingTarget.eines_resum.map((e) => ({
+        id: e.id,
+        nom: e.nom,
+        model: e.model ?? null,
+        numero_serie: e.numero_serie ?? null,
+        quantitat: e.quantitat != null ? String(e.quantitat) : "1",
+        unitat: (e.unitat === "h" || e.unitat === "dia" || e.unitat === "ut" ? e.unitat : "ut"),
+        cost_eur: e.cost_eur != null ? String(e.cost_eur) : "",
+      }));
+    }
+    if (editingTarget?.eines_ids && editingTarget.eines_ids.length > 0) {
+      return editingTarget.eines_ids.map((id) => ({
+        id,
+        nom: "Eina seleccionada",
+        quantitat: "1",
+        unitat: "ut",
+        cost_eur: "",
+      }));
+    }
+    return [];
+  });
   const [cercaEina, setCercaEina] = useState("");
   const [einaDropdownOpen, setEinaDropdownOpen] = useState(false);
   const einaBoxRef = useRef<HTMLDivElement>(null);
@@ -880,39 +1155,61 @@ export function PressupostModal({
   const [previewItem, setPreviewItem] = useState<PressupostItem | null>(null);
   const [sendItem, setSendItem] = useState<PressupostItem | null>(null);
 
-  // Helper per autocompletar totes les dades referents al client
+  // Helper per autocompletar totes les dades referents al client (incloent codi, adreça parsejada i dades contacte)
   const aplicarDadesClient = useCallback((cli: ClientOption, overwriteAdrecaObra: boolean) => {
+    const parsedAdr = parsejarAdrecaFiscal(
+      cli.adreca_fiscal,
+      cli.codi_postal,
+      cli.poblacio,
+      cli.provincia
+    );
+    const contactFb = extreureContacteFallback(cli.email, cli.telefon, cli.dades_contacte);
+
+    setClientCodi(cli.codi || "");
+    if (cli.codi) {
+      setFormReferenciaClient(cli.codi);
+    }
     setClientRaoSocial(cli.rao_social || "");
     setClientNif(cli.nif || "");
-    setClientAdreca(cli.adreca_fiscal || "");
-    setClientCodiPostal(cli.codi_postal || "");
-    setClientPoblacio(cli.poblacio || "");
-    setClientProvincia(cli.provincia || "");
+    setClientAdreca(parsedAdr.adreca);
+    setClientCodiPostal(parsedAdr.codi_postal);
+    setClientPoblacio(parsedAdr.poblacio);
+    setClientProvincia(parsedAdr.provincia);
     setClientPersonaContacte(cli.persona_contacte || "");
-    setClientEmail(cli.email || "");
-    setClientTelefon(cli.telefon || "");
+    setClientDadesContacte(cli.dades_contacte || "");
+    setClientEmail(contactFb.email);
+    setClientTelefon(contactFb.telefon);
     if (overwriteAdrecaObra) {
       const adrecaParts = [
-        cli.adreca_fiscal,
-        [cli.codi_postal, cli.poblacio].filter(Boolean).join(" "),
-        cli.provincia,
+        parsedAdr.adreca,
+        [parsedAdr.codi_postal, parsedAdr.poblacio].filter(Boolean).join(" "),
+        parsedAdr.provincia,
       ].filter((p) => p && String(p).trim());
       setFormAdrecaObra(adrecaParts.join(", "));
     }
     setClientAutofilledBadge(true);
   }, []);
 
-  // Càrrega inicial de catàlegs reals
+  // Sincronitzar clientsProp si arriba asíncronament
+  useEffect(() => {
+    if (clientsProp && clientsProp.length > 0) {
+      setClients((prev) => (prev.length === 0 ? clientsProp : prev));
+    }
+  }, [clientsProp]);
+
+  // Càrrega inicial de catàlegs reals (sempre refresca clients per garantir dades al dia)
   useEffect(() => {
     const loads: Promise<void>[] = [];
 
-    if (!clientsProp || clientsProp.length === 0) {
-      loads.push(
-        apiFetch<ClientOption[]>("/gestio/clients?limit=200")
-          .then((res) => setClients(Array.isArray(res) ? res : []))
-          .catch(() => {})
-      );
-    }
+    loads.push(
+      apiFetch<ClientOption[]>("/gestio/clients?limit=200")
+        .then((res) => {
+          if (Array.isArray(res) && res.length > 0) {
+            setClients(res);
+          }
+        })
+        .catch(() => {})
+    );
 
     loads.push(
       apiFetch<ArticleMagatzemOption[]>("/gestio/magatzem/articles?limit=200")
@@ -928,7 +1225,41 @@ export function PressupostModal({
 
     loads.push(
       apiFetch<EinaOption[]>("/gestio/magatzem/eines")
-        .then((res) => setEines(Array.isArray(res) ? res : []))
+        .then((res) => {
+          const list = Array.isArray(res) ? res : [];
+          setEines(list);
+          if (list.length > 0) {
+            const byId = new Map(list.map((e) => [e.id, e]));
+            setSelectedEines((prev) =>
+              prev.map((sel) => {
+                const found = byId.get(sel.id);
+                if (!found) return sel;
+                return {
+                  ...sel,
+                  nom: found.nom,
+                  model: found.model ?? sel.model,
+                  numero_serie: found.numero_serie ?? sel.numero_serie,
+                };
+              })
+            );
+          }
+        })
+        .catch(() => {})
+    );
+
+    loads.push(
+      apiFetch<OperariImputacioOption[]>("/gestio/pressupostos/operaris-imputacio")
+        .catch(() => apiFetch<OperariImputacioOption[]>("/gestio/operaris").catch(() => []))
+        .then((res) => {
+          const list = Array.isArray(res) ? res : [];
+          setOperaris(list);
+          if (list.length > 0) {
+            const ambCost = list.find((o) => o.cost_hora_eur != null && Number(o.cost_hora_eur) > 0);
+            if (ambCost) {
+              setSelectedOperariId((prev) => prev || ambCost.id);
+            }
+          }
+        })
         .catch(() => {})
     );
 
@@ -938,7 +1269,13 @@ export function PressupostModal({
           if (b) {
             setBarema(b);
             if (!editingTarget && b.suplement_desplacament_eur && b.suplement_desplacament_eur > 0) {
-              setFormDesplacamentFix((prev) => (prev ? prev : String(b.suplement_desplacament_eur)));
+              setDesplacamentSlots((prev) =>
+                prev.map((sl, i) =>
+                  i === 0 && !sl.import_fix
+                    ? { ...sl, import_fix: String(b.suplement_desplacament_eur) }
+                    : sl
+                )
+              );
             }
           }
         })
@@ -971,19 +1308,59 @@ export function PressupostModal({
     }
 
     Promise.all(loads);
-  }, [clientsProp, editingTarget]);
+  }, [editingTarget]);
 
-  // Si venim amb initialClientId en creació i arriben els clients, autocompletem automàticament!
+  // Autocompletat inicial (en creació) o hidratació de camps buits (en edició) un cop arriben els clients reals
   const didInitialAutofill = useRef(false);
   useEffect(() => {
-    if (!isEditing && formClientId && clients.length > 0 && !didInitialAutofill.current) {
-      const cli = clients.find((c) => c.id === formClientId);
-      if (cli) {
-        aplicarDadesClient(cli, !formAdrecaObra);
-        didInitialAutofill.current = true;
+    if (!formClientId || clients.length === 0) return;
+    const cli = clients.find((c) => c.id === formClientId);
+    if (!cli) return;
+
+    if (!isEditing && !didInitialAutofill.current) {
+      aplicarDadesClient(cli, !formAdrecaObra);
+      didInitialAutofill.current = true;
+    } else if (isEditing && !didInitialAutofill.current) {
+      const parsedAdr = parsejarAdrecaFiscal(
+        cli.adreca_fiscal,
+        cli.codi_postal,
+        cli.poblacio,
+        cli.provincia
+      );
+      const contactFb = extreureContacteFallback(cli.email, cli.telefon, cli.dades_contacte);
+      if (!clientCodi && cli.codi) setClientCodi(cli.codi);
+      if (!formReferenciaClient && cli.codi) setFormReferenciaClient(cli.codi);
+      if (!clientAdreca && parsedAdr.adreca) setClientAdreca(parsedAdr.adreca);
+      if (!clientCodiPostal && parsedAdr.codi_postal) setClientCodiPostal(parsedAdr.codi_postal);
+      if (!clientPoblacio && parsedAdr.poblacio) setClientPoblacio(parsedAdr.poblacio);
+      if (!clientProvincia && parsedAdr.provincia) setClientProvincia(parsedAdr.provincia);
+      if (!clientPersonaContacte && cli.persona_contacte) {
+        setClientPersonaContacte(cli.persona_contacte);
       }
+      if (!clientDadesContacte && cli.dades_contacte) {
+        setClientDadesContacte(cli.dades_contacte);
+      }
+      if (!clientEmail && contactFb.email) setClientEmail(contactFb.email);
+      if (!clientTelefon && contactFb.telefon) setClientTelefon(contactFb.telefon);
+      didInitialAutofill.current = true;
     }
-  }, [isEditing, formClientId, clients, formAdrecaObra, aplicarDadesClient]);
+  }, [
+    isEditing,
+    formClientId,
+    clients,
+    formAdrecaObra,
+    clientCodi,
+    formReferenciaClient,
+    clientAdreca,
+    clientCodiPostal,
+    clientPoblacio,
+    clientProvincia,
+    clientPersonaContacte,
+    clientDadesContacte,
+    clientEmail,
+    clientTelefon,
+    aplicarDadesClient,
+  ]);
 
   // Carregar finques del client seleccionat
   useEffect(() => {
@@ -1016,6 +1393,8 @@ export function PressupostModal({
     if (cli) {
       aplicarDadesClient(cli, true);
     } else {
+      setClientCodi("");
+      setFormReferenciaClient("");
       setClientRaoSocial("");
       setClientNif("");
       setClientAdreca("");
@@ -1023,6 +1402,7 @@ export function PressupostModal({
       setClientPoblacio("");
       setClientProvincia("");
       setClientPersonaContacte("");
+      setClientDadesContacte("");
       setClientEmail("");
       setClientTelefon("");
       setClientAutofilledBadge(false);
@@ -1038,12 +1418,40 @@ export function PressupostModal({
     }
   };
 
-  const handleSelectVehicle = (vehId: string) => {
-    setFormVehicleId(vehId);
+  const updateDesplacamentSlot = (
+    localId: string,
+    patch: Partial<DesplacamentSlotState>
+  ) => {
+    setDesplacamentSlots((prev) =>
+      prev.map((sl) => (sl.localId === localId ? { ...sl, ...patch } : sl))
+    );
+  };
+
+  const handleSelectVehicleSlot = (localId: string, vehId: string) => {
     const veh = vehicles.find((v) => v.id === vehId);
-    if (veh && veh.cost_per_km_eur && veh.cost_per_km_eur > 0 && !formDesplacamentPreuKm) {
-      setFormDesplacamentPreuKm(String(Number(veh.cost_per_km_eur).toFixed(2)));
-    }
+    setDesplacamentSlots((prev) =>
+      prev.map((sl) => {
+        if (sl.localId !== localId) return sl;
+        const next: DesplacamentSlotState = { ...sl, vehicle_id: vehId };
+        if (veh && veh.cost_per_km_eur && veh.cost_per_km_eur > 0 && !sl.preu_km) {
+          next.preu_km = String(Number(veh.cost_per_km_eur).toFixed(2));
+        }
+        if (
+          veh &&
+          (veh.tipus || "").toUpperCase() === "MAQUINARIA" &&
+          veh.tarifa_diaria_eur &&
+          veh.tarifa_diaria_eur > 0 &&
+          !sl.preu_hora
+        ) {
+          next.preu_hora = String(r2(Number(veh.tarifa_diaria_eur) / 8).toFixed(2));
+        }
+        return next;
+      })
+    );
+  };
+
+  const obrirNouSlotDesplacament = () => {
+    setDesplacamentSlots((prev) => [...prev, nouSlotDesplacament("")]);
   };
 
   const dataValidesaCalculada = useMemo(() => {
@@ -1065,10 +1473,15 @@ export function PressupostModal({
     return list.slice(0, 12);
   }, [articles, cercaMaterial]);
 
+  const selectedEinaIdsSet = useMemo(
+    () => new Set(selectedEines.map((e) => e.id)),
+    [selectedEines]
+  );
+
   const einesFiltrades = useMemo(() => {
     const q = cercaEina.trim().toLowerCase();
     return eines
-      .filter((e) => !selectedEinaIds.includes(e.id))
+      .filter((e) => !selectedEinaIdsSet.has(e.id))
       .filter((e) => {
         if (!q) return true;
         return (
@@ -1078,22 +1491,20 @@ export function PressupostModal({
         );
       })
       .slice(0, 10);
-  }, [eines, selectedEinaIds, cercaEina]);
+  }, [eines, selectedEinaIdsSet, cercaEina]);
 
-  const selectedVehicleObj = useMemo(
-    () => vehicles.find((v) => v.id === formVehicleId) || null,
-    [vehicles, formVehicleId]
+  const selectedOperariObj = useMemo(
+    () => operaris.find((o) => o.id === selectedOperariId) || null,
+    [operaris, selectedOperariId]
   );
 
-  const selectedEinesObjs = useMemo(() => {
-    const map = new Map(eines.map((e) => [e.id, e]));
-    return selectedEinaIds.map((id) => {
-      const found = map.get(id);
-      if (found) return found;
-      const fromSaved = editingTarget?.eines_resum?.find((er) => er.id === id);
-      return fromSaved || { id, nom: "Eina seleccionada" };
-    });
-  }, [eines, selectedEinaIds, editingTarget]);
+  const costHoraMaObraActiu = useMemo(() => {
+    if (esEnginyer) return 0;
+    if (selectedOperariObj && selectedOperariObj.cost_hora_eur != null && Number(selectedOperariObj.cost_hora_eur) > 0) {
+      return Number(selectedOperariObj.cost_hora_eur);
+    }
+    return Number(barema?.preu_hora_standard_eur || 0);
+  }, [esEnginyer, selectedOperariObj, barema]);
 
   const editorTotals = useMemo(() => {
     const basesBrutesPerIva: Record<string, number> = {};
@@ -1134,13 +1545,18 @@ export function PressupostModal({
     };
   }, [formLinies, formDescompteGlobal, formPercentatgeAcompte]);
 
-  const afegirLinia = (novaLinia: PressupostLinia) => {
+  const afegirLinies = (novesLinies: PressupostLinia[]) => {
+    if (novesLinies.length === 0) return;
     setFormLinies((prev) => {
       if (prev.length === 1 && !prev[0].concepte.trim() && Number(prev[0].preu_unitari) === 0) {
-        return [novaLinia];
+        return [...novesLinies];
       }
-      return [...prev, novaLinia];
+      return [...prev, ...novesLinies];
     });
+  };
+
+  const afegirLinia = (novaLinia: PressupostLinia) => {
+    afegirLinies([novaLinia]);
   };
 
   const afegirMaterialMagatzem = (art: ArticleMagatzemOption) => {
@@ -1161,46 +1577,81 @@ export function PressupostModal({
     setMaterialDropdownOpen(false);
   };
 
-  const afegirPartidaDesplacament = () => {
-    const km = Number(formDesplacamentKm || 0);
-    const preuKm = Number(formDesplacamentPreuKm || 0);
-    const fix = Number(formDesplacamentFix || 0);
-    const vehLabel = selectedVehicleObj
-      ? [selectedVehicleObj.matricula, selectedVehicleObj.marca, selectedVehicleObj.model]
-          .filter(Boolean)
-          .join(" · ")
+  const construirLiniesSlotDesplacament = (slot: DesplacamentSlotState): PressupostLinia[] => {
+    const km = Number(slot.km || 0);
+    const preuKm = Number(slot.preu_km || 0);
+    const fix = Number(slot.import_fix || 0);
+    const hores = Number(slot.hores || 0);
+    const preuHora = Number(slot.preu_hora || 0);
+    const vehObj = vehicles.find((v) => v.id === slot.vehicle_id) || null;
+    const vehLabel = vehObj
+      ? [vehObj.matricula, vehObj.marca, vehObj.model].filter(Boolean).join(" · ")
       : "";
 
-    if (km > 0 && preuKm > 0) {
-      afegirLinia({
-        vehicle_id: formVehicleId || null,
+    const noves: PressupostLinia[] = [];
+    const teTrajecte = km > 0 || fix > 0 || hores <= 0;
+
+    if (teTrajecte) {
+      if (km > 0 && preuKm > 0) {
+        noves.push({
+          vehicle_id: slot.vehicle_id || null,
+          seccio: "Desplaçament i vehicle",
+          tipus_linia: "DESPLACAMENT",
+          concepte: vehLabel ? `Desplaçament (${vehLabel})` : "Desplaçament i transport",
+          detall: `${km} km a ${preuKm.toFixed(2)} €/km${
+            fix > 0 ? ` (+ tarifa base ${fix.toFixed(2)} €)` : ""
+          }`,
+          quantitat: fix > 0 ? 1 : km,
+          preu_unitari: esEnginyer ? 0 : fix > 0 ? r2(km * preuKm + fix) : preuKm,
+          descompte_pct: 0,
+          tipus_iva: 21,
+        });
+      } else {
+        noves.push({
+          vehicle_id: slot.vehicle_id || null,
+          seccio: "Desplaçament i vehicle",
+          tipus_linia: "DESPLACAMENT",
+          concepte: vehLabel ? `Desplaçament (${vehLabel})` : "Desplaçament",
+          detall:
+            km > 0 ? `Trajecte previst: ${km} km` : "Desplaçament de l'equip tècnic al lloc d'obra",
+          quantitat: 1,
+          preu_unitari: esEnginyer ? 0 : Math.max(0, fix),
+          descompte_pct: 0,
+          tipus_iva: 21,
+        });
+      }
+    }
+
+    if (hores > 0) {
+      noves.push({
+        vehicle_id: slot.vehicle_id || null,
         seccio: "Desplaçament i vehicle",
-        tipus_linia: "DESPLACAMENT",
-        concepte: vehLabel ? `Desplaçament (${vehLabel})` : "Desplaçament i transport",
-        detall: `${km} km a ${preuKm.toFixed(2)} €/km${fix > 0 ? ` (+ tarifa base ${fix.toFixed(2)} €)` : ""}`,
-        quantitat: fix > 0 ? 1 : km,
-        preu_unitari: esEnginyer ? 0 : fix > 0 ? r2(km * preuKm + fix) : preuKm,
-        descompte_pct: 0,
-        tipus_iva: 21,
-      });
-    } else {
-      afegirLinia({
-        vehicle_id: formVehicleId || null,
-        seccio: "Desplaçament i vehicle",
-        tipus_linia: "DESPLACAMENT",
-        concepte: vehLabel ? `Desplaçament (${vehLabel})` : "Desplaçament",
-        detall: km > 0 ? `Trajecte previst: ${km} km` : "Desplaçament de l'equip tècnic al lloc d'obra",
-        quantitat: 1,
-        preu_unitari: esEnginyer ? 0 : Math.max(0, fix),
+        tipus_linia: "MAQUINARIA",
+        concepte: vehLabel
+          ? `Ús per hores (${vehLabel})`
+          : "Ús per hores de vehicle / maquinària",
+        detall: `${hores} h${preuHora > 0 ? ` a ${preuHora.toFixed(2)} €/h` : ""}`,
+        quantitat: hores,
+        preu_unitari: esEnginyer ? 0 : Math.max(0, preuHora),
         descompte_pct: 0,
         tipus_iva: 21,
       });
     }
-    setInfoMsg("Partida de desplaçament afegida a la taula.");
+    return noves;
+  };
+
+  const afegirPartidaDesplacamentSlot = (slot: DesplacamentSlotState) => {
+    const noves = construirLiniesSlotDesplacament(slot);
+    afegirLinies(noves);
+    setInfoMsg(
+      noves.length > 1
+        ? "Partides de trajecte i cost per hora afegides a sota de l'última línia."
+        : "Partida de desplaçament / maquinària afegida a sota de l'última línia."
+    );
   };
 
   const afegirPartidaEines = () => {
-    if (selectedEinesObjs.length === 0) {
+    if (selectedEines.length === 0) {
       afegirLinia({
         seccio: "Eines i maquinària",
         tipus_linia: "EINA",
@@ -1213,38 +1664,62 @@ export function PressupostModal({
       });
       return;
     }
-    const detallEines = selectedEinesObjs
-      .map((e) => [e.nom, e.model, e.numero_serie ? `S/N ${e.numero_serie}` : null].filter(Boolean).join(" · "))
-      .join(" | ");
-    afegirLinia({
-      eina_id: selectedEinesObjs.length === 1 ? selectedEinesObjs[0].id : null,
-      seccio: "Eines i maquinària",
-      tipus_linia: "EINA",
-      concepte:
-        selectedEinesObjs.length === 1
-          ? `Ús de maquinària: ${selectedEinesObjs[0].nom}`
-          : `Ús d'eines i maquinària (${selectedEinesObjs.length} equips)`,
-      detall: detallEines,
-      quantitat: 1,
-      preu_unitari: 0,
-      descompte_pct: 0,
-      tipus_iva: 21,
+
+    const noves: PressupostLinia[] = selectedEines.map((eina) => {
+      const qt = Math.max(0.01, Number(eina.quantitat || 1));
+      const cost = esEnginyer ? 0 : Math.max(0, Number(eina.cost_eur || 0));
+      const detParts = [
+        eina.model || null,
+        eina.numero_serie ? `S/N ${eina.numero_serie}` : null,
+        `Unitat: ${eina.unitat}`,
+      ].filter(Boolean);
+      return {
+        eina_id: eina.id.startsWith("custom-") ? null : eina.id,
+        seccio: "Eines i maquinària",
+        tipus_linia: "EINA",
+        concepte: `Ús d'eina / maquinària: ${eina.nom}`,
+        detall: detParts.join(" · "),
+        quantitat: qt,
+        preu_unitari: cost,
+        descompte_pct: 0,
+        tipus_iva: 21,
+      };
     });
-    setInfoMsg("Partida d'eines i maquinària afegida a la taula.");
+    afegirLinies(noves);
+    setInfoMsg(
+      noves.length === 1
+        ? "Partida d'eina amb cost assignat afegida a la taula."
+        : `${noves.length} partides d'eines i maquinària amb cost assignat afegides a la taula.`
+    );
   };
 
   const afegirPartidaMaObra = () => {
-    const preuHora = esEnginyer ? 0 : Number(barema?.preu_hora_standard_eur || 0);
+    const hores = Math.max(0.25, Number(maObraHores || 1));
+    const op = selectedOperariObj;
+    const nomOp = op
+      ? (op.nom_complet || `${op.nom} ${op.cognoms || ""}`.trim())
+      : "";
+    const preuHora = costHoraMaObraActiu;
     afegirLinia({
+      operari_id: op?.id || null,
       seccio: "Mà d'obra i instal·lació",
       tipus_linia: "MA_OBRA",
-      concepte: "Mà d'obra tècnica especialitzada",
-      detall: "Hores de muntatge, instal·lació i posada en marxa",
-      quantitat: 1,
+      concepte: op
+        ? `Mà d'obra — ${nomOp}${op.especialitat ? ` (${op.especialitat})` : ""}`
+        : "Mà d'obra tècnica especialitzada",
+      detall: op
+        ? `Imputació d'obra (${hores} h · Cost/h fitxa: ${preuHora.toFixed(2)} €/h)`
+        : "Hores de muntatge, instal·lació i posada en marxa",
+      quantitat: hores,
       preu_unitari: preuHora,
       descompte_pct: 0,
       tipus_iva: 21,
     });
+    setInfoMsg(
+      op
+        ? `Partida de mà d'obra de ${nomOp} (${preuHora.toFixed(2)} €/h) afegida a la taula.`
+        : "Partida de mà d'obra afegida a la taula."
+    );
   };
 
   const handlePropostaCopilot = async () => {
@@ -1257,13 +1732,12 @@ export function PressupostModal({
     setError(null);
     setInfoMsg(null);
     try {
-      const q = new URLSearchParams({ prompt: basePrompt });
-      if (formClientId) q.set("client_id", formClientId);
       const res = await apiFetch<{
         draft?: {
           titol?: string;
           resum_tecnic?: string;
           linies?: Array<{
+            article_id?: string | null;
             seccio?: string;
             tipus_linia?: string;
             concepte: string;
@@ -1272,11 +1746,18 @@ export function PressupostModal({
           }>;
         };
         missatge?: string;
-      }>(`/gestio/pressupostos/generar-ia?${q.toString()}`, { method: "POST" });
+      }>(`/gestio/pressupostos/generar-ia`, {
+        method: "POST",
+        body: JSON.stringify({
+          prompt: basePrompt,
+          client_id: formClientId || null,
+        }),
+      });
 
       if (res?.draft?.linies && res.draft.linies.length > 0) {
         setFormLinies(
           res.draft.linies.map((l) => ({
+            article_id: l.article_id || null,
             seccio: l.seccio || "Materials i subministraments",
             tipus_linia: l.tipus_linia || "ALTRE",
             concepte: l.concepte,
@@ -1287,10 +1768,15 @@ export function PressupostModal({
             tipus_iva: 21,
           }))
         );
-        if (!formDescripcio.trim() && res.draft.resum_tecnic) {
-          setFormDescripcio(res.draft.resum_tecnic);
+        if (res.draft.resum_tecnic) {
+          setFormDescripcio((prev) =>
+            prev.trim() ? prev : res.draft?.resum_tecnic || ""
+          );
         }
         setInfoMsg(res.missatge || "Partides proposades pel Copilot IA carregades per revisió HITL.");
+      } else if (res?.draft?.resum_tecnic) {
+        setFormDescripcio((prev) => (prev.trim() ? prev : res.draft?.resum_tecnic || ""));
+        setInfoMsg(res.missatge || "Justificació tècnica proposada pel Copilot IA carregada.");
       }
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "El Node IA local no ha respost.");
@@ -1316,6 +1802,7 @@ export function PressupostModal({
         article_id: l.article_id || null,
         vehicle_id: l.vehicle_id || null,
         eina_id: l.eina_id || null,
+        operari_id: l.operari_id || null,
         seccio: l.seccio?.trim() || null,
         tipus_linia: l.tipus_linia || "ALTRE",
         concepte: l.concepte.trim(),
@@ -1326,6 +1813,43 @@ export function PressupostModal({
         tipus_iva: Math.max(0, Number(l.tipus_iva ?? 21)),
       }));
 
+      const vehiclesSlotsPayload = desplacamentSlots
+        .map((sl) => {
+          const vObj = vehicles.find((v) => v.id === sl.vehicle_id) || null;
+          const vNom = vObj
+            ? [vObj.matricula, vObj.marca, vObj.model].filter(Boolean).join(" · ")
+            : null;
+          return {
+            vehicle_id: sl.vehicle_id || null,
+            vehicle_nom: vNom,
+            km: sl.km !== "" ? Number(sl.km) : null,
+            preu_km: sl.preu_km !== "" ? Number(sl.preu_km) : null,
+            import_fix: sl.import_fix !== "" ? Number(sl.import_fix) : null,
+            hores: sl.hores !== "" ? Number(sl.hores) : null,
+            preu_hora: sl.preu_hora !== "" ? Number(sl.preu_hora) : null,
+          };
+        })
+        .filter(
+          (sl) =>
+            sl.vehicle_id ||
+            sl.km != null ||
+            sl.preu_km != null ||
+            sl.import_fix != null ||
+            sl.hores != null ||
+            sl.preu_hora != null
+        );
+      const firstSlotPayload = vehiclesSlotsPayload[0] || null;
+
+      const einesAssignadesPayload = selectedEines.map((e) => ({
+        id: e.id.startsWith("custom-") ? null : e.id,
+        nom: e.nom,
+        model: e.model || null,
+        numero_serie: e.numero_serie || null,
+        quantitat: Math.max(0.01, Number(e.quantitat || 1)),
+        unitat: e.unitat || "ut",
+        cost_eur: e.cost_eur !== "" ? Math.max(0, Number(e.cost_eur)) : null,
+      }));
+
       const commonBody = {
         client_id: formClientId,
         numero: formNumero.trim(),
@@ -1333,8 +1857,9 @@ export function PressupostModal({
         descripcio: formDescripcio.trim() || null,
         data_pressupost: formDataPressupost || null,
         validesa_dies: Math.max(1, Number(formValidesa || 30)),
-        referencia_client: formReferenciaClient.trim() || null,
+        referencia_client: formReferenciaClient.trim() || clientCodi.trim() || null,
         elaborat_per: formElaboratPer.trim() || null,
+        client_codi: clientCodi.trim() || null,
         client_rao_social: clientRaoSocial.trim() || null,
         client_nif: clientNif.trim() || null,
         client_adreca: clientAdreca.trim() || null,
@@ -1342,20 +1867,23 @@ export function PressupostModal({
         client_poblacio: clientPoblacio.trim() || null,
         client_provincia: clientProvincia.trim() || null,
         client_persona_contacte: clientPersonaContacte.trim() || null,
+        client_dades_contacte: clientDadesContacte.trim() || null,
         client_email: clientEmail.trim() || null,
         client_telefon: clientTelefon.trim() || null,
         finca_id: formFincaId || null,
         adreca_obra: formAdrecaObra.trim() || null,
-        vehicle_id: formVehicleId || null,
-        vehicle_nom: selectedVehicleObj
-          ? [selectedVehicleObj.matricula, selectedVehicleObj.marca, selectedVehicleObj.model]
-              .filter(Boolean)
-              .join(" · ")
-          : null,
-        eines_ids: selectedEinaIds,
-        desplacament_km: formDesplacamentKm !== "" ? Number(formDesplacamentKm) : null,
-        desplacament_preu_km: formDesplacamentPreuKm !== "" ? Number(formDesplacamentPreuKm) : null,
-        desplacament_import_fix: formDesplacamentFix !== "" ? Number(formDesplacamentFix) : null,
+        vehicle_id: firstSlotPayload?.vehicle_id || null,
+        vehicle_nom: firstSlotPayload?.vehicle_nom || null,
+        eines_ids: selectedEines
+          .filter((e) => !e.id.startsWith("custom-"))
+          .map((e) => e.id),
+        eines_assignades: einesAssignadesPayload,
+        desplacament_km: firstSlotPayload?.km ?? null,
+        desplacament_preu_km: firstSlotPayload?.preu_km ?? null,
+        desplacament_import_fix: firstSlotPayload?.import_fix ?? null,
+        desplacament_hores: firstSlotPayload?.hores ?? null,
+        desplacament_preu_hora: firstSlotPayload?.preu_hora ?? null,
+        vehicles_desplacaments: vehiclesSlotsPayload,
         descompte_global_pct: Math.min(100, Math.max(0, Number(formDescompteGlobal || 0))),
         forma_pagament: formFormaPagament.trim() || null,
         percentatge_acompte: Math.min(100, Math.max(0, Number(formPercentatgeAcompte || 0))),
@@ -1506,6 +2034,7 @@ export function PressupostModal({
                   <option value="">Selecciona un client...</option>
                   {clients.map((c) => (
                     <option key={c.id} value={c.id}>
+                      {c.codi ? `[${c.codi}] ` : ""}
                       {c.rao_social} ({c.nif})
                     </option>
                   ))}
@@ -1579,11 +2108,42 @@ export function PressupostModal({
             {/* Fitxa autocompletada del client */}
             {formClientId && (
               <div className="rounded-lg border border-outline-variant/40 bg-surface-container-lowest p-3 space-y-2.5">
-                <div className="text-[11px] font-semibold text-on-surface-variant">
-                  Dades fiscals i de contacte del client al document (autocompletades, editables si cal)
+                <div className="flex items-center justify-between gap-2 flex-wrap">
+                  <div className="text-[11px] font-semibold text-on-surface-variant">
+                    Dades fiscals i de contacte del client al document (importades de la fitxa, editables si cal)
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const cli = clients.find((c) => c.id === formClientId);
+                      if (cli) {
+                        aplicarDadesClient(cli, true);
+                        setInfoMsg(`Dades del client ${cli.codi || cli.rao_social} reimportades de la fitxa.`);
+                      }
+                    }}
+                    className="inline-flex items-center gap-1 rounded-md border border-outline-variant/50 bg-surface px-2 py-1 text-[10px] font-semibold text-primary hover:bg-surface-container cursor-pointer"
+                  >
+                    <RefreshCw className="w-3 h-3" /> Reimportar de la fitxa
+                  </button>
                 </div>
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                <div className="grid grid-cols-1 sm:grid-cols-6 gap-2.5">
                   <div>
+                    <label className="block text-[11px] text-on-surface-variant mb-0.5">
+                      Codi client
+                    </label>
+                    <input
+                      value={clientCodi}
+                      onChange={(e) => {
+                        setClientCodi(e.target.value);
+                        if (!formReferenciaClient || formReferenciaClient === clientCodi) {
+                          setFormReferenciaClient(e.target.value);
+                        }
+                      }}
+                      placeholder="CLI-0001"
+                      className="w-full rounded-md border border-outline-variant/50 bg-surface px-2.5 py-1.5 font-mono font-semibold text-primary"
+                    />
+                  </div>
+                  <div className="sm:col-span-3">
                     <label className="block text-[11px] text-on-surface-variant mb-0.5">
                       Raó social / Nom
                     </label>
@@ -1593,7 +2153,7 @@ export function PressupostModal({
                       className="w-full rounded-md border border-outline-variant/50 bg-surface px-2.5 py-1.5 text-on-surface"
                     />
                   </div>
-                  <div>
+                  <div className="sm:col-span-2">
                     <label className="block text-[11px] text-on-surface-variant mb-0.5">
                       NIF / CIF
                     </label>
@@ -1603,7 +2163,49 @@ export function PressupostModal({
                       className="w-full rounded-md border border-outline-variant/50 bg-surface px-2.5 py-1.5 font-mono text-on-surface"
                     />
                   </div>
+
+                  <div className="sm:col-span-3">
+                    <label className="block text-[11px] text-on-surface-variant mb-0.5">
+                      Adreça fiscal
+                    </label>
+                    <input
+                      value={clientAdreca}
+                      onChange={(e) => setClientAdreca(e.target.value)}
+                      placeholder="Carrer, número, nau..."
+                      className="w-full rounded-md border border-outline-variant/50 bg-surface px-2.5 py-1.5 text-on-surface"
+                    />
+                  </div>
                   <div>
+                    <label className="block text-[11px] text-on-surface-variant mb-0.5">CP</label>
+                    <input
+                      value={clientCodiPostal}
+                      onChange={(e) => setClientCodiPostal(e.target.value)}
+                      placeholder="08001"
+                      className="w-full rounded-md border border-outline-variant/50 bg-surface px-2 py-1.5 font-mono text-on-surface"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] text-on-surface-variant mb-0.5">
+                      Població
+                    </label>
+                    <input
+                      value={clientPoblacio}
+                      onChange={(e) => setClientPoblacio(e.target.value)}
+                      className="w-full rounded-md border border-outline-variant/50 bg-surface px-2 py-1.5 text-on-surface"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] text-on-surface-variant mb-0.5">
+                      Província
+                    </label>
+                    <input
+                      value={clientProvincia}
+                      onChange={(e) => setClientProvincia(e.target.value)}
+                      className="w-full rounded-md border border-outline-variant/50 bg-surface px-2 py-1.5 text-on-surface"
+                    />
+                  </div>
+
+                  <div className="sm:col-span-2">
                     <label className="block text-[11px] text-on-surface-variant mb-0.5">
                       Persona de contacte
                     </label>
@@ -1616,46 +2218,6 @@ export function PressupostModal({
                   </div>
                   <div className="sm:col-span-2">
                     <label className="block text-[11px] text-on-surface-variant mb-0.5">
-                      Adreça fiscal
-                    </label>
-                    <input
-                      value={clientAdreca}
-                      onChange={(e) => setClientAdreca(e.target.value)}
-                      className="w-full rounded-md border border-outline-variant/50 bg-surface px-2.5 py-1.5 text-on-surface"
-                    />
-                  </div>
-                  <div className="grid grid-cols-3 gap-1.5">
-                    <div>
-                      <label className="block text-[11px] text-on-surface-variant mb-0.5">CP</label>
-                      <input
-                        value={clientCodiPostal}
-                        onChange={(e) => setClientCodiPostal(e.target.value)}
-                        className="w-full rounded-md border border-outline-variant/50 bg-surface px-2 py-1.5 text-on-surface"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[11px] text-on-surface-variant mb-0.5">
-                        Població
-                      </label>
-                      <input
-                        value={clientPoblacio}
-                        onChange={(e) => setClientPoblacio(e.target.value)}
-                        className="w-full rounded-md border border-outline-variant/50 bg-surface px-2 py-1.5 text-on-surface"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[11px] text-on-surface-variant mb-0.5">
-                        Província
-                      </label>
-                      <input
-                        value={clientProvincia}
-                        onChange={(e) => setClientProvincia(e.target.value)}
-                        className="w-full rounded-md border border-outline-variant/50 bg-surface px-2 py-1.5 text-on-surface"
-                      />
-                    </div>
-                  </div>
-                  <div>
-                    <label className="block text-[11px] text-on-surface-variant mb-0.5">
                       Email client
                     </label>
                     <input
@@ -1665,7 +2227,7 @@ export function PressupostModal({
                       className="w-full rounded-md border border-outline-variant/50 bg-surface px-2.5 py-1.5 text-on-surface"
                     />
                   </div>
-                  <div>
+                  <div className="sm:col-span-2">
                     <label className="block text-[11px] text-on-surface-variant mb-0.5">
                       Telèfon client
                     </label>
@@ -1675,8 +2237,20 @@ export function PressupostModal({
                       className="w-full rounded-md border border-outline-variant/50 bg-surface px-2.5 py-1.5 text-on-surface"
                     />
                   </div>
+
+                  <div className={finques.length > 0 ? "sm:col-span-4" : "sm:col-span-6"}>
+                    <label className="block text-[11px] text-on-surface-variant mb-0.5">
+                      Dades del contacte
+                    </label>
+                    <input
+                      value={clientDadesContacte}
+                      onChange={(e) => setClientDadesContacte(e.target.value)}
+                      placeholder="Càrrec, horari, telèfon directe o notes de contacte..."
+                      className="w-full rounded-md border border-outline-variant/50 bg-surface px-2.5 py-1.5 text-on-surface"
+                    />
+                  </div>
                   {finques.length > 0 && (
-                    <div>
+                    <div className="sm:col-span-2">
                       <label className="block text-[11px] text-on-surface-variant mb-0.5">
                         Finca / Instal·lació del client
                       </label>
@@ -1745,104 +2319,203 @@ export function PressupostModal({
             </div>
           </section>
 
-          {/* 3. RECURSOS OPERATIUS: VEHICLE, DESPLAÇAMENT I EINES */}
+          {/* 3. RECURSOS OPERATIUS: VEHICLE, MAQUINÀRIA, DESPLAÇAMENT I EINES */}
           <section className="rounded-xl border border-outline-variant/40 bg-surface p-4 space-y-3">
             <h4 className="font-bold text-on-surface flex items-center gap-2 text-xs">
               <Truck className="w-4 h-4 text-primary" />
-              Recursos previstos: vehicle, desplaçament i eines
+              Recursos previstos: vehicle, maquinària, desplaçament i eines
             </h4>
 
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-              {/* Vehicle i Desplaçament */}
+              {/* Vehicle, Maquinària i Desplaçament (Multi-slot + Trajecte + Cost per hora) */}
               <div className="rounded-lg border border-outline-variant/40 bg-surface-container-lowest p-3 space-y-2.5">
-                <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center justify-between gap-2 flex-wrap">
                   <span className="font-semibold text-on-surface flex items-center gap-1.5">
                     <Navigation className="w-3.5 h-3.5 text-primary" />
-                    Vehicle i desplaçament
+                    Vehicle, maquinària i desplaçament
                   </span>
                   <button
                     type="button"
-                    onClick={afegirPartidaDesplacament}
+                    onClick={obrirNouSlotDesplacament}
                     className="inline-flex items-center gap-1 rounded-md bg-primary/10 px-2.5 py-1 text-[11px] font-semibold text-primary hover:bg-primary/20 cursor-pointer"
                   >
                     <Plus className="w-3 h-3" /> Afegir partida desplaçament
                   </button>
                 </div>
 
-                <div>
-                  <label className="block text-[11px] text-on-surface-variant mb-1">
-                    Vehicle assignat previst
-                  </label>
-                  <select
-                    value={formVehicleId}
-                    onChange={(e) => handleSelectVehicle(e.target.value)}
-                    className="w-full rounded-lg border border-outline-variant/60 bg-surface px-2.5 py-1.5 text-on-surface"
-                  >
-                    <option value="">Cap vehicle seleccionat...</option>
-                    {vehicles.map((v) => (
-                      <option key={v.id} value={v.id}>
-                        {v.matricula}
-                        {v.marca || v.model ? ` — ${[v.marca, v.model].filter(Boolean).join(" ")}` : ""}
-                        {v.cost_per_km_eur && v.cost_per_km_eur > 0
-                          ? ` (${Number(v.cost_per_km_eur).toFixed(2)} €/km)`
-                          : ""}
-                      </option>
-                    ))}
-                  </select>
-                </div>
+                <div className="space-y-2.5">
+                  {desplacamentSlots.map((slot, slotIdx) => {
+                    const kmVal = Number(slot.km || 0);
+                    const pKmVal = Number(slot.preu_km || 0);
+                    const fixVal = Number(slot.import_fix || 0);
+                    const horesVal = Number(slot.hores || 0);
+                    const pHoraVal = Number(slot.preu_hora || 0);
+                    const subSlot = r2(
+                      (kmVal > 0 && pKmVal > 0 ? kmVal * pKmVal : 0) +
+                        Math.max(0, fixVal) +
+                        (horesVal > 0 && pHoraVal > 0 ? horesVal * pHoraVal : 0)
+                    );
+                    return (
+                      <div
+                        key={slot.localId}
+                        className="rounded-lg border border-outline-variant/40 bg-surface p-2.5 space-y-2"
+                      >
+                        <div className="flex items-center justify-between gap-2 flex-wrap">
+                          <span className="text-[11px] font-semibold text-on-surface">
+                            Vehicle / Maquinària #{slotIdx + 1}
+                            {!esEnginyer && subSlot > 0 && (
+                              <span className="ml-2 font-mono text-primary tabular-nums">
+                                ({subSlot.toFixed(2)} €)
+                              </span>
+                            )}
+                          </span>
+                          <div className="flex items-center gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => afegirPartidaDesplacamentSlot(slot)}
+                              className="inline-flex items-center gap-1 rounded-md border border-primary/40 bg-primary/10 px-2 py-0.5 text-[10px] font-semibold text-primary hover:bg-primary/20 cursor-pointer"
+                            >
+                              <Plus className="w-3 h-3" /> Passar a partides
+                            </button>
+                            {desplacamentSlots.length > 1 && (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setDesplacamentSlots((prev) =>
+                                    prev.filter((s) => s.localId !== slot.localId)
+                                  )
+                                }
+                                title="Eliminar aquest slot"
+                                className="rounded p-1 text-rose-600 hover:bg-rose-50 cursor-pointer"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            )}
+                          </div>
+                        </div>
 
-                <div className="grid grid-cols-3 gap-2">
-                  <div>
-                    <label className="block text-[11px] text-on-surface-variant mb-0.5">
-                      Distància (km)
-                    </label>
-                    <input
-                      type="number"
-                      min="0"
-                      step="0.5"
-                      value={formDesplacamentKm}
-                      onChange={(e) => setFormDesplacamentKm(e.target.value)}
-                      placeholder="Ex: 40"
-                      className="w-full rounded-md border border-outline-variant/60 bg-surface px-2 py-1.5 tabular-nums text-on-surface"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-[11px] text-on-surface-variant mb-0.5">
-                      Preu €/km
-                    </label>
-                    <input
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      value={formDesplacamentPreuKm}
-                      onChange={(e) => setFormDesplacamentPreuKm(e.target.value)}
-                      placeholder="Ex: 0.45"
-                      className="w-full rounded-md border border-outline-variant/60 bg-surface px-2 py-1.5 tabular-nums text-on-surface"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-[11px] text-on-surface-variant mb-0.5">
-                      Tarifa fixa (€)
-                    </label>
-                    <input
-                      type="number"
-                      min="0"
-                      step="0.5"
-                      value={formDesplacamentFix}
-                      onChange={(e) => setFormDesplacamentFix(e.target.value)}
-                      placeholder="Ex: 35.00"
-                      className="w-full rounded-md border border-outline-variant/60 bg-surface px-2 py-1.5 tabular-nums text-on-surface"
-                    />
-                  </div>
+                        <div>
+                          <label className="block text-[11px] text-on-surface-variant mb-0.5">
+                            Vehicle o maquinària assignada
+                          </label>
+                          <select
+                            value={slot.vehicle_id}
+                            onChange={(e) => handleSelectVehicleSlot(slot.localId, e.target.value)}
+                            className="w-full rounded-md border border-outline-variant/60 bg-surface-container-lowest px-2.5 py-1.5 text-on-surface"
+                          >
+                            <option value="">Cap vehicle / maquinària seleccionat...</option>
+                            {vehicles.map((v) => (
+                              <option key={v.id} value={v.id}>
+                                {v.matricula}
+                                {v.marca || v.model
+                                  ? ` — ${[v.marca, v.model].filter(Boolean).join(" ")}`
+                                  : ""}
+                                {v.tipus ? ` [${v.tipus}]` : ""}
+                                {!esEnginyer && v.cost_per_km_eur && v.cost_per_km_eur > 0
+                                  ? ` (${Number(v.cost_per_km_eur).toFixed(2)} €/km)`
+                                  : ""}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+
+                        <div className="grid grid-cols-3 gap-2">
+                          <div>
+                            <label className="block text-[10px] text-on-surface-variant mb-0.5">
+                              Distància (km)
+                            </label>
+                            <input
+                              type="number"
+                              min="0"
+                              step="0.5"
+                              value={slot.km}
+                              onChange={(e) =>
+                                updateDesplacamentSlot(slot.localId, { km: e.target.value })
+                              }
+                              placeholder="Ex: 40"
+                              className="w-full rounded-md border border-outline-variant/60 bg-surface-container-lowest px-2 py-1 tabular-nums text-on-surface"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-[10px] text-on-surface-variant mb-0.5">
+                              Preu €/km
+                            </label>
+                            <input
+                              type="number"
+                              min="0"
+                              step="0.01"
+                              value={slot.preu_km}
+                              onChange={(e) =>
+                                updateDesplacamentSlot(slot.localId, { preu_km: e.target.value })
+                              }
+                              placeholder="Ex: 0.45"
+                              className="w-full rounded-md border border-outline-variant/60 bg-surface-container-lowest px-2 py-1 tabular-nums text-on-surface"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-[10px] text-on-surface-variant mb-0.5">
+                              Tarifa fixa (€)
+                            </label>
+                            <input
+                              type="number"
+                              min="0"
+                              step="0.5"
+                              value={slot.import_fix}
+                              onChange={(e) =>
+                                updateDesplacamentSlot(slot.localId, { import_fix: e.target.value })
+                              }
+                              placeholder="Ex: 35.00"
+                              className="w-full rounded-md border border-outline-variant/60 bg-surface-container-lowest px-2 py-1 tabular-nums text-on-surface"
+                            />
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-2 pt-1 border-t border-outline-variant/25">
+                          <div>
+                            <label className="block text-[10px] text-on-surface-variant mb-0.5">
+                              Ús per hores (h · ex: excavadora)
+                            </label>
+                            <input
+                              type="number"
+                              min="0"
+                              step="0.5"
+                              value={slot.hores}
+                              onChange={(e) =>
+                                updateDesplacamentSlot(slot.localId, { hores: e.target.value })
+                              }
+                              placeholder="Ex: 4"
+                              className="w-full rounded-md border border-outline-variant/60 bg-surface-container-lowest px-2 py-1 tabular-nums text-on-surface"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-[10px] text-on-surface-variant mb-0.5">
+                              Cost per hora (€/h)
+                            </label>
+                            <input
+                              type="number"
+                              min="0"
+                              step="0.5"
+                              value={slot.preu_hora}
+                              onChange={(e) =>
+                                updateDesplacamentSlot(slot.localId, { preu_hora: e.target.value })
+                              }
+                              placeholder="Ex: 65.00"
+                              className="w-full rounded-md border border-outline-variant/60 bg-surface-container-lowest px-2 py-1 tabular-nums text-on-surface"
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
 
-              {/* Eines i Maquinària */}
+              {/* Eines i Maquinària (amb camp d'assignació de cost per eina) */}
               <div
                 className="rounded-lg border border-outline-variant/40 bg-surface-container-lowest p-3 space-y-2.5"
                 ref={einaBoxRef}
               >
-                <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center justify-between gap-2 flex-wrap">
                   <span className="font-semibold text-on-surface flex items-center gap-1.5">
                     <Wrench className="w-3.5 h-3.5 text-primary" />
                     Eines i maquinària prevista
@@ -1880,7 +2553,18 @@ export function PressupostModal({
                           key={eina.id}
                           type="button"
                           onClick={() => {
-                            setSelectedEinaIds((prev) => [...prev, eina.id]);
+                            setSelectedEines((prev) => [
+                              ...prev,
+                              {
+                                id: eina.id,
+                                nom: eina.nom,
+                                model: eina.model ?? null,
+                                numero_serie: eina.numero_serie ?? null,
+                                quantitat: "1",
+                                unitat: "h",
+                                cost_eur: "",
+                              },
+                            ]);
                             setCercaEina("");
                             setEinaDropdownOpen(false);
                           }}
@@ -1905,32 +2589,120 @@ export function PressupostModal({
                   )}
                 </div>
 
-                {selectedEinesObjs.length > 0 ? (
-                  <div className="flex flex-wrap gap-1.5 pt-1">
-                    {selectedEinesObjs.map((eina) => (
-                      <span
-                        key={eina.id}
-                        className="inline-flex items-center gap-1 rounded-full bg-primary/10 text-primary px-2.5 py-1 text-[11px] font-medium"
-                      >
-                        <span>
-                          {eina.nom}
-                          {eina.model ? ` · ${eina.model}` : ""}
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() =>
-                            setSelectedEinaIds((prev) => prev.filter((id) => id !== eina.id))
-                          }
-                          className="hover:text-rose-600 cursor-pointer"
+                {selectedEines.length > 0 ? (
+                  <div className="space-y-2 pt-1">
+                    {selectedEines.map((eina) => {
+                      const subEina = r2(
+                        Math.max(0, Number(eina.quantitat || 0)) *
+                          Math.max(0, Number(eina.cost_eur || 0))
+                      );
+                      return (
+                        <div
+                          key={eina.id}
+                          className="rounded-lg border border-outline-variant/40 bg-surface p-2 space-y-1.5"
                         >
-                          <X className="w-3 h-3" />
-                        </button>
-                      </span>
-                    ))}
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="min-w-0">
+                              <span className="font-semibold text-on-surface text-[11px] block truncate">
+                                {eina.nom}
+                                {eina.model ? ` · ${eina.model}` : ""}
+                              </span>
+                              {eina.numero_serie && (
+                                <span className="font-mono text-[10px] text-on-surface-variant">
+                                  S/N {eina.numero_serie}
+                                </span>
+                              )}
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setSelectedEines((prev) => prev.filter((item) => item.id !== eina.id))
+                              }
+                              className="p-1 text-on-surface-variant hover:text-rose-600 cursor-pointer shrink-0"
+                              title="Treure eina"
+                            >
+                              <X className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                          <div className="grid grid-cols-12 gap-1.5 items-end">
+                            <div className="col-span-3">
+                              <label className="block text-[10px] text-on-surface-variant mb-0.5">
+                                Quantitat
+                              </label>
+                              <input
+                                type="number"
+                                min="0.01"
+                                step="0.5"
+                                value={eina.quantitat}
+                                onChange={(e) =>
+                                  setSelectedEines((prev) =>
+                                    prev.map((it) =>
+                                      it.id === eina.id ? { ...it, quantitat: e.target.value } : it
+                                    )
+                                  )
+                                }
+                                className="w-full rounded-md border border-outline-variant/60 bg-surface-container-lowest px-2 py-1 tabular-nums text-on-surface"
+                              />
+                            </div>
+                            <div className="col-span-3">
+                              <label className="block text-[10px] text-on-surface-variant mb-0.5">
+                                Unitat
+                              </label>
+                              <select
+                                value={eina.unitat}
+                                onChange={(e) =>
+                                  setSelectedEines((prev) =>
+                                    prev.map((it) =>
+                                      it.id === eina.id
+                                        ? { ...it, unitat: e.target.value as "h" | "dia" | "ut" }
+                                        : it
+                                    )
+                                  )
+                                }
+                                className="w-full rounded-md border border-outline-variant/60 bg-surface-container-lowest px-1.5 py-1 text-on-surface"
+                              >
+                                <option value="h">Hores (h)</option>
+                                <option value="dia">Dies (dia)</option>
+                                <option value="ut">Unitats (ut)</option>
+                              </select>
+                            </div>
+                            {!esEnginyer && (
+                              <>
+                                <div className="col-span-4">
+                                  <label className="block text-[10px] text-on-surface-variant mb-0.5">
+                                    Cost assignat (€/{eina.unitat})
+                                  </label>
+                                  <input
+                                    type="number"
+                                    min="0"
+                                    step="0.5"
+                                    value={eina.cost_eur}
+                                    onChange={(e) =>
+                                      setSelectedEines((prev) =>
+                                        prev.map((it) =>
+                                          it.id === eina.id
+                                            ? { ...it, cost_eur: e.target.value }
+                                            : it
+                                        )
+                                      )
+                                    }
+                                    placeholder="Ex: 25.00"
+                                    className="w-full rounded-md border border-outline-variant/60 bg-surface-container-lowest px-2 py-1 tabular-nums text-on-surface"
+                                  />
+                                </div>
+                                <div className="col-span-2 text-right font-mono font-semibold text-[11px] text-primary tabular-nums pb-1">
+                                  {subEina.toFixed(2)} €
+                                </div>
+                              </>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
                 ) : (
                   <p className="text-[11px] text-on-surface-variant">
-                    Selecciona eines de l&apos;inventari per incloure-les al document i traspassar-les a l&apos;OT.
+                    Selecciona eines de l&apos;inventari, assigna&apos;ls el cost (per hora, dia o unitat) i prem «Afegir partida eines».
                   </p>
                 )}
               </div>
@@ -1946,16 +2718,6 @@ export function PressupostModal({
                   Partides del pressupost
                 </span>
                 <div className="flex items-center gap-2 flex-wrap">
-                  <button
-                    type="button"
-                    onClick={afegirPartidaMaObra}
-                    className="inline-flex items-center gap-1 rounded-lg border border-outline-variant/60 bg-surface-container-lowest px-2.5 py-1.5 font-semibold text-on-surface hover:bg-surface-container cursor-pointer"
-                  >
-                    <Plus className="w-3.5 h-3.5 text-primary" /> Mà d&apos;obra
-                    {!esEnginyer && barema?.preu_hora_standard_eur
-                      ? ` (${Number(barema.preu_hora_standard_eur).toFixed(2)} €/h)`
-                      : ""}
-                  </button>
                   {copilotActiu && (
                     <button
                       type="button"
@@ -1989,6 +2751,63 @@ export function PressupostModal({
                     <Plus className="w-3.5 h-3.5" /> Afegir línia
                   </button>
                 </div>
+              </div>
+
+              {/* Selector de Mà d'obra llegint Cost/Hora Imputació d'Obra (€/h) de la fitxa de l'operari o tècnic */}
+              <div className="flex flex-col sm:flex-row items-stretch sm:items-end gap-2 rounded-lg border border-outline-variant/40 bg-surface-container-lowest p-2.5">
+                <div className="flex-1 min-w-0">
+                  <label className="block text-[10px] font-semibold text-on-surface-variant mb-0.5 flex items-center gap-1">
+                    <UserCheck className="w-3 h-3 text-primary" />
+                    Mà d&apos;obra · Operari o tècnic (Cost/Hora Imputació d&apos;Obra)
+                  </label>
+                  <select
+                    value={selectedOperariId}
+                    onChange={(e) => setSelectedOperariId(e.target.value)}
+                    className="w-full rounded-md border border-outline-variant/60 bg-surface px-2.5 py-1.5 text-on-surface"
+                  >
+                    <option value="">
+                      Tarifa general
+                      {!esEnginyer && barema?.preu_hora_standard_eur
+                        ? ` (${Number(barema.preu_hora_standard_eur).toFixed(2)} €/h barema)`
+                        : ""}
+                    </option>
+                    {operaris.map((op) => {
+                      const nomOp = op.nom_complet || `${op.nom} ${op.cognoms || ""}`.trim();
+                      return (
+                        <option key={op.id} value={op.id}>
+                          {nomOp}
+                          {op.especialitat ? ` · ${op.especialitat}` : ""}
+                          {!esEnginyer && op.cost_hora_eur != null
+                            ? ` — ${Number(op.cost_hora_eur).toFixed(2)} €/h`
+                            : ""}
+                        </option>
+                      );
+                    })}
+                  </select>
+                </div>
+                <div className="w-full sm:w-24">
+                  <label className="block text-[10px] font-semibold text-on-surface-variant mb-0.5">
+                    Hores (h)
+                  </label>
+                  <input
+                    type="number"
+                    min="0.25"
+                    step="0.5"
+                    value={maObraHores}
+                    onChange={(e) => setMaObraHores(e.target.value)}
+                    className="w-full rounded-md border border-outline-variant/60 bg-surface px-2.5 py-1.5 tabular-nums text-on-surface"
+                  />
+                </div>
+                <button
+                  type="button"
+                  onClick={afegirPartidaMaObra}
+                  className="inline-flex items-center justify-center gap-1 rounded-lg border border-outline-variant/60 bg-surface px-3 py-1.5 font-semibold text-on-surface hover:bg-surface-container cursor-pointer shrink-0"
+                >
+                  <Plus className="w-3.5 h-3.5 text-primary" /> Mà d&apos;obra
+                  {!esEnginyer && costHoraMaObraActiu > 0
+                    ? ` (${costHoraMaObraActiu.toFixed(2)} €/h)`
+                    : ""}
+                </button>
               </div>
 
               {articles.length > 0 && (

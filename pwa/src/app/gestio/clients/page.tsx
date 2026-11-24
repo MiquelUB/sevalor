@@ -33,6 +33,9 @@ interface Client {
   telefon?: string;
   email?: string;
   adreca_fiscal?: string;
+  codi_postal?: string;
+  poblacio?: string;
+  provincia?: string;
   web?: string;
   persona_contacte?: string;
   dades_contacte?: string;
@@ -109,6 +112,9 @@ export default function GestioClientsPage() {
     telefon: "",
     email: "",
     adreca_fiscal: "",
+    codi_postal: "",
+    poblacio: "",
+    provincia: "",
     web: "",
     persona_contacte: "",
     dades_contacte: "",
@@ -212,6 +218,9 @@ export default function GestioClientsPage() {
           telefon: clientEditant.telefon || null,
           email: clientEditant.email || null,
           adreca_fiscal: clientEditant.adreca_fiscal || null,
+          codi_postal: clientEditant.codi_postal || null,
+          poblacio: clientEditant.poblacio || null,
+          provincia: clientEditant.provincia || null,
           web: clientEditant.web || null,
           persona_contacte: clientEditant.persona_contacte || null,
           dades_contacte: clientEditant.dades_contacte || null,
@@ -299,6 +308,9 @@ export default function GestioClientsPage() {
         telefon: "",
         email: "",
         adreca_fiscal: "",
+        codi_postal: "",
+        poblacio: "",
+        provincia: "",
         web: "",
         persona_contacte: "",
         dades_contacte: "",
@@ -937,11 +949,50 @@ export default function GestioClientsPage() {
                 </label>
                 <input
                   type="text"
-                  placeholder="Carrer Major, 12, 08001 Barcelona"
+                  placeholder="Carrer Major, 12"
                   value={nouClient.adreca_fiscal}
                   onChange={(e) => setNouClient({ ...nouClient, adreca_fiscal: e.target.value })}
                   className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs"
                 />
+              </div>
+
+              <div className="grid grid-cols-3 gap-2">
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-400 mb-1">
+                    Codi Postal
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="08001"
+                    value={nouClient.codi_postal}
+                    onChange={(e) => setNouClient({ ...nouClient, codi_postal: e.target.value })}
+                    className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-400 mb-1">
+                    Població
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="Vic"
+                    value={nouClient.poblacio}
+                    onChange={(e) => setNouClient({ ...nouClient, poblacio: e.target.value })}
+                    className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-400 mb-1">
+                    Província
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="Barcelona"
+                    value={nouClient.provincia}
+                    onChange={(e) => setNouClient({ ...nouClient, provincia: e.target.value })}
+                    className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs"
+                  />
+                </div>
               </div>
 
               <div className="grid grid-cols-2 gap-3">
@@ -1114,6 +1165,35 @@ export default function GestioClientsPage() {
                   onChange={(e) => setClientEditant({ ...clientEditant, adreca_fiscal: e.target.value })}
                   className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs"
                 />
+              </div>
+              <div className="grid grid-cols-3 gap-2">
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-400 mb-1">Codi Postal</label>
+                  <input
+                    type="text"
+                    value={clientEditant.codi_postal || ""}
+                    onChange={(e) => setClientEditant({ ...clientEditant, codi_postal: e.target.value })}
+                    className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-400 mb-1">Població</label>
+                  <input
+                    type="text"
+                    value={clientEditant.poblacio || ""}
+                    onChange={(e) => setClientEditant({ ...clientEditant, poblacio: e.target.value })}
+                    className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-400 mb-1">Província</label>
+                  <input
+                    type="text"
+                    value={clientEditant.provincia || ""}
+                    onChange={(e) => setClientEditant({ ...clientEditant, provincia: e.target.value })}
+                    className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs"
+                  />
+                </div>
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>

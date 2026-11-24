@@ -437,12 +437,12 @@ export function CrearOTModal({ onClose, onSuccess, initialClientId }: CrearOTMod
 
     setCopilotLoading(true);
     try {
-      const query = new URLSearchParams({ prompt: basePrompt });
-      if (formData.client_id) {
-        query.set("client_id", formData.client_id);
-      }
-      const res = await apiFetch<any>(`/gestio/pressupostos/generar-ia?${query.toString()}`, {
+      const res = await apiFetch<any>(`/gestio/pressupostos/generar-ia`, {
         method: "POST",
+        body: JSON.stringify({
+          prompt: basePrompt,
+          client_id: formData.client_id || null,
+        }),
       });
       if (res?.draft) {
         setIaDraft({

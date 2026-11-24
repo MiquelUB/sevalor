@@ -16,6 +16,7 @@ from app.core.security import require_roles
 from app.models.models import Client, Finca
 from app.services.codis_service import generar_seguent_codi
 from app.services.csv_service import CsvImportResult, generate_csv_content
+from app.services.pressupost_service import parsejar_adreca_fiscal
 from app.services.sovereign_storage import SovereignStorageGateway
 from app.services.subagents.dispatcher import copilot_dispatcher
 
@@ -43,8 +44,11 @@ def _resolve_emp_uuid(request: Request, claims: Optional[dict[str, Any]] = None)
 
 
 def _serialitzar_client(c: Client, rol: str) -> dict[str, Any]:
-    """Serialitza Client aplicant Principi VI (oculta IBAN complet a ENGINYER)."""
+    """Serialitza Client aplicant Principi VI (oculta IBAN complet a ENGINYER) i resolent CP/població/província."""
     is_enginyer = rol.upper() == "ENGINYER"
+    parsed_adr = parsejar_adreca_fiscal(
+        c.adreca_fiscal, c.codi_postal, c.poblacio, c.provincia
+    )
     return {
         "id": c.id,
         "codi": c.codi,
@@ -53,9 +57,9 @@ def _serialitzar_client(c: Client, rol: str) -> dict[str, Any]:
         "telefon": c.telefon,
         "email": c.email,
         "adreca_fiscal": c.adreca_fiscal,
-        "codi_postal": c.codi_postal,
-        "poblacio": c.poblacio,
-        "provincia": c.provincia,
+        "codi_postal": c.codi_postal or parsed_adr["codi_postal"],
+        "poblacio": c.poblacio or parsed_adr["poblacio"],
+        "provincia": c.provincia or parsed_adr["provincia"],
         "web": c.web,
         "persona_contacte": c.persona_contacte,
         "dades_contacte": c.dades_contacte,
@@ -214,6 +218,9 @@ async def alta_client(
         )
 
     codi_auto = await generar_seguent_codi(db, Client, emp_uuid, "CLI")
+    parsed_adr = parsejar_adreca_fiscal(
+        client.adreca_fiscal, client.codi_postal, client.poblacio, client.provincia
+    )
 
     nou_client = Client(
         empresa_id=emp_uuid,
@@ -223,9 +230,9 @@ async def alta_client(
         telefon=client.telefon,
         email=client.email,
         adreca_fiscal=client.adreca_fiscal,
-        codi_postal=client.codi_postal,
-        poblacio=client.poblacio,
-        provincia=client.provincia,
+        codi_postal=client.codi_postal or parsed_adr["codi_postal"],
+        poblacio=client.poblacio or parsed_adr["poblacio"],
+        provincia=client.provincia or parsed_adr["provincia"],
         web=client.web,
         persona_contacte=client.persona_contacte,
         dades_contacte=client.dades_contacte,
@@ -249,6 +256,9 @@ async def alta_client(
                 "telefon": nou_client.telefon,
                 "email": nou_client.email,
                 "adreca_fiscal": nou_client.adreca_fiscal,
+                "codi_postal": nou_client.codi_postal,
+                "poblacio": nou_client.poblacio,
+                "provincia": nou_client.provincia,
                 "web": nou_client.web,
                 "persona_contacte": nou_client.persona_contacte,
                 "dades_contacte": nou_client.dades_contacte,
@@ -296,17 +306,26 @@ async def modificar_client(
             raise HTTPException(status_code=400, detail="Ja existeix un altre client amb aquest NIF")
 
     # El codi del client s'assigna automàticament i no s'altera manualment
+    parsed_adr = parsejar_adreca_fiscal(
+        payload.adreca_fiscal,
+        payload.codi_postal if payload.codi_postal is not None else client_db.codi_postal,
+        payload.poblacio if payload.poblacio is not None else client_db.poblacio,
+        payload.provincia if payload.provincia is not None else client_db.provincia,
+    )
     client_db.rao_social = payload.rao_social
     client_db.nif = payload.nif
     client_db.telefon = payload.telefon
     client_db.email = payload.email
     client_db.adreca_fiscal = payload.adreca_fiscal
-    if payload.codi_postal is not None:
-        client_db.codi_postal = payload.codi_postal
-    if payload.poblacio is not None:
-        client_db.poblacio = payload.poblacio
-    if payload.provincia is not None:
-        client_db.provincia = payload.provincia
+    client_db.codi_postal = (
+        payload.codi_postal if payload.codi_postal is not None else parsed_adr["codi_postal"]
+    )
+    client_db.poblacio = (
+        payload.poblacio if payload.poblacio is not None else parsed_adr["poblacio"]
+    )
+    client_db.provincia = (
+        payload.provincia if payload.provincia is not None else parsed_adr["provincia"]
+    )
     client_db.web = payload.web
     client_db.persona_contacte = payload.persona_contacte
     client_db.dades_contacte = payload.dades_contacte
@@ -329,6 +348,9 @@ async def modificar_client(
                 "telefon": client_db.telefon,
                 "email": client_db.email,
                 "adreca_fiscal": client_db.adreca_fiscal,
+                "codi_postal": client_db.codi_postal,
+                "poblacio": client_db.poblacio,
+                "provincia": client_db.provincia,
                 "web": client_db.web,
                 "persona_contacte": client_db.persona_contacte,
                 "dades_contacte": client_db.dades_contacte,
@@ -766,21 +788,7 @@ async def obtenir_fitxa_360_client(
         dies_analitzats=365,
     )
 
-    client_resp = ClientResponse(
-        id=client.id,
-        codi=client.codi,
-        rao_social=client.rao_social,
-        nif=client.nif,
-        telefon=client.telefon,
-        email=client.email,
-        adreca_fiscal=client.adreca_fiscal,
-        web=client.web,
-        persona_contacte=client.persona_contacte,
-        dades_contacte=client.dades_contacte,
-        iban=None if is_enginyer else client.iban_xifrat_simetric,
-        estat_canal_telegram=client.estat_canal_telegram,
-        actiu=client.actiu,
-    )
+    client_resp = ClientResponse(**_serialitzar_client(client, rol))
 
     return Fitxa360Response(
         client=client_resp,

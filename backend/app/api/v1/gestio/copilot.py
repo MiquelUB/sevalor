@@ -99,6 +99,41 @@ async def execute_tool_get_vehicle_info(
     return await copilot_dispatcher.subagent_flota.tool_get_vehicle_info(db, empresa_id, matricula)
 
 
+async def _resoldre_model_actiu_tunel(target_key: str, configured_model: str) -> str:
+    """Resol el model carregat en viu a LM Studio/Ollama via estat del túnel per evitar 404 o recàrregues lentes."""
+    if configured_model and configured_model.strip():
+        return configured_model.strip()
+    try:
+        st = await vault_tunnel_broker.get_status(target_key)
+        health = st.get("health") if isinstance(st, dict) else {}
+        models = health.get("models") if isinstance(health, dict) else []
+        if isinstance(models, list) and models:
+            chat_models = [str(m) for m in models if m and "embed" not in str(m).lower()]
+            if chat_models:
+                return chat_models[0]
+            return str(models[0])
+    except Exception:
+        pass
+    try:
+        m_res = await vault_tunnel_broker.call_llm_models(target_key, timeout=3.0)
+        loaded = [
+            str(m.get("id"))
+            for m in m_res.get("data", [])
+            if isinstance(m, dict) and m.get("id")
+        ]
+        chat_m = [m for m in loaded if "embed" not in m.lower()]
+        if chat_m:
+            return chat_m[0]
+        if loaded:
+            return loaded[0]
+    except Exception:
+        pass
+    return str(
+        getattr(settings, "LM_STUDIO_MODEL", None)
+        or getattr(settings, "LMSTUDIO_MODEL", "qwen2.5-vl-7b-instruct")
+    )
+
+
 async def cridar_lm_studio(
     pregunta: str,
     vertical: str = "SEVALOR",
@@ -107,6 +142,10 @@ async def cridar_lm_studio(
     node_ia_url: Optional[str] = None,
     vault_token: Optional[str] = None,
     db: Optional[AsyncSession] = None,
+    *,
+    max_tokens: int = 280,
+    timeout_s: Optional[float] = None,
+    raise_on_timeout: bool = False,
 ) -> Optional[str]:
     """Cridar el node d'IA local dedicat de l'empresa via Túnel WSS Únic amb prompt estricte per tenant."""
     emp_target_id: Optional[str] = None
@@ -129,6 +168,7 @@ async def cridar_lm_studio(
         return None
 
     configured_model = ""
+    effective_timeout = 22.0
     if db is not None:
         cfg = await get_strict_copilot_config(db, uuid.UUID(emp_target_id))
         if not cfg or not (cfg.system_prompt or "").strip():
@@ -140,20 +180,20 @@ async def cridar_lm_studio(
         if (cfg.rag_prompt or "").strip():
             system_prompt += f"\n\nINSTRUCCIONS RAG:\n{cfg.rag_prompt.strip()}"
         configured_model = (cfg.effective_chat_model or "").strip()
+        effective_timeout = min(max(12.0, float(cfg.timeout_budget_s or 20.0)), 24.0)
     else:
         raise HTTPException(
             status_code=422,
             detail="COPILOT_NOT_CONFIGURED: Cal sessió de BD per carregar la configuració aïllada del Copilot.",
         )
 
+    if timeout_s is not None:
+        effective_timeout = min(max(5.0, float(timeout_s)), 24.0)
+
     if context_addicional:
         system_prompt += f"\nContext addicional:\n{context_addicional}"
 
-    model_name = (
-        configured_model
-        or getattr(settings, "LM_STUDIO_MODEL", None)
-        or getattr(settings, "LMSTUDIO_MODEL", "qwen2.5-vl-7b-instruct")
-    )
+    model_name = await _resoldre_model_actiu_tunel(target_key, configured_model)
     payload: Dict[str, Any] = {
         "model": model_name,
         "messages": [
@@ -161,15 +201,44 @@ async def cridar_lm_studio(
             {"role": "user", "content": pregunta},
         ],
         "temperature": 0.2,
-        "max_tokens": 400,
+        "max_tokens": max(64, min(int(max_tokens), 512)),
     }
 
     try:
-        data = await vault_tunnel_broker.call_llm_chat(target_key, payload, timeout=60.0)
+        data = await vault_tunnel_broker.call_llm_chat(
+            target_key, payload, timeout=effective_timeout, priority="HIGH"
+        )
         choices = data.get("choices", [])
         if choices:
             raw_content = str(choices[0].get("message", {}).get("content", "")).strip()
             return strip_think(raw_content) or raw_content
+    except VaultTunnelTimeoutError as e:
+        logger.warning("Timeout LM Studio via WSS (%s, %.1fs): %s", target_key, effective_timeout, e)
+        if raise_on_timeout:
+            raise
+    except VaultTunnelRemoteError as e:
+        if e.status_code == 404:
+            # Model configurat no carregat: reintent controlat amb el model actiu detectat
+            try:
+                live_model = await _resoldre_model_actiu_tunel(target_key, "")
+                if live_model and live_model != model_name:
+                    payload["model"] = live_model
+                    data = await vault_tunnel_broker.call_llm_chat(
+                        target_key,
+                        payload,
+                        timeout=min(effective_timeout, 18.0),
+                        priority="HIGH",
+                    )
+                    choices = data.get("choices", [])
+                    if choices:
+                        raw_content = str(choices[0].get("message", {}).get("content", "")).strip()
+                        return strip_think(raw_content) or raw_content
+            except VaultTunnelTimeoutError:
+                if raise_on_timeout:
+                    raise
+            except Exception as inner_e:
+                logger.warning("Reintent model actiu LM Studio fallit (%s): %s", target_key, inner_e)
+        logger.warning("Connexió amb LM Studio via WSS fallida (%s): %s", target_key, e)
     except (VaultTunnelError, Exception) as e:
         logger.warning("Connexió amb LM Studio via WSS fallida (%s): %s", target_key, e)
 

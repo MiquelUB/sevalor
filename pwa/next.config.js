@@ -8,6 +8,7 @@ const nextConfig = {
   experimental: {
     cpus: 1,
     memoryBasedWorkersCount: true,
+    proxyTimeout: 120000,
   },
   async rewrites() {
     const rawApiUrl = (process.env.NEXT_PUBLIC_API_URL || 'http://backend:8000/api/v1').replace(/\/+$/, '');

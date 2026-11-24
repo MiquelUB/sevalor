@@ -125,9 +125,15 @@ export async function proxyToBackend(
 
   const isLongRunningEndpoint =
     targetPath.includes("/copilot/") ||
+    targetPath.includes("/generar-ia") ||
+    targetPath.includes("/pressupost-intelligent") ||
     targetPath.includes("/import") ||
-    targetPath.includes("/ocr/");
-  const timeoutMs = isLongRunningEndpoint ? 65000 : 15000;
+    targetPath.includes("/ocr/") ||
+    targetPath.includes("/pdf") ||
+    targetPath.includes("/enviar-email") ||
+    targetPath.includes("/sincronitzar-disc") ||
+    targetPath.includes("/prospeccio/");
+  const timeoutMs = isLongRunningEndpoint ? 90000 : 25000;
 
   for (const baseRoot of candidates) {
     const targetUrl = `${baseRoot}${targetPath}${search}`;
