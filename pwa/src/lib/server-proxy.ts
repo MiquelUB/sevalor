@@ -123,7 +123,11 @@ export async function proxyToBackend(
   let lastUpstreamResponse: Response | null = null;
   let lastError: unknown = null;
 
-  const timeoutMs = targetPath.includes("/copilot/") ? 45000 : 15000;
+  const isLongRunningEndpoint =
+    targetPath.includes("/copilot/") ||
+    targetPath.includes("/import") ||
+    targetPath.includes("/ocr/");
+  const timeoutMs = isLongRunningEndpoint ? 65000 : 15000;
 
   for (const baseRoot of candidates) {
     const targetUrl = `${baseRoot}${targetPath}${search}`;
@@ -188,6 +192,19 @@ export async function proxyToBackend(
         cachedBackendRoot = null;
       }
       lastError = err;
+      // Si la petició ha esgotat el timeout propi (AbortError) sobre un endpoint llarg o mutació,
+      // no reintentar altres candidats per evitar duplicar imports/accions ni falsificar "backend caigut".
+      if (err instanceof Error && err.name === "AbortError" && (isLongRunningEndpoint || hasBody)) {
+        return Response.json(
+          {
+            detail:
+              "La petició ha superat el temps màxim d'espera del servidor. Si estàs important un fitxer amb el Copilot, comprova que LM Studio respongui o torna-ho a provar.",
+            code: "BACKEND_TIMEOUT",
+            error: err.message,
+          },
+          { status: 504 }
+        );
+      }
       continue;
     }
   }

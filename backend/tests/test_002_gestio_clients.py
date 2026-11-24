@@ -365,7 +365,17 @@ async def test_import_csv_clients_tots_els_camps_i_copilot_wss(admin_session, he
             assert res_json["copilot_usat"] is True
             assert res_json["inserits"] == 1
             assert res_json["errors_detectats"] == []
-            assert len(ctx["llm_calls"]) >= 1
+            chat_calls = [c for c in ctx["llm_calls"] if c.get("method") == "POST" and c.get("path") == "/v1/chat/completions"]
+            assert len(chat_calls) == 1
+            llm_body = chat_calls[0]["body"]
+            # LM Studio només suporta json_schema GBNF (no json_object) i el prompt ha de ser compacte
+            assert llm_body["response_format"]["type"] == "json_schema"
+            schema_serialized = json.dumps(llm_body["response_format"])
+            assert "$defs" not in schema_serialized
+            assert "$ref" not in schema_serialized
+            assert llm_body["max_tokens"] <= 220
+            user_prompt = llm_body["messages"][1]["content"]
+            assert len(user_prompt) <= 1300
 
             r_list = await ac.get("/api/v1/gestio/clients", headers=headers)
             assert r_list.status_code == 200
