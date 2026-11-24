@@ -398,14 +398,18 @@ export function CrearOTModal({ onClose, onSuccess, initialClientId }: CrearOTMod
           numero,
           titol: formData.titol.trim() || `Pressupost ${numero}`,
           descripcio: formData.descripcio.trim() || undefined,
+          finca_id: formData.finca_id || undefined,
+          adreca_obra: formData.adreca.trim() || undefined,
+          vehicle_id: formData.vehicle_id || undefined,
+          eines_ids: selectedEinaIds.length > 0 ? selectedEinaIds : undefined,
           total: Number(totalCalculat.toFixed(2)),
           linies: liniesPayload.length > 0 ? liniesPayload : undefined,
         }),
       });
       setModalFeedback({
         type: "ok",
-        text: `Pressupost ${created.numero} generat en estat ${created.estat} (${Number(created.total).toFixed(2)} €). Ara el pots revisar i enviar al client.`,
-        href: `/gestio/pressupostos?id=${created.id}&enviar=1`,
+        text: `Pressupost ${created.numero} generat en estat ${created.estat} (${Number(created.total).toFixed(2)} €). Ara el pots revisar, editar i enviar al client.`,
+        href: `/gestio/pressupostos?id=${created.id}&revisar=1`,
       });
     } catch (err: any) {
       setModalFeedback({
@@ -491,14 +495,18 @@ export function CrearOTModal({ onClose, onSuccess, initialClientId }: CrearOTMod
           numero,
           titol: iaDraft.titol || formData.titol.trim() || `Pressupost ${numero}`,
           descripcio: iaDraft.resum_tecnic || formData.descripcio.trim() || undefined,
+          finca_id: formData.finca_id || undefined,
+          adreca_obra: formData.adreca.trim() || undefined,
+          vehicle_id: formData.vehicle_id || undefined,
+          eines_ids: selectedEinaIds.length > 0 ? selectedEinaIds : undefined,
           total: Number(iaDraft.total_estimat ?? 0),
           linies: liniesIa.length > 0 ? liniesIa : undefined,
         }),
       });
       setModalFeedback({
         type: "ok",
-        text: `Pressupost ${created.numero} consolidat. Ara el pots enviar al client per Email, Telegram o Enllaç.`,
-        href: `/gestio/pressupostos?id=${created.id}&enviar=1`,
+        text: `Pressupost ${created.numero} consolidat. Ara el pots revisar, editar i enviar al client.`,
+        href: `/gestio/pressupostos?id=${created.id}&revisar=1`,
       });
     } catch (err: any) {
       setModalFeedback({

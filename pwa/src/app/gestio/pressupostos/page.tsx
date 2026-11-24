@@ -9,6 +9,7 @@ import {
   CheckCircle2,
   Download,
   Edit3,
+  Eye,
   FileText,
   Plus,
   RefreshCw,
@@ -17,13 +18,15 @@ import {
   X,
   XCircle,
 } from "lucide-react";
-import { apiFetch, getApiBaseUrl } from "@/lib/api";
+import { apiFetch } from "@/lib/api";
 import { useGestio } from "@/lib/gestio-context";
 import {
   ClientOption,
+  descarregarPdfPressupostAutenticat,
   EnviarPressupostModal,
   PressupostItem,
   PressupostModal,
+  PrevisualitzarPressupostModal,
 } from "@/components/gestio/PressupostModal";
 
 function badgeEstat(estat: string): string {
@@ -43,6 +46,8 @@ function PressupostosContent() {
 
   const paramId = searchParams.get("id") || "";
   const paramEnviar = searchParams.get("enviar") === "1";
+  const paramRevisar = searchParams.get("revisar") === "1";
+  const paramEditar = searchParams.get("editar") === "1";
   const paramClientId = searchParams.get("client_id") || "";
 
   const [pressupostos, setPressupostos] = useState<PressupostItem[]>([]);
@@ -50,6 +55,7 @@ function PressupostosContent() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
+  const [pdfLoadingId, setPdfLoadingId] = useState<string | null>(null);
 
   const [cerca, setCerca] = useState("");
   const [filtreEstat, setFiltreEstat] = useState<"TOTS" | "PENDENT" | "APROVAT" | "REBUTJAT">("TOTS");
@@ -58,6 +64,7 @@ function PressupostosContent() {
     open: boolean;
     item: PressupostItem | null;
   }>({ open: false, item: null });
+  const [previewModalItem, setPreviewModalItem] = useState<PressupostItem | null>(null);
   const [sendModalItem, setSendModalItem] = useState<PressupostItem | null>(null);
   const [handledParamId, setHandledParamId] = useState<string | null>(null);
 
@@ -86,13 +93,17 @@ function PressupostosContent() {
     if (paramId && paramId !== handledParamId && pressupostos.length > 0) {
       const found = pressupostos.find((p) => p.id === paramId);
       if (found) {
-        if (paramEnviar) {
+        if (paramEditar && found.estat !== "APROVAT") {
+          setEditorState({ open: true, item: found });
+        } else if (paramRevisar) {
+          setPreviewModalItem(found);
+        } else if (paramEnviar) {
           setSendModalItem(found);
         }
         setHandledParamId(paramId);
       }
     }
-  }, [paramId, paramEnviar, pressupostos, handledParamId]);
+  }, [paramId, paramEnviar, paramRevisar, paramEditar, pressupostos, handledParamId]);
 
   const filtrats = useMemo(() => {
     return pressupostos.filter((p) => {
@@ -103,7 +114,8 @@ function PressupostosContent() {
       return (
         (p.numero || "").toLowerCase().includes(t) ||
         (p.titol || "").toLowerCase().includes(t) ||
-        (p.client_nom || "").toLowerCase().includes(t)
+        (p.client_nom || "").toLowerCase().includes(t) ||
+        (p.vehicle_nom || "").toLowerCase().includes(t)
       );
     });
   }, [pressupostos, filtreEstat, cerca, paramClientId]);
@@ -121,6 +133,18 @@ function PressupostosContent() {
       totalAprovat,
     };
   }, [pressupostos]);
+
+  const handleDescarregarPdf = async (p: PressupostItem) => {
+    setPdfLoadingId(p.id);
+    setError(null);
+    try {
+      await descarregarPdfPressupostAutenticat(p.id, p.numero);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Error generant el PDF del pressupost.");
+    } finally {
+      setPdfLoadingId(null);
+    }
+  };
 
   const handleConvertirOT = async (p: PressupostItem) => {
     setError(null);
@@ -169,7 +193,7 @@ function PressupostosContent() {
             <span>Pressupostos i Enviament a Clients</span>
           </h1>
           <p className="text-sm text-on-surface-variant mt-1">
-            Prepara partides detallades, descarrega el PDF corporatiu i envia el pressupost per Email, Telegram, WhatsApp o enllaç d&apos;acceptació.
+            Prepara partides detallades amb vehicle, eines i desplaçament, previsualitza i edita la plantilla oficial abans d&apos;enviar-la.
           </p>
         </div>
 
@@ -190,7 +214,7 @@ function PressupostosContent() {
             className="px-4 py-2.5 rounded-xl bg-primary hover:bg-primary/90 text-on-primary text-xs font-body-strong flex items-center gap-2 shadow-sm cursor-pointer"
           >
             <Plus className="w-4 h-4" />
-            <span>+ Nou Pressupost</span>
+            <span>Nou pressupost</span>
           </button>
         </div>
       </div>
@@ -260,7 +284,7 @@ function PressupostosContent() {
             type="text"
             value={cerca}
             onChange={(e) => setCerca(e.target.value)}
-            placeholder="Cercar per número, títol o client..."
+            placeholder="Cercar per número, títol, client o vehicle..."
             className="w-full pl-9 pr-4 py-2 rounded-lg bg-surface-container-low border border-outline-variant/60 text-xs text-on-surface focus:border-primary outline-none"
           />
         </div>
@@ -300,7 +324,7 @@ function PressupostosContent() {
               onClick={() => setEditorState({ open: true, item: null })}
               className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-primary text-on-primary text-xs font-bold cursor-pointer"
             >
-              <Plus className="w-4 h-4" /> Nou Pressupost
+              <Plus className="w-4 h-4" /> Nou pressupost
             </button>
           </div>
         ) : (
@@ -322,14 +346,20 @@ function PressupostosContent() {
                     <td className="py-3 px-4 whitespace-nowrap">
                       <span className="font-mono font-bold text-primary">{p.numero}</span>
                       <span className="block text-[10px] text-on-surface-variant">
-                        {new Date(p.created_at).toLocaleDateString()}
+                        {p.data_pressupost
+                          ? new Date(`${p.data_pressupost}T00:00:00`).toLocaleDateString("ca-ES")
+                          : new Date(p.created_at).toLocaleDateString("ca-ES")}
                       </span>
                     </td>
-                    <td className="py-3 px-4 min-w-[200px]">
+                    <td className="py-3 px-4 min-w-[220px]">
                       <p className="font-bold text-on-surface">{p.titol || p.numero}</p>
                       <p className="text-[11px] text-on-surface-variant">
                         {p.client_nom || "Client"}
                         {p.linies.length > 0 ? ` · ${p.linies.length} partides` : ""}
+                        {p.vehicle_nom ? ` · ${p.vehicle_nom}` : ""}
+                        {p.eines_resum && p.eines_resum.length > 0
+                          ? ` · ${p.eines_resum.length} eines`
+                          : ""}
                       </p>
                     </td>
                     <td className="py-3 px-4 whitespace-nowrap">
@@ -351,7 +381,7 @@ function PressupostosContent() {
                         </div>
                       ) : (
                         <span className="text-[11px] text-amber-700 font-medium">
-                          No enviat encara
+                          Esborrany (no enviat)
                         </span>
                       )}
                     </td>
@@ -373,30 +403,43 @@ function PressupostosContent() {
                       <div className="inline-flex items-center gap-1.5 flex-wrap justify-end">
                         <button
                           type="button"
+                          onClick={() => setPreviewModalItem(p)}
+                          className="px-2.5 py-1.5 rounded-lg border border-outline-variant/60 text-[11px] font-semibold text-on-surface hover:bg-surface-container inline-flex items-center gap-1 cursor-pointer"
+                          title="Previsualitzar document oficial"
+                        >
+                          <Eye className="w-3.5 h-3.5 text-primary" />
+                          <span>Veure</span>
+                        </button>
+                        {p.estat !== "APROVAT" && (
+                          <button
+                            type="button"
+                            onClick={() => setEditorState({ open: true, item: p })}
+                            className="px-2.5 py-1.5 rounded-lg border border-outline-variant/60 text-[11px] font-semibold text-secondary hover:bg-surface-container inline-flex items-center gap-1 cursor-pointer"
+                            title="Editar pressupost"
+                          >
+                            <Edit3 className="w-3.5 h-3.5" />
+                            <span>Editar</span>
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          disabled={pdfLoadingId === p.id}
+                          onClick={() => handleDescarregarPdf(p)}
+                          className="px-2 py-1.5 rounded-lg border border-outline-variant/60 text-[11px] font-semibold text-on-surface hover:bg-surface-container inline-flex items-center gap-1 cursor-pointer disabled:opacity-50"
+                        >
+                          <Download className="w-3.5 h-3.5" />
+                          <span>{pdfLoadingId === p.id ? "..." : "PDF"}</span>
+                        </button>
+                        <button
+                          type="button"
                           onClick={() => setSendModalItem(p)}
                           className="px-2.5 py-1.5 rounded-lg bg-primary text-on-primary text-[11px] font-bold hover:opacity-90 inline-flex items-center gap-1 cursor-pointer"
                         >
                           <Send className="w-3.5 h-3.5" />
                           <span>Enviar</span>
                         </button>
-                        <a
-                          href={`${getApiBaseUrl()}/gestio/pressupostos/${p.id}/pdf`}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="px-2 py-1.5 rounded-lg border border-outline-variant/60 text-[11px] font-semibold text-on-surface hover:bg-surface-container inline-flex items-center gap-1"
-                        >
-                          <Download className="w-3.5 h-3.5" /> PDF
-                        </a>
                         {p.estat === "PENDENT" && (
                           <>
-                            <button
-                              type="button"
-                              onClick={() => setEditorState({ open: true, item: p })}
-                              className="p-1.5 rounded-lg border border-outline-variant/60 text-secondary hover:bg-surface-container cursor-pointer"
-                              title="Editar partides"
-                            >
-                              <Edit3 className="w-3.5 h-3.5" />
-                            </button>
                             <button
                               type="button"
                               onClick={() => handleCanviarEstat(p, "aprovar")}
@@ -454,11 +497,27 @@ function PressupostosContent() {
           onSaved={(saved, isNew) => {
             carregarDades();
             if (isNew) {
-              setSuccessMsg(`Pressupost ${saved.numero} creat. Ara ja el pots enviar al client!`);
-              setSendModalItem(saved);
+              setSuccessMsg(
+                `Pressupost ${saved.numero} creat. El pots revisar, editar o enviar quan vulguis.`
+              );
             } else {
               setSuccessMsg(`Pressupost ${saved.numero} actualitzat correctament.`);
             }
+          }}
+        />
+      )}
+
+      {previewModalItem && (
+        <PrevisualitzarPressupostModal
+          pressupost={previewModalItem}
+          onClose={() => setPreviewModalItem(null)}
+          onEdit={(p) => {
+            setPreviewModalItem(null);
+            setEditorState({ open: true, item: p });
+          }}
+          onSend={(p) => {
+            setPreviewModalItem(null);
+            setSendModalItem(p);
           }}
         />
       )}
@@ -467,6 +526,14 @@ function PressupostosContent() {
         <EnviarPressupostModal
           pressupost={sendModalItem}
           onClose={() => setSendModalItem(null)}
+          onPreview={(p) => {
+            setSendModalItem(null);
+            setPreviewModalItem(p);
+          }}
+          onEdit={(p) => {
+            setSendModalItem(null);
+            setEditorState({ open: true, item: p });
+          }}
           onSent={(msg) => {
             setSuccessMsg(msg);
             carregarDades();

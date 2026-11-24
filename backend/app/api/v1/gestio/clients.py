@@ -53,6 +53,9 @@ def _serialitzar_client(c: Client, rol: str) -> dict[str, Any]:
         "telefon": c.telefon,
         "email": c.email,
         "adreca_fiscal": c.adreca_fiscal,
+        "codi_postal": c.codi_postal,
+        "poblacio": c.poblacio,
+        "provincia": c.provincia,
         "web": c.web,
         "persona_contacte": c.persona_contacte,
         "dades_contacte": c.dades_contacte,
@@ -69,6 +72,9 @@ class ClientCreate(BaseModel):
     telefon: Optional[str] = Field(None, max_length=30)
     email: Optional[str] = Field(None, max_length=200)
     adreca_fiscal: Optional[str] = Field(None)
+    codi_postal: Optional[str] = Field(None, max_length=15)
+    poblacio: Optional[str] = Field(None, max_length=100)
+    provincia: Optional[str] = Field(None, max_length=100)
     web: Optional[str] = Field(None, max_length=255)
     persona_contacte: Optional[str] = Field(None, max_length=150)
     dades_contacte: Optional[str] = Field(None)
@@ -119,6 +125,9 @@ class ClientResponse(BaseModel):
     telefon: Optional[str] = None
     email: Optional[str] = None
     adreca_fiscal: Optional[str] = None
+    codi_postal: Optional[str] = None
+    poblacio: Optional[str] = None
+    provincia: Optional[str] = None
     web: Optional[str] = None
     persona_contacte: Optional[str] = None
     dades_contacte: Optional[str] = None
@@ -214,6 +223,9 @@ async def alta_client(
         telefon=client.telefon,
         email=client.email,
         adreca_fiscal=client.adreca_fiscal,
+        codi_postal=client.codi_postal,
+        poblacio=client.poblacio,
+        provincia=client.provincia,
         web=client.web,
         persona_contacte=client.persona_contacte,
         dades_contacte=client.dades_contacte,
@@ -289,6 +301,12 @@ async def modificar_client(
     client_db.telefon = payload.telefon
     client_db.email = payload.email
     client_db.adreca_fiscal = payload.adreca_fiscal
+    if payload.codi_postal is not None:
+        client_db.codi_postal = payload.codi_postal
+    if payload.poblacio is not None:
+        client_db.poblacio = payload.poblacio
+    if payload.provincia is not None:
+        client_db.provincia = payload.provincia
     client_db.web = payload.web
     client_db.persona_contacte = payload.persona_contacte
     client_db.dades_contacte = payload.dades_contacte

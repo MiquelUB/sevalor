@@ -10,13 +10,32 @@ interface PressupostPublicData {
   numero: string;
   titol: string;
   descripcio?: string | null;
+  adreca_obra?: string | null;
+  data_pressupost?: string | null;
+  referencia_client?: string | null;
+  elaborat_per?: string | null;
+  vehicle_nom?: string | null;
+  eines_resum?: Array<{ id?: string; nom: string; model?: string | null }>;
+  desplacament_km?: number | null;
+  desplacament_preu_km?: number | null;
+  desplacament_import_fix?: number | null;
   estat: string;
+  subtotal_brut?: number;
+  descompte_global_pct?: number;
+  descompte_global_import?: number;
   base_imposable: number;
   quota_iva: number;
   total: number;
   validesa_dies: number;
+  forma_pagament?: string | null;
+  percentatge_acompte?: number;
+  termini_execucio?: string | null;
+  notes_exclusions?: string | null;
+  mencio_legal?: string | null;
   linies: Array<{
+    seccio?: string | null;
     concepte: string;
+    detall?: string | null;
     quantitat: number;
     preu_unitari: number;
     descompte_pct?: number;
@@ -27,6 +46,8 @@ interface PressupostPublicData {
   motiu_canvis_client?: string | null;
   client_nom?: string | null;
   client_nif?: string | null;
+  client_adreca?: string | null;
+  client_persona_contacte?: string | null;
   empresa: {
     nom: string;
     nif?: string | null;
@@ -92,7 +113,8 @@ export default function PressupostPublicPage() {
           ? {
               ...prev,
               estat: updated.estat,
-              motiu_canvis_client: accio === "REBUTJAR" ? comentari.trim() || prev.motiu_canvis_client : prev.motiu_canvis_client,
+              motiu_canvis_client:
+                accio === "REBUTJAR" ? comentari.trim() || prev.motiu_canvis_client : prev.motiu_canvis_client,
             }
           : prev
       );
@@ -124,6 +146,23 @@ export default function PressupostPublicPage() {
   }
 
   const primaryHsl = data.empresa?.primari_hsl || "150 40 20";
+  const hasRecursos = Boolean(
+    data.vehicle_nom ||
+      (data.eines_resum && data.eines_resum.length > 0) ||
+      (data.desplacament_km && data.desplacament_km > 0) ||
+      (data.desplacament_import_fix && data.desplacament_import_fix > 0)
+  );
+
+  // Agrupar línies per secció preservant l'ordre
+  const seccions: Array<{ nom: string | null; linies: PressupostPublicData["linies"] }> = [];
+  for (const lin of data.linies) {
+    const sec = (lin.seccio || "").trim() || null;
+    if (seccions.length > 0 && seccions[seccions.length - 1].nom === sec) {
+      seccions[seccions.length - 1].linies.push(lin);
+    } else {
+      seccions.push({ nom: sec, linies: [lin] });
+    }
+  }
 
   return (
     <div
@@ -141,7 +180,7 @@ export default function PressupostPublicPage() {
             {data.empresa.nif && <p className="text-xs opacity-80">NIF: {data.empresa.nif}</p>}
           </div>
           <div className="text-right">
-            <span className="font-mono text-sm font-bold block">{data.numero}</span>
+            <span className="font-mono text-sm font-bold block">N.º {data.numero}</span>
             <span className="inline-block mt-1 rounded-full bg-white/20 px-3 py-0.5 text-[11px] font-bold">
               {data.estat}
             </span>
@@ -154,10 +193,17 @@ export default function PressupostPublicPage() {
               <span className="text-slate-400 uppercase font-bold block">Client</span>
               <p className="font-bold text-slate-900 text-sm">{data.client_nom || "Client"}</p>
               {data.client_nif && <p className="text-slate-500">NIF: {data.client_nif}</p>}
+              {data.client_adreca && <p className="text-slate-500">{data.client_adreca}</p>}
+              {data.client_persona_contacte && (
+                <p className="text-slate-500">Atenció: {data.client_persona_contacte}</p>
+              )}
             </div>
             <div className="text-right">
               <span className="text-slate-400 uppercase font-bold block">Validesa</span>
               <p className="font-semibold">{data.validesa_dies} dies</p>
+              {data.referencia_client && (
+                <p className="text-slate-500">Ref: {data.referencia_client}</p>
+              )}
               <a
                 href={`${getApiBaseUrl()}/public/pressupostos/${encodeURIComponent(token)}/pdf`}
                 target="_blank"
@@ -165,7 +211,7 @@ export default function PressupostPublicPage() {
                 className="inline-flex items-center gap-1 mt-1 text-xs font-bold hover:underline"
                 style={{ color: `hsl(${primaryHsl})` }}
               >
-                <Download className="w-3.5 h-3.5" /> Descarregar PDF
+                <Download className="w-3.5 h-3.5" /> Descarregar PDF oficial
               </a>
             </div>
           </div>
@@ -175,19 +221,49 @@ export default function PressupostPublicPage() {
               <FileText className="w-4 h-4" />
               <span>{data.titol}</span>
             </h2>
-            {data.descripcio && <p className="text-xs text-slate-600 mt-1">{data.descripcio}</p>}
+            {data.descripcio && (
+              <p className="text-xs text-slate-600 mt-1 whitespace-pre-line">{data.descripcio}</p>
+            )}
+            {data.adreca_obra && (
+              <p className="text-xs text-slate-600 mt-1">
+                <strong>Ubicació dels treballs:</strong> {data.adreca_obra}
+              </p>
+            )}
           </div>
+
+          {hasRecursos && (
+            <div className="rounded-xl bg-slate-50 border border-slate-200 p-3 text-xs space-y-1">
+              <div className="font-semibold text-slate-500">Recursos operatius previstos</div>
+              <div className="flex flex-wrap gap-x-5 gap-y-1 text-slate-700">
+                {data.vehicle_nom && (
+                  <span>
+                    <strong>Vehicle:</strong> {data.vehicle_nom}
+                  </span>
+                )}
+                {data.desplacament_km != null && data.desplacament_km > 0 && (
+                  <span>
+                    <strong>Desplaçament:</strong> {data.desplacament_km} km
+                  </span>
+                )}
+                {data.eines_resum && data.eines_resum.length > 0 && (
+                  <span>
+                    <strong>Eines:</strong> {data.eines_resum.map((e) => e.nom).join(", ")}
+                  </span>
+                )}
+              </div>
+            </div>
+          )}
 
           {/* Partides */}
           <div className="overflow-x-auto rounded-xl border border-slate-200">
             <table className="w-full text-left text-xs">
               <thead className="bg-slate-50 text-slate-600">
                 <tr>
-                  <th className="px-3 py-2.5">Concepte</th>
-                  <th className="px-3 py-2.5 text-right">Qt.</th>
-                  <th className="px-3 py-2.5 text-right">Preu u.</th>
-                  <th className="px-3 py-2.5 text-right">IVA %</th>
-                  <th className="px-3 py-2.5 text-right">Subtotal</th>
+                  <th className="px-3 py-2.5">Descripció</th>
+                  <th className="px-3 py-2.5 text-right">Quantitat</th>
+                  <th className="px-3 py-2.5 text-right">Preu unitari</th>
+                  <th className="px-3 py-2.5 text-right">IVA</th>
+                  <th className="px-3 py-2.5 text-right">Import</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
@@ -202,22 +278,40 @@ export default function PressupostPublicPage() {
                     </td>
                   </tr>
                 ) : (
-                  data.linies.map((lin, i) => (
-                    <tr key={i}>
-                      <td className="px-3 py-2.5 font-medium text-slate-900">{lin.concepte}</td>
-                      <td className="px-3 py-2.5 text-right tabular-nums">
-                        {Number(lin.quantitat).toFixed(2)}
-                      </td>
-                      <td className="px-3 py-2.5 text-right tabular-nums">
-                        {Number(lin.preu_unitari).toFixed(2)} €
-                      </td>
-                      <td className="px-3 py-2.5 text-right tabular-nums">
-                        {Number(lin.tipus_iva ?? 21).toFixed(0)}%
-                      </td>
-                      <td className="px-3 py-2.5 text-right font-semibold tabular-nums">
-                        {Number(lin.subtotal ?? lin.quantitat * lin.preu_unitari).toFixed(2)} €
-                      </td>
-                    </tr>
+                  seccions.map((sec, sIdx) => (
+                    <React.Fragment key={sIdx}>
+                      {sec.nom && (
+                        <tr className="bg-slate-100/80">
+                          <td colSpan={5} className="px-3 py-2 font-semibold text-slate-800">
+                            {sec.nom}
+                          </td>
+                        </tr>
+                      )}
+                      {sec.linies.map((lin, i) => (
+                        <tr key={`${sIdx}-${i}`}>
+                          <td className="px-3 py-2.5">
+                            <div className="font-medium text-slate-900">{lin.concepte}</div>
+                            {lin.detall && (
+                              <div className="text-[11px] text-slate-500 whitespace-pre-line">
+                                {lin.detall}
+                              </div>
+                            )}
+                          </td>
+                          <td className="px-3 py-2.5 text-right tabular-nums">
+                            {Number(lin.quantitat).toFixed(2)}
+                          </td>
+                          <td className="px-3 py-2.5 text-right tabular-nums">
+                            {Number(lin.preu_unitari).toFixed(2)} €
+                          </td>
+                          <td className="px-3 py-2.5 text-right tabular-nums">
+                            {Number(lin.tipus_iva ?? 21).toFixed(0)}%
+                          </td>
+                          <td className="px-3 py-2.5 text-right font-semibold tabular-nums">
+                            {Number(lin.subtotal ?? lin.quantitat * lin.preu_unitari).toFixed(2)} €
+                          </td>
+                        </tr>
+                      ))}
+                    </React.Fragment>
                   ))
                 )}
               </tbody>
@@ -225,7 +319,25 @@ export default function PressupostPublicPage() {
           </div>
 
           <div className="rounded-xl bg-slate-50 border border-slate-200 p-4 flex flex-wrap items-center justify-between gap-4 text-xs">
-            <div className="flex gap-6">
+            <div className="flex flex-wrap gap-6">
+              {data.descompte_global_pct && data.descompte_global_pct > 0 ? (
+                <>
+                  <div>
+                    <span className="text-slate-500 block">Subtotal</span>
+                    <span className="font-semibold tabular-nums">
+                      {Number(data.subtotal_brut ?? data.base_imposable).toFixed(2)} €
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-slate-500 block">
+                      Descompte ({data.descompte_global_pct}%)
+                    </span>
+                    <span className="font-semibold tabular-nums text-rose-700">
+                      -{Number(data.descompte_global_import ?? 0).toFixed(2)} €
+                    </span>
+                  </div>
+                </>
+              ) : null}
               <div>
                 <span className="text-slate-500 block">Base Imposable</span>
                 <span className="font-bold tabular-nums">{Number(data.base_imposable).toFixed(2)} €</span>
@@ -245,6 +357,36 @@ export default function PressupostPublicPage() {
               </span>
             </div>
           </div>
+
+          {(data.forma_pagament || data.termini_execucio || data.notes_exclusions || data.mencio_legal) && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs border-t border-slate-100 pt-4">
+              <div>
+                <h3 className="font-bold text-slate-800 mb-1">Condicions</h3>
+                <ul className="list-disc pl-4 space-y-1 text-slate-600">
+                  {data.forma_pagament && <li>Forma de pagament: {data.forma_pagament}</li>}
+                  {data.percentatge_acompte && data.percentatge_acompte > 0 ? (
+                    <li>
+                      Acompte a l&apos;acceptació: {data.percentatge_acompte}% (
+                      {((Number(data.total || 0) * data.percentatge_acompte) / 100).toFixed(2)} €)
+                    </li>
+                  ) : null}
+                  {data.termini_execucio && <li>Termini d&apos;execució: {data.termini_execucio}</li>}
+                  <li>Validesa de l&apos;oferta: {data.validesa_dies} dies</li>
+                </ul>
+              </div>
+              {(data.notes_exclusions || data.mencio_legal) && (
+                <div>
+                  <h3 className="font-bold text-slate-800 mb-1">Notes i exclusions</h3>
+                  {data.notes_exclusions && (
+                    <p className="text-slate-600 whitespace-pre-line">{data.notes_exclusions}</p>
+                  )}
+                  {data.mencio_legal && (
+                    <p className="text-slate-500 mt-1 whitespace-pre-line">{data.mencio_legal}</p>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
 
           {data.estat === "PENDENT" ? (
             <div className="space-y-3 pt-2 border-t border-slate-100">

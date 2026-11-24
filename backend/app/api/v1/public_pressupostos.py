@@ -79,21 +79,44 @@ async def obtenir_pressupost_public(
     total_val = float(pressupost.total) if pressupost.total is not None else 0.0
     raw_base = detalls.get("base_imposable")
     base_val = float(raw_base) if raw_base is not None else total_val
+    raw_sub = detalls.get("subtotal_brut")
+    subtotal_brut_val = float(raw_sub) if raw_sub is not None else base_val
     return {
         "id": str(pressupost.id),
         "numero": pressupost.numero,
         "titol": detalls.get("titol") or f"Pressupost {pressupost.numero}",
         "descripcio": detalls.get("descripcio"),
+        "adreca_obra": detalls.get("adreca_obra"),
+        "data_pressupost": detalls.get("data_pressupost")
+        or (pressupost.created_at.date().isoformat() if pressupost.created_at else None),
+        "referencia_client": detalls.get("referencia_client"),
+        "elaborat_per": detalls.get("elaborat_per"),
+        "vehicle_nom": detalls.get("vehicle_nom"),
+        "eines_resum": detalls.get("eines_resum") or [],
+        "desplacament_km": detalls.get("desplacament_km"),
+        "desplacament_preu_km": detalls.get("desplacament_preu_km"),
+        "desplacament_import_fix": detalls.get("desplacament_import_fix"),
         "estat": pressupost.estat,
+        "subtotal_brut": subtotal_brut_val,
+        "descompte_global_pct": float(detalls.get("descompte_global_pct") or 0.0),
+        "descompte_global_import": float(detalls.get("descompte_global_import") or 0.0),
         "base_imposable": base_val,
         "quota_iva": float(detalls.get("quota_iva") or 0.0),
         "total": total_val,
         "validesa_dies": int(detalls.get("validesa_dies") or DEFAULT_VALIDESA_DIES),
+        "forma_pagament": detalls.get("forma_pagament"),
+        "percentatge_acompte": float(detalls.get("percentatge_acompte") or 0.0),
+        "termini_execucio": detalls.get("termini_execucio"),
+        "notes_exclusions": detalls.get("notes_exclusions"),
+        "mencio_legal": detalls.get("mencio_legal"),
         "linies": linies,
         "created_at": pressupost.created_at.isoformat() if pressupost.created_at else None,
         "motiu_canvis_client": detalls.get("motiu_canvis_client"),
-        "client_nom": client.rao_social if client else None,
-        "client_nif": client.nif if client else None,
+        "client_nom": detalls.get("client_rao_social") or (client.rao_social if client else None),
+        "client_nif": detalls.get("client_nif") or (client.nif if client else None),
+        "client_adreca": detalls.get("client_adreca") or (client.adreca_fiscal if client else None),
+        "client_persona_contacte": detalls.get("client_persona_contacte")
+        or (getattr(client, "persona_contacte", None) if client else None),
         "empresa": {
             "nom": empresa.nom if empresa else "Sevalor Suite",
             "nif": empresa.nif if empresa else None,
@@ -118,10 +141,11 @@ async def descarregar_pressupost_public_pdf(
         detalls=detalls,
         acceptacio_url=None,
     )
+    safe_num = pressupost.numero.replace("/", "_").replace(" ", "_")
     return Response(
         content=pdf_bytes,
         media_type="application/pdf",
-        headers={"Content-Disposition": f'inline; filename="PRESSUPOST_{pressupost.numero}.pdf"'},
+        headers={"Content-Disposition": f'inline; filename="PRESSUPOST_{safe_num}.pdf"'},
     )
 
 
