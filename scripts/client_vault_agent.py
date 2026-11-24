@@ -818,6 +818,7 @@ class SovereignWssAgent:
         headers = self.config.build_handshake_headers()
         send_lock = asyncio.Lock()
         inflight: set[asyncio.Task[None]] = set()
+        self.welcome = {}
 
         async with websockets.connect(
             ws_url,
@@ -827,11 +828,15 @@ class SovereignWssAgent:
             open_timeout=15.0,
             close_timeout=5.0,
         ) as ws:
-            # 1. Rebre trama inicial `welcome`
+            # 1. Rebre trama inicial `welcome` (sense descartar mai trames `request`/`ping` anticipades)
+            early_messages: List[Dict[str, Any]] = []
             raw_welcome = await asyncio.wait_for(ws.recv(), timeout=10.0)
             welcome_msg = json.loads(raw_welcome)
-            if isinstance(welcome_msg, dict) and welcome_msg.get("type") == "welcome":
-                self.welcome = welcome_msg
+            if isinstance(welcome_msg, dict):
+                if str(welcome_msg.get("type") or "").lower() == "welcome":
+                    self.welcome = welcome_msg
+                else:
+                    early_messages.append(welcome_msg)
 
             # 2. Enviar salutació `hello` amb telemetria inicial de salut
             health_snap = await self.action_health()
@@ -896,6 +901,28 @@ class SovereignWssAgent:
                 except Exception:
                     pass
 
+            async def _dispatch_incoming(msg: Dict[str, Any]) -> None:
+                mtype = str(msg.get("type") or "").lower()
+                if mtype == "welcome":
+                    self.welcome = msg
+                    return
+                if mtype == "ping":
+                    pong_frame: Dict[str, Any] = {
+                        "type": "pong",
+                        "req_id": str(msg.get("req_id") or ""),
+                        "ts": datetime.now(timezone.utc).isoformat(),
+                    }
+                    async with send_lock:
+                        await ws.send(json.dumps(pong_frame, ensure_ascii=False))
+                    return
+                if mtype == "request":
+                    t = asyncio.create_task(_handle_request(msg))
+                    inflight.add(t)
+                    t.add_done_callback(inflight.discard)
+
+            for early_msg in early_messages:
+                await _dispatch_incoming(early_msg)
+
             stop_waiter = asyncio.create_task(stop_event.wait())
             try:
                 while not stop_event.is_set():
@@ -922,21 +949,7 @@ class SovereignWssAgent:
                     if not isinstance(msg, dict):
                         continue
 
-                    mtype = str(msg.get("type") or "").lower()
-                    if mtype == "ping":
-                        pong_frame: Dict[str, Any] = {
-                            "type": "pong",
-                            "req_id": str(msg.get("req_id") or ""),
-                            "ts": datetime.now(timezone.utc).isoformat(),
-                        }
-                        async with send_lock:
-                            await ws.send(json.dumps(pong_frame, ensure_ascii=False))
-                        continue
-
-                    if mtype == "request":
-                        t = asyncio.create_task(_handle_request(msg))
-                        inflight.add(t)
-                        t.add_done_callback(inflight.discard)
+                    await _dispatch_incoming(msg)
             except websockets.exceptions.ConnectionClosed as closed_exc:
                 code = closed_exc.rcvd.code if closed_exc.rcvd else None
                 self.last_close_code = code

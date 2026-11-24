@@ -512,28 +512,31 @@ async def connect_vault_tunnel(websocket: WebSocket) -> None:
     target_key, role, empresa_id_str, agent_version = auth_result
     await websocket.accept()
 
-    conn = await vault_tunnel_broker.register(
-        target_key=target_key,
-        role=role,
-        websocket=websocket,
-        empresa_id=empresa_id_str,
-        agent_version=agent_version,
-        remote_ip=remote_ip,
-    )
+    welcome_payload: Dict[str, Any] = {
+        "type": "welcome",
+        "target_key": target_key,
+        "role": role,
+        "heartbeat_interval_s": HEARTBEAT_INTERVAL_SECONDS,
+        "server_time": datetime.now(timezone.utc).isoformat(),
+    }
 
     try:
-        async with conn.send_lock:
-            await websocket.send_json(
-                {
-                    "type": "welcome",
-                    "target_key": target_key,
-                    "role": role,
-                    "conn_id": conn.conn_id,
-                    "heartbeat_interval_s": HEARTBEAT_INTERVAL_SECONDS,
-                    "server_time": datetime.now(timezone.utc).isoformat(),
-                }
-            )
+        conn = await vault_tunnel_broker.register(
+            target_key=target_key,
+            role=role,
+            websocket=websocket,
+            empresa_id=empresa_id_str,
+            agent_version=agent_version,
+            remote_ip=remote_ip,
+            welcome_payload=welcome_payload,
+        )
+    except WebSocketDisconnect:
+        return
+    except Exception as exc:
+        logger.debug("Error registrant túnel WSS per %s: %s", target_key, exc)
+        return
 
+    try:
         if role == "EMPRESA" and empresa_id_str is not None:
             conn.bootstrap_task = asyncio.create_task(
                 _post_connect_empresa_bootstrap(empresa_id_str, conn),

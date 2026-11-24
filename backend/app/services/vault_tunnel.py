@@ -184,8 +184,14 @@ class VaultTunnelBroker:
         agent_version: Optional[str] = None,
         remote_ip: Optional[str] = None,
         heartbeat_interval: float = HEARTBEAT_INTERVAL_SECONDS,
+        welcome_payload: Optional[Dict[str, Any]] = None,
     ) -> TunnelConnection:
-        """Registra una nova connexió WSS exclusiva substituint netament qualsevol sessió prèvia."""
+        """Registra una nova connexió WSS exclusiva substituint netament qualsevol sessió prèvia.
+
+        Manté `conn.send_lock` bloquejat des de la inserció a `_connections` fins a enviar la trama
+        inicial `welcome`, garantint que `welcome` sigui sempre el primer missatge al cable i que
+        cap petició RPC concurrent (local, Redis o heartbeat) pugui avançar-s'hi.
+        """
         parse_target_key(target_key)
         conn = TunnelConnection(
             target_key=target_key,
@@ -197,28 +203,41 @@ class VaultTunnelBroker:
         )
 
         old_conn: Optional[TunnelConnection] = None
-        async with self._registry_lock:
-            old_conn = self._connections.get(target_key)
-            self._connections[target_key] = conn
+        send_error: Optional[Exception] = None
+        async with conn.send_lock:
+            async with self._registry_lock:
+                old_conn = self._connections.get(target_key)
+                self._connections[target_key] = conn
 
-        if old_conn is not None:
-            logger.info(
-                "Substituint connexió WSS prèvia per %s (old=%s -> new=%s).",
-                target_key,
-                old_conn.conn_id,
-                conn.conn_id,
+            if old_conn is not None:
+                logger.info(
+                    "Substituint connexió WSS prèvia per %s (old=%s -> new=%s).",
+                    target_key,
+                    old_conn.conn_id,
+                    conn.conn_id,
+                )
+                await self._teardown_connection(old_conn, close_code=4009, close_reason="Replaced")
+
+            await self._publish_presence(conn)
+            conn.heartbeat_task = asyncio.create_task(
+                self._heartbeat_loop(conn, interval=heartbeat_interval),
+                name=f"wss-hb-{target_key}-{conn.conn_id[:8]}",
             )
-            await self._teardown_connection(old_conn, close_code=4009, close_reason="Replaced")
+            conn.redis_listener_task = asyncio.create_task(
+                self._redis_rpc_loop(conn),
+                name=f"wss-redis-{target_key}-{conn.conn_id[:8]}",
+            )
+            if welcome_payload is not None:
+                try:
+                    await websocket.send_json({**welcome_payload, "conn_id": conn.conn_id})
+                except Exception as exc:
+                    conn.closed = True
+                    send_error = exc
 
-        await self._publish_presence(conn)
-        conn.heartbeat_task = asyncio.create_task(
-            self._heartbeat_loop(conn, interval=heartbeat_interval),
-            name=f"wss-hb-{target_key}-{conn.conn_id[:8]}",
-        )
-        conn.redis_listener_task = asyncio.create_task(
-            self._redis_rpc_loop(conn),
-            name=f"wss-redis-{target_key}-{conn.conn_id[:8]}",
-        )
+        if send_error is not None:
+            await self.unregister(target_key, conn.conn_id)
+            raise send_error
+
         logger.info(
             "Túnel WSS registrat: target=%s role=%s conn_id=%s agent_version=%s",
             target_key,
@@ -541,6 +560,13 @@ class VaultTunnelBroker:
 
         try:
             async with conn.send_lock:
+                if conn.closed:
+                    offline_code = (
+                        "NODE_SUPERADMIN_OFFLINE"
+                        if conn.target_key == SUPERADMIN_TARGET_KEY
+                        else "NODE_EMPRESA_OFFLINE"
+                    )
+                    raise VaultTunnelOfflineError(code=offline_code)
                 await conn.websocket.send_json(frame)
             resp = await asyncio.wait_for(fut, timeout=timeout)
         except asyncio.TimeoutError as exc:

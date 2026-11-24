@@ -466,3 +466,57 @@ async def test_fase2_agent_superadmin_20_carpetes_i_cli_init_only(
                 await asyncio.wait_for(task, timeout=5.0)
             except asyncio.TimeoutError:
                 task.cancel()
+
+
+@pytest.mark.asyncio
+async def test_fase2_zero_cursa_welcome_i_rpc_concurrent_en_connectar(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regressió determinista: una crida RPC `health` llançada en l'instant exacte en què
+    `is_online()` passa a True (mentre `_publish_presence` encara s'executa) no pot avançar-se
+    mai a la trama `welcome` ni perdre's amb `VaultTunnelTimeoutError`.
+    """
+    orig_publish = vault_tunnel_broker._publish_presence
+
+    async def _slow_publish_presence(conn: Any) -> None:
+        await asyncio.sleep(0.15)
+        await orig_publish(conn)
+
+    monkeypatch.setattr(vault_tunnel_broker, "_publish_presence", _slow_publish_presence)
+
+    tok = f"svlt_{uuid.uuid4().hex}"
+    emp_id = await _create_empresa_and_boss(tok)
+    target_key = empresa_target_key(emp_id)
+
+    try:
+        async with _LiveUvicornOnPort() as srv:
+            cfg = cva.AgentConfig(
+                server_url=srv.http_url,
+                role="EMPRESA",
+                empresa_id=str(emp_id),
+                vault_token=tok,
+                disk_a=tmp_path / "race_a",
+                disk_b=tmp_path / "race_b",
+            )
+            agent = cva.SovereignWssAgent(cfg)
+            stop_ev = asyncio.Event()
+            task = asyncio.create_task(agent.run_forever(stop_ev))
+            try:
+                # Sondeig ràpid (5ms) per disparar `health()` just dins la finestra de `_publish_presence`
+                for _ in range(400):
+                    if await vault_tunnel_broker.is_online(target_key):
+                        break
+                    await asyncio.sleep(0.005)
+                assert await vault_tunnel_broker.is_online(target_key)
+
+                h = await vault_tunnel_broker.health(target_key, timeout=5.0)
+                assert h["status"] == "OK"
+                assert agent.welcome.get("target_key") == target_key
+            finally:
+                stop_ev.set()
+                try:
+                    await asyncio.wait_for(task, timeout=5.0)
+                except asyncio.TimeoutError:
+                    task.cancel()
+    finally:
+        await _cleanup_empresa(emp_id)
