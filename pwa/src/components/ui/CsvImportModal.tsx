@@ -2,6 +2,7 @@
 
 import React, { useState } from 'react';
 import { AlertCircle, CheckCircle2, UploadCloud, X, FileJson } from 'lucide-react';
+import { apiFetch, extractTenantId, getApiBaseUrl, getAuthToken } from '@/lib/api';
 
 interface CsvImportModalProps {
   isOpen: boolean;
@@ -47,31 +48,61 @@ export function CsvImportModal({ isOpen, onClose, resourceName, endpoint, onSucc
     formData.append('file', file);
 
     try {
-      const token = localStorage.getItem('sevalor_token');
-      const apiEndpoint = endpoint.startsWith('http') 
-        ? endpoint 
-        : `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}${endpoint}`;
-        
-      const response = await fetch(apiEndpoint, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
-        body: formData,
-      });
+      let data: ImportResult;
+      const baseUrl = getApiBaseUrl();
 
-      if (!response.ok) {
-        throw new Error('Error al pujar el fitxer');
+      if (endpoint.startsWith('http://') || endpoint.startsWith('https://')) {
+        if (baseUrl.startsWith('http') && endpoint.startsWith(baseUrl)) {
+          const relativePath = endpoint.slice(baseUrl.length) || '/';
+          data = await apiFetch<ImportResult>(relativePath, {
+            method: 'POST',
+            body: formData,
+          });
+        } else {
+          const token = getAuthToken();
+          const tenantId = extractTenantId();
+          const headers: Record<string, string> = {};
+          if (token) headers['Authorization'] = `Bearer ${token}`;
+          if (tenantId) {
+            headers['X-Empresa-ID'] = tenantId;
+            headers['X-Tenant-ID'] = tenantId;
+          }
+
+          const response = await fetch(endpoint, {
+            method: 'POST',
+            credentials: 'include',
+            headers,
+            body: formData,
+          });
+
+          if (!response.ok) {
+            const errJson = await response.json().catch(() => null);
+            const detail =
+              (typeof errJson?.detail === 'string' && errJson.detail) ||
+              (typeof errJson?.message === 'string' && errJson.message) ||
+              `Error al pujar el fitxer (${response.status})`;
+            throw new Error(detail);
+          }
+          data = await response.json();
+        }
+      } else {
+        data = await apiFetch<ImportResult>(endpoint, {
+          method: 'POST',
+          body: formData,
+        });
       }
 
-      const data: ImportResult = await response.json();
       setResult(data);
 
       if (data.inserits > 0) {
         onSuccess();
       }
-    } catch (error) {
-      setErrorToast('Hi ha hagut un error processant el fitxer CSV. Comprova la connexió o el format.');
+    } catch (error: unknown) {
+      const message =
+        error instanceof Error && error.message
+          ? error.message
+          : 'Hi ha hagut un error processant el fitxer CSV. Comprova la connexió o el format.';
+      setErrorToast(message);
     } finally {
       setLoading(false);
     }

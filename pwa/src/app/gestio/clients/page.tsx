@@ -169,7 +169,10 @@ export default function GestioClientsPage() {
       if (token) hdrs["Authorization"] = `Bearer ${token}`;
       if (tenantId) hdrs["X-Empresa-ID"] = tenantId;
 
-      const resp = await fetch(`${getApiBaseUrl()}/gestio/clients/export`, { headers: hdrs });
+      const resp = await fetch(`${getApiBaseUrl()}/gestio/clients/export`, {
+        credentials: "include",
+        headers: hdrs,
+      });
       if (!resp.ok) {
         throw new Error(`Error exportant CSV (${resp.status})`);
       }
@@ -805,9 +808,8 @@ export default function GestioClientsPage() {
         isOpen={isImportModalOpen} 
         onClose={() => setIsImportModalOpen(false)} 
         resourceName="Clients"
-        endpoint={`${getApiBaseUrl()}/gestio/clients/import`}
+        endpoint="/gestio/clients/import"
         onSuccess={() => {
-          setIsImportModalOpen(false);
           carregarClients();
         }}
       />

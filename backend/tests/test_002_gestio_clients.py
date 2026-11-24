@@ -187,3 +187,108 @@ async def test_enumeracio_automatica_clients_i_aillament_tenant(admin_session, h
         )
         assert r_emp2.status_code == 201, r_emp2.text
         assert r_emp2.json()["codi"] == "CLI-0001"
+
+
+def test_parse_csv_excel_semicolon_latin1_and_short_rows():
+    from app.api.v1.gestio.clients import _CLIENT_CSV_ALIASES, ClientCreate
+    from app.services.csv_service import parse_and_validate_csv_with_rows
+
+    # Excel català: punt i coma, codificació cp1252, capçaleres amb accents, fila curta i línia buida
+    raw_text = (
+        "Raó Social;NIF;Telèfon;Adreça Fiscal\n"
+        "Agrícola del Vallès SL;B61234567;600111222\n"
+        "\n"
+        "Instal·lacions Solà;NIF_DOLENT;600999888;Carrer Major, 12\n"
+        "Regadiu Ponent SA;A69876543\n"
+    )
+    valid_rows, errors = parse_and_validate_csv_with_rows(
+        raw_text.encode("cp1252"),
+        ClientCreate,
+        column_aliases=_CLIENT_CSV_ALIASES,
+    )
+    assert len(valid_rows) == 2
+    assert valid_rows[0][0] == 2
+    assert valid_rows[0][1].rao_social == "Agrícola del Vallès SL"
+    assert valid_rows[0][1].adreca_fiscal is None
+    assert valid_rows[1][0] == 5
+    assert valid_rows[1][1].nif == "A69876543"
+    assert len(errors) == 1
+    assert errors[0]["fila"] == 4
+    assert errors[0]["columna"] == "nif"
+
+
+@pytest.mark.asyncio
+async def test_import_csv_clients_robustesa_i_rls(admin_session, headers, boss_token):
+    from app.core.security import create_access_token
+
+    _, empresa_id_1 = boss_token
+    admin_session.add(
+        Empresa(
+            id=uuid.UUID(empresa_id_1),
+            nom="Import Emp 1",
+            nif="B" + str(uuid.uuid4())[:8].upper(),
+            subdomini="imp1-" + str(uuid.uuid4())[:5],
+            pla_subscripcio="STARTER",
+            estat_pagament="ACTIU",
+        )
+    )
+    empresa_id_2 = uuid.uuid4()
+    admin_session.add(
+        Empresa(
+            id=empresa_id_2,
+            nom="Import Emp 2",
+            nif="B" + str(uuid.uuid4())[:8].upper(),
+            subdomini="imp2-" + str(uuid.uuid4())[:5],
+            pla_subscripcio="STARTER",
+            estat_pagament="ACTIU",
+        )
+    )
+    await admin_session.flush()
+
+    token_2 = create_access_token({"sub": str(uuid.uuid4()), "rol": "BOSS", "empresa_id": str(empresa_id_2)})
+    headers_2 = {"Authorization": f"Bearer {token_2}", "X-Empresa-ID": str(empresa_id_2)}
+
+    csv_excel = (
+        "Raó Social;NIF;Telèfon\n"
+        "Masia Ca n'Oriol;B71111111;611111111\n"
+        "Masia Ca n'Oriol Dup;B71111111\n"
+        "Cooperativa Garraf;B72222222\n"
+    ).encode("cp1252")
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        r_ok = await ac.post(
+            "/api/v1/gestio/clients/import",
+            files={"file": ("CLIENTS.CSV", csv_excel, "text/csv")},
+            headers=headers,
+        )
+        assert r_ok.status_code == 200, r_ok.text
+        data = r_ok.json()
+        assert data["inserits"] == 2
+        assert data["total_processats"] == 3
+        assert len(data["errors_detectats"]) == 1
+        assert data["errors_detectats"][0]["fila"] == 3
+        assert "NIF" in data["errors_detectats"][0]["motiu"]
+
+        # Verificar que els 2 vàlids s'han persistit i estan aïllats per RLS
+        r_emp1 = await ac.get("/api/v1/gestio/clients", headers=headers)
+        assert r_emp1.status_code == 200
+        assert len(r_emp1.json()) == 2
+
+        r_emp2 = await ac.get("/api/v1/gestio/clients", headers=headers_2)
+        assert r_emp2.status_code == 200
+        assert r_emp2.json() == []
+
+        # Rebutjar fitxer buit o extensió invàlida
+        r_empty = await ac.post(
+            "/api/v1/gestio/clients/import",
+            files={"file": ("buit.csv", b"   ", "text/csv")},
+            headers=headers,
+        )
+        assert r_empty.status_code == 400
+
+        r_ext = await ac.post(
+            "/api/v1/gestio/clients/import",
+            files={"file": ("clients.xlsx", b"PK\x03\x04dummy", "application/octet-stream")},
+            headers=headers,
+        )
+        assert r_ext.status_code == 400

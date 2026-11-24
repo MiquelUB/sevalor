@@ -3,6 +3,7 @@ import uuid
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Sequence
 
+import filetype  # type: ignore[import-untyped]
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
@@ -14,8 +15,36 @@ from app.core.db import get_db_with_tenant_context
 from app.core.security import require_roles
 from app.models.models import Client, Finca
 from app.services.codis_service import generar_seguent_codi
-from app.services.csv_service import CsvImportResult, generate_csv_content, parse_and_validate_csv
+from app.services.csv_service import (
+    CsvImportResult,
+    generate_csv_content,
+    parse_and_validate_csv_with_rows,
+)
 from app.services.sovereign_storage import SovereignStorageGateway
+
+_CLIENT_CSV_ALIASES: Dict[str, str] = {
+    "rao_social": "rao_social",
+    "raosocial": "rao_social",
+    "nom": "rao_social",
+    "nom_client": "rao_social",
+    "client": "rao_social",
+    "empresa": "rao_social",
+    "nif": "nif",
+    "cif": "nif",
+    "nif_cif": "nif",
+    "dni": "nif",
+    "telefon": "telefon",
+    "tel": "telefon",
+    "mobil": "telefon",
+    "email": "email",
+    "correu": "email",
+    "correu_electronic": "email",
+    "adreca_fiscal": "adreca_fiscal",
+    "adreca": "adreca_fiscal",
+    "direccio": "adreca_fiscal",
+    "iban": "iban",
+    "codi": "codi",
+}
 
 logger = logging.getLogger("sevalor.clients")
 
@@ -86,6 +115,8 @@ class ClientCreate(BaseModel):
         v = v.upper().replace(" ", "")
         if len(v) < 15 or len(v) > 34:
             raise ValueError("Longitud d'IBAN invàlida")
+        if not v.isalnum():
+            raise ValueError("L'IBAN només pot contenir lletres i números")
         # Modulo 97 check
         # Move first 4 chars to the end
         rearranged = v[4:] + v[:4]
@@ -734,33 +765,45 @@ async def importar_clients_csv(
     file: UploadFile = File(...),
     db: AsyncSession = Depends(get_db_with_tenant_context),
 ) -> CsvImportResult:
-    if not file.filename.endswith(".csv"):  # type: ignore
+    if not file.filename or not file.filename.lower().endswith(".csv"):
         raise HTTPException(status_code=400, detail="El fitxer ha de ser un CSV")
 
     content = await file.read()
-    valid_records, errors = parse_and_validate_csv(content, ClientCreate)
+    if not content or not content.strip():
+        raise HTTPException(status_code=400, detail="El fitxer CSV està buit")
+
+    kind = filetype.guess(content)
+    if kind is not None and not kind.mime.startswith("text/"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Format de fitxer invàlid ({kind.mime}). Puja un fitxer CSV de text pla.",
+        )
+
+    valid_rows, errors = parse_and_validate_csv_with_rows(
+        content, ClientCreate, column_aliases=_CLIENT_CSV_ALIASES
+    )
 
     inserits = 0
-    total_processats = len(valid_records) + len(set(e["fila"] for e in errors))
+    total_processats = len(valid_rows) + len({e["fila"] for e in errors})
 
     emp_uuid = _resolve_emp_uuid(request)
 
-    # Processar els vàlids un a un amb enumeració automàtica CLI-XXXX
-    for record in valid_records:
+    # Processar els vàlids un a un amb enumeració automàtica CLI-XXXX i SAVEPOINT per fila
+    for row_num, record in valid_rows:
         dup_nif = (
             await db.execute(
                 select(Client.id).where(
                     Client.empresa_id == emp_uuid,
-                    Client.nif == record.nif,  # type: ignore[attr-defined]
+                    Client.nif == record.nif,
                 )
             )
         ).first()
         if dup_nif:
             errors.append(
                 {
-                    "fila": "Desconeguda",
+                    "fila": row_num,
                     "columna": "nif",
-                    "valor": record.nif,  # type: ignore[attr-defined]
+                    "valor": record.nif,
                     "motiu": "Ja existeix un client amb aquest NIF",
                 }
             )
@@ -771,20 +814,20 @@ async def importar_clients_csv(
         client_db = Client(
             empresa_id=emp_uuid,
             codi=codi_auto,
-            iban_xifrat_simetric=getattr(record, "iban", None),
+            iban_xifrat_simetric=record.iban,
             **dades_client,
         )
-        db.add(client_db)
         try:
-            await db.flush()
+            async with db.begin_nested():
+                db.add(client_db)
+                await db.flush()
             inserits += 1
         except IntegrityError:
-            await db.rollback()
             errors.append(
                 {
-                    "fila": "Desconeguda",
+                    "fila": row_num,
                     "columna": "nif/codi",
-                    "valor": record.nif,  # type: ignore[attr-defined]
+                    "valor": record.nif,
                     "motiu": "Ja existeix un client amb aquest NIF o Codi",
                 }
             )
