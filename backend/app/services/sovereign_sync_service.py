@@ -31,7 +31,7 @@ from typing import Any, Awaitable, Callable, Dict, Iterable, List, Optional, Seq
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.db import set_tenant_context
+from app.core.db import AsyncSessionLocal, set_tenant_context
 from app.models.models import (
     AlbaraProveidor,
     Article,
@@ -1137,13 +1137,15 @@ async def sincronitzar_categoria_al_disc(
     if not await _is_disk_writable_now(db, emp_uuid):
         return {"escrits": 0, "existents": 0, "total_bd": 0, "errors": 0}
 
-    # Aïllament RLS obligatori abans de consultar PostgreSQL
-    try:
-        await set_tenant_context(db, str(emp_uuid))
-    except Exception as exc:
-        logger.warning("No s'ha pogut establir context RLS per sync %s/%s: %s", emp_uuid, categoria, exc)
+    # Aïllament RLS obligatori abans de consultar PostgreSQL (serialitzat per sessió asyncpg)
+    db_lock = db.info.setdefault("_sevalor_db_lock", asyncio.Lock())
+    async with db_lock:
+        try:
+            await set_tenant_context(db, str(emp_uuid))
+        except Exception as exc:
+            logger.warning("No s'ha pogut establir context RLS per sync %s/%s: %s", emp_uuid, categoria, exc)
 
-    rows = await collector(db, emp_uuid)
+        rows = await collector(db, emp_uuid)
     total_bd = len(rows)
     if total_bd == 0:
         return {"escrits": 0, "existents": 0, "total_bd": 0, "errors": 0}
@@ -1311,9 +1313,18 @@ async def reparar_categoria_buida_si_cal(
         _READ_REPAIR_LAST_TS[key] = now
         try:
             emp_uuid = empresa_id if isinstance(empresa_id, uuid.UUID) else uuid.UUID(emp_str)
-            stats = await sincronitzar_categoria_al_disc(
-                db, emp_uuid, categoria, only_missing=True
-            )
+            sync_s = getattr(db, "sync_session", None)
+            is_savepoint = getattr(sync_s, "join_transaction_mode", None) == "create_savepoint"
+            if is_savepoint:
+                stats = await sincronitzar_categoria_al_disc(
+                    db, emp_uuid, categoria, only_missing=True
+                )
+            else:
+                async with AsyncSessionLocal() as repair_db:
+                    stats = await sincronitzar_categoria_al_disc(
+                        repair_db, emp_uuid, categoria, only_missing=True
+                    )
+                    await repair_db.commit()
             return stats["escrits"] > 0
         except Exception as exc:
             logger.warning(

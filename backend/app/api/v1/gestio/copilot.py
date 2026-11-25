@@ -30,7 +30,7 @@ from app.services.copilot_config_service import (
     get_strict_copilot_config,
     save_strict_copilot_config,
 )
-from app.services.llm_utils import strip_think
+from app.services.llm_utils import apply_qwen3_no_think, strip_think
 from app.services.sovereign_storage import SovereignStorageGateway
 from app.services.subagents.dispatcher import copilot_dispatcher
 from app.services.vault_tunnel import (
@@ -130,6 +130,16 @@ async def _resoldre_model_actiu_tunel(target_key: str, configured_model: str) ->
                 if lm.lower() == cfg_low:
                     return lm
         chat_models = [m for m in loaded_models if "embed" not in m.lower()]
+        text_only = [
+            m for m in chat_models if "-vl-" not in m.lower() and "vision" not in m.lower()
+        ]
+        preferred_default = str(getattr(settings, "LM_STUDIO_MODEL", "qwen3-4b") or "").strip()
+        if text_only:
+            if preferred_default:
+                for m in text_only:
+                    if m.lower() == preferred_default.lower():
+                        return m
+            return text_only[0]
         if chat_models:
             return chat_models[0]
         return loaded_models[0]
@@ -139,7 +149,7 @@ async def _resoldre_model_actiu_tunel(target_key: str, configured_model: str) ->
 
     return str(
         getattr(settings, "LM_STUDIO_MODEL", None)
-        or getattr(settings, "LMSTUDIO_MODEL", "qwen2.5-vl-7b-instruct")
+        or getattr(settings, "LMSTUDIO_MODEL", "qwen3-4b")
     )
 
 
@@ -211,10 +221,13 @@ async def cridar_lm_studio(
     model_name = await _resoldre_model_actiu_tunel(target_key, configured_model)
     payload: Dict[str, Any] = {
         "model": model_name,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": pregunta},
-        ],
+        "messages": apply_qwen3_no_think(
+            model_name,
+            [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": pregunta},
+            ],
+        ),
         "temperature": 0.2,
         "max_tokens": max(64, min(int(max_tokens), 1024)),
     }
@@ -1004,11 +1017,17 @@ class CopilotConfigIn(BaseModel):
     system_prompt: str
     rag_prompt: str = ""
     subagent_prompts: Dict[str, str] = Field(default_factory=dict)
+    contrast_rules: List[str] = Field(default_factory=list)
+    router_hints: str = ""
+    subagent_enabled: Dict[str, bool] = Field(default_factory=dict)
+    idiosincrasia: Dict[str, str] = Field(default_factory=dict)
+    synthesis_max_tokens: int = 700
     llm_model: str = ""
     llm_chat_model: str = ""
     llm_vision_model: str = ""
     hardware_profile: str = "32GB"
     timeout_budget_s: Optional[float] = None
+    router_timeout_s: Optional[float] = None
 
 
 @router.get("/config", response_model=CopilotConfigIn)
@@ -1024,21 +1043,33 @@ async def obtenir_config_copilot(
             system_prompt="",
             rag_prompt="",
             subagent_prompts={},
+            contrast_rules=[],
+            router_hints="",
+            subagent_enabled={},
+            idiosincrasia={},
+            synthesis_max_tokens=700,
             llm_model="",
             llm_chat_model="",
             llm_vision_model="",
             hardware_profile="32GB",
-            timeout_budget_s=18.0,
+            timeout_budget_s=24.0,
+            router_timeout_s=8.0,
         )
     return CopilotConfigIn(
         system_prompt=cfg.system_prompt or "",
         rag_prompt=cfg.rag_prompt or "",
         subagent_prompts=dict(cfg.subagent_prompts or {}),
+        contrast_rules=list(cfg.contrast_rules or []),
+        router_hints=cfg.router_hints or "",
+        subagent_enabled=cfg.subagent_enabled_map,
+        idiosincrasia=dict(cfg.idiosincrasia or {}),
+        synthesis_max_tokens=cfg.synthesis_max_tokens,
         llm_model=cfg.effective_chat_model,
         llm_chat_model=cfg.effective_chat_model,
         llm_vision_model=cfg.llm_vision_model or "",
         hardware_profile=cfg.hardware_profile,
         timeout_budget_s=cfg.timeout_budget_s,
+        router_timeout_s=cfg.router_timeout_s,
     )
 
 
@@ -1056,21 +1087,33 @@ async def actualitzar_config_copilot(
         system_prompt=payload.system_prompt,
         rag_prompt=payload.rag_prompt,
         subagent_prompts=payload.subagent_prompts,
+        contrast_rules=payload.contrast_rules,
+        router_hints=payload.router_hints,
+        subagent_enabled=payload.subagent_enabled,
+        idiosincrasia=payload.idiosincrasia,
+        synthesis_max_tokens=payload.synthesis_max_tokens,
         llm_model=payload.llm_model,
         llm_chat_model=payload.llm_chat_model or payload.llm_model,
         llm_vision_model=payload.llm_vision_model,
         hardware_profile=payload.hardware_profile,
         timeout_budget_s=payload.timeout_budget_s,
+        router_timeout_s=payload.router_timeout_s,
     )
     return CopilotConfigIn(
         system_prompt=cfg.system_prompt or "",
         rag_prompt=cfg.rag_prompt or "",
         subagent_prompts=dict(cfg.subagent_prompts or {}),
+        contrast_rules=list(cfg.contrast_rules or []),
+        router_hints=cfg.router_hints or "",
+        subagent_enabled=cfg.subagent_enabled_map,
+        idiosincrasia=dict(cfg.idiosincrasia or {}),
+        synthesis_max_tokens=cfg.synthesis_max_tokens,
         llm_model=cfg.effective_chat_model,
         llm_chat_model=cfg.effective_chat_model,
         llm_vision_model=cfg.llm_vision_model or "",
         hardware_profile=cfg.hardware_profile,
         timeout_budget_s=cfg.timeout_budget_s,
+        router_timeout_s=cfg.router_timeout_s,
     )
 
 
@@ -1103,7 +1146,6 @@ async def consultar_xat_tecnic(
         context_id=dades.context_id,
         vertical=vertical,
         historial=dades.historial,
-        agent_prompt_system=empresa.agent_prompt_system if empresa else None,
     )
     return resposta
 
@@ -1170,15 +1212,21 @@ async def obtenir_estat_ia(
             if isinstance(m, dict) and m.get("id")
         ]
         chat_models = [m for m in models if "embed" not in m.lower()]
-        model_actiu = (
-            chat_models[0]
-            if chat_models
-            else (
-                models[0]
-                if models
-                else getattr(settings, "LM_STUDIO_MODEL", "qwen2.5-vl-7b-instruct")
+        text_only = [
+            m for m in chat_models if "-vl-" not in m.lower() and "vision" not in m.lower()
+        ]
+        preferred_default = str(getattr(settings, "LM_STUDIO_MODEL", "qwen3-4b") or "").strip()
+        if text_only:
+            model_actiu = next(
+                (m for m in text_only if preferred_default and m.lower() == preferred_default.lower()),
+                text_only[0],
             )
-        )
+        elif chat_models:
+            model_actiu = chat_models[0]
+        elif models:
+            model_actiu = models[0]
+        else:
+            model_actiu = preferred_default or "qwen3-4b"
         return {
             "estat": "ONLINE",
             "status": "ONLINE",

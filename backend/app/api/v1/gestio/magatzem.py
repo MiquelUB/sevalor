@@ -1021,17 +1021,25 @@ async def afegir_linia_picking(
                 from app.api.v1.gestio.copilot import cridar_lm_studio
 
                 # RF-18 / RF-33: Intervenció del Copilot per avaluar Backorders o falta d'estoc
-                avís_ia = await cridar_lm_studio(
-                    pregunta=(
-                        f"S'ha intentat extreure {payload.quantitat_prevista} unitats de l'article {estoc.article_id}, "
-                        f"però només hi ha {disponible} disponibles físicament. Si no hi ha comandes en trànsit, "
-                        "adverteix el cap de magatzem de forma tècnica i concisa."
-                    ),
-                    vertical="LOGISTICA",
-                    context_addicional="El teu objectiu és bloquejar el picking i advertir del trencament d'estoc.",
-                    empresa=empresa,
-                    node_ia_url=empresa.node_ia_url,
-                )
+                try:
+                    avís_ia = await cridar_lm_studio(
+                        pregunta=(
+                            f"S'ha intentat extreure {payload.quantitat_prevista} unitats de l'article {estoc.article_id}, "
+                            f"però només hi ha {disponible} disponibles físicament. Si no hi ha comandes en trànsit, "
+                            "adverteix el cap de magatzem de forma tècnica i concisa."
+                        ),
+                        vertical="LOGISTICA",
+                        context_addicional="El teu objectiu és bloquejar el picking i advertir del trencament d'estoc.",
+                        empresa=empresa,
+                        node_ia_url=empresa.node_ia_url,
+                        db=db,
+                    )
+                except HTTPException as copilot_exc:
+                    logging.getLogger("magatzem").warning(
+                        "Copilot IA no disponible en advertència d'estoc (empresa=%s): %s",
+                        empresa.id,
+                        copilot_exc.detail,
+                    )
 
             detail_msg = (
                 f"❌ Copilot IA: {avís_ia}"

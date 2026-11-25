@@ -268,7 +268,7 @@ async def test_bloc1_onboarding_complet_i_zero_storage_hetzner(
                     await wait_for(
                         lambda: (emp_a / "11_configuracio_i_backups/identitat_camaleo/empresa.json").is_file()
                         and (emp_a / f"08_flota_i_operaris/operaris/{boss_id}.json").is_file()
-                        and (emp_a / "09_copilot_ia/prompt_sistema/system_prompt.txt").is_file(),
+                        and (emp_a / "09_copilot_ia/prompt_sistema/copilot_profile.json").is_file(),
                         timeout=8.0,
                     )
 
@@ -309,7 +309,11 @@ async def test_bloc1_onboarding_complet_i_zero_storage_hetzner(
                     assert empresa_json["adreca"] == adreca_real
                     assert boss_json["nom"] == "Montserrat"
                     assert boss_json["email"] == boss_email_real
-                    assert (emp_a / "09_copilot_ia/prompt_sistema/system_prompt.txt").read_text("utf-8") == prompt_real
+                    profile_json = json.loads(
+                        (emp_a / "09_copilot_ia/prompt_sistema/copilot_profile.json").read_text("utf-8")
+                    )
+                    assert profile_json["system_prompt"] == prompt_real
+                    assert not (emp_a / "09_copilot_ia/prompt_sistema/system_prompt.txt").exists()
 
                     # 3. Verificar fitxa comercial + llicències al Disc del Superadmin
                     fitxa_sa = json.loads(

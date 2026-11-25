@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.models.models import Client, Empresa, TokenInvitacioTelegram
+from app.services.llm_utils import apply_qwen3_no_think
 from app.services.vault_tunnel import VaultTunnelError, empresa_target_key, vault_tunnel_broker
 
 logger = logging.getLogger("telegram_service")
@@ -166,13 +167,16 @@ class TelegramService:
                 return f"Informació d'atenció al client:\n\n{context_rag}"
             return "Gràcies pel vostre missatge. Hem registrat la vostra consulta i el nostre equip tècnic us respondrà aviat."
 
-        model_name = getattr(settings, "LM_STUDIO_MODEL", "qwen2.5-vl-7b-instruct")
+        model_name = getattr(settings, "LM_STUDIO_MODEL", "qwen3-4b")
         payload: Dict[str, Any] = {
             "model": model_name,
-            "messages": [
-                {"role": "system", "content": system_prompt_telegram},
-                {"role": "user", "content": text},
-            ],
+            "messages": apply_qwen3_no_think(
+                model_name,
+                [
+                    {"role": "system", "content": system_prompt_telegram},
+                    {"role": "user", "content": text},
+                ],
+            ),
             "temperature": 0.1,  # Molt baixa per evitar al·lucinacions
             "max_tokens": 400,
         }

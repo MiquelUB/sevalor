@@ -104,8 +104,8 @@ class SubagentPlanificacioEquip(BaseSubagent):
         caller_user_id: Optional[uuid.UUID] = None,
         **kwargs: Any,
     ) -> dict:
-        c_role = caller_role or args.get("_caller_role")
-        c_user_id = caller_user_id or args.get("_caller_user_id")
+        c_role = caller_role
+        c_user_id = caller_user_id
 
         if tool_name == "get_work_orders":
             return await self.tool_get_work_orders(

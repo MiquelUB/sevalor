@@ -5,10 +5,12 @@ from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
 from pydantic import BaseModel, Field
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db_with_tenant_context
 from app.core.security import get_current_user_claims, require_roles
+from app.models.models import Empresa
 from app.services.memorandum_service import generar_memorandum_tecnic
 from app.services.sovereign_storage import SovereignStorageGateway
 from app.services.whisper_service import transcriure_audio
@@ -51,7 +53,23 @@ async def consultar_ia_rag(
     if not pregunta:
         raise HTTPException(status_code=422, detail="Consulta buida")
 
-    resposta = await cridar_lm_studio(pregunta=pregunta)
+    empresa_id_str = claims.get("empresa_id")
+    if not empresa_id_str:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Tenant no identificat")
+    res_emp = await db.execute(select(Empresa).where(Empresa.id == uuid.UUID(str(empresa_id_str))))
+    empresa = res_emp.scalar_one_or_none()
+    if not empresa:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Node d'IA local no disponible",
+        )
+
+    resposta = await cridar_lm_studio(
+        pregunta=pregunta,
+        vertical=empresa.vertical or "SEVALOR",
+        empresa=empresa,
+        db=db,
+    )
     if not resposta:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

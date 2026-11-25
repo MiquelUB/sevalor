@@ -183,13 +183,14 @@ async def _cridar_ia_vision(
     # Resoldre `llm_vision_model` del perfil sobirà de l'empresa al PC (caché o disc) amb fallback segur
     vision_model_override = ""
     try:
-        import time as _time
+        from app.services.copilot_config_service import (
+            PROFILE_ITEM_ID,
+            get_cached_copilot_profile_sync,
+        )
 
-        from app.services.copilot_config_service import _PROFILE_CACHE, PROFILE_ITEM_ID
-
-        cached = _PROFILE_CACHE.get(str(emp_target_str))
-        if cached is not None and cached[0] > _time.monotonic():
-            vision_model_override = cached[1].effective_vision_model
+        cached_profile = get_cached_copilot_profile_sync(emp_target_str)
+        if cached_profile is not None:
+            vision_model_override = cached_profile.effective_vision_model
         else:
             raw_profiles = await vault_tunnel_broker.json_get_list(
                 target_key, "09_copilot_ia/prompt_sistema", timeout=2.0
@@ -204,19 +205,24 @@ async def _cridar_ia_vision(
                     raw_profiles[0] if isinstance(raw_profiles[0], dict) else None,
                 )
                 if isinstance(pdoc, dict):
-                    vision_model_override = str(
-                        pdoc.get("llm_vision_model")
-                        or pdoc.get("llm_chat_model")
-                        or pdoc.get("llm_model")
-                        or ""
-                    ).strip()
-    except Exception:
-        pass
+                    raw_vis = str(pdoc.get("llm_vision_model") or "").strip()
+                    if raw_vis:
+                        vision_model_override = raw_vis
+                    else:
+                        raw_chat = str(
+                            pdoc.get("llm_chat_model") or pdoc.get("llm_model") or ""
+                        ).strip()
+                        if "-vl-" in raw_chat.lower() or "vision" in raw_chat.lower():
+                            vision_model_override = raw_chat
+    except Exception as exc:
+        logger.warning(
+            "No s'ha pogut resoldre llm_vision_model del perfil sobirà (empresa=%s), s'aplica fallback: %s",
+            emp_target_str,
+            exc,
+        )
 
-    model_name = (
-        vision_model_override
-        or getattr(settings, "LM_STUDIO_MODEL", "qwen2.5-vl-7b-instruct")
-    )
+    default_vision = getattr(settings, "LM_STUDIO_VISION_MODEL", "qwen2.5-vl-7b-instruct")
+    model_name = vision_model_override or default_vision
 
     user_content: Any = text_contingut
     if imatge_b64:

@@ -75,6 +75,30 @@ async def is_tenant_blacklisted(empresa_id: str) -> Optional[str]:
     return None
 
 
+async def get_cache_version(namespace: str, empresa_id: str) -> Optional[str]:
+    """Llegeix el comptador de versió per invalidació multi-worker de cachés per tenant."""
+    try:
+        client = await get_redis_client()
+        if client:
+            val = await client.get(f"{namespace}:{empresa_id}")
+            return str(val) if val is not None else None
+    except Exception as exc:
+        logger.debug("No s'ha pogut llegir versió de caché Redis (%s:%s): %s", namespace, empresa_id, exc)
+    return None
+
+
+async def bump_cache_version(namespace: str, empresa_id: str) -> Optional[str]:
+    """Incrementa el comptador de versió a Redis per invalidar la caché de tots els workers."""
+    try:
+        client = await get_redis_client()
+        if client:
+            new_val = await client.incr(f"{namespace}:{empresa_id}")
+            return str(new_val)
+    except Exception as exc:
+        logger.warning("No s'ha pogut incrementar versió de caché Redis (%s:%s): %s", namespace, empresa_id, exc)
+    return None
+
+
 async def get_redis() -> aioredis.Redis:
     """Dependència FastAPI que retorna el client Redis asíncron actiu."""
     client = await get_redis_client()

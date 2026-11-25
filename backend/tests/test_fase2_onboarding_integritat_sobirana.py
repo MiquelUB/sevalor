@@ -153,11 +153,11 @@ async def test_onboarding_integritat_dades_i_persistencia_local_fs(headers, db_s
 
     empresa_json_path = os.path.join(config_folder, "empresa.json")
     boss_json_path = os.path.join(config_folder, "boss.json")
-    system_prompt_path = os.path.join(prompt_folder, "system_prompt.txt")
+    copilot_profile_path = os.path.join(prompt_folder, "copilot_profile.json")
 
     assert os.path.exists(empresa_json_path), f"Falta {empresa_json_path}"
     assert os.path.exists(boss_json_path), f"Falta {boss_json_path}"
-    assert os.path.exists(system_prompt_path), f"Falta {system_prompt_path}"
+    assert os.path.exists(copilot_profile_path), f"Falta {copilot_profile_path}"
 
     with open(empresa_json_path, "r", encoding="utf-8") as f:
         emp_json_data = json.load(f)
@@ -175,9 +175,9 @@ async def test_onboarding_integritat_dades_i_persistencia_local_fs(headers, db_s
         assert boss_json_data["cognoms"] == "Pons Roig"
         assert boss_json_data["telefon"] == telefon_real
 
-    with open(system_prompt_path, "r", encoding="utf-8") as f:
-        prompt_content = f.read()
-        assert prompt_content == system_prompt_text
+    with open(copilot_profile_path, "r", encoding="utf-8") as f:
+        profile_data = json.load(f)
+        assert profile_data["system_prompt"] == system_prompt_text
 
 
 @pytest.mark.asyncio

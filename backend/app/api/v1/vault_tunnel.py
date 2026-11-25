@@ -328,7 +328,6 @@ async def _post_connect_empresa_bootstrap(empresa_id_str: str, conn: TunnelConne
         # 2. Actualitzar metadades de túnel a PostgreSQL i llegir dades inicials (sessió curta)
         empresa_snapshot: Optional[Dict[str, Any]] = None
         boss_snapshot: Optional[Dict[str, Any]] = None
-        prompt_text: Optional[str] = None
         wss_uri = build_wss_tunnel_uri(emp_uuid)
 
         async with AsyncSessionLocal() as session:
@@ -354,7 +353,6 @@ async def _post_connect_empresa_bootstrap(empresa_id_str: str, conn: TunnelConne
                     emp.updated_at = datetime.now(timezone.utc)
                     await session.commit()
 
-                prompt_text = getattr(emp, "agent_prompt_system", None)
                 empresa_snapshot = {
                     "id": empresa_id_str,
                     "nom": emp.nom,
@@ -443,17 +441,6 @@ async def _post_connect_empresa_bootstrap(empresa_id_str: str, conn: TunnelConne
                             "synced_at": datetime.now(timezone.utc).isoformat(),
                         },
                     },
-                    timeout=10.0,
-                )
-
-            if isinstance(prompt_text, str) and prompt_text.strip():
-                sub_prompt = MAPA_CARPETES_CLIENT["copilot_prompt"]
-                await vault_tunnel_broker.file_put(
-                    target_key,
-                    subcarpeta=sub_prompt,
-                    filename="system_prompt.txt",
-                    content_bytes=prompt_text.encode("utf-8"),
-                    content_type="text/plain; charset=utf-8",
                     timeout=10.0,
                 )
 

@@ -2280,8 +2280,8 @@ class ConsultaXatCopilot(Base):
     usuari_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("usuaris.id", ondelete="CASCADE"), nullable=False
     )
-    pregunta: Mapped[str] = mapped_column(Text, nullable=False)
-    resposta: Mapped[str] = mapped_column(Text, nullable=False)
+    pregunta: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    resposta: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     vertical: Mapped[str] = mapped_column(String(100), default="SEVALOR", server_default="SEVALOR")
     node_ia_actiu: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default=text("false")
@@ -2315,6 +2315,7 @@ class ConsultaXatCopilot(Base):
     tool_name: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     tool_args: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
     tool_result: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+    mode_resposta: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),

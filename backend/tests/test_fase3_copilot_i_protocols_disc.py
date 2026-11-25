@@ -187,7 +187,7 @@ async def test_protocols_interns_i_system_prompt_disc_client(
     assert any("amiant" in f.read_text(encoding="utf-8") for f in fitxers_protocols)
 
     # 2. Verificar que /gestio/configuracio/node-ia està eliminat (exclusiu Superadmin)
-    #    i que system_prompt.txt es persisteix al disc de l'empresa via SovereignStorageGateway
+    #    i que copilot_profile.json es persisteix al disc de l'empresa via save_strict_copilot_config
     prompt_personalitzat = "Ets el Copilot de Fontaners del Maresme. Prioritza sempre el compliment del Codi Tècnic de l'Edificació (CTE-DB-HS)."
     resp_conf = await async_client.put(
         "/gestio/configuracio/node-ia",
@@ -195,17 +195,14 @@ async def test_protocols_interns_i_system_prompt_disc_client(
     )
     assert resp_conf.status_code == 404, resp_conf.text
 
-    from app.services.sovereign_storage import SovereignStorageGateway
+    from app.services.copilot_config_service import save_strict_copilot_config
 
-    await SovereignStorageGateway.pujar_fitxer_binari(
+    await save_strict_copilot_config(
         db=admin_session,
         empresa_id=empresa_id,
-        categoria="copilot_prompt",
-        nom_fitxer="system_prompt.txt",
-        content=prompt_personalitzat.encode("utf-8"),
-        content_type="text/plain; charset=utf-8",
+        system_prompt=prompt_personalitzat,
     )
 
-    fitxer_prompt = disc_empresa / "09_copilot_ia" / "prompt_sistema" / "system_prompt.txt"
-    assert fitxer_prompt.exists(), f"Fitxer de prompt no trobat a {fitxer_prompt}"
-    assert prompt_personalitzat in fitxer_prompt.read_text(encoding="utf-8")
+    fitxer_profile = disc_empresa / "09_copilot_ia" / "prompt_sistema" / "copilot_profile.json"
+    assert fitxer_profile.exists(), f"Fitxer de perfil no trobat a {fitxer_profile}"
+    assert prompt_personalitzat in fitxer_profile.read_text(encoding="utf-8")

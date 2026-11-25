@@ -93,10 +93,10 @@ async def test_onboarding_persistencia_100_i_fitxers_inicials_disc(
     assert boss_db.email == blind_email(f"jjrovira_{slug}@sevalormante.cat")
     assert boss_db.telefon is None
 
-    # En connectar el PC del client via Túnel WSS, es creen les 38 carpetes i es drenen empresa.json, boss.json i system_prompt.txt
+    # En connectar el PC del client via Túnel WSS, es creen les 38 carpetes i es drenen empresa.json, boss.json i copilot_profile.json
     fitxa_empresa = disc_client / "11_configuracio_i_backups/identitat_camaleo/empresa.json"
     fitxa_boss = disc_client / f"08_flota_i_operaris/operaris/{boss_db.id}.json"
-    prompt_file = disc_client / "09_copilot_ia/prompt_sistema/system_prompt.txt"
+    profile_file = disc_client / "09_copilot_ia/prompt_sistema/copilot_profile.json"
 
     try:
         async with LiveUvicornServer() as server:
@@ -108,7 +108,7 @@ async def test_onboarding_persistencia_100_i_fitxers_inicials_disc(
                 disk_a=disc_client,
             ):
                 await wait_for(
-                    lambda: fitxa_empresa.is_file() and fitxa_boss.is_file() and prompt_file.is_file(),
+                    lambda: fitxa_empresa.is_file() and fitxa_boss.is_file() and profile_file.is_file(),
                     timeout=8.0,
                 )
     finally:
@@ -116,12 +116,14 @@ async def test_onboarding_persistencia_100_i_fitxers_inicials_disc(
 
     assert fitxa_empresa.is_file()
     assert fitxa_boss.is_file()
-    assert prompt_file.is_file()
+    assert profile_file.is_file()
     emp_disk_data = json.loads(fitxa_empresa.read_text("utf-8"))
     boss_disk_data = json.loads(fitxa_boss.read_text("utf-8"))
+    profile_disk_data = json.loads(profile_file.read_text("utf-8"))
     assert emp_disk_data["nif"] == cif_empresa
     assert emp_disk_data["adreca"] == "Avinguda Generalitat 120, Tortosa"
+    assert "agent_prompt_system" not in emp_disk_data
     assert boss_disk_data["nif"] == dni_boss
     assert boss_disk_data["nom"] == "Joan Josep"
     assert boss_disk_data["cognoms"] == "Rovira i Soler"
-    assert prompt_file.read_text("utf-8") == "Ets el Copilot tècnic de Sevalormante."
+    assert profile_disk_data["system_prompt"] == "Ets el Copilot tècnic de Sevalormante."

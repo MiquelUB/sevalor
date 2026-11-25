@@ -501,18 +501,18 @@ async def test_aillament_exclusiu_dues_empreses_i_persistencia_triple(
 
             emp_json_a = disc_empresa_a / "11_configuracio_i_backups/identitat_camaleo/empresa.json"
             boss_json_a = disc_empresa_a / "11_configuracio_i_backups/identitat_camaleo/boss.json"
-            prompt_txt_a = disc_empresa_a / "09_copilot_ia/prompt_sistema/system_prompt.txt"
+            profile_json_a = disc_empresa_a / "09_copilot_ia/prompt_sistema/copilot_profile.json"
             emp_json_b = disc_empresa_b / "11_configuracio_i_backups/identitat_camaleo/empresa.json"
             boss_json_b = disc_empresa_b / "11_configuracio_i_backups/identitat_camaleo/boss.json"
-            prompt_txt_b = disc_empresa_b / "09_copilot_ia/prompt_sistema/system_prompt.txt"
+            profile_json_b = disc_empresa_b / "09_copilot_ia/prompt_sistema/copilot_profile.json"
 
             await wait_for(
                 lambda: emp_json_a.exists()
                 and boss_json_a.exists()
-                and prompt_txt_a.exists()
+                and profile_json_a.exists()
                 and emp_json_b.exists()
                 and boss_json_b.exists()
-                and prompt_txt_b.exists(),
+                and profile_json_b.exists(),
                 timeout=8.0,
             )
 
@@ -531,12 +531,14 @@ async def test_aillament_exclusiu_dues_empreses_i_persistencia_triple(
             dades_disc_a = json.loads(emp_json_a.read_text(encoding="utf-8"))
             assert dades_disc_a["id"] == id_a
             assert dades_disc_a["disc_dur_url"] == url_a
-            assert "Empresa A REBT" in prompt_txt_a.read_text(encoding="utf-8")
+            assert "agent_prompt_system" not in dades_disc_a
+            assert "Empresa A REBT" in json.loads(profile_json_a.read_text(encoding="utf-8"))["system_prompt"]
 
             dades_disc_b = json.loads(emp_json_b.read_text(encoding="utf-8"))
             assert dades_disc_b["id"] == id_b
             assert dades_disc_b["disc_dur_url"] == url_b
-            assert "Empresa B Aigua" in prompt_txt_b.read_text(encoding="utf-8")
+            assert "agent_prompt_system" not in dades_disc_b
+            assert "Empresa B Aigua" in json.loads(profile_json_b.read_text(encoding="utf-8"))["system_prompt"]
 
             # 3. Aïllament estricte d'escriptura d'entitats
             ref_cli_a = await SovereignStorageGateway.desar_entitat_json(

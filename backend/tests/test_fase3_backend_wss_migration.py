@@ -360,8 +360,8 @@ async def test_fase3_onboarding_wss_unic_i_bootstrap_automatic(tmp_path: Path) -
 
                 emp_json = disk_a / "11_configuracio_i_backups" / "identitat_camaleo" / "empresa.json"
                 boss_json = disk_a / "11_configuracio_i_backups" / "identitat_camaleo" / "boss.json"
-                prompt_txt = disk_a / "09_copilot_ia" / "prompt_sistema" / "system_prompt.txt"
-                await _wait_for(lambda: emp_json.exists() and boss_json.exists() and prompt_txt.exists(), timeout=8.0)
+                profile_json = disk_a / "09_copilot_ia" / "prompt_sistema" / "copilot_profile.json"
+                await _wait_for(lambda: emp_json.exists() and boss_json.exists() and profile_json.exists(), timeout=8.0)
 
                 # Totes les 38 carpetes creades a Disc A i mirall Disc B inicialitzat
                 for rel_dir in MAPA_CARPETES_CLIENT.values():

@@ -16,7 +16,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.services.copilot_config_service import get_strict_copilot_config
 from app.services.csv_service import _decode_csv_bytes, _detect_csv_delimiter, _normalize_header
-from app.services.llm_utils import escape_data_block, sanitize_llm_text, strip_think
+from app.services.llm_utils import (
+    apply_qwen3_no_think,
+    escape_data_block,
+    sanitize_llm_text,
+    strip_think,
+)
 from app.services.subagents.base import BaseSubagent
 from app.services.subagents.schemas import SCHEMAS_OCR_VISION
 from app.services.vault_tunnel import (
@@ -479,16 +484,23 @@ class SubagentOcrVision(BaseSubagent):
             profile = await get_strict_copilot_config(db, empresa_id)
             if profile and profile.effective_chat_model:
                 model_name = str(profile.effective_chat_model)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning(
+                "No s'ha pogut llegir el perfil del Copilot per mapping CSV (empresa=%s), s'usa model per defecte: %s",
+                empresa_id,
+                exc,
+            )
 
         target_key = empresa_target_key(empresa_id)
         payload: Dict[str, Any] = {
             "model": model_name,
-            "messages": [
-                {"role": "system", "content": _CSV_COPILOT_SYSTEM_PROMPT},
-                {"role": "user", "content": user_content},
-            ],
+            "messages": apply_qwen3_no_think(
+                model_name,
+                [
+                    {"role": "system", "content": _CSV_COPILOT_SYSTEM_PROMPT},
+                    {"role": "user", "content": user_content},
+                ],
+            ),
             "temperature": 0.0,
             "max_tokens": 220,
             "response_format": {

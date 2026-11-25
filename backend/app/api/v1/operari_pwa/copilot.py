@@ -62,7 +62,6 @@ async def consultar_copilot_operari(
         context_id=dades.context_id,
         vertical=vertical,
         historial=dades.historial,
-        agent_prompt_system=empresa.agent_prompt_system if empresa else None,
         allow_operari=True,
     )
 

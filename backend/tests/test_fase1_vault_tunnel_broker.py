@@ -618,14 +618,20 @@ async def test_fase1_auto_inicialitzacio_38_carpetes_fitxes_i_autodrenatge_svenc
         vault_token=tok,
         feature_copilot_ia=True,
         node_ia_actiu=False,
-        agent_prompt_system="Ets el Copilot REBT dedicat d'Electrotec Sobirana.",
         with_boss=True,
     )
     disk_emp = tmp_path / "disc_electrotec"
 
     try:
         # 1. Escriptures prèvies mentre el PC està apagat -> cua xifrada SVENC1:
+        from app.services.copilot_config_service import save_strict_copilot_config
+
         async with AsyncSessionLocal() as session:
+            await save_strict_copilot_config(
+                session,
+                emp_id,
+                system_prompt="Ets el Copilot REBT dedicat d'Electrotec Sobirana.",
+            )
             ref_json = await SovereignStorageGateway.desar_entitat_json(
                 session, emp_id, "clients", "cli_pend_1", {"nom": "Finca Pendent"}
             )
@@ -639,7 +645,7 @@ async def test_fase1_auto_inicialitzacio_38_carpetes_fitxes_i_autodrenatge_svenc
             )
         assert ref_json.startswith(f"transit://{emp_id}/")
         assert ref_pdf.startswith(f"transit://{emp_id}/")
-        assert len(list((transit_dir / str(emp_id)).glob("*.bin"))) == 2
+        assert len(list((transit_dir / str(emp_id)).glob("*.bin"))) == 3
 
         # 2. El PC es connecta pel túnel WSS -> bootstrap automàtic + drenatge + unlink
         async with _LiveUvicornContext() as srv:
@@ -654,7 +660,7 @@ async def test_fase1_auto_inicialitzacio_38_carpetes_fitxes_i_autodrenatge_svenc
                     if (
                         (disk_emp / "04_factures/emeses_verifactu_pdf/fac_pend_1.pdf").is_file()
                         and (disk_emp / "11_configuracio_i_backups/identitat_camaleo/empresa.json").is_file()
-                        and (disk_emp / "09_copilot_ia/prompt_sistema/system_prompt.txt").is_file()
+                        and (disk_emp / "09_copilot_ia/prompt_sistema/copilot_profile.json").is_file()
                     ):
                         break
                     await asyncio.sleep(0.05)
@@ -664,10 +670,10 @@ async def test_fase1_auto_inicialitzacio_38_carpetes_fitxes_i_autodrenatge_svenc
                 assert (disk_emp / "06_ordres_treball/actives_buffer").is_dir()
                 assert (disk_emp / "11_configuracio_i_backups/identitat_camaleo/empresa.json").is_file()
                 assert (disk_emp / "11_configuracio_i_backups/identitat_camaleo/boss.json").is_file()
-                assert (
-                    (disk_emp / "09_copilot_ia/prompt_sistema/system_prompt.txt").read_text(encoding="utf-8")
-                    == "Ets el Copilot REBT dedicat d'Electrotec Sobirana."
+                profile_data = json.loads(
+                    (disk_emp / "09_copilot_ia/prompt_sistema/copilot_profile.json").read_text(encoding="utf-8")
                 )
+                assert profile_data["system_prompt"] == "Ets el Copilot REBT dedicat d'Electrotec Sobirana."
 
                 # Verificar drenatge real al disc físic + purga (unlink) de Hetzner
                 cli_file = disk_emp / "01_clients/fitxes/cli_pend_1.json"

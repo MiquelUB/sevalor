@@ -680,7 +680,12 @@ async def test_copilot_dispatcher_dispatch_sovereign(admin_session, tmp_path: Pa
         )
         log_db = (await admin_session.execute(stmt)).scalars().first()
         assert log_db is not None
-        assert log_db.pregunta == "Hola, qui ets?"
+        # Zero-Storage Hetzner: sense text ni dades operatives a PG (viven al disc sobirà copilot_feedback)
+        assert log_db.pregunta is None
+        assert log_db.resposta is None
+        assert log_db.tool_args is None
+        assert log_db.tool_result is None
+        assert log_db.mode_resposta is not None
         assert log_db.temps_inferencia_ms >= 0
 
         feedbacks = await SovereignStorageGateway.llegir_entitats_json(

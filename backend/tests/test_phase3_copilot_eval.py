@@ -151,8 +151,11 @@ async def test_f3_01_tool_calling_stock_real(admin_session, boss_token, tmp_path
 
     assert log_db is not None, "El registre de consulta a la BD no s'ha creat"
     assert log_db.tool_name == "get_real_stock"
-    assert log_db.tool_result is not None
-    assert log_db.tool_result.get("total_disponible") == 327.0
+    # Zero-Storage Hetzner: cap dada operativa ni JSON de resposta del disc a PostgreSQL
+    assert log_db.tool_result is None
+    assert log_db.tool_args is None
+    assert log_db.pregunta is None
+    assert log_db.resposta is None
 
 
 @pytest.mark.asyncio
@@ -342,7 +345,11 @@ async def test_f3_02_tool_calling_vehicle_proper(admin_session, boss_token, tmp_
 
     assert log_db is not None
     assert log_db.tool_name == "get_closest_vehicle"
-    assert log_db.tool_result["vehicle_mes_proper"]["matricula"] == "1111-AAA"
+    # Zero-Storage Hetzner: sense payload d'eina ni text de conversa a PostgreSQL
+    assert log_db.tool_result is None
+    assert log_db.tool_args is None
+    assert log_db.pregunta is None
+    assert log_db.resposta is None
 
 
 @pytest.mark.asyncio

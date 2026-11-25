@@ -669,14 +669,6 @@ async def test_bloc2_503_zero_fallback_i_xat_amb_prompt_i_feedback_disc(
                 "art_live",
                 {"id": "art_live", "nom": "Vàlvula Motor 2 polzades", "referencia_inventari": "VLV-2P", "estoc_disponible": 42.0},
             )
-            await SovereignStorageGateway.pujar_fitxer_binari(
-                admin_session,
-                emp_on,
-                "copilot_prompt",
-                "system_prompt.txt",
-                b"INSTRUCCIO SECRETA DEL CLIENT: Prioritza sempre les valvules de llauto.",
-                "text/plain; charset=utf-8",
-            )
             from app.services.copilot_config_service import save_strict_copilot_config
 
             await save_strict_copilot_config(

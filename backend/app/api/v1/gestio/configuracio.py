@@ -239,7 +239,6 @@ async def obtenir_dades_empresa(
         "nif": empresa.nif,
         "vertical": empresa.vertical,
         "magatzem_families_default": empresa.magatzem_families_default,
-        "agent_prompt_system": empresa.agent_prompt_system,
         "adreca": empresa.adreca,
         "codi_postal": empresa.codi_postal,
         "poblacio": empresa.poblacio,
@@ -334,6 +333,11 @@ async def actualitzar_dades_empresa(
         empresa.subdomini = payload.subdomini
 
     await db.commit()
+
+    if empresa_id:
+        from app.services.subagents.dispatcher import invalidate_empresa_meta_cache_async
+
+        await invalidate_empresa_meta_cache_async(empresa_id)
 
     return {"status": "OK", "missatge": "Dades de l'empresa actualitzades correctament"}
 

@@ -1244,7 +1244,6 @@ async def crear_nou_tenant(
         "feature_telegram": payload.feature_flags.get("telegram_bot", True)
         if payload.feature_flags
         else True,
-        "agent_prompt_system": agent_prompt_final,
         "notes_crm": payload.notes_crm,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
@@ -1408,7 +1407,6 @@ async def crear_nou_tenant(
             "vault_token": vault_token_unic,
             "node_ia_actiu": nova_empresa.node_ia_actiu,
             "feature_copilot_ia": copilot_actiu,
-            "agent_prompt_system": agent_prompt_final,
             "magatzem_families_default": payload.magatzem_families_default,
         }
         dades_boss_reals = {
@@ -1426,7 +1424,6 @@ async def crear_nou_tenant(
             boss=nou_boss,
             dades_empresa_reals=dades_empresa_reals,
             dades_boss_reals=dades_boss_reals,
-            agent_prompt_system=agent_prompt_final,
         )
         tots_transit = any(str(v).startswith("transit://") for v in rutes_init.values())
         vault_sync = {

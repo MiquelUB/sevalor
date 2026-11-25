@@ -42,8 +42,12 @@ BACKEND_DIR = REPO_ROOT / "backend"
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
+from datetime import datetime  # noqa: E402
+from zoneinfo import ZoneInfo  # noqa: E402
+
 from app.services.copilot_config_service import build_default_vertical_prompt  # noqa: E402
 from app.services.llm_utils import (  # noqa: E402
+    apply_qwen3_no_think,
     conte_narracio_eina,
     escape_data_block,
     strip_think,
@@ -572,10 +576,23 @@ async def _detect_first_model(client: httpx.AsyncClient, base_url: str) -> str:
     resp.raise_for_status()
     data = resp.json()
     items = data.get("data") if isinstance(data, dict) else []
-    if isinstance(items, list):
-        for item in items:
-            if isinstance(item, dict) and item.get("id"):
-                return str(item["id"])
+    models = [
+        str(item["id"])
+        for item in (items if isinstance(items, list) else [])
+        if isinstance(item, dict) and item.get("id")
+    ]
+    chat_models = [m for m in models if "embed" not in m.lower()]
+    text_only = [m for m in chat_models if "-vl-" not in m.lower() and "vision" not in m.lower()]
+    for preferred in ("qwen3-4b",):
+        for m in text_only:
+            if m.lower() == preferred:
+                return m
+    if text_only:
+        return text_only[0]
+    if chat_models:
+        return chat_models[0]
+    if models:
+        return models[0]
     raise RuntimeError(f"No s'ha trobat cap model carregat a {base_url}/models.")
 
 
@@ -593,12 +610,15 @@ async def _call_router_live(
     sys_msg = f"{ROUTER_SYSTEM_PROMPT}\n\nEines disponibles:\n{tools_desc}"
     payload: Dict[str, Any] = {
         "model": model,
-        "messages": [
-            {"role": "system", "content": sys_msg},
-            {"role": "user", "content": f"Pregunta actual: {query}"},
-        ],
+        "messages": apply_qwen3_no_think(
+            model,
+            [
+                {"role": "system", "content": sys_msg},
+                {"role": "user", "content": f"Pregunta actual: {query}"},
+            ],
+        ),
         "temperature": 0.0,
-        "max_tokens": 220,
+        "max_tokens": 320,
         "response_format": {
             "type": "json_schema",
             "json_schema": {
@@ -661,12 +681,15 @@ async def _call_synthesis_live(
     )
     payload: Dict[str, Any] = {
         "model": model,
-        "messages": [
-            {"role": "system", "content": static_prompt},
-            {"role": "user", "content": user_msg},
-        ],
+        "messages": apply_qwen3_no_think(
+            model,
+            [
+                {"role": "system", "content": static_prompt},
+                {"role": "user", "content": user_msg},
+            ],
+        ),
         "temperature": 0.1,
-        "max_tokens": 350,
+        "max_tokens": 500,
     }
     t0 = time.perf_counter()
     try:
@@ -691,6 +714,7 @@ async def run_evaluation(
     hardware_profile: str,
     vertical_filter: Optional[str],
     limit: Optional[int],
+    router_timeout_override: Optional[float] = None,
 ) -> Dict[str, Any]:
     dispatcher = CopilotDispatcher()
     cases = list(EVAL_CASES)
@@ -701,8 +725,14 @@ async def run_evaluation(
         cases = cases[:limit]
 
     resolved_model = model or "dry-run"
-    router_timeout = 8.0 if hardware_profile == "16GB" else 6.0
-    synth_timeout = 18.0 if hardware_profile == "16GB" else 14.0
+    default_router_t = 12.0 if hardware_profile == "16GB" else 8.0
+    router_timeout = (
+        max(3.0, float(router_timeout_override))
+        if router_timeout_override is not None
+        else default_router_t
+    )
+    synth_timeout = 24.0 if hardware_profile == "16GB" else 18.0
+    ara_str = datetime.now(ZoneInfo("Europe/Madrid")).strftime("%Y-%m-%d %H:%M")
 
     results: List[CaseEvalResult] = []
     async with httpx.AsyncClient(follow_redirects=False) as client:
@@ -814,7 +844,8 @@ async def run_evaluation(
 
             synth_raw = ""
             synth_ms = 0.0
-            if case.fixture_result and err is None:
+            # Mai saltem la síntesi quan el Router fa timeout: avaluem la síntesi sobre les dades de fallback igual que CopilotDispatcher
+            if case.fixture_result:
                 synth_raw, synth_ms, synth_err = await _call_synthesis_live(
                     client,
                     base_url,
@@ -824,17 +855,20 @@ async def run_evaluation(
                     case.fixture_result,
                     synth_timeout,
                 )
-                if synth_err:
+                if synth_err and not err:
                     err = synth_err
 
             clean_synth = strip_think(synth_raw)
             think_leaked = "<think>" in clean_synth.lower() or "</think>" in clean_synth.lower()
             narration_leaked = conte_narracio_eina(clean_synth) if clean_synth else False
-            numeric_hall = (
-                xifres_inventades(clean_synth, case.fixture_result)
-                if clean_synth and case.fixture_result
-                else False
-            )
+            numeric_hall = bool(
+                xifres_inventades(
+                    clean_synth,
+                    case.fixture_result,
+                    pregunta=case.query,
+                    ara_str=ara_str,
+                )
+            ) if (clean_synth and case.fixture_result) else False
 
             results.append(
                 CaseEvalResult(
@@ -864,6 +898,10 @@ async def run_evaluation(
     totals_ms = [r.total_ms for r in non_greet if r.total_ms > 0]
     router_lat = [r.router_ms for r in non_greet if r.router_ms > 0]
     synth_lat = [r.synth_ms for r in non_greet if r.synth_ms > 0]
+    cold_router_ms = round(router_lat[0], 1) if router_lat else 0.0
+    warm_router_lat = router_lat[1:] if len(router_lat) > 1 else router_lat
+    cold_synth_ms = round(synth_lat[0], 1) if synth_lat else 0.0
+    warm_synth_lat = synth_lat[1:] if len(synth_lat) > 1 else synth_lat
 
     slo_p95_ms = 16000.0 if hardware_profile == "16GB" else 12000.0
     p95_total = round(_percentile(totals_ms, 95), 1)
@@ -871,6 +909,7 @@ async def run_evaluation(
         "mode": "dry-run" if dry_run else "live",
         "model": resolved_model,
         "hardware_profile": hardware_profile,
+        "router_timeout_s": router_timeout,
         "cases_total": total,
         "tool_accuracy_pct": round(100.0 * sum(1 for r in results if r.tool_hit) / max(1, total), 1),
         "args_valid_pct": round(100.0 * sum(1 for r in results if r.args_valid) / max(1, total), 1),
@@ -887,10 +926,16 @@ async def run_evaluation(
         "think_leakage_pct": round(
             100.0 * sum(1 for r in results if r.think_leaked) / max(1, total), 1
         ),
+        "latency_cold_router_ms": cold_router_ms,
+        "latency_cold_synth_ms": cold_synth_ms,
         "latency_router_p50_ms": round(_percentile(router_lat, 50), 1),
         "latency_router_p95_ms": round(_percentile(router_lat, 95), 1),
+        "latency_warm_router_p50_ms": round(_percentile(warm_router_lat, 50), 1),
+        "latency_warm_router_p95_ms": round(_percentile(warm_router_lat, 95), 1),
         "latency_synth_p50_ms": round(_percentile(synth_lat, 50), 1),
         "latency_synth_p95_ms": round(_percentile(synth_lat, 95), 1),
+        "latency_warm_synth_p50_ms": round(_percentile(warm_synth_lat, 50), 1),
+        "latency_warm_synth_p95_ms": round(_percentile(warm_synth_lat, 95), 1),
         "latency_total_p50_ms": round(_percentile(totals_ms, 50), 1),
         "latency_total_p95_ms": p95_total,
         "slo_p95_target_ms": slo_p95_ms,
@@ -913,13 +958,18 @@ def _print_report(report: Dict[str, Any]) -> None:
     print(f"Fuita <think>:            {s['think_leakage_pct']}% (objectiu: 0.0%)")
     if s["mode"] == "live":
         print(
-            f"Latència Router p50/p95:  {s['latency_router_p50_ms']} ms / {s['latency_router_p95_ms']} ms"
+            f"Latència Freda (1a crida): Router={s['latency_cold_router_ms']} ms | Síntesi={s['latency_cold_synth_ms']} ms"
         )
         print(
-            f"Latència Síntesi p50/p95: {s['latency_synth_p50_ms']} ms / {s['latency_synth_p95_ms']} ms"
+            f"Latència Router Calenta p50/p95:  {s['latency_warm_router_p50_ms']} ms / {s['latency_warm_router_p95_ms']} ms "
+            f"(global: {s['latency_router_p50_ms']} / {s['latency_router_p95_ms']} ms)"
         )
         print(
-            f"Latència Total p50/p95:   {s['latency_total_p50_ms']} ms / {s['latency_total_p95_ms']} ms "
+            f"Latència Síntesi Calenta p50/p95: {s['latency_warm_synth_p50_ms']} ms / {s['latency_warm_synth_p95_ms']} ms "
+            f"(global: {s['latency_synth_p50_ms']} / {s['latency_synth_p95_ms']} ms)"
+        )
+        print(
+            f"Latència Total p50/p95:           {s['latency_total_p50_ms']} ms / {s['latency_total_p95_ms']} ms "
             f"(SLO <= {s['slo_p95_target_ms']} ms -> {'OK' if s['slo_passed'] else 'SUPERAT'})"
         )
     print("-" * 72)
@@ -972,6 +1022,12 @@ def main() -> int:
         help="Limita el nombre de casos executats (útil per proves ràpides).",
     )
     parser.add_argument(
+        "--router-timeout",
+        type=float,
+        default=None,
+        help="Timeout del Router JSON en segons (per defecte 8.0 s per 32GB o 12.0 s per 16GB).",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Valida encaminament, allowlists i RBAC dels 36 casos sense cridar LM Studio.",
@@ -991,6 +1047,7 @@ def main() -> int:
             hardware_profile=args.hardware_profile,
             vertical_filter=args.vertical,
             limit=args.limit,
+            router_timeout_override=args.router_timeout,
         )
     )
     _print_report(report)

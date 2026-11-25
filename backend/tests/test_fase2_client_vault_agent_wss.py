@@ -228,6 +228,13 @@ async def test_fase2_agent_subprocess_real_wss_end_to_end_empresa_i_llm(tmp_path
     disk_a = tmp_path / "empresa_disc_a"
     disk_b = tmp_path / "empresa_disc_b"
 
+    from app.services.copilot_config_service import save_strict_copilot_config
+
+    async with AsyncSessionLocal() as session:
+        await save_strict_copilot_config(
+            session, emp_id, system_prompt="Prompt tècnic Fase 2 CampoPro."
+        )
+
     proc: Optional[subprocess.Popen[bytes]] = None
     try:
         async with _LiveUvicornOnPort() as srv:
@@ -256,7 +263,7 @@ async def test_fase2_agent_subprocess_real_wss_end_to_end_empresa_i_llm(tmp_path
                 if (
                     await vault_tunnel_broker.is_online(target_key)
                     and (disk_a / "11_configuracio_i_backups/identitat_camaleo/empresa.json").is_file()
-                    and (disk_a / "09_copilot_ia/prompt_sistema/system_prompt.txt").is_file()
+                    and (disk_a / "09_copilot_ia/prompt_sistema/copilot_profile.json").is_file()
                 ):
                     break
                 await asyncio.sleep(0.08)
@@ -264,10 +271,10 @@ async def test_fase2_agent_subprocess_real_wss_end_to_end_empresa_i_llm(tmp_path
             assert await vault_tunnel_broker.is_online(target_key)
             assert (disk_a / "09_copilot_ia/index_vectorial_rag").is_dir()
             assert (disk_a / "11_configuracio_i_backups/identitat_camaleo/boss.json").is_file()
-            assert (
-                (disk_a / "09_copilot_ia/prompt_sistema/system_prompt.txt").read_text(encoding="utf-8")
-                == "Prompt tècnic Fase 2 CampoPro."
+            profile_f2 = json.loads(
+                (disk_a / "09_copilot_ia/prompt_sistema/copilot_profile.json").read_text(encoding="utf-8")
             )
+            assert profile_f2["system_prompt"] == "Prompt tècnic Fase 2 CampoPro."
 
             # 2. Health check amb espai lliure i models LLM locals
             h = await vault_tunnel_broker.health(target_key)

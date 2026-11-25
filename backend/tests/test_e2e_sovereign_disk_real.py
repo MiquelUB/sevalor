@@ -142,7 +142,7 @@ async def test_e2e_sovereign_disk_multi_tenant_roundtrip_and_transit_drain(
                 await wait_for(
                     lambda: (primary_a / "11_configuracio_i_backups/identitat_camaleo/empresa.json").is_file()
                     and (primary_a / "11_configuracio_i_backups/identitat_camaleo/boss.json").is_file()
-                    and (primary_a / "09_copilot_ia/prompt_sistema/system_prompt.txt").is_file(),
+                    and (primary_a / "09_copilot_ia/prompt_sistema/copilot_profile.json").is_file(),
                     timeout=8.0,
                 )
                 assert not (primary_b / "11_configuracio_i_backups/identitat_camaleo/empresa.json").exists()

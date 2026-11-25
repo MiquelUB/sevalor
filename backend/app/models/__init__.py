@@ -3,7 +3,6 @@ from app.models.contractes import (
     ContractesMantenimentFinques,
     RevisionsContracte,
 )
-from app.models.copilot_config import CopilotConfig
 from app.models.models import (
     Article,
     CapaAnotacio,
@@ -69,7 +68,6 @@ __all__ = [
     "ContracteManteniment",
     "ContractesMantenimentFinques",
     "RevisionsContracte",
-    "CopilotConfig",
     "SaasLead",
     "SaasOportunitat",
     "SaasActivitatLead",

@@ -39,11 +39,17 @@ interface CopilotConfigState {
   system_prompt: string;
   rag_prompt: string;
   subagent_prompts: Record<string, string>;
+  subagent_enabled: Record<string, boolean>;
+  contrast_rules: string[];
+  router_hints: string;
+  idiosincrasia: Record<string, string>;
+  synthesis_max_tokens: number;
   llm_model: string;
   llm_chat_model: string;
   llm_vision_model: string;
   hardware_profile: "32GB" | "16GB";
   timeout_budget_s: number;
+  router_timeout_s: number;
 }
 
 const SUBAGENTS_CATALEG: Array<{ id: string; nom: string; ambit: string }> = [
@@ -178,11 +184,17 @@ export default function CopilotIAPage() {
     system_prompt: "",
     rag_prompt: "",
     subagent_prompts: {},
+    subagent_enabled: {},
+    contrast_rules: [],
+    router_hints: "",
+    idiosincrasia: {},
+    synthesis_max_tokens: 700,
     llm_model: "",
     llm_chat_model: "",
     llm_vision_model: "",
     hardware_profile: "32GB",
-    timeout_budget_s: 18,
+    timeout_budget_s: 24,
+    router_timeout_s: 8,
   });
   const [desantConfig, setDesantConfig] = useState(false);
   const [feedbackConfig, setFeedbackConfig] = useState<{ type: "ok" | "err"; text: string } | null>(null);
@@ -262,11 +274,17 @@ export default function CopilotIAPage() {
           system_prompt: cfg.system_prompt || "",
           rag_prompt: cfg.rag_prompt || "",
           subagent_prompts: cfg.subagent_prompts || {},
+          subagent_enabled: cfg.subagent_enabled || {},
+          contrast_rules: Array.isArray(cfg.contrast_rules) ? cfg.contrast_rules : [],
+          router_hints: cfg.router_hints || "",
+          idiosincrasia: cfg.idiosincrasia || {},
+          synthesis_max_tokens: Number(cfg.synthesis_max_tokens || 700),
           llm_model: cfg.llm_chat_model || cfg.llm_model || "",
           llm_chat_model: cfg.llm_chat_model || cfg.llm_model || "",
           llm_vision_model: cfg.llm_vision_model || "",
           hardware_profile: hw,
-          timeout_budget_s: Number(cfg.timeout_budget_s || (hw === "16GB" ? 22 : 18)),
+          timeout_budget_s: Number(cfg.timeout_budget_s || (hw === "16GB" ? 30 : 24)),
+          router_timeout_s: Number(cfg.router_timeout_s || (hw === "16GB" ? 12 : 8)),
         });
       }
       setRagDocs(Array.isArray(docs) ? docs : []);
@@ -292,17 +310,26 @@ export default function CopilotIAPage() {
     setFeedbackConfig(null);
     try {
       const chatModel = (copilotConfig.llm_chat_model || copilotConfig.llm_model || "").trim();
+      const contrastClean = copilotConfig.contrast_rules
+        .map((r) => r.trim())
+        .filter((r) => r.length > 0);
       const saved = await apiFetch<CopilotConfigState>("/gestio/copilot/config", {
         method: "PUT",
         body: JSON.stringify({
           system_prompt: copilotConfig.system_prompt.trim(),
           rag_prompt: copilotConfig.rag_prompt.trim(),
           subagent_prompts: copilotConfig.subagent_prompts,
+          subagent_enabled: copilotConfig.subagent_enabled,
+          contrast_rules: contrastClean,
+          router_hints: copilotConfig.router_hints.trim(),
+          idiosincrasia: copilotConfig.idiosincrasia,
+          synthesis_max_tokens: copilotConfig.synthesis_max_tokens,
           llm_model: chatModel,
           llm_chat_model: chatModel,
           llm_vision_model: (copilotConfig.llm_vision_model || "").trim(),
           hardware_profile: copilotConfig.hardware_profile,
           timeout_budget_s: copilotConfig.timeout_budget_s,
+          router_timeout_s: copilotConfig.router_timeout_s,
         }),
       });
       const hw: "32GB" | "16GB" = saved.hardware_profile === "16GB" ? "16GB" : "32GB";
@@ -310,11 +337,17 @@ export default function CopilotIAPage() {
         system_prompt: saved.system_prompt || "",
         rag_prompt: saved.rag_prompt || "",
         subagent_prompts: saved.subagent_prompts || {},
+        subagent_enabled: saved.subagent_enabled || {},
+        contrast_rules: Array.isArray(saved.contrast_rules) ? saved.contrast_rules : [],
+        router_hints: saved.router_hints || "",
+        idiosincrasia: saved.idiosincrasia || {},
+        synthesis_max_tokens: Number(saved.synthesis_max_tokens || 700),
         llm_model: saved.llm_chat_model || saved.llm_model || "",
         llm_chat_model: saved.llm_chat_model || saved.llm_model || "",
         llm_vision_model: saved.llm_vision_model || "",
         hardware_profile: hw,
-        timeout_budget_s: Number(saved.timeout_budget_s || (hw === "16GB" ? 22 : 18)),
+        timeout_budget_s: Number(saved.timeout_budget_s || (hw === "16GB" ? 30 : 24)),
+        router_timeout_s: Number(saved.router_timeout_s || (hw === "16GB" ? 12 : 8)),
       });
       setFeedbackConfig({
         type: "ok",
@@ -1020,7 +1053,7 @@ export default function CopilotIAPage() {
             </div>
 
             <div className="space-y-4 pt-1 border-t border-outline-variant/30">
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
                 <div className="space-y-1.5">
                   <label className="block text-xs font-bold text-on-surface">
                     Perfil del Mini-PC Dedicat
@@ -1033,34 +1066,204 @@ export default function CopilotIAPage() {
                       setCopilotConfig((prev) => ({
                         ...prev,
                         hardware_profile: hw,
-                        timeout_budget_s: hw === "16GB" ? 22 : 18,
+                        timeout_budget_s: hw === "16GB" ? 30 : 24,
+                        router_timeout_s: hw === "16GB" ? 12 : 8,
                       }));
                     }}
                     className="w-full rounded-xl border border-outline-variant bg-surface-container-low text-on-surface px-3 py-2.5 text-xs outline-none focus:border-primary disabled:opacity-70"
                   >
-                    <option value="32GB">32 GB RAM — Ideal (MoE 35B-A3B · 18 s)</option>
-                    <option value="16GB">16 GB RAM — Estàndard (4B / 9B · 22 s)</option>
+                    <option value="32GB">32 GB RAM — Ideal (MoE 35B-A3B · 24 s)</option>
+                    <option value="16GB">16 GB RAM — Estàndard (4B / 9B · 30 s)</option>
                   </select>
                 </div>
                 <div className="space-y-1.5">
                   <label className="block text-xs font-bold text-on-surface">
-                    Pressupost màxim de síntesi (segons)
+                    Timeout Router (segons)
+                  </label>
+                  <input
+                    type="number"
+                    min={3}
+                    max={25}
+                    step={1}
+                    disabled={!potEditarConfig}
+                    value={copilotConfig.router_timeout_s}
+                    onChange={(e) =>
+                      setCopilotConfig((prev) => ({
+                        ...prev,
+                        router_timeout_s: Math.max(3, Math.min(25, Number(e.target.value) || 8)),
+                      }))
+                    }
+                    className="w-full rounded-xl border border-outline-variant bg-surface-container-low text-on-surface px-3 py-2.5 text-xs font-mono outline-none focus:border-primary disabled:opacity-70"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-bold text-on-surface">
+                    Pressupost màxim total (s)
                   </label>
                   <input
                     type="number"
                     min={8}
-                    max={30}
+                    max={90}
                     step={1}
                     disabled={!potEditarConfig}
                     value={copilotConfig.timeout_budget_s}
                     onChange={(e) =>
                       setCopilotConfig((prev) => ({
                         ...prev,
-                        timeout_budget_s: Math.max(8, Math.min(30, Number(e.target.value) || 18)),
+                        timeout_budget_s: Math.max(8, Math.min(90, Number(e.target.value) || 24)),
                       }))
                     }
                     className="w-full rounded-xl border border-outline-variant bg-surface-container-low text-on-surface px-3 py-2.5 text-xs font-mono outline-none focus:border-primary disabled:opacity-70"
                   />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-bold text-on-surface">
+                    Max tokens síntesi
+                  </label>
+                  <input
+                    type="number"
+                    min={250}
+                    max={1500}
+                    step={50}
+                    disabled={!potEditarConfig}
+                    value={copilotConfig.synthesis_max_tokens}
+                    onChange={(e) =>
+                      setCopilotConfig((prev) => ({
+                        ...prev,
+                        synthesis_max_tokens: Math.max(
+                          250,
+                          Math.min(1500, Number(e.target.value) || 700),
+                        ),
+                      }))
+                    }
+                    className="w-full rounded-xl border border-outline-variant bg-surface-container-low text-on-surface px-3 py-2.5 text-xs font-mono outline-none focus:border-primary disabled:opacity-70"
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="block text-xs font-bold text-on-surface">
+                  Pistes per al Router Multi-Subagent (Etapa 1 · opcional)
+                </label>
+                <p className="text-[11px] text-on-surface-variant">
+                  Vocabulari de la vertical, distinció «com/on» (guies) vs cerca de registres i crides paral·leles per consultes transversals.
+                </p>
+                <textarea
+                  rows={2}
+                  disabled={!potEditarConfig}
+                  value={copilotConfig.router_hints}
+                  onChange={(e) =>
+                    setCopilotConfig((prev) => ({ ...prev, router_hints: e.target.value }))
+                  }
+                  placeholder="Ex: Distingeix consultes de procediment ('com es fa') cap a guies RAG; si es pregunta estoc+OT, crida ambdós subagents en paral·lel."
+                  className="w-full rounded-xl border border-outline-variant bg-surface-container-low text-on-surface p-3 text-xs leading-relaxed outline-none focus:border-primary disabled:opacity-70"
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="block text-xs font-bold text-on-surface">
+                  Regles de Contrast i Verificació Creuada (Etapa 2 · una regla per línia)
+                </label>
+                <p className="text-[11px] text-on-surface-variant">
+                  Només s&apos;injecten quan responen múltiples subagents; defineixen criteris de desempat propis de l&apos;empresa.
+                </p>
+                <textarea
+                  rows={3}
+                  disabled={!potEditarConfig}
+                  value={copilotConfig.contrast_rules.join("\n")}
+                  onChange={(e) =>
+                    setCopilotConfig((prev) => ({
+                      ...prev,
+                      contrast_rules: e.target.value.split("\n"),
+                    }))
+                  }
+                  placeholder="Ex: Compara sempre l'estoc disponible vs el material reservat per a les OTs del dia i assenyala qualsevol dèficit."
+                  className="w-full rounded-xl border border-outline-variant bg-surface-container-low text-on-surface p-3 text-xs leading-relaxed outline-none focus:border-primary disabled:opacity-70"
+                />
+              </div>
+
+              <div className="space-y-2.5 pt-1 border-t border-outline-variant/20">
+                <div>
+                  <label className="block text-xs font-bold text-on-surface">
+                    Idiosincràsia Operativa de l&apos;Empresa (opcional)
+                  </label>
+                  <p className="text-[11px] text-on-surface-variant">
+                    Només els camps omplerts s&apos;injecten al prefix del Copilot (les xifres configurades aquí queden autoritzades automàticament).
+                  </p>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div className="space-y-1">
+                    <label className="block text-[11px] font-semibold text-on-surface-variant">
+                      Horari de magatzem i lliuraments
+                    </label>
+                    <input
+                      type="text"
+                      disabled={!potEditarConfig}
+                      value={copilotConfig.idiosincrasia.horari_magatzem || ""}
+                      onChange={(e) =>
+                        setCopilotConfig((prev) => ({
+                          ...prev,
+                          idiosincrasia: { ...prev.idiosincrasia, horari_magatzem: e.target.value },
+                        }))
+                      }
+                      placeholder="Ex: Dll-Dv 07:30-13:30 i 15:00-18:00"
+                      className="w-full rounded-xl border border-outline-variant bg-surface-container-low text-on-surface px-3 py-2 text-xs outline-none focus:border-primary disabled:opacity-70"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="block text-[11px] font-semibold text-on-surface-variant">
+                      Prioritat contractual / SLA
+                    </label>
+                    <input
+                      type="text"
+                      disabled={!potEditarConfig}
+                      value={copilotConfig.idiosincrasia.prioritat_sla || ""}
+                      onChange={(e) =>
+                        setCopilotConfig((prev) => ({
+                          ...prev,
+                          idiosincrasia: { ...prev.idiosincrasia, prioritat_sla: e.target.value },
+                        }))
+                      }
+                      placeholder="Ex: Avaries urgents SLA màxim 4 h; manteniment 48 h"
+                      className="w-full rounded-xl border border-outline-variant bg-surface-container-low text-on-surface px-3 py-2 text-xs outline-none focus:border-primary disabled:opacity-70"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="block text-[11px] font-semibold text-on-surface-variant">
+                      Zones i rutes de cobertura
+                    </label>
+                    <input
+                      type="text"
+                      disabled={!potEditarConfig}
+                      value={copilotConfig.idiosincrasia.zones_cobertura || ""}
+                      onChange={(e) =>
+                        setCopilotConfig((prev) => ({
+                          ...prev,
+                          idiosincrasia: { ...prev.idiosincrasia, zones_cobertura: e.target.value },
+                        }))
+                      }
+                      placeholder="Ex: Segrià, Pla d'Urgell i Garrigues"
+                      className="w-full rounded-xl border border-outline-variant bg-surface-container-low text-on-surface px-3 py-2 text-xs outline-none focus:border-primary disabled:opacity-70"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="block text-[11px] font-semibold text-on-surface-variant">
+                      Glossari intern
+                    </label>
+                    <input
+                      type="text"
+                      disabled={!potEditarConfig}
+                      value={copilotConfig.idiosincrasia.glossari_intern || ""}
+                      onChange={(e) =>
+                        setCopilotConfig((prev) => ({
+                          ...prev,
+                          idiosincrasia: { ...prev.idiosincrasia, glossari_intern: e.target.value },
+                        }))
+                      }
+                      placeholder="Ex: 'Quadre A' = Quadre principal nau sud"
+                      className="w-full rounded-xl border border-outline-variant bg-surface-container-low text-on-surface px-3 py-2 text-xs outline-none focus:border-primary disabled:opacity-70"
+                    />
+                  </div>
                 </div>
               </div>
 
@@ -1079,7 +1282,7 @@ export default function CopilotIAPage() {
                       llm_model: e.target.value,
                     }))
                   }
-                  placeholder="Deixa-ho buit per detectar automàticament el model actiu a LM Studio"
+                  placeholder="Ex: qwen3-4b (buit detecta automàticament el model de xat text-only a LM Studio)"
                   className="w-full rounded-xl border border-outline-variant bg-surface-container-low text-on-surface px-3 py-2.5 text-xs font-mono outline-none focus:border-primary disabled:opacity-70"
                 />
                 {iaStatus?.models_disponibles && iaStatus.models_disponibles.length > 0 && potEditarConfig && (
@@ -1161,11 +1364,14 @@ export default function CopilotIAPage() {
               {SUBAGENTS_CATALEG.map((sub) => {
                 const obert = subagentObert === sub.id;
                 const valor = copilotConfig.subagent_prompts[sub.id] || "";
+                const habilitat = copilotConfig.subagent_enabled[sub.id] ?? true;
                 const personalitzat = Boolean(valor.trim());
                 return (
                   <div
                     key={sub.id}
-                    className="rounded-xl border border-outline-variant/40 bg-surface-container-low overflow-hidden"
+                    className={`rounded-xl border border-outline-variant/40 bg-surface-container-low overflow-hidden transition-opacity ${
+                      habilitat ? "" : "opacity-65"
+                    }`}
                   >
                     <button
                       type="button"
@@ -1175,6 +1381,11 @@ export default function CopilotIAPage() {
                       <div className="min-w-0">
                         <div className="text-xs font-bold text-on-surface flex items-center gap-2">
                           <span className="truncate">{sub.nom}</span>
+                          {!habilitat && (
+                            <span className="px-1.5 py-0.5 rounded bg-surface-container-high text-on-surface-variant text-[10px] font-semibold shrink-0">
+                              Desactivat
+                            </span>
+                          )}
                           {personalitzat && (
                             <span className="px-1.5 py-0.5 rounded bg-primary/15 text-primary text-[10px] font-semibold shrink-0">
                               Personalitzat
@@ -1190,8 +1401,28 @@ export default function CopilotIAPage() {
                       )}
                     </button>
                     {obert && (
-                      <div className="px-3.5 pb-3.5 pt-1 space-y-1.5 border-t border-outline-variant/30">
-                        <div className="text-[10px] font-mono text-on-surface-variant">{sub.id}</div>
+                      <div className="px-3.5 pb-3.5 pt-2 space-y-2 border-t border-outline-variant/30">
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="text-[10px] font-mono text-on-surface-variant">{sub.id}</div>
+                          <label className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-on-surface cursor-pointer">
+                            <input
+                              type="checkbox"
+                              disabled={!potEditarConfig}
+                              checked={habilitat}
+                              onChange={(e) =>
+                                setCopilotConfig((prev) => ({
+                                  ...prev,
+                                  subagent_enabled: {
+                                    ...prev.subagent_enabled,
+                                    [sub.id]: e.target.checked,
+                                  },
+                                }))
+                              }
+                              className="rounded border-outline-variant accent-primary"
+                            />
+                            <span>Actiu</span>
+                          </label>
+                        </div>
                         <textarea
                           rows={4}
                           disabled={!potEditarConfig}

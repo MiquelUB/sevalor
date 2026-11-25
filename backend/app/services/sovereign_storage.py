@@ -7,6 +7,7 @@ clients, proveïdors, magatzem, factures, plànols, ordres_treball, incidències
 flota_i_operaris, copilot_ia (amb autoaprenentatge) i protocols_i_manuals.
 """
 
+import asyncio
 import hashlib
 import hmac
 import json
@@ -353,7 +354,12 @@ class SovereignStorageGateway:
         if os.getenv("TESTING") == "1" and not os.path.exists("/.dockerenv"):
             emp = None
             if db is not None:
-                res = await db.execute(select(Empresa).where(Empresa.id == emp_uuid))
+                if isinstance(db, AsyncSession):
+                    db_lock = db.info.setdefault("_sevalor_db_lock", asyncio.Lock())
+                    async with db_lock:
+                        res = await db.execute(select(Empresa).where(Empresa.id == emp_uuid))
+                else:
+                    res = await db.execute(select(Empresa).where(Empresa.id == emp_uuid))
                 emp = res.scalars().first()
             raw_disc = (getattr(emp, "disc_dur_url", None) or "").strip() if emp else ""
             if (
@@ -368,7 +374,12 @@ class SovereignStorageGateway:
 
         secret: Optional[str] = None
         if db is not None:
-            res = await db.execute(select(Empresa).where(Empresa.id == emp_uuid))
+            if isinstance(db, AsyncSession):
+                db_lock = db.info.setdefault("_sevalor_db_lock", asyncio.Lock())
+                async with db_lock:
+                    res = await db.execute(select(Empresa).where(Empresa.id == emp_uuid))
+            else:
+                res = await db.execute(select(Empresa).where(Empresa.id == emp_uuid))
             emp_off = res.scalars().first()
             if emp_off is not None:
                 secret = resolve_empresa_vault_token(emp_off)
@@ -898,8 +909,22 @@ class SovereignStorageGateway:
                 base_target, rel_path=f"{subcarpeta}/{nom_net}", timeout=10.0
             )
             return raw_bytes.decode("utf-8", errors="replace")
-        except VaultTunnelError:
-            return None
+        except VaultTunnelRemoteError as exc:
+            if exc.status_code == 404 or exc.code == "NOT_FOUND":
+                return None
+            raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+        except (VaultTunnelOfflineError, VaultTunnelTimeoutError) as exc:
+            logger.warning("Túnel WSS offline llegint fitxer per empresa=%s: %s", empresa_id, exc)
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={
+                    "code": "NODE_EMPRESA_OFFLINE",
+                    "motiu": "TUNEL_OFFLINE",
+                    "message": "El disc dur dedicat de l'empresa no està connectat al túnel WSS.",
+                },
+            ) from exc
+        except VaultTunnelError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
     @classmethod
     async def pujar_fitxer_binari(
@@ -1209,16 +1234,10 @@ class SovereignStorageGateway:
         *,
         dades_empresa_reals: Optional[Dict[str, Any]] = None,
         dades_boss_reals: Optional[Dict[str, Any]] = None,
-        agent_prompt_system: Optional[str] = None,
     ) -> Dict[str, str]:
-        """Bolca la fitxa d'identitat camaleònica, la fitxa del Boss i el system_prompt.txt al disc del client."""
+        """Bolca la fitxa d'identitat camaleònica i la fitxa del Boss al disc del client."""
         rutes: Dict[str, str] = {}
         reals_emp = dades_empresa_reals or {}
-        prompt_final = (
-            agent_prompt_system
-            if agent_prompt_system is not None
-            else empresa.agent_prompt_system
-        )
         dades_empresa: Dict[str, Any] = {
             "id": str(empresa.id),
             "nom": reals_emp.get("nom", empresa.nom),
@@ -1239,7 +1258,6 @@ class SovereignStorageGateway:
             "feature_copilot_ia": bool(
                 reals_emp.get("feature_copilot_ia", getattr(empresa, "feature_copilot_ia", False))
             ),
-            "agent_prompt_system": prompt_final,
         }
         if "magatzem_families_default" in reals_emp:
             dades_empresa["magatzem_families_default"] = reals_emp["magatzem_families_default"]
@@ -1279,15 +1297,6 @@ class SovereignStorageGateway:
                 )
             except Exception:
                 pass
-        if prompt_final:
-            rutes["system_prompt"] = await cls.pujar_fitxer_binari(
-                db=db,
-                empresa_id=empresa.id,
-                categoria="copilot_prompt",
-                nom_fitxer="system_prompt.txt",
-                content=prompt_final.encode("utf-8"),
-                content_type="text/plain; charset=utf-8",
-            )
         return rutes
 
     @classmethod
@@ -1302,7 +1311,7 @@ class SovereignStorageGateway:
         Persistència Sobirana Doble (Superadmin Disk + Empresa Exclusive Disk):
         1. Actualitza la fitxa B2B al Disc Dur de Superadmin (01_tenants_b2b/fitxes_empreses/<id>.json)
            amb node_ia_url, disc_dur_url, vault_token, node_ia_actiu i feature_copilot_ia.
-        2. Escriu empresa.json (i system_prompt.txt si n'hi ha) a la carpeta 11_configuracio_i_backups
+        2. Escriu empresa.json a la carpeta 11_configuracio_i_backups
            del Disc Dur Exclusiu de l'Empresa i drena la cua de trànsit pendent.
         """
         emp_id_str = str(empresa.id)
@@ -1318,12 +1327,6 @@ class SovereignStorageGateway:
         )
         nif_real = str(extra.get("nif") or fitxa_existent.get("nif") or empresa.nif)
         adreca_real = extra.get("adreca", fitxa_existent.get("adreca", empresa.adreca))
-
-        prompt_efectiu = (
-            extra.get("agent_prompt_system")
-            or fitxa_existent.get("agent_prompt_system")
-            or empresa.agent_prompt_system
-        )
 
         fitxa_superadmin: Dict[str, Any] = {
             **fitxa_existent,
@@ -1346,9 +1349,9 @@ class SovereignStorageGateway:
             "feature_flota": bool(getattr(empresa, "feature_flota", True)),
             "feature_planols": bool(getattr(empresa, "feature_planols", False)),
             "feature_telegram": bool(getattr(empresa, "feature_telegram", True)),
-            "agent_prompt_system": prompt_efectiu,
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }
+        fitxa_superadmin.pop("agent_prompt_system", None)
         if "created_at" not in fitxa_superadmin:
             fitxa_superadmin["created_at"] = datetime.now(timezone.utc).isoformat()
 
@@ -1379,7 +1382,6 @@ class SovereignStorageGateway:
                     "node_ia_actiu": bool(getattr(empresa, "node_ia_actiu", False)),
                     "feature_copilot_ia": bool(getattr(empresa, "feature_copilot_ia", False)),
                 },
-                agent_prompt_system=prompt_efectiu,
             )
             await cls.drenar_cua_transit_empresa(db, empresa.id)
         except Exception as exc:
