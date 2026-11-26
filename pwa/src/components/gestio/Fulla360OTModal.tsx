@@ -106,7 +106,20 @@ interface ConciliacioCompleta {
     marca_model: string;
     carnet_necessari?: string | null;
     cost_per_km_eur?: number | null;
+    preu_km_facturable?: number | null;
+    km_imputats?: number | null;
+    odometre_inici?: number | null;
+    odometre_fi?: number | null;
+    estat_pickout?: string | null;
+    valor_desplacament_pvp?: number | null;
   } | null;
+  operaris_assignats?: Array<{
+    id: string;
+    nom: string;
+    rol?: string | null;
+    es_cap_de_colla?: boolean;
+    telefon?: string | null;
+  }>;
   planol?: { id: string; titol: string; codi_referencia?: string | null } | null;
   disclaimer: DisclaimerOT;
   validacio: {
@@ -121,7 +134,9 @@ interface ConciliacioCompleta {
     te_tram_obert: boolean;
     temps_acumulat_segons: number;
     hores_previstes: number;
+    hores_previstes_human?: string;
     hores_reals: number;
+    hores_reals_human?: string;
     desviacio_hores: number;
     desviacio_geovalla: boolean;
     justificacio_geovalla?: string | null;
@@ -149,6 +164,12 @@ interface ConciliacioCompleta {
     alerta_consum_excessiu: boolean;
     detall_merma?: string | null;
     linies: MaterialConciliacio[];
+    linies_pendents_facturar?: Array<{
+      concepte: string;
+      quantitat: number;
+      preu_unitari: number;
+      subtotal: number;
+    }>;
   };
   eines?: Array<{
     id: string;
@@ -156,6 +177,9 @@ interface ConciliacioCompleta {
     model?: string | null;
     numero_serie: string;
     estat: string;
+    en_custodia_efectiva?: boolean;
+    requereix_pickout?: boolean;
+    custodiat_per_id?: string | null;
   }>;
   incidencies: {
     total: number;
@@ -253,6 +277,74 @@ const JERARQUIA_CARNETS: Record<string, string[]> = {
   CE: ["CE", "C+E"],
   D: ["D"],
 };
+
+function latLngToTile(lat: number, lng: number, zoom: number) {
+  const n = Math.pow(2, zoom);
+  const tileX = Math.floor(((lng + 180) / 360) * n);
+  const latRad = (lat * Math.PI) / 180;
+  const tileY = Math.floor(
+    ((1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) / 2) * n
+  );
+  return { x: tileX, y: tileY };
+}
+
+interface MiniMapOTProps {
+  adreca: string;
+  latitud?: number | null;
+  longitud?: number | null;
+  codi?: string;
+}
+
+function MiniMapOT({ adreca, latitud, longitud, codi }: MiniMapOTProps) {
+  const coords = useMemo(() => {
+    let lat = latitud != null && Number(latitud) !== 0 ? Number(latitud) : 41.3879;
+    let lng = longitud != null && Number(longitud) !== 0 ? Number(longitud) : 2.1699;
+    if ((!latitud || !longitud) && adreca) {
+      const g = geocodificarAdreca(adreca, lat, lng);
+      lat = g.lat;
+      lng = g.lng;
+    }
+    return { lat, lng };
+  }, [adreca, latitud, longitud]);
+
+  const zoom = 14;
+  const tile = latLngToTile(coords.lat, coords.lng, zoom);
+
+  return (
+    <div className="relative w-full h-36 rounded-lg overflow-hidden border border-outline-variant/30 bg-slate-950 flex items-center justify-center select-none">
+      <div className="grid grid-cols-3 grid-rows-3 w-[768px] h-[768px] absolute pointer-events-none opacity-90 scale-50 transform">
+        {[-1, 0, 1].map((dy) =>
+          [-1, 0, 1].map((dx) => {
+            const tx = tile.x + dx;
+            const ty = tile.y + dy;
+            const tileUrl = `https://tile.openstreetmap.org/${zoom}/${tx}/${ty}.png`;
+            return (
+              <img
+                key={`${tx}-${ty}`}
+                src={tileUrl}
+                alt="MiniMap Tile"
+                className="w-[256px] h-[256px] block object-cover"
+                loading="lazy"
+              />
+            );
+          })
+        )}
+      </div>
+      {/* Pin central de l'OT */}
+      <div className="relative z-10 flex flex-col items-center">
+        <div className="w-6 h-6 rounded-full bg-primary text-white flex items-center justify-center shadow-lg border-2 border-white animate-bounce">
+          <MapPin className="w-3.5 h-3.5" />
+        </div>
+        <span className="mt-1 px-1.5 py-0.5 rounded bg-slate-900/90 text-white font-mono text-[9px] font-bold border border-slate-700 shadow-sm">
+          {codi || "OT"}
+        </span>
+      </div>
+      <div className="absolute bottom-1 right-1.5 text-[8px] text-slate-400/80 bg-slate-950/70 px-1 py-0.5 rounded pointer-events-none">
+        © OpenStreetMap
+      </div>
+    </div>
+  );
+}
 
 const SECCIONS_MA_OBRA_KW = [
   "mà d'obra",
@@ -2430,18 +2522,37 @@ export function Fulla360OTModal({
                               eines.find((e) => e.id === eid) ||
                               conc?.eines?.find((e) => e.id === eid) ||
                               loadedFeina?.eines?.find((e) => e.id === eid);
+                            const estatEina = eDef?.estat || "DISPONIBLE";
+                            const isAvariada = estatEina === "AVARIADA";
+                            const isEnCustodia = eDef?.en_custodia_efectiva ?? (estatEina !== "DISPONIBLE");
+
                             return (
                               <li
                                 key={eid}
-                                className="flex items-center justify-between bg-surface-container-lowest dark:bg-slate-900 px-3 py-2 rounded-lg border border-outline-variant/30 text-xs"
+                                className={`flex items-center justify-between px-3 py-2 rounded-lg border text-xs ${
+                                  isAvariada
+                                    ? "bg-amber-50/50 dark:bg-amber-950/20 border-amber-300 dark:border-amber-700"
+                                    : "bg-surface-container-lowest dark:bg-slate-900 border-outline-variant/30"
+                                }`}
                               >
                                 <div className="flex items-center gap-2 min-w-0">
-                                  <Wrench className="w-3.5 h-3.5 text-secondary shrink-0" />
+                                  <Wrench className={`w-3.5 h-3.5 shrink-0 ${isAvariada ? "text-amber-600" : "text-secondary"}`} />
                                   <span className="font-bold text-primary truncate">
                                     {eDef?.nom || "Eina"}
                                   </span>
                                   <span className="font-mono text-[10px] text-on-surface-variant">
                                     SN: {eDef?.numero_serie || "—"}
+                                  </span>
+                                  <span
+                                    className={`text-[9px] font-bold px-2 py-0.5 rounded-full ${
+                                      isAvariada
+                                        ? "bg-amber-200 text-amber-900 dark:bg-amber-900 dark:text-amber-200"
+                                        : isEnCustodia
+                                        ? "bg-primary/10 text-primary"
+                                        : "bg-surface-container text-on-surface-variant"
+                                    }`}
+                                  >
+                                    {isAvariada ? "AVARIADA (En custòdia - Pendent Pick-Out)" : estatEina}
                                   </span>
                                 </div>
                                 {!isLockedByInvoice && (
@@ -2476,6 +2587,104 @@ export function Fulla360OTModal({
                         </h3>
                         {loadingConc && <Loader2 className="w-4 h-4 animate-spin text-primary" />}
                       </div>
+
+                      {/* Resum de Conciliació d'Hores i Estat Operatiu Real */}
+                      <div className="p-3.5 rounded-xl bg-surface-container-low border border-outline-variant/30 space-y-2.5">
+                        <div className="flex items-center justify-between text-xs font-bold">
+                          <span className="flex items-center gap-1.5 text-primary">
+                            <Clock className="w-3.5 h-3.5 text-primary" />
+                            <span>Conciliació d&apos;Hores (Previstes vs Reals)</span>
+                          </span>
+                          <span
+                            className={`font-mono text-[10px] px-2 py-0.5 rounded-full font-bold ${
+                              conc?.disclaimer?.codi === "VALIDADA_PENDENT_FACTURAR" || conc?.validacio?.validada
+                                ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300"
+                                : conc?.disclaimer?.codi === "CONCLOSA_PENDENT_VALIDACIO"
+                                ? "bg-amber-100 text-amber-800 dark:bg-amber-950/40 dark:text-amber-300"
+                                : "bg-sky-100 text-sky-800 dark:bg-sky-950/40 dark:text-sky-300"
+                            }`}
+                          >
+                            {conc?.disclaimer?.titol || formData.estat}
+                          </span>
+                        </div>
+                        <div className="grid grid-cols-3 gap-2 text-center text-xs">
+                          <div className="p-2 rounded-lg bg-surface-container-lowest border border-outline-variant/20">
+                            <span className="text-[10px] text-on-surface-variant block">Pressupostades / Previstes</span>
+                            <span className="font-mono font-bold text-sm">
+                              {Number(conc?.temps_i_gps?.hores_previstes ?? horesPrevistes ?? 0).toFixed(2)} h
+                            </span>
+                            <span className="block text-[10px] font-mono text-on-surface-variant">
+                              {conc?.temps_i_gps?.hores_previstes_human ||
+                                `${Math.floor(Number(horesPrevistes || 0))}h ${Math.round((Number(horesPrevistes || 0) % 1) * 60)}m`}
+                            </span>
+                          </div>
+                          <div className="p-2 rounded-lg bg-surface-container-lowest border border-outline-variant/20">
+                            <span className="text-[10px] text-on-surface-variant block">Reals (Operari / Cronòmetre)</span>
+                            <span className="font-mono font-bold text-sm text-secondary">
+                              {Number(conc?.temps_i_gps?.hores_reals ?? 0).toFixed(2)} h
+                            </span>
+                            <span className="block text-[10px] font-mono text-secondary">
+                              {conc?.temps_i_gps?.hores_reals_human ||
+                                `${Math.floor(Number(conc?.temps_i_gps?.hores_reals || 0))}h ${Math.round((Number(conc?.temps_i_gps?.hores_reals || 0) % 1) * 60)}m`}
+                            </span>
+                          </div>
+                          <div className="p-2 rounded-lg bg-surface-container-lowest border border-outline-variant/20">
+                            <span className="text-[10px] text-on-surface-variant block">Desviació</span>
+                            <span
+                              className={`font-mono font-bold text-sm ${
+                                Number(conc?.temps_i_gps?.desviacio_hores ?? 0) > 0
+                                  ? "text-error"
+                                  : "text-emerald-700 dark:text-emerald-400"
+                              }`}
+                            >
+                              {Number(conc?.temps_i_gps?.desviacio_hores ?? 0) > 0 ? "+" : ""}
+                              {Number(conc?.temps_i_gps?.desviacio_hores ?? 0).toFixed(2)} h
+                            </span>
+                            <span className="block text-[10px] text-on-surface-variant">
+                              {Number(conc?.temps_i_gps?.desviacio_hores ?? 0) <= 0
+                                ? "Dins de marge"
+                                : "Excés de temps"}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Quadrilla d'Operaris de Camp (Cap de colla + Operaris) */}
+                      {conc?.operaris_assignats && conc.operaris_assignats.length > 0 && (
+                        <div className="p-3 rounded-xl bg-surface-container-low border border-outline-variant/30 space-y-2">
+                          <span className="text-xs font-bold text-primary flex items-center gap-1.5">
+                            <Users className="w-3.5 h-3.5 text-primary" />
+                            <span>Equip Quadrilla de Camp ({conc.operaris_assignats.length})</span>
+                          </span>
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                            {conc.operaris_assignats.map((op) => (
+                              <div
+                                key={op.id}
+                                className="px-2.5 py-1.5 rounded-lg bg-surface-container-lowest border border-outline-variant/20 flex items-center justify-between text-xs"
+                              >
+                                <div className="min-w-0">
+                                  <span className="font-bold truncate block">
+                                    {op.nom}
+                                  </span>
+                                  <span className="text-[10px] text-on-surface-variant">
+                                    {op.es_cap_de_colla ? "Cap de Colla" : op.rol || "Operari"}
+                                    {op.telefon ? ` · ${op.telefon}` : ""}
+                                  </span>
+                                </div>
+                                <span
+                                  className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full ${
+                                    op.es_cap_de_colla
+                                      ? "bg-primary/10 text-primary"
+                                      : "bg-surface-container text-on-surface-variant"
+                                  }`}
+                                >
+                                  {op.es_cap_de_colla ? "RESPONSABLE" : "OPERARI"}
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
 
                       {/* Alerta Geovalla GPS */}
                       {conc?.temps_i_gps?.desviacio_geovalla && (
@@ -2634,8 +2843,40 @@ export function Fulla360OTModal({
                         </div>
                       </div>
 
+                      {/* Resum Pick-In / Pick-Out i Estat del Picking */}
+                      {isExistingOT && conc?.materials && (
+                        <div className="p-3 rounded-xl bg-surface-container-low border border-outline-variant/30 space-y-2">
+                          <div className="flex items-center justify-between text-xs">
+                            <span className="font-bold text-primary flex items-center gap-1.5">
+                              <Package className="w-3.5 h-3.5 text-primary" />
+                              <span>Resum Picking de Materials ({conc.materials.total_linies} línies)</span>
+                            </span>
+                            <span className="font-mono text-[10px] px-2 py-0.5 rounded-full font-bold bg-primary/10 text-primary">
+                              Estat: {conc.materials.estat_picking || "PENDENT"}
+                            </span>
+                          </div>
+
+                          {/* Avís de materials del pressupost pendents d'importar/facturar */}
+                          {conc.materials.linies_pendents_facturar && conc.materials.linies_pendents_facturar.length > 0 && (
+                            <div className="p-2.5 rounded-lg bg-amber-50 dark:bg-amber-950/35 border border-amber-300 text-xs text-amber-950 dark:text-amber-200 space-y-1">
+                              <div className="flex items-center gap-1.5 font-bold">
+                                <AlertTriangle className="w-3.5 h-3.5 text-amber-700 shrink-0" />
+                                <span>Ítems del pressupost pendents de facturar o sense picking vinculat:</span>
+                              </div>
+                              <ul className="list-disc list-inside space-y-0.5 text-[11px] text-amber-900 dark:text-amber-300">
+                                {conc.materials.linies_pendents_facturar.map((lpf, idx) => (
+                                  <li key={idx}>
+                                    <strong>{lpf.concepte}</strong> — {lpf.quantitat} u. ({lpf.subtotal.toFixed(2)} €)
+                                  </li>
+                                ))}
+                              </ul>
+                            </div>
+                          )}
+                        </div>
+                      )}
+
                       {/* Conciliació de Materials (Pick-In / Pick-Out / Merma) */}
-                      {materialsConc.length > 0 && disclaimer?.pot_validar && (
+                      {materialsConc.length > 0 && (
                         <div className="border border-outline-variant/30 rounded-xl overflow-x-auto">
                           <table className="w-full text-left text-xs">
                             <thead className="bg-surface-container-low text-on-surface-variant text-[10px] uppercase">
@@ -2645,7 +2886,9 @@ export function Fulla360OTModal({
                                 <th className="py-2 px-2 text-right">Pick-In</th>
                                 <th className="py-2 px-2 text-right">Retorn</th>
                                 <th className="py-2 px-2 text-right">Merma</th>
-                                <th className="py-2 px-3 text-right">Consum</th>
+                                <th className="py-2 px-2 text-right">Consum</th>
+                                <th className="py-2 px-2 text-right">PVP Unit.</th>
+                                <th className="py-2 px-3 text-right">Subtotal (€)</th>
                               </tr>
                             </thead>
                             <tbody className="divide-y divide-outline-variant/15">
@@ -2653,58 +2896,84 @@ export function Fulla360OTModal({
                                 const d = ajustosPicking[lin.linia_id];
                                 const qIn = d ? parseFloat(d.carregat) : lin.quantitat_carregada_pick_in;
                                 const qOut = d ? parseFloat(d.retornat) : lin.quantitat_retornada_pick_out;
+                                const qMermaVal = d ? parseFloat(d.merma) : lin.quantitat_mermada;
                                 const cons = Math.max(0, (Number.isNaN(qIn) ? 0 : qIn) - (Number.isNaN(qOut) ? 0 : qOut));
+                                const subtotalPvp = cons * Number(lin.preu_venda_unitari || 0);
+
                                 return (
                                   <tr key={lin.linia_id}>
-                                    <td className="py-1.5 px-3 font-medium">{lin.article_nom}</td>
+                                    <td className="py-1.5 px-3 font-medium">
+                                      <div>{lin.article_nom}</div>
+                                      <div className="text-[10px] font-mono text-on-surface-variant">
+                                        {lin.origen_estoc} · {lin.referencia_inventari || "S/REF"}
+                                      </div>
+                                    </td>
                                     <td className="py-1.5 px-2 text-right font-mono">{lin.quantitat_prevista}</td>
                                     <td className="py-1.5 px-2 text-right">
-                                      <input
-                                        type="number"
-                                        step="0.1"
-                                        min="0"
-                                        value={d?.carregat ?? "0"}
-                                        onChange={(e) =>
-                                          setAjustosPicking((prev) => ({
-                                            ...prev,
-                                            [lin.linia_id]: { ...prev[lin.linia_id], carregat: e.target.value },
-                                          }))
-                                        }
-                                        className="w-16 px-1.5 py-0.5 text-right rounded border border-outline-variant text-xs font-mono"
-                                      />
+                                      {disclaimer?.pot_validar ? (
+                                        <input
+                                          type="number"
+                                          step="0.1"
+                                          min="0"
+                                          value={d?.carregat ?? "0"}
+                                          onChange={(e) =>
+                                            setAjustosPicking((prev) => ({
+                                              ...prev,
+                                              [lin.linia_id]: { ...prev[lin.linia_id], carregat: e.target.value },
+                                            }))
+                                          }
+                                          className="w-16 px-1.5 py-0.5 text-right rounded border border-outline-variant text-xs font-mono"
+                                        />
+                                      ) : (
+                                        <span className="font-mono">{lin.quantitat_carregada_pick_in}</span>
+                                      )}
                                     </td>
                                     <td className="py-1.5 px-2 text-right">
-                                      <input
-                                        type="number"
-                                        step="0.1"
-                                        min="0"
-                                        value={d?.retornat ?? "0"}
-                                        onChange={(e) =>
-                                          setAjustosPicking((prev) => ({
-                                            ...prev,
-                                            [lin.linia_id]: { ...prev[lin.linia_id], retornat: e.target.value },
-                                          }))
-                                        }
-                                        className="w-16 px-1.5 py-0.5 text-right rounded border border-outline-variant text-xs font-mono"
-                                      />
+                                      {disclaimer?.pot_validar ? (
+                                        <input
+                                          type="number"
+                                          step="0.1"
+                                          min="0"
+                                          value={d?.retornat ?? "0"}
+                                          onChange={(e) =>
+                                            setAjustosPicking((prev) => ({
+                                              ...prev,
+                                              [lin.linia_id]: { ...prev[lin.linia_id], retornat: e.target.value },
+                                            }))
+                                          }
+                                          className="w-16 px-1.5 py-0.5 text-right rounded border border-outline-variant text-xs font-mono"
+                                        />
+                                      ) : (
+                                        <span className="font-mono">{lin.quantitat_retornada_pick_out}</span>
+                                      )}
                                     </td>
                                     <td className="py-1.5 px-2 text-right">
-                                      <input
-                                        type="number"
-                                        step="0.1"
-                                        min="0"
-                                        value={d?.merma ?? "0"}
-                                        onChange={(e) =>
-                                          setAjustosPicking((prev) => ({
-                                            ...prev,
-                                            [lin.linia_id]: { ...prev[lin.linia_id], merma: e.target.value },
-                                          }))
-                                        }
-                                        className="w-16 px-1.5 py-0.5 text-right rounded border border-outline-variant text-xs font-mono"
-                                      />
+                                      {disclaimer?.pot_validar ? (
+                                        <input
+                                          type="number"
+                                          step="0.1"
+                                          min="0"
+                                          value={d?.merma ?? "0"}
+                                          onChange={(e) =>
+                                            setAjustosPicking((prev) => ({
+                                              ...prev,
+                                              [lin.linia_id]: { ...prev[lin.linia_id], merma: e.target.value },
+                                            }))
+                                          }
+                                          className="w-16 px-1.5 py-0.5 text-right rounded border border-outline-variant text-xs font-mono"
+                                        />
+                                      ) : (
+                                        <span className="font-mono">{lin.quantitat_mermada}</span>
+                                      )}
                                     </td>
-                                    <td className="py-1.5 px-3 text-right font-mono font-bold text-primary">
+                                    <td className="py-1.5 px-2 text-right font-mono font-bold text-primary">
                                       {cons.toFixed(2)}
+                                    </td>
+                                    <td className="py-1.5 px-2 text-right font-mono text-on-surface-variant">
+                                      {Number(lin.preu_venda_unitari || 0).toFixed(2)} €
+                                    </td>
+                                    <td className="py-1.5 px-3 text-right font-mono font-bold text-secondary">
+                                      {subtotalPvp.toFixed(2)} €
                                     </td>
                                   </tr>
                                 );
@@ -2968,6 +3237,16 @@ export function Fulla360OTModal({
                       />
                     </div>
 
+                    {/* Mini-mapa cartogràfic real sempre visible */}
+                    <div className="pt-1">
+                      <MiniMapOT
+                        adreca={formData.adreca}
+                        latitud={formData.latitud}
+                        longitud={formData.longitud}
+                        codi={formData.codi}
+                      />
+                    </div>
+
                     <div>
                       <label className="block text-[11px] font-semibold text-on-surface-variant mb-1 flex items-center justify-between">
                         <span className="flex items-center gap-1">
@@ -3162,6 +3441,49 @@ export function Fulla360OTModal({
                         />
                       </div>
                     </div>
+
+                    {/* Resum de Validació i Pick-Out del Vehicle (Conciliació) */}
+                    {isExistingOT && conc?.vehicle && (
+                      <div className="p-3 rounded-lg bg-surface-container-low border border-outline-variant/30 text-xs space-y-2">
+                        <div className="flex items-center justify-between">
+                          <span className="font-bold text-primary flex items-center gap-1.5">
+                            <Truck className="w-3.5 h-3.5 text-primary" /> Validació Pick-Out Vehicle
+                          </span>
+                          <span
+                            className={`font-mono text-[10px] px-2 py-0.5 rounded-full font-bold ${
+                              conc.vehicle.estat_pickout === "COMPLERT"
+                                ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300"
+                                : conc.vehicle.estat_pickout === "RETORNAT"
+                                ? "bg-sky-100 text-sky-800 dark:bg-sky-950/40 dark:text-sky-300"
+                                : "bg-amber-100 text-amber-800 dark:bg-amber-950/40 dark:text-amber-300"
+                            }`}
+                          >
+                            {conc.vehicle.estat_pickout || "PENDENT"}
+                          </span>
+                        </div>
+                        <div className="grid grid-cols-3 gap-2 text-center text-[11px]">
+                          <div className="p-1.5 rounded bg-surface-container-lowest border border-outline-variant/20">
+                            <span className="text-[10px] text-on-surface-variant block">Odòmetre Inici</span>
+                            <span className="font-mono font-bold">
+                              {conc.vehicle.odometre_inici != null ? `${conc.vehicle.odometre_inici} km` : "—"}
+                            </span>
+                          </div>
+                          <div className="p-1.5 rounded bg-surface-container-lowest border border-outline-variant/20">
+                            <span className="text-[10px] text-on-surface-variant block">Odòmetre Final</span>
+                            <span className="font-mono font-bold">
+                              {conc.vehicle.odometre_fi != null ? `${conc.vehicle.odometre_fi} km` : "—"}
+                            </span>
+                          </div>
+                          <div className="p-1.5 rounded bg-surface-container-lowest border border-outline-variant/20">
+                            <span className="text-[10px] text-on-surface-variant block">Km Facturables</span>
+                            <span className="font-mono font-bold text-primary">
+                              {conc.vehicle.km_imputats || Number(kmImputatsInput) || 0} km (
+                              {Number(conc.vehicle.valor_desplacament_pvp || 0).toFixed(2)} €)
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    )}
 
                     {avísCarnet && (
                       <div className="p-2.5 rounded-lg bg-error-container/30 border border-error text-error text-xs font-semibold flex items-start gap-1.5">

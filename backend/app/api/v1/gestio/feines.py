@@ -2084,15 +2084,21 @@ async def obtenir_evidencia_fulla_360(
 
     if tipus_norm in ("foto_inicial", "foto_intermedia", "foto_final"):
         clau_foto = tipus_norm.replace("foto_", "")
-        fitxer_rel = f"06_ordres_treball/actives_buffer/ot_{feina_id}_foto_{clau_foto}.webp"
-        try:
-            raw_bytes, _ = await SovereignStorageGateway.obtenir_bytes_fitxer(
-                db=db,
-                empresa_id=emp_uuid,
-                fitxer_path=fitxer_rel,
-            )
-        except HTTPException:
-            raw_bytes = None
+        rutes_possibles = [
+            f"06_ordres_treball/actives_buffer/ot_{feina_id}_foto_{clau_foto}.webp",
+            f"06_ordres_treball/historic_tancades/ot_{feina_id}_foto_{clau_foto}.webp",
+        ]
+        for fitxer_rel in rutes_possibles:
+            try:
+                raw_bytes, _ = await SovereignStorageGateway.obtenir_bytes_fitxer(
+                    db=db,
+                    empresa_id=emp_uuid,
+                    fitxer_path=fitxer_rel,
+                )
+                if raw_bytes:
+                    break
+            except HTTPException:
+                raw_bytes = None
     elif tipus_norm == "signatura":
         default_mime = "image/png"
         if ordre.signatura_client_path:

@@ -13,7 +13,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import filetype  # type: ignore[import-untyped]
 from fastapi import HTTPException, status
-from sqlalchemy import select, text
+from sqlalchemy import and_, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.models import (
@@ -24,6 +24,7 @@ from app.models.models import (
     Client,
     EinaCustodia,
     FullaPicking,
+    HistorialAssignacioVehicle,
     Incidencia,
     LiniaPicking,
     Magatzem,
@@ -342,6 +343,12 @@ class ReconciliacioOTService:
 
         vehicle_info: Optional[Dict[str, Any]] = None
         veh_cost_per_km = Decimal("0.32")
+        veh_preu_km_facturable = Decimal("0.45")
+        km_imputats_val = int(ot.km_imputats or 0)
+        odometre_inici_reg: Optional[int] = None
+        odometre_fi_reg: Optional[int] = None
+        vehicle_pickout_estat: str = "PENDENT"
+
         if ot.vehicle_id:
             veh = (
                 await db.execute(
@@ -355,12 +362,58 @@ class ReconciliacioOTService:
                 c_km_raw = getattr(veh, "cost_per_km_eur", None)
                 if c_km_raw is not None and Decimal(str(c_km_raw)) > 0:
                     veh_cost_per_km = Decimal(str(c_km_raw))
+                p_km_raw = getattr(veh, "preu_km_exces_eur", None)
+                if p_km_raw is not None and Decimal(str(p_km_raw)) > 0:
+                    veh_preu_km_facturable = Decimal(str(p_km_raw))
+
+                # Comprovar si hi ha odòmetre registrat o moviment d'assignació
+                odo_actual = getattr(veh, "odometre_acumulat", None)
+                if odo_actual is not None:
+                    odometre_fi_reg = int(odo_actual)
+
+                # Si l'OT té data de planificació, consultar si hi ha historial
+                hist_row = (
+                    await db.execute(
+                        select(HistorialAssignacioVehicle)
+                        .where(
+                            HistorialAssignacioVehicle.empresa_id == empresa_id,
+                            HistorialAssignacioVehicle.vehicle_id == veh.id,
+                        )
+                        .order_by(HistorialAssignacioVehicle.data_inici.desc())
+                    )
+                ).scalars().first()
+                if hist_row:
+                    odometre_inici_reg = hist_row.odometre_inici
+                    if hist_row.odometre_fi is not None:
+                        odometre_fi_reg = hist_row.odometre_fi
+                        vehicle_pickout_estat = "COMPLERT"
+                    elif hist_row.data_fi is not None:
+                        vehicle_pickout_estat = "COMPLERT"
+                    else:
+                        vehicle_pickout_estat = "RETORNAT" if str(ot.estat or "").upper() in ESTATS_OT_CONCLOSES else "EN_TRAJECTE"
+                elif str(ot.estat or "").upper() in ESTATS_OT_CONCLOSES:
+                    vehicle_pickout_estat = "COMPLERT"
+
+                # Si no s'havia imputat km manualment però tenim odòmetres, derivar km_imputats
+                if km_imputats_val <= 0 and odometre_inici_reg is not None and odometre_fi_reg is not None:
+                    km_diff = odometre_fi_reg - odometre_inici_reg
+                    if km_diff > 0:
+                        km_imputats_val = km_diff
+
+                valor_desplacament_pvp = _q2(Decimal(km_imputats_val) * veh_preu_km_facturable)
+
                 vehicle_info = {
                     "id": str(veh.id),
                     "matricula": veh.matricula,
                     "marca_model": f"{veh.marca} {veh.model}".strip(),
                     "carnet_necessari": getattr(veh, "carnet_necessari", None),
                     "cost_per_km_eur": float(_q2(veh_cost_per_km)) if mostrar_costos_interns else None,
+                    "preu_km_facturable": float(_q2(veh_preu_km_facturable)),
+                    "km_imputats": km_imputats_val,
+                    "odometre_inici": odometre_inici_reg,
+                    "odometre_fi": odometre_fi_reg,
+                    "estat_pickout": vehicle_pickout_estat,
+                    "valor_desplacament_pvp": float(valor_desplacament_pvp),
                 }
 
         # Quadrilla assignada (Cap de colla + Operaris)
@@ -435,6 +488,17 @@ class ReconciliacioOTService:
             hores_previstes = _q2(Decimal(str(diff_sec)) / Decimal("3600"))
         desviacio_hores = _q2(hores_reals - hores_previstes)
 
+        # Càlcul de format humà sexagesimal per a conciliació exacta (ex: 1.43h -> 1h 26m)
+        total_min_reals = int(round(float(hores_reals) * 60))
+        h_reals_int = total_min_reals // 60
+        m_reals_int = total_min_reals % 60
+        hores_reals_human = f"{h_reals_int}h {m_reals_int:02d}m" if hores_reals > 0 else "0h 00m"
+
+        total_min_prev = int(round(float(hores_previstes) * 60))
+        h_prev_int = total_min_prev // 60
+        m_prev_int = total_min_prev % 60
+        hores_previstes_human = f"{h_prev_int}h {m_prev_int:02d}m" if hores_previstes > 0 else "0h 00m"
+
         desviacions_gps: List[Dict[str, Any]] = []
         if ot.desviacio_geovalla or ot.justificacio_geovalla:
             desviacions_gps.append(
@@ -459,12 +523,22 @@ class ReconciliacioOTService:
         for tipus_f in ("inicial", "intermedia", "final"):
             nom_f = f"ot_{ot.id}_foto_{tipus_f}.webp"
             try:
-                fotos_qa[tipus_f] = await SovereignStorageGateway.existeix_fitxer_categoria(
+                exists_active = await SovereignStorageGateway.existeix_fitxer_categoria(
                     db=db,
                     empresa_id=empresa_id,
                     categoria="ots_actives",
                     nom_fitxer=nom_f,
                 )
+                if not exists_active:
+                    exists_historic = await SovereignStorageGateway.existeix_fitxer_categoria(
+                        db=db,
+                        empresa_id=empresa_id,
+                        categoria="ots_historic",
+                        nom_fitxer=nom_f,
+                    )
+                    fotos_qa[tipus_f] = exists_historic
+                else:
+                    fotos_qa[tipus_f] = True
             except Exception:
                 fotos_qa[tipus_f] = False
         protocol_fotos_complet = all(fotos_qa.values())
@@ -559,19 +633,40 @@ class ReconciliacioOTService:
 
             materials_list.append(mat_item)
 
-        # 5. Eines en custòdia
+        # 5. Eines en custòdia (incloses les assignades a l'OT o en custòdia dels operaris de la quadrilla)
+        eina_conds = [EinaCustodia.ordre_treball_id == ot.id]
+        colla_op_ids = [uuid.UUID(str(op["id"])) for op in operaris_list if op.get("id")]
+        if ot.cap_de_colla_id and ot.cap_de_colla_id not in colla_op_ids:
+            colla_op_ids.append(ot.cap_de_colla_id)
+
+        if colla_op_ids:
+            eina_conds.append(
+                and_(
+                    EinaCustodia.custodiat_per_operari_id.in_(colla_op_ids),
+                    EinaCustodia.estat.in_(["CUSTODIADA", "EN_VEHICLE", "AVARIADA"]),
+                )
+            )
+
         eines_rows = list(
             (
                 await db.execute(
                     select(EinaCustodia).where(
                         EinaCustodia.empresa_id == empresa_id,
-                        EinaCustodia.ordre_treball_id == ot.id,
-                    )
+                        or_(*eina_conds),
+                    ).order_by(EinaCustodia.nom.asc())
                 )
             )
             .scalars()
             .all()
         )
+        # Deduplicar per ID
+        seen_eines_ids = set()
+        dedup_eines_rows = []
+        for e in eines_rows:
+            if e.id not in seen_eines_ids:
+                seen_eines_ids.add(e.id)
+                dedup_eines_rows.append(e)
+
         eines_list = [
             {
                 "id": str(e.id),
@@ -579,8 +674,11 @@ class ReconciliacioOTService:
                 "model": getattr(e, "model", None),
                 "numero_serie": e.numero_serie,
                 "estat": e.estat,
+                "en_custodia_efectiva": bool(e.estat in ("CUSTODIADA", "EN_VEHICLE", "AVARIADA")),
+                "requereix_pickout": bool(e.estat == "AVARIADA" or e.estat == "CUSTODIADA" or e.estat == "EN_VEHICLE"),
+                "custodiat_per_id": str(e.custodiat_per_operari_id) if e.custodiat_per_operari_id else None,
             }
-            for e in eines_rows
+            for e in dedup_eines_rows
         ]
 
         # 6. Incidències d'obra vinculades a l'OT
@@ -704,6 +802,7 @@ class ReconciliacioOTService:
 
         # 9. Pressupost vinculat (si n'hi ha al client / disc sobirà)
         pressupost_info: Optional[Dict[str, Any]] = None
+        pressupost_linies_raw: List[Dict[str, Any]] = []
         try:
             pres_json_items = await SovereignStorageGateway.llegir_entitats_json(
                 db, empresa_id, "pressupostos"
@@ -719,16 +818,37 @@ class ReconciliacioOTService:
                         )
                     ).scalars().first()
                     if pres_db:
+                        pressupost_linies_raw = list(item.get("linies") or [])
                         pressupost_info = {
                             "id": str(pres_db.id),
                             "numero": pres_db.numero,
                             "estat": pres_db.estat,
                             "total": float(_q2(pres_db.total or 0)),
                             "created_at": pres_db.created_at.isoformat() if pres_db.created_at else None,
+                            "total_linies": len(pressupost_linies_raw),
                         }
                         break
         except Exception:
             pressupost_info = None
+
+        # Detectar ítems de material del pressupost pendents de facturar o no inclosos al picking
+        linies_pendents_facturar: List[Dict[str, Any]] = []
+        if pressupost_linies_raw:
+            picked_art_ids = {str(m["article_id"]) for m in materials_list if m.get("article_id")}
+            picked_noms = {str(m["article_nom"]).strip().lower() for m in materials_list if m.get("article_nom")}
+            for pl in pressupost_linies_raw:
+                c_nom = str(pl.get("concepte") or "").strip()
+                art_id_pl = str(pl.get("article_id") or "") if pl.get("article_id") else None
+                es_mat = str(pl.get("tipus_linia") or "").upper() == "MATERIAL" or bool(art_id_pl) or "material" in str(pl.get("seccio") or "").lower()
+                if es_mat:
+                    coincideix = (art_id_pl and art_id_pl in picked_art_ids) or (c_nom.lower() in picked_noms)
+                    if not coincideix:
+                        linies_pendents_facturar.append({
+                            "concepte": c_nom,
+                            "quantitat": float(pl.get("quantitat") or 1.0),
+                            "preu_unitari": float(pl.get("preu_unitari") or 0.0),
+                            "subtotal": float(pl.get("subtotal") or 0.0),
+                        })
 
         # 10. Pre-factura o Factura final vinculada a l'OT (via funció SECURITY DEFINER acotada a l'OT,
         # preservant intactes les polítiques RLS `economics_boss_only` sobre consultes globals)
@@ -933,7 +1053,9 @@ class ReconciliacioOTService:
                 "te_tram_obert": te_tram_obert,
                 "temps_acumulat_segons": temps_segons,
                 "hores_previstes": float(hores_previstes),
+                "hores_previstes_human": hores_previstes_human,
                 "hores_reals": float(hores_reals),
+                "hores_reals_human": hores_reals_human,
                 "desviacio_hores": float(desviacio_hores),
                 "hora_inici_real": ot.hora_inici_real.isoformat() if ot.hora_inici_real else None,
                 "hora_fi_real": ot.hora_fi_real.isoformat() if ot.hora_fi_real else None,
@@ -964,6 +1086,7 @@ class ReconciliacioOTService:
                 "alerta_consum_excessiu": alerta_consum_excessiu,
                 "detall_merma": " ".join(detall_merma_msgs) if detall_merma_msgs else None,
                 "linies": materials_list,
+                "linies_pendents_facturar": linies_pendents_facturar,
             },
             "eines": eines_list,
             "incidencies": {
