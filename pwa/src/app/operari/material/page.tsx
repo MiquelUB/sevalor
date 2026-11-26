@@ -22,7 +22,6 @@ import {
   ArrowUpRight,
 } from "lucide-react";
 import { apiFetch } from "@/lib/api";
-import { BarcodeScanner } from "@/components/operari/BarcodeScanner";
 
 interface MaterialItem {
   id: string;
@@ -37,6 +36,7 @@ interface MaterialItem {
   es_eina: boolean;
   format_continu?: boolean;
   carregat_pick_in: boolean;
+  confirmat_bd?: boolean;
   retornat_pick_out: number;
   quantitat_mermada: number;
   origen_estoc: "NAU" | "FURGONETA" | string;
@@ -180,13 +180,17 @@ function OperariMaterialContent() {
       const data = await apiFetch<MaterialItem[]>(url);
       const items = Array.isArray(data) ? data : [];
       setMaterials(
-        items.map((m) => ({
-          ...m,
-          carregat_pick_in: Boolean(m.carregat_pick_in),
-          retornat_pick_out: Number(m.retornat_pick_out ?? 0),
-          quantitat_mermada: Number(m.quantitat_mermada ?? 0),
-          origen_estoc: (m.origen_estoc || "NAU").toUpperCase(),
-        }))
+        items.map((m) => {
+          const confirmatServidor = Boolean(m.carregat_pick_in);
+          return {
+            ...m,
+            carregat_pick_in: confirmatServidor,
+            confirmat_bd: confirmatServidor,
+            retornat_pick_out: Number(m.retornat_pick_out ?? 0),
+            quantitat_mermada: Number(m.quantitat_mermada ?? 0),
+            origen_estoc: (m.origen_estoc || "NAU").toUpperCase(),
+          };
+        })
       );
     } catch {
       setMaterials([]);
@@ -330,10 +334,12 @@ function OperariMaterialContent() {
   );
 
   const marcatsCount = materialsNau.filter((m) => m.carregat_pick_in).length;
+  const confirmatsBdCount = materialsNau.filter((m) => m.confirmat_bd).length;
   const totalNauCount = materialsNau.length;
   const percentPickIn =
     totalNauCount > 0 ? Math.round((marcatsCount / totalNauCount) * 100) : 0;
   const totsMarcats = totalNauCount > 0 && marcatsCount === totalNauCount;
+  const totsConfirmatsBd = totalNauCount > 0 && confirmatsBdCount === totalNauCount;
 
   const handleToggleCheck = (id: string) => {
     setMaterials((prev) =>
@@ -343,31 +349,41 @@ function OperariMaterialContent() {
     );
   };
 
+  const handleMarcarTots = () => {
+    setMaterials((prev) =>
+      prev.map((m) =>
+        m.origen_estoc !== "FURGONETA" ? { ...m, carregat_pick_in: true } : m
+      )
+    );
+  };
+
   const handleConfirmarPickIn = async () => {
+    const aConfirmar = materialsNau.filter((m) => m.carregat_pick_in);
+    if (aConfirmar.length === 0) return;
+
     setDesant(true);
     setFeedback(null);
     try {
-      const aConfirmar = materialsNau.filter((m) => m.carregat_pick_in);
-      await Promise.all(
-        aConfirmar.map((m) =>
-          apiFetch(`/operari/picking/linies/${m.id}`, {
-            method: "PUT",
-            body: JSON.stringify({
-              quantitat_carregada_pick_in: m.quantitat_programada,
-            }),
-          })
-        )
-      );
-      setFeedback({
-        tipus: "ok",
-        text: `Pick-In confirmat (${aConfirmar.length} línies registrades).`,
+      await apiFetch("/operari/picking/linies/batch", {
+        method: "PUT",
+        body: JSON.stringify({
+          items: aConfirmar.map((m) => ({
+            linia_id: m.id,
+            quantitat_carregada_pick_in: m.quantitat_programada,
+          })),
+        }),
       });
       await carregarMaterials(ordreActivaId);
+      setFeedback({
+        tipus: "ok",
+        text: `Pick-In confirmat al magatzem (${aConfirmar.length} de ${totalNauCount} línies desades).`,
+      });
       setFase("OBRA");
     } catch (err: unknown) {
+      await carregarMaterials(ordreActivaId);
       setFeedback({
         tipus: "error",
-        text: err instanceof Error ? err.message : "Error en confirmar el Pick-In.",
+        text: err instanceof Error ? err.message : "Error en confirmar el Pick-In. Cap canvi parcial no s'ha desat.",
       });
     } finally {
       setDesant(false);
@@ -403,30 +419,32 @@ function OperariMaterialContent() {
   };
 
   const handleConfirmarPickOut = async () => {
+    if (materialsNau.length === 0) return;
+
     setDesant(true);
     setFeedback(null);
     try {
-      await Promise.all(
-        materialsNau.map((m) =>
-          apiFetch(`/operari/picking/linies/${m.id}`, {
-            method: "PUT",
-            body: JSON.stringify({
-              quantitat_carregada_pick_in:
-                m.quantitat_carregada_pick_in && m.quantitat_carregada_pick_in > 0
-                  ? m.quantitat_carregada_pick_in
-                  : m.quantitat_programada,
-              quantitat_retornada_pick_out: m.retornat_pick_out ?? 0,
-              quantitat_mermada: m.quantitat_mermada ?? 0,
-            }),
-          })
-        )
-      );
+      await apiFetch("/operari/picking/linies/batch", {
+        method: "PUT",
+        body: JSON.stringify({
+          items: materialsNau.map((m) => ({
+            linia_id: m.id,
+            quantitat_carregada_pick_in:
+              m.quantitat_carregada_pick_in && m.quantitat_carregada_pick_in > 0
+                ? m.quantitat_carregada_pick_in
+                : m.quantitat_programada,
+            quantitat_retornada_pick_out: m.retornat_pick_out ?? 0,
+            quantitat_mermada: m.quantitat_mermada ?? 0,
+          })),
+        }),
+      });
+      await carregarMaterials(ordreActivaId);
       setFeedback({
         tipus: "ok",
         text: "Pick-Out consolidat. Estoc del magatzem i balanç de l'ordre actualitzats.",
       });
-      await carregarMaterials(ordreActivaId);
     } catch (err: unknown) {
+      await carregarMaterials(ordreActivaId);
       setFeedback({
         tipus: "error",
         text: err instanceof Error ? err.message : "Error en consolidar el Pick-Out.",
@@ -720,19 +738,34 @@ function OperariMaterialContent() {
         {/* FASE 1: PICK IN */}
         {materialsNau.length > 0 && fase === "PICK_IN" && (
           <div className="space-y-4">
-            <div className="bg-surface-container-low dark:bg-slate-900 rounded-xl p-4 border border-outline-variant/25 dark:border-slate-800">
-              <div className="flex items-center justify-between mb-3">
+            <div className="bg-surface-container-low dark:bg-slate-900 rounded-xl p-4 border border-outline-variant/25 dark:border-slate-800 space-y-2.5">
+              <div className="flex items-start justify-between gap-2">
                 <div>
                   <span className="text-xs text-on-surface-variant block">
-                    Verificació de càrrega a nau
+                    {totsConfirmatsBd
+                      ? "Càrrega a nau confirmada al magatzem"
+                      : `Confirmats a magatzem: ${confirmatsBdCount} de ${totalNauCount}`}
                   </span>
                   <h2 className="text-lg font-extrabold text-primary dark:text-white">
-                    {marcatsCount} de {totalNauCount} ítems verificats
+                    {totsConfirmatsBd
+                      ? `${confirmatsBdCount} de ${totalNauCount} ítems confirmats`
+                      : `${marcatsCount} de ${totalNauCount} ítems seleccionats`}
                   </h2>
                 </div>
-                <span className="text-sm font-mono font-extrabold text-secondary">
-                  {percentPickIn}%
-                </span>
+                <div className="flex items-center gap-2 shrink-0">
+                  {!totsMarcats && (
+                    <button
+                      type="button"
+                      onClick={handleMarcarTots}
+                      className="px-2.5 py-1 rounded-lg bg-surface-container-lowest dark:bg-slate-800 border border-outline-variant/40 text-[11px] font-bold text-primary dark:text-slate-200 hover:border-primary/50 transition-colors cursor-pointer"
+                    >
+                      Marcar tots
+                    </button>
+                  )}
+                  <span className="text-sm font-mono font-extrabold text-secondary">
+                    {percentPickIn}%
+                  </span>
+                </div>
               </div>
               <div className="w-full h-2 bg-surface-container-highest dark:bg-slate-800 rounded-full overflow-hidden">
                 <div
@@ -740,27 +773,12 @@ function OperariMaterialContent() {
                   style={{ width: `${percentPickIn}%` }}
                 />
               </div>
+              {!totsConfirmatsBd && marcatsCount > confirmatsBdCount && (
+                <p className="text-[11px] text-amber-700 dark:text-amber-300 font-medium">
+                  Els ítems marcats encara no s&apos;han desat. Prem el botó de confirmació inferior per registrar la càrrega.
+                </p>
+              )}
             </div>
-
-            <BarcodeScanner
-              onScan={(codi) => {
-                const item = materialsNau.find(
-                  (m) => m.referencia === codi || m.id === codi
-                );
-                if (item) {
-                  handleToggleCheck(item.id);
-                  setFeedback({
-                    tipus: "ok",
-                    text: `Material verificat: ${item.nom}`,
-                  });
-                } else {
-                  setFeedback({
-                    tipus: "error",
-                    text: `El codi "${codi}" no consta a la llista de càrrega.`,
-                  });
-                }
-              }}
-            />
 
             <div className="space-y-2.5">
               {materialsNau.map((m) => (
@@ -768,13 +786,15 @@ function OperariMaterialContent() {
                   key={m.id}
                   onClick={() => handleToggleCheck(m.id)}
                   className={`p-3.5 rounded-xl border transition-all cursor-pointer flex items-center justify-between ${
-                    m.carregat_pick_in
-                      ? "bg-secondary-container/10 border-secondary-container text-primary dark:text-emerald-200"
+                    m.confirmat_bd
+                      ? "bg-secondary-container/12 border-secondary-container text-primary dark:text-emerald-200"
+                      : m.carregat_pick_in
+                      ? "bg-amber-500/8 border-amber-500/50 text-primary dark:text-amber-100"
                       : "bg-surface-container-lowest dark:bg-slate-900 border-outline-variant/30 dark:border-slate-800 hover:border-primary/40"
                   }`}
                 >
                   <div className="flex items-center gap-3 min-w-0">
-                    <div className="text-secondary-container shrink-0">
+                    <div className={m.confirmat_bd ? "text-secondary-container shrink-0" : "text-amber-600 dark:text-amber-400 shrink-0"}>
                       {m.carregat_pick_in ? (
                         <CheckSquare className="w-6 h-6" />
                       ) : (
@@ -791,6 +811,15 @@ function OperariMaterialContent() {
                             {m.magatzem_nom}
                           </span>
                         )}
+                        {m.confirmat_bd ? (
+                          <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-secondary-container/20 text-secondary">
+                            Confirmat
+                          </span>
+                        ) : m.carregat_pick_in ? (
+                          <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-700 dark:text-amber-300">
+                            Pendent de desar
+                          </span>
+                        ) : null}
                         {m.es_eina && (
                           <span className="text-[11px] font-bold px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-700 dark:text-amber-300 inline-flex items-center gap-1">
                             <Wrench className="w-3 h-3" /> Eina
@@ -799,7 +828,7 @@ function OperariMaterialContent() {
                       </div>
                       <h4
                         className={`text-sm font-bold mt-1 truncate ${
-                          m.carregat_pick_in
+                          m.confirmat_bd
                             ? "line-through opacity-75 text-on-surface-variant"
                             : "text-primary dark:text-slate-100"
                         }`}
@@ -818,6 +847,7 @@ function OperariMaterialContent() {
 
             <button
               type="button"
+              data-testid="btn-confirmar-pick-in"
               onClick={handleConfirmarPickIn}
               disabled={!totsMarcats || desant}
               className={`w-full py-3.5 rounded-xl font-bold text-xs flex items-center justify-center gap-2 shadow-md transition-all cursor-pointer ${
@@ -831,7 +861,13 @@ function OperariMaterialContent() {
               ) : (
                 <CheckCircle2 className="w-4 h-4" />
               )}
-              <span>Confirmar Pick In (100% verificat)</span>
+              <span>
+                {desant
+                  ? "Desant Pick-In al magatzem..."
+                  : totsConfirmatsBd
+                  ? "Pick-In confirmat · Reconfirmar i passar a Furgoneta"
+                  : `Confirmar Pick In (${marcatsCount} de ${totalNauCount})`}
+              </span>
             </button>
           </div>
         )}
@@ -1075,39 +1111,6 @@ function OperariMaterialContent() {
               </button>
             </div>
 
-            <BarcodeScanner
-              onScan={(codi) => {
-                const codiLower = codi.trim().toLowerCase();
-                const enCustodia = einesAssignades.find(
-                  (e) =>
-                    e.numero_serie.toLowerCase() === codiLower ||
-                    (e.referencia_fabricant || "").toLowerCase() === codiLower ||
-                    e.id === codi
-                );
-                if (enCustodia) {
-                  setFeedback({
-                    tipus: "ok",
-                    text: `Eina localitzada en custòdia: ${enCustodia.nom} (${enCustodia.numero_serie}). Pots confirmar-la a furgoneta o fer Pick-Out.`,
-                  });
-                  return;
-                }
-                const disp = einesDisponibles.find(
-                  (e) =>
-                    e.numero_serie.toLowerCase() === codiLower ||
-                    (e.referencia_fabricant || "").toLowerCase() === codiLower ||
-                    e.id === codi
-                );
-                if (disp) {
-                  handlePickInEina(disp, destiPickInEina);
-                  return;
-                }
-                setFeedback({
-                  tipus: "error",
-                  text: `Cap eina trobada amb el codi o número de sèrie "${codi}".`,
-                });
-              }}
-            />
-
             {loadingEines && einesAssignades.length === 0 ? (
               <div className="p-6 text-center text-xs text-on-surface-variant">
                 Carregant eines assignades...
@@ -1121,7 +1124,7 @@ function OperariMaterialContent() {
                   Cap eina en custòdia per a aquesta ordre
                 </h4>
                 <p className="text-xs text-on-surface-variant dark:text-slate-400">
-                  Escaneja el número de sèrie o selecciona una eina disponible a nau per registrar el seu Pick-In.
+                  Selecciona una eina disponible a nau per registrar el seu Pick-In.
                 </p>
               </div>
             ) : (
@@ -1407,7 +1410,7 @@ function OperariMaterialContent() {
                       type="text"
                       value={cercaVan}
                       onChange={(e) => setCercaVan(e.target.value)}
-                      placeholder="Cerca per nom, referència o codi de barres..."
+                      placeholder="Cerca per nom o referència..."
                       className="w-full pl-9 pr-3 py-2 rounded-xl bg-surface-container-low dark:bg-slate-800 border border-outline-variant/40 text-xs"
                     />
                   </div>

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -559,3 +560,328 @@ async def test_05_rls_aillament_estoc_furgoneta_i_picking(admin_session, tmp_pat
         )
         assert r_stock_a.status_code == 200, r_stock_a.text
         assert r_stock_a.json()["items"][0]["quantitat_disponible"] == 15.0
+
+
+@pytest.mark.asyncio
+async def test_06_pick_in_i_pick_out_concurrents_sense_stale_data_error(tmp_path: Path):
+    """Dues peticions PUT simultànies (en dues connexions reals de PostgreSQL) sobre la mateixa OT
+    amb optimistic locking (`OrdreTreball.versio`) han de serialitzar-se netament sense StaleDataError."""
+    from sqlalchemy import text
+
+    from app.core.db import AsyncSessionLocal
+
+    emp_id: uuid.UUID | None = None
+    saved_overrides = dict(app.dependency_overrides)
+    try:
+        async with AsyncSessionLocal() as s_seed:
+            await s_seed.execute(text("RESET ROLE;"))
+            t = await _seed_tenant_picking(s_seed, tmp_path / "disc_conc", "Conc")
+            emp_id = t["empresa_id"]
+            art2_id = uuid.uuid4()
+            fp_id = uuid.uuid4()
+            lin1_id = uuid.uuid4()
+            lin2_id = uuid.uuid4()
+
+            # Forçar estoc_minim elevat perquè també s'executi avaluar_i_sincronitzar_alertes_recompra
+            art1 = (
+                await s_seed.execute(select(Article).where(Article.id == t["article_id"]))
+            ).scalar_one()
+            art1.estoc_minim = 200.0
+
+            s_seed.add(
+                Article(
+                    id=art2_id,
+                    empresa_id=t["empresa_id"],
+                    referencia_inventari=f"VALV-{uuid.uuid4().hex[:6].upper()}",
+                    nom="Vàlvula esfera 32mm",
+                    unitat_mesura="UNITAT",
+                    es_material_continu=False,
+                    preu_cost=12.0,
+                    preu_cost_mitja=12.0,
+                    pmp_actual=12.0,
+                    preu_venda=30.0,
+                    estoc_minim=50.0,
+                    estoc_total_actual=20.0,
+                )
+            )
+            await s_seed.flush()
+            s_seed.add(
+                EstocMagatzem(
+                    empresa_id=t["empresa_id"],
+                    article_id=art2_id,
+                    magatzem_id=t["mag_nau_id"],
+                    quantitat_fisica=20.0,
+                    quantitat_virtual_reservada=4.0,
+                    quantitat_cuarentena=0.0,
+                )
+            )
+            s_seed.add(
+                FullaPicking(
+                    id=fp_id,
+                    empresa_id=t["empresa_id"],
+                    ordre_treball_id=t["ot_id"],
+                    vehicle_id=t["vehicle_id"],
+                    estat_picking="PENDENT",
+                )
+            )
+            await s_seed.flush()
+            s_seed.add(
+                LiniaPicking(
+                    id=lin1_id,
+                    empresa_id=t["empresa_id"],
+                    picking_id=fp_id,
+                    article_id=t["article_id"],
+                    magatzem_id=t["mag_nau_id"],
+                    quantitat_prevista=6.0,
+                )
+            )
+            s_seed.add(
+                LiniaPicking(
+                    id=lin2_id,
+                    empresa_id=t["empresa_id"],
+                    picking_id=fp_id,
+                    article_id=art2_id,
+                    magatzem_id=t["mag_nau_id"],
+                    quantitat_prevista=4.0,
+                )
+            )
+            await s_seed.commit()
+
+        # Usar sessions reals independents per petició (igual que en producció)
+        app.dependency_overrides.clear()
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+            r1, r2 = await asyncio.gather(
+                ac.put(
+                    f"/api/v1/operari/picking/linies/{lin1_id}",
+                    json={"quantitat_carregada_pick_in": 6.0},
+                    headers=t["headers_op"],
+                ),
+                ac.put(
+                    f"/api/v1/operari/picking/linies/{lin2_id}",
+                    json={"quantitat_carregada_pick_in": 4.0},
+                    headers=t["headers_op"],
+                ),
+            )
+            assert r1.status_code == 200, r1.text
+            assert r2.status_code == 200, r2.text
+
+            # Verificar que GET /operari/materials retorna tots 2 confirmats realment a BD
+            r_mat = await ac.get(
+                f"/api/v1/operari/materials?ordre_treball_id={t['ot_id']}",
+                headers=t["headers_op"],
+            )
+            assert r_mat.status_code == 200, r_mat.text
+            mats = r_mat.json()
+            assert len(mats) == 2
+            assert all(m["carregat_pick_in"] is True for m in mats)
+
+            # També Pick-Out concurrent de totes dues línies sense StaleDataError
+            o1, o2 = await asyncio.gather(
+                ac.put(
+                    f"/api/v1/operari/picking/linies/{lin1_id}",
+                    json={
+                        "quantitat_carregada_pick_in": 6.0,
+                        "quantitat_retornada_pick_out": 1.0,
+                        "quantitat_mermada": 0.0,
+                    },
+                    headers=t["headers_op"],
+                ),
+                ac.put(
+                    f"/api/v1/operari/picking/linies/{lin2_id}",
+                    json={
+                        "quantitat_carregada_pick_in": 4.0,
+                        "quantitat_retornada_pick_out": 1.0,
+                        "quantitat_mermada": 0.0,
+                    },
+                    headers=t["headers_op"],
+                ),
+            )
+            assert o1.status_code == 200, o1.text
+            assert o2.status_code == 200, o2.text
+
+        # Comprovar totals reals recalculats a l'OT: (5*10 + 3*12 = 86 PMP; 5*25 + 3*30 = 215 PVP)
+        async with AsyncSessionLocal() as s_chk:
+            await s_chk.execute(text("RESET ROLE;"))
+            ot_db = (
+                await s_chk.execute(select(OrdreTreball).where(OrdreTreball.id == t["ot_id"]))
+            ).scalar_one()
+            assert float(ot_db.cost_materials_pmp) == 86.0
+            assert float(ot_db.pvp_materials_aplicat) == 215.0
+    finally:
+        app.dependency_overrides.clear()
+        app.dependency_overrides.update(saved_overrides)
+        if emp_id is not None:
+            async with AsyncSessionLocal() as s_del:
+                await s_del.execute(text("RESET ROLE;"))
+                await s_del.execute(text("DELETE FROM empreses WHERE id = :id"), {"id": emp_id})
+                await s_del.commit()
+
+
+@pytest.mark.asyncio
+async def test_07_batch_picking_atomic_rollback_i_rls(admin_session, tmp_path: Path):
+    """PUT /operari/picking/linies/batch és atòmic (tot o res) i aplica aïllament RLS estricte."""
+    ta = await _seed_tenant_picking(admin_session, tmp_path / "disc_batch_a", "BatchA")
+    tb = await _seed_tenant_picking(admin_session, tmp_path / "disc_batch_b", "BatchB")
+
+    art2_id = uuid.uuid4()
+    fp_id = uuid.uuid4()
+    lin1_id = uuid.uuid4()
+    lin2_id = uuid.uuid4()
+
+    admin_session.add(
+        Article(
+            id=art2_id,
+            empresa_id=ta["empresa_id"],
+            referencia_inventari=f"COLZ-{uuid.uuid4().hex[:6].upper()}",
+            nom="Colze 90º PE 32mm",
+            unitat_mesura="UNITAT",
+            preu_cost=4.0,
+            preu_cost_mitja=4.0,
+            pmp_actual=4.0,
+            preu_venda=9.0,
+            estoc_total_actual=30.0,
+        )
+    )
+    await admin_session.flush()
+    admin_session.add(
+        EstocMagatzem(
+            empresa_id=ta["empresa_id"],
+            article_id=art2_id,
+            magatzem_id=ta["mag_nau_id"],
+            quantitat_fisica=30.0,
+            quantitat_virtual_reservada=5.0,
+            quantitat_cuarentena=0.0,
+        )
+    )
+    admin_session.add(
+        FullaPicking(
+            id=fp_id,
+            empresa_id=ta["empresa_id"],
+            ordre_treball_id=ta["ot_id"],
+            vehicle_id=ta["vehicle_id"],
+            estat_picking="PENDENT",
+        )
+    )
+    await admin_session.flush()
+    admin_session.add(
+        LiniaPicking(
+            id=lin1_id,
+            empresa_id=ta["empresa_id"],
+            picking_id=fp_id,
+            article_id=ta["article_id"],
+            magatzem_id=ta["mag_nau_id"],
+            quantitat_prevista=10.0,
+        )
+    )
+    admin_session.add(
+        LiniaPicking(
+            id=lin2_id,
+            empresa_id=ta["empresa_id"],
+            picking_id=fp_id,
+            article_id=art2_id,
+            magatzem_id=ta["mag_nau_id"],
+            quantitat_prevista=5.0,
+        )
+    )
+    await admin_session.commit()
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        # 1. Batch Pick-In vàlid de 2 línies en una sola transacció
+        r_in = await ac.put(
+            "/api/v1/operari/picking/linies/batch",
+            json={
+                "items": [
+                    {"linia_id": str(lin1_id), "quantitat_carregada_pick_in": 10.0},
+                    {"linia_id": str(lin2_id), "quantitat_carregada_pick_in": 5.0},
+                ]
+            },
+            headers=ta["headers_op"],
+        )
+        assert r_in.status_code == 200, r_in.text
+        assert r_in.json()["total_confirmades"] == 2
+
+        # 2. Batch Pick-Out amb 2a línia invàlida (retorn + merma > carregat) -> 422 i ROLLBACK TOTAL
+        r_bad = await ac.put(
+            "/api/v1/operari/picking/linies/batch",
+            json={
+                "items": [
+                    {
+                        "linia_id": str(lin1_id),
+                        "quantitat_carregada_pick_in": 10.0,
+                        "quantitat_retornada_pick_out": 2.0,
+                        "quantitat_mermada": 0.0,
+                    },
+                    {
+                        "linia_id": str(lin2_id),
+                        "quantitat_carregada_pick_in": 5.0,
+                        "quantitat_retornada_pick_out": 4.0,
+                        "quantitat_mermada": 3.0,  # 7 > 5 -> invàlid!
+                    },
+                ]
+            },
+            headers=ta["headers_op"],
+        )
+        assert r_bad.status_code == 422, r_bad.text
+
+        # Comprovar que la línia 1 tampoc s'ha tocat (zero desat parcial!)
+        admin_session.expire_all()
+        l1_db = (
+            await admin_session.execute(select(LiniaPicking).where(LiniaPicking.id == lin1_id))
+        ).scalar_one()
+        assert float(l1_db.quantitat_retornada_pick_out) == 0.0
+        assert float(l1_db.consum_aplicat_magatzem) == 0.0
+
+        # 3. Tenant B intenta fer batch sobre línies de Tenant A -> 404 (RLS)
+        r_rls = await ac.put(
+            "/api/v1/operari/picking/linies/batch",
+            json={"items": [{"linia_id": str(lin1_id), "quantitat_carregada_pick_in": 10.0}]},
+            headers=tb["headers_op"],
+        )
+        assert r_rls.status_code == 404, r_rls.text
+
+        # 4. Batch Pick-Out vàlid -> 200 i estoc actualitzat d'ambdues línies
+        r_out = await ac.put(
+            "/api/v1/operari/picking/linies/batch",
+            json={
+                "items": [
+                    {
+                        "linia_id": str(lin1_id),
+                        "quantitat_carregada_pick_in": 10.0,
+                        "quantitat_retornada_pick_out": 2.0,
+                        "quantitat_mermada": 0.0,
+                    },
+                    {
+                        "linia_id": str(lin2_id),
+                        "quantitat_carregada_pick_in": 5.0,
+                        "quantitat_retornada_pick_out": 1.0,
+                        "quantitat_mermada": 0.0,
+                    },
+                ]
+            },
+            headers=ta["headers_op"],
+        )
+        assert r_out.status_code == 200, r_out.text
+        assert r_out.json()["total_confirmades"] == 2
+
+    admin_session.expire_all()
+    e1 = (
+        await admin_session.execute(
+            select(EstocMagatzem).where(
+                EstocMagatzem.empresa_id == ta["empresa_id"],
+                EstocMagatzem.magatzem_id == ta["mag_nau_id"],
+                EstocMagatzem.article_id == ta["article_id"],
+            )
+        )
+    ).scalar_one()
+    e2 = (
+        await admin_session.execute(
+            select(EstocMagatzem).where(
+                EstocMagatzem.empresa_id == ta["empresa_id"],
+                EstocMagatzem.magatzem_id == ta["mag_nau_id"],
+                EstocMagatzem.article_id == art2_id,
+            )
+        )
+    ).scalar_one()
+    assert float(e1.quantitat_fisica) == 92.0  # 100 - 8
+    assert float(e2.quantitat_fisica) == 26.0  # 30 - 4

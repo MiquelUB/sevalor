@@ -21,6 +21,7 @@ from app.models.models import (
 )
 from app.services.picking_stock_service import (
     actualitzar_linia_picking_amb_estoc,
+    actualitzar_linies_picking_batch_amb_estoc,
     obtenir_estoc_furgoneta_operari,
     registrar_consum_material_furgoneta,
     resoldre_magatzem_furgoneta,
@@ -161,6 +162,17 @@ class UpdateLiniaPickingRequest(BaseModel):
     quantitat_mermada: Optional[float] = None
 
 
+class BatchLiniaPickingItem(BaseModel):
+    linia_id: uuid.UUID
+    quantitat_carregada_pick_in: Optional[float] = None
+    quantitat_retornada_pick_out: Optional[float] = None
+    quantitat_mermada: Optional[float] = None
+
+
+class BatchUpdateLiniesPickingRequest(BaseModel):
+    items: List[BatchLiniaPickingItem] = Field(..., min_length=1)
+
+
 class BalancLiniaResponse(BaseModel):
     id: uuid.UUID
     article_id: uuid.UUID
@@ -172,6 +184,44 @@ class BalancLiniaResponse(BaseModel):
     consum_aplicat_magatzem: float = 0.0
     origen_estoc: str = "NAU"
     estoc_actualitzat: bool = False
+
+
+class BatchBalancLiniesResponse(BaseModel):
+    linies: List[BalancLiniaResponse]
+    total_confirmades: int
+
+
+@router.put("/linies/batch", response_model=BatchBalancLiniesResponse)
+async def actualitzar_linies_picking_batch_operari(
+    request: Request,
+    payload: BatchUpdateLiniesPickingRequest,
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+    claims: dict = Depends(get_current_user_claims),
+):
+    """Actualitza atòmicament totes les línies de picking en una sola transacció (tot o res)."""
+    empresa_id = request.state.empresa_id
+    if not empresa_id or empresa_id == "undefined":
+        raise HTTPException(status_code=401, detail="Context d'empresa no trobat")
+
+    usuari_id: Optional[uuid.UUID] = None
+    sub_raw = claims.get("sub") if claims else None
+    if sub_raw:
+        try:
+            usuari_id = uuid.UUID(str(sub_raw))
+        except ValueError:
+            usuari_id = None
+
+    resultats = await actualitzar_linies_picking_batch_amb_estoc(
+        db=db,
+        empresa_id=uuid.UUID(empresa_id),
+        items=[it.model_dump() for it in payload.items],
+        usuari_id=usuari_id,
+    )
+    linies_resp = [BalancLiniaResponse(**r) for r in resultats]
+    return BatchBalancLiniesResponse(
+        linies=linies_resp,
+        total_confirmades=len(linies_resp),
+    )
 
 
 @router.put("/linies/{linia_id}", response_model=BalancLiniaResponse)
@@ -203,7 +253,8 @@ async def actualitzar_linia_picking_operari(
         quantitat_retornada_pick_out=payload.quantitat_retornada_pick_out,
         quantitat_mermada=payload.quantitat_mermada,
     )
-    return BalancLiniaResponse(**res)
+    res_clean = {k: v for k, v in res.items() if not k.startswith("_")}
+    return BalancLiniaResponse(**res_clean)
 
 
 class ConsumVehicleRequest(BaseModel):

@@ -65,16 +65,22 @@ async def recalcular_totals_materials_ot(
     db: AsyncSession,
     empresa_id: uuid.UUID,
     ordre_treball_id: uuid.UUID,
+    *,
+    ot_locked: Optional[OrdreTreball] = None,
 ) -> Tuple[Decimal, Decimal]:
     """Recalcula i persisteix cost_materials_picking_pmp, cost_materials_pmp i pvp_materials_aplicat a l'OT."""
-    ot = (
-        await db.execute(
-            select(OrdreTreball).where(
-                OrdreTreball.id == ordre_treball_id,
-                OrdreTreball.empresa_id == empresa_id,
+    ot = ot_locked
+    if ot is None:
+        ot = (
+            await db.execute(
+                select(OrdreTreball)
+                .where(
+                    OrdreTreball.id == ordre_treball_id,
+                    OrdreTreball.empresa_id == empresa_id,
+                )
+                .with_for_update()
             )
-        )
-    ).scalars().first()
+        ).scalars().first()
     if not ot:
         return Decimal("0.00"), Decimal("0.00")
 
@@ -317,6 +323,7 @@ async def actualitzar_linia_picking_amb_estoc(
     quantitat_retornada_pick_out: Optional[float] = None,
     quantitat_mermada: Optional[float] = None,
     auto_commit: bool = True,
+    sincronitzar_disc: bool = True,
 ) -> Dict[str, Any]:
     """Actualitza Pick-In / Pick-Out / Merma d'una línia de picking amb ajust atòmic i idempotent de magatzem."""
     if quantitat_carregada_pick_in is not None and quantitat_carregada_pick_in < 0:
@@ -335,6 +342,50 @@ async def actualitzar_linia_picking_amb_estoc(
             detail="La quantitat mermada no pot ser negativa.",
         )
 
+    # 1. Resoldre els IDs pares sense carregar OrdreTreball a la identity map
+    #    per adquirir els bloquejos FOR UPDATE en ordre jeràrquic canònic:
+    #    OrdreTreball -> FullaPicking -> LiniaPicking -> EstocMagatzem.
+    #    Això evita deadlocks i elimina StaleDataError sobre OrdreTreball.versio
+    #    en peticions concurrents de la mateixa OT.
+    ids_row = (
+        await db.execute(
+            select(LiniaPicking.picking_id, FullaPicking.ordre_treball_id)
+            .join(FullaPicking, LiniaPicking.picking_id == FullaPicking.id)
+            .where(
+                LiniaPicking.id == linia_id,
+                LiniaPicking.empresa_id == empresa_id,
+                FullaPicking.empresa_id == empresa_id,
+            )
+        )
+    ).first()
+    if not ids_row:
+        raise HTTPException(status_code=404, detail="Línia de picking no trobada")
+    picking_id_ref, ot_id_ref = ids_row
+
+    ot: Optional[OrdreTreball] = None
+    if ot_id_ref is not None:
+        ot = (
+            await db.execute(
+                select(OrdreTreball)
+                .where(
+                    OrdreTreball.id == ot_id_ref,
+                    OrdreTreball.empresa_id == empresa_id,
+                )
+                .with_for_update()
+            )
+        ).scalars().first()
+
+    fulla = (
+        await db.execute(
+            select(FullaPicking)
+            .where(
+                FullaPicking.id == picking_id_ref,
+                FullaPicking.empresa_id == empresa_id,
+            )
+            .with_for_update()
+        )
+    ).scalars().first()
+
     linia = (
         await db.execute(
             select(LiniaPicking)
@@ -348,28 +399,6 @@ async def actualitzar_linia_picking_amb_estoc(
     if not linia:
         raise HTTPException(status_code=404, detail="Línia de picking no trobada")
 
-    fulla = (
-        await db.execute(
-            select(FullaPicking).where(
-                FullaPicking.id == linia.picking_id,
-                FullaPicking.empresa_id == empresa_id,
-            )
-        )
-    ).scalars().first()
-    ot = (
-        (
-            await db.execute(
-                select(OrdreTreball).where(
-                    OrdreTreball.id == fulla.ordre_treball_id,
-                    OrdreTreball.empresa_id == empresa_id,
-                )
-            )
-        )
-        .scalars()
-        .first()
-        if fulla
-        else None
-    )
     article = (
         await db.execute(
             select(Article).where(
@@ -552,7 +581,7 @@ async def actualitzar_linia_picking_amb_estoc(
             fulla.estat_picking = "RECONCILIAT"
 
     if ot is not None:
-        await recalcular_totals_materials_ot(db, empresa_id, ot.id)
+        await recalcular_totals_materials_ot(db, empresa_id, ot.id, ot_locked=ot)
 
     await avaluar_i_sincronitzar_alertes_recompra(db, empresa_id, [linia.article_id])
     if auto_commit:
@@ -565,28 +594,31 @@ async def actualitzar_linia_picking_amb_estoc(
     merma_f = float(linia.quantitat_mermada or 0.0)
     consum_real = max(0.0, round(pick_in_f - pick_out_f, 3))
 
-    try:
-        await SovereignStorageGateway.desar_entitat_json(
-            db=db,
-            empresa_id=empresa_id,
-            categoria="picking",
-            item_id=f"linia_{linia.id}",
-            dades={
-                "id": str(linia.id),
-                "picking_id": str(linia.picking_id),
-                "article_id": str(linia.article_id),
-                "magatzem_id": str(linia.magatzem_id) if linia.magatzem_id else None,
-                "origen_estoc": getattr(linia, "origen_estoc", "NAU") or "NAU",
-                "quantitat_prevista": float(linia.quantitat_prevista),
-                "quantitat_carregada_pick_in": pick_in_f,
-                "quantitat_retornada_pick_out": pick_out_f,
-                "quantitat_mermada": merma_f,
-                "consum_real": consum_real,
-                "consum_aplicat_magatzem": float(linia.consum_aplicat_magatzem or 0.0),
-            },
-        )
-    except Exception as exc:
-        logger.warning("No s'ha pogut sincronitzar la línia de picking %s al disc: %s", linia.id, exc)
+    if sincronitzar_disc and auto_commit:
+        try:
+            await SovereignStorageGateway.desar_entitat_json(
+                db=db,
+                empresa_id=empresa_id,
+                categoria="picking",
+                item_id=f"linia_{linia.id}",
+                dades={
+                    "id": str(linia.id),
+                    "picking_id": str(linia.picking_id),
+                    "article_id": str(linia.article_id),
+                    "magatzem_id": str(linia.magatzem_id) if linia.magatzem_id else None,
+                    "origen_estoc": getattr(linia, "origen_estoc", "NAU") or "NAU",
+                    "quantitat_prevista": float(linia.quantitat_prevista),
+                    "quantitat_carregada_pick_in": pick_in_f,
+                    "quantitat_retornada_pick_out": pick_out_f,
+                    "quantitat_mermada": merma_f,
+                    "consum_real": consum_real,
+                    "consum_aplicat_magatzem": float(linia.consum_aplicat_magatzem or 0.0),
+                },
+            )
+        except Exception as exc:
+            logger.warning(
+                "No s'ha pogut sincronitzar la línia de picking %s al disc: %s", linia.id, exc
+            )
 
     return {
         "id": linia.id,
@@ -599,7 +631,109 @@ async def actualitzar_linia_picking_amb_estoc(
         "consum_aplicat_magatzem": float(linia.consum_aplicat_magatzem or 0.0),
         "origen_estoc": getattr(linia, "origen_estoc", "NAU") or "NAU",
         "estoc_actualitzat": estoc_actualitzat,
+        "_sync_meta": {
+            "picking_id": str(linia.picking_id),
+            "magatzem_id": str(linia.magatzem_id) if linia.magatzem_id else None,
+        },
     }
+
+
+async def actualitzar_linies_picking_batch_amb_estoc(
+    db: AsyncSession,
+    empresa_id: uuid.UUID,
+    items: List[Dict[str, Any]],
+    *,
+    usuari_id: Optional[uuid.UUID] = None,
+) -> List[Dict[str, Any]]:
+    """Actualitza atòmicament un lot de línies de picking en una única transacció SQL (tot o res)."""
+    if not items:
+        return []
+
+    # Resoldre i bloquejar primer totes les OTs afectades en ordre determinista per UUID
+    linia_ids = [item["linia_id"] for item in items]
+    ot_rows = (
+        await db.execute(
+            select(FullaPicking.ordre_treball_id)
+            .join(LiniaPicking, LiniaPicking.picking_id == FullaPicking.id)
+            .where(
+                LiniaPicking.empresa_id == empresa_id,
+                FullaPicking.empresa_id == empresa_id,
+                LiniaPicking.id.in_(linia_ids),
+            )
+            .distinct()
+        )
+    ).scalars().all()
+    ot_ids_sorted = sorted((oid for oid in ot_rows if oid is not None), key=str)
+    if ot_ids_sorted:
+        await db.execute(
+            select(OrdreTreball)
+            .where(
+                OrdreTreball.empresa_id == empresa_id,
+                OrdreTreball.id.in_(ot_ids_sorted),
+            )
+            .order_by(OrdreTreball.id.asc())
+            .with_for_update()
+        )
+
+    # Ordenar per linia_id per ordre canònic de bloqueig i evitar deadlocks
+    items_ordenats = sorted(items, key=lambda x: str(x["linia_id"]))
+    resultats_per_id: Dict[uuid.UUID, Dict[str, Any]] = {}
+
+    try:
+        for item in items_ordenats:
+            res = await actualitzar_linia_picking_amb_estoc(
+                db=db,
+                empresa_id=empresa_id,
+                linia_id=item["linia_id"],
+                usuari_id=usuari_id,
+                quantitat_carregada_pick_in=item.get("quantitat_carregada_pick_in"),
+                quantitat_retornada_pick_out=item.get("quantitat_retornada_pick_out"),
+                quantitat_mermada=item.get("quantitat_mermada"),
+                auto_commit=False,
+                sincronitzar_disc=False,
+            )
+            resultats_per_id[item["linia_id"]] = res
+
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        raise
+
+    # Sincronitzar cada línia al disc sobirà un cop confirmat el COMMIT a PostgreSQL
+    for item in items_ordenats:
+        res = resultats_per_id[item["linia_id"]]
+        sync_meta = res.get("_sync_meta") or {}
+        try:
+            await SovereignStorageGateway.desar_entitat_json(
+                db=db,
+                empresa_id=empresa_id,
+                categoria="picking",
+                item_id=f"linia_{res['id']}",
+                dades={
+                    "id": str(res["id"]),
+                    "picking_id": sync_meta.get("picking_id"),
+                    "article_id": str(res["article_id"]),
+                    "magatzem_id": sync_meta.get("magatzem_id"),
+                    "origen_estoc": res["origen_estoc"],
+                    "quantitat_prevista": res["quantitat_prevista"],
+                    "quantitat_carregada_pick_in": res["quantitat_carregada_pick_in"],
+                    "quantitat_retornada_pick_out": res["quantitat_retornada_pick_out"],
+                    "quantitat_mermada": res["quantitat_mermada"],
+                    "consum_real": res["consum_real"],
+                    "consum_aplicat_magatzem": res["consum_aplicat_magatzem"],
+                },
+            )
+        except Exception as exc:
+            logger.warning(
+                "No s'ha pogut sincronitzar la línia de picking %s al disc: %s", res["id"], exc
+            )
+
+    # Retornar en l'ordre original demanat pel client sense claus internes
+    ordenat_final: List[Dict[str, Any]] = []
+    for item in items:
+        res_clean = {k: v for k, v in resultats_per_id[item["linia_id"]].items() if not k.startswith("_")}
+        ordenat_final.append(res_clean)
+    return ordenat_final
 
 
 async def registrar_consum_material_furgoneta(
@@ -631,10 +765,12 @@ async def registrar_consum_material_furgoneta(
 
     ot = (
         await db.execute(
-            select(OrdreTreball).where(
+            select(OrdreTreball)
+            .where(
                 OrdreTreball.id == ordre_treball_id,
                 OrdreTreball.empresa_id == empresa_id,
             )
+            .with_for_update()
         )
     ).scalars().first()
     if not ot:
@@ -821,7 +957,9 @@ async def registrar_consum_material_furgoneta(
         )
 
     # 5. Recalcular totals reals de l'OT i alertes de reposició
-    cost_pmp_ot, pvp_mat_ot = await recalcular_totals_materials_ot(db, empresa_id, ot.id)
+    cost_pmp_ot, pvp_mat_ot = await recalcular_totals_materials_ot(
+        db, empresa_id, ot.id, ot_locked=ot
+    )
     await avaluar_i_sincronitzar_alertes_recompra(db, empresa_id, [article.id])
 
     if auto_commit:
