@@ -1,16 +1,19 @@
 import uuid
-from typing import List, Optional
+from datetime import datetime, timezone
+from typing import List, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
-from sqlalchemy import or_, select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db_with_tenant_context
 from app.core.security import get_current_user_claims, require_roles
 from app.models.models import (
     Article,
+    EinaCustodia,
     FullaPicking,
+    Incidencia,
     LiniaPicking,
     Magatzem,
     OrdreTreball,
@@ -20,7 +23,9 @@ from app.services.picking_stock_service import (
     actualitzar_linia_picking_amb_estoc,
     obtenir_estoc_furgoneta_operari,
     registrar_consum_material_furgoneta,
+    resoldre_magatzem_furgoneta,
 )
+from app.services.sovereign_storage import SovereignStorageGateway
 
 router = APIRouter(
     prefix="/operari/picking",
@@ -396,6 +401,329 @@ async def llistar_materials_operari(
             )
         )
     return items
+
+
+class EinaPickingItemResponse(BaseModel):
+    id: uuid.UUID
+    nom: str
+    model: Optional[str] = None
+    numero_serie: str
+    referencia_fabricant: Optional[str] = None
+    estat: str
+    ordre_treball_id: Optional[uuid.UUID] = None
+    ordre_codi: Optional[str] = None
+    custodiat_per_operari_id: Optional[uuid.UUID] = None
+    magatzem_id: Optional[uuid.UUID] = None
+    magatzem_nom: Optional[str] = None
+    observacions: Optional[str] = None
+    incidencies: Optional[str] = None
+
+
+class EinesPickingLlistaResponse(BaseModel):
+    eines_assignades: List[EinaPickingItemResponse] = []
+    eines_disponibles: List[EinaPickingItemResponse] = []
+
+
+class EinaPickInRequest(BaseModel):
+    ordre_treball_id: Optional[uuid.UUID] = None
+    desti: Literal["CUSTODIADA", "EN_VEHICLE"] = "CUSTODIADA"
+    observacions: Optional[str] = Field(default=None, max_length=500)
+
+
+class EinaPickOutRequest(BaseModel):
+    ordre_treball_id: Optional[uuid.UUID] = None
+    estat_retorn: Literal["DISPONIBLE", "AVARIADA"] = "DISPONIBLE"
+    incidencia: Optional[str] = Field(default=None, max_length=500)
+
+
+def _extract_usuari_uuid(request: Request, claims: dict) -> Optional[uuid.UUID]:
+    raw = getattr(request.state, "user_id", None) or (claims.get("sub") if claims else None)
+    if not raw:
+        return None
+    try:
+        return uuid.UUID(str(raw))
+    except (ValueError, TypeError):
+        return None
+
+
+def _build_eina_picking_item(
+    eina: EinaCustodia,
+    ordre_codi: Optional[str] = None,
+    magatzem_nom: Optional[str] = None,
+) -> EinaPickingItemResponse:
+    return EinaPickingItemResponse(
+        id=eina.id,
+        nom=eina.nom,
+        model=eina.model,
+        numero_serie=eina.numero_serie,
+        referencia_fabricant=eina.referencia_fabricant,
+        estat=eina.estat,
+        ordre_treball_id=eina.ordre_treball_id,
+        ordre_codi=ordre_codi,
+        custodiat_per_operari_id=eina.custodiat_per_operari_id,
+        magatzem_id=eina.magatzem_id,
+        magatzem_nom=magatzem_nom,
+        observacions=eina.observacions,
+        incidencies=eina.incidencies,
+    )
+
+
+@router.get("/eines", response_model=EinesPickingLlistaResponse)
+async def llistar_eines_picking_operari(
+    request: Request,
+    ordre_treball_id: Optional[uuid.UUID] = None,
+    incloure_disponibles: bool = True,
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+    claims: dict = Depends(get_current_user_claims),
+):
+    """Llista les eines vinculades a l'OT / operari per Pick-In i Pick-Out, i les disponibles a nau."""
+    empresa_id = request.state.empresa_id
+    if not empresa_id or empresa_id == "undefined":
+        raise HTTPException(status_code=401, detail="Context d'empresa no trobat")
+    emp_uuid = uuid.UUID(str(empresa_id))
+    user_uuid = _extract_usuari_uuid(request, claims)
+
+    conds = []
+    if ordre_treball_id is not None:
+        conds.append(EinaCustodia.ordre_treball_id == ordre_treball_id)
+    if user_uuid is not None:
+        if ordre_treball_id is not None:
+            conds.append(
+                and_(
+                    EinaCustodia.custodiat_per_operari_id == user_uuid,
+                    EinaCustodia.ordre_treball_id.is_(None),
+                )
+            )
+        else:
+            conds.append(EinaCustodia.custodiat_per_operari_id == user_uuid)
+
+    stmt_assig = (
+        select(EinaCustodia, OrdreTreball.codi, Magatzem.nom)
+        .outerjoin(OrdreTreball, EinaCustodia.ordre_treball_id == OrdreTreball.id)
+        .outerjoin(Magatzem, EinaCustodia.magatzem_id == Magatzem.id)
+        .where(EinaCustodia.empresa_id == emp_uuid)
+    )
+    if conds:
+        stmt_assig = stmt_assig.where(or_(*conds))
+    else:
+        stmt_assig = stmt_assig.where(EinaCustodia.estat.in_(["CUSTODIADA", "EN_VEHICLE"]))
+    stmt_assig = stmt_assig.order_by(EinaCustodia.nom.asc())
+
+    rows_assig = (await db.execute(stmt_assig)).all()
+    assigned_ids = {e.id for e, _ot_codi, _mag_nom in rows_assig}
+    eines_assignades = [
+        _build_eina_picking_item(e, ordre_codi=ot_codi, magatzem_nom=mag_nom)
+        for e, ot_codi, mag_nom in rows_assig
+    ]
+
+    eines_disponibles: List[EinaPickingItemResponse] = []
+    if incloure_disponibles:
+        stmt_disp = (
+            select(EinaCustodia, Magatzem.nom)
+            .outerjoin(Magatzem, EinaCustodia.magatzem_id == Magatzem.id)
+            .where(
+                EinaCustodia.empresa_id == emp_uuid,
+                EinaCustodia.estat == "DISPONIBLE",
+            )
+            .order_by(EinaCustodia.nom.asc())
+        )
+        rows_disp = (await db.execute(stmt_disp)).all()
+        for e, mag_nom in rows_disp:
+            if e.id not in assigned_ids:
+                eines_disponibles.append(_build_eina_picking_item(e, magatzem_nom=mag_nom))
+
+    return EinesPickingLlistaResponse(
+        eines_assignades=eines_assignades,
+        eines_disponibles=eines_disponibles,
+    )
+
+
+@router.post("/eines/{eina_id}/pick-in", response_model=EinaPickingItemResponse)
+async def pick_in_eina_operari(
+    eina_id: uuid.UUID,
+    payload: EinaPickInRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+    claims: dict = Depends(get_current_user_claims),
+):
+    """Confirma el Pick-In (càrrega / custòdia) d'una eina per a l'operari i/o furgoneta vinculada a l'OT."""
+    empresa_id = request.state.empresa_id
+    if not empresa_id or empresa_id == "undefined":
+        raise HTTPException(status_code=401, detail="Context d'empresa no trobat")
+    emp_uuid = uuid.UUID(str(empresa_id))
+    user_uuid = _extract_usuari_uuid(request, claims)
+
+    eina = (
+        await db.execute(
+            select(EinaCustodia).where(
+                EinaCustodia.id == eina_id,
+                EinaCustodia.empresa_id == emp_uuid,
+            )
+        )
+    ).scalars().first()
+    if not eina:
+        raise HTTPException(status_code=404, detail="Eina no trobada")
+
+    if eina.estat in ("AVARIADA", "BAIXA"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"L'eina no està operativa (estat actual: {eina.estat}).",
+        )
+
+    # Validar que no la tingui custodiada un altre operari en una altra OT diferent
+    if (
+        eina.estat in ("CUSTODIADA", "EN_VEHICLE")
+        and eina.ordre_treball_id is not None
+        and payload.ordre_treball_id is not None
+        and eina.ordre_treball_id != payload.ordre_treball_id
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="Aquesta eina ja està assignada a una altra ordre de treball activa.",
+        )
+
+    ordre_codi: Optional[str] = None
+    target_ot_id = payload.ordre_treball_id or eina.ordre_treball_id
+    if target_ot_id is not None:
+        ot = (
+            await db.execute(
+                select(OrdreTreball).where(
+                    OrdreTreball.id == target_ot_id,
+                    OrdreTreball.empresa_id == emp_uuid,
+                )
+            )
+        ).scalars().first()
+        if not ot:
+            raise HTTPException(status_code=404, detail="Ordre de treball no trobada")
+        ordre_codi = ot.codi
+        eina.ordre_treball_id = ot.id
+
+    magatzem_nom: Optional[str] = None
+    if payload.desti == "EN_VEHICLE":
+        mag, _veh = await resoldre_magatzem_furgoneta(
+            db,
+            emp_uuid,
+            ordre_treball_id=target_ot_id,
+            usuari_id=user_uuid,
+        )
+        eina.magatzem_id = mag.id if mag else None
+        magatzem_nom = mag.nom if mag else None
+    else:
+        eina.magatzem_id = None
+
+    eina.estat = payload.desti
+    if user_uuid is not None:
+        eina.custodiat_per_operari_id = user_uuid
+    if payload.observacions and payload.observacions.strip():
+        stamp = datetime.now(timezone.utc).strftime("%d/%m %H:%M")
+        nota = f"[Pick-In {stamp}] {payload.observacions.strip()}"
+        eina.observacions = f"{eina.observacions}\n{nota}".strip() if eina.observacions else nota
+
+    resp_item = _build_eina_picking_item(eina, ordre_codi=ordre_codi, magatzem_nom=magatzem_nom)
+    await db.commit()
+
+    await SovereignStorageGateway.desar_entitat_json(
+        db=db,
+        empresa_id=emp_uuid,
+        categoria="magatzem_eines",
+        item_id=str(resp_item.id),
+        dades={
+            "id": str(resp_item.id),
+            "nom": resp_item.nom,
+            "model": resp_item.model,
+            "numero_serie": resp_item.numero_serie,
+            "estat": resp_item.estat,
+            "ordre_treball_id": str(resp_item.ordre_treball_id) if resp_item.ordre_treball_id else None,
+            "custodiat_per_operari_id": (
+                str(resp_item.custodiat_per_operari_id) if resp_item.custodiat_per_operari_id else None
+            ),
+            "magatzem_id": str(resp_item.magatzem_id) if resp_item.magatzem_id else None,
+            "observacions": resp_item.observacions,
+            "incidencies": resp_item.incidencies,
+        },
+    )
+
+    return resp_item
+
+
+@router.post("/eines/{eina_id}/pick-out", response_model=EinaPickingItemResponse)
+async def pick_out_eina_operari(
+    eina_id: uuid.UUID,
+    payload: EinaPickOutRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+    claims: dict = Depends(get_current_user_claims),
+):
+    """Executa el Pick-Out (retorn a magatzem / nau) d'una eina en custòdia, amb opció d'avaria."""
+    empresa_id = request.state.empresa_id
+    if not empresa_id or empresa_id == "undefined":
+        raise HTTPException(status_code=401, detail="Context d'empresa no trobat")
+    emp_uuid = uuid.UUID(str(empresa_id))
+    user_uuid = _extract_usuari_uuid(request, claims)
+
+    eina = (
+        await db.execute(
+            select(EinaCustodia).where(
+                EinaCustodia.id == eina_id,
+                EinaCustodia.empresa_id == emp_uuid,
+            )
+        )
+    ).scalars().first()
+    if not eina:
+        raise HTTPException(status_code=404, detail="Eina no trobada")
+
+    if eina.estat not in ("CUSTODIADA", "EN_VEHICLE"):
+        raise HTTPException(
+            status_code=400,
+            detail="L'eina no està en custòdia ni carregada a furgoneta per fer Pick-Out.",
+        )
+
+    ot_ref_id = payload.ordre_treball_id or eina.ordre_treball_id
+    incidencia_clean = payload.incidencia.strip() if payload.incidencia else None
+    eina.estat = payload.estat_retorn
+    eina.custodiat_per_operari_id = None
+    eina.ordre_treball_id = None
+    eina.magatzem_id = None
+
+    if incidencia_clean or payload.estat_retorn == "AVARIADA":
+        stamp = datetime.now(timezone.utc).strftime("%d/%m %H:%M")
+        detall_inc = incidencia_clean or "Retornada amb avaria o incidència des de camp (Pick-Out)"
+        nota_inc = f"[Pick-Out {stamp}] {detall_inc}"
+        eina.incidencies = f"{eina.incidencies}\n{nota_inc}".strip() if eina.incidencies else nota_inc
+
+        nova_inc = Incidencia(
+            empresa_id=emp_uuid,
+            ordre_treball_id=ot_ref_id,
+            operari_id=user_uuid,
+            ambit="MAGATZEM",
+            estat="VERMELL",
+            text_observacions=f"Eina {eina.nom} (SN: {eina.numero_serie}): {detall_inc}",
+        )
+        db.add(nova_inc)
+
+    resp_item = _build_eina_picking_item(eina)
+    await db.commit()
+
+    await SovereignStorageGateway.desar_entitat_json(
+        db=db,
+        empresa_id=emp_uuid,
+        categoria="magatzem_eines",
+        item_id=str(resp_item.id),
+        dades={
+            "id": str(resp_item.id),
+            "nom": resp_item.nom,
+            "model": resp_item.model,
+            "numero_serie": resp_item.numero_serie,
+            "estat": resp_item.estat,
+            "ordre_treball_id": None,
+            "custodiat_per_operari_id": None,
+            "magatzem_id": None,
+            "observacions": resp_item.observacions,
+            "incidencies": resp_item.incidencies,
+        },
+    )
+
+    return resp_item
 
 
 materials_operari_router = APIRouter(

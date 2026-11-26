@@ -11,6 +11,11 @@ interface OrdreResum {
   codi?: string;
   titol?: string;
   hores_imputades_facturables?: number | null;
+  signatura_client_path?: string | null;
+  nom_receptor?: string | null;
+  dni_receptor?: string | null;
+  observacions_tancament?: string | null;
+  data_signatura?: string | null;
 }
 
 export default function TancarFeinaPage() {
@@ -36,7 +41,15 @@ export default function TancarFeinaPage() {
               codi: data.codi,
               titol: data.titol,
               hores_imputades_facturables: data.hores_imputades_facturables,
+              signatura_client_path: data.signatura_client_path || null,
+              nom_receptor: data.nom_receptor || null,
+              dni_receptor: data.dni_receptor || null,
+              observacions_tancament: data.observacions_tancament || null,
+              data_signatura: data.data_signatura || null,
             });
+            if (data.nom_receptor) setNomSignant(data.nom_receptor);
+            if (data.dni_receptor) setDniSignant(data.dni_receptor);
+            if (data.observacions_tancament) setObservacions(data.observacions_tancament);
           }
         }
       } catch {
@@ -91,6 +104,31 @@ export default function TancarFeinaPage() {
       setSignatureSaved(true);
     } catch (e: unknown) {
       setErrorMsg(e instanceof Error ? e.message : "Error en desar la signatura i tancar la feina.");
+    } finally {
+      setSavingSignature(false);
+    }
+  };
+
+  const handleFinalizeWithExistingSignature = async () => {
+    setSavingSignature(true);
+    setErrorMsg(null);
+    try {
+      const horesAImputar =
+        ordre?.hores_imputades_facturables != null && ordre.hores_imputades_facturables > 0
+          ? ordre.hores_imputades_facturables
+          : undefined;
+      await apiFetch(`/operari/feines/${feinaId}/finalitzar`, {
+        method: "PUT",
+        body: JSON.stringify({
+          nom_receptor: nomSignant.trim() || undefined,
+          dni_receptor: dniSignant.trim().toUpperCase() || undefined,
+          observacions: observacions.trim() || undefined,
+          hores: horesAImputar,
+        }),
+      });
+      setSignatureSaved(true);
+    } catch (e: unknown) {
+      setErrorMsg(e instanceof Error ? e.message : "Error en finalitzar la feina.");
     } finally {
       setSavingSignature(false);
     }
@@ -208,6 +246,22 @@ export default function TancarFeinaPage() {
             {errorMsg && (
               <div className="p-3 rounded-lg bg-error-container/25 border border-error text-xs font-semibold text-error">
                 {errorMsg}
+              </div>
+            )}
+
+            {ordre?.signatura_client_path && (
+              <div className="p-3 rounded-xl bg-secondary-container/10 border border-secondary-container/35 space-y-2">
+                <p className="text-xs font-bold text-secondary">
+                  Ja hi ha una signatura de conformitat desada des de la Fitxa 360.
+                </p>
+                <button
+                  type="button"
+                  disabled={savingSignature}
+                  onClick={handleFinalizeWithExistingSignature}
+                  className="w-full py-2.5 rounded-xl bg-secondary-container hover:brightness-110 text-white text-xs font-bold uppercase tracking-wider disabled:opacity-50 cursor-pointer"
+                >
+                  {savingSignature ? "Tancant ordre..." : "Tancar Ordre amb la Signatura Desada"}
+                </button>
               </div>
             )}
 

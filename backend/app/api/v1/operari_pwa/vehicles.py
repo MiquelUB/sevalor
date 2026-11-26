@@ -1,9 +1,9 @@
 import uuid
-from typing import List
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db_with_tenant_context
@@ -13,6 +13,7 @@ from app.models.models import (
     EstocMagatzem,
     Incidencia,
     Magatzem,
+    OrdreTreball,
     TiquetCarburant,
     Usuari,
     Vehicle,
@@ -93,11 +94,27 @@ class VehicleResponse(BaseModel):
 @router.get("", response_model=List[VehicleResponse])
 async def llistar_vehicles_pwa(
     request: Request,
+    vehicle_id: Optional[uuid.UUID] = None,
+    ordre_treball_id: Optional[uuid.UUID] = None,
     db: AsyncSession = Depends(get_db_with_tenant_context),
     claims: dict = Depends(require_roles(["OPERARI", "CAPATAZ", "CAP_DE_COLLA", "BOSS", "SUPERADMIN"])),
 ):
     empresa_id = request.state.empresa_id
     emp_uuid = uuid.UUID(empresa_id)
+
+    # Prioritzar vehicle explícit o assignat a l'OT activa
+    prioritat_vehicle_id: Optional[uuid.UUID] = vehicle_id
+    if prioritat_vehicle_id is None and ordre_treball_id is not None:
+        ot_veh = (
+            await db.execute(
+                select(OrdreTreball.vehicle_id).where(
+                    OrdreTreball.id == ordre_treball_id,
+                    OrdreTreball.empresa_id == emp_uuid,
+                )
+            )
+        ).scalar_one_or_none()
+        if ot_veh:
+            prioritat_vehicle_id = ot_veh
 
     # Identificar vehicle assignat a l'operari autenticat
     user_id_raw = getattr(request.state, "user_id", None) or claims.get("sub")
@@ -118,13 +135,15 @@ async def llistar_vehicles_pwa(
     res = await db.execute(select(Vehicle).where(Vehicle.empresa_id == emp_uuid))
     vehicles = list(res.scalars().all())
 
-    # Ordenar prioritzant el vehicle habitual de l'operari a l'índex 0
-    if user_uuid or vehicle_assignat_id:
+    # Ordenar prioritzant: 0 = vehicle explícit/OT, 1 = vehicle habitual de l'operari, 2 = resta
+    if prioritat_vehicle_id or user_uuid or vehicle_assignat_id:
         vehicles.sort(
             key=lambda v: 0
+            if (prioritat_vehicle_id and v.id == prioritat_vehicle_id)
+            else 1
             if (vehicle_assignat_id and v.id == vehicle_assignat_id)
             or (user_uuid and v.conductor_habitual_id == user_uuid)
-            else 1
+            else 2
         )
 
     return [
@@ -156,22 +175,55 @@ class ItemEstocFurgonetaResponse(BaseModel):
 @router.get("/stock", response_model=List[ItemEstocFurgonetaResponse])
 async def llistar_estoc_furgonetes(
     request: Request,
+    vehicle_id: Optional[uuid.UUID] = None,
+    ordre_treball_id: Optional[uuid.UUID] = None,
     db: AsyncSession = Depends(get_db_with_tenant_context),
 ):
     """Retorna l'estoc físic d'articles ubicats als vehicles/furgoneta de la colla."""
     empresa_id = request.state.empresa_id
     if not empresa_id or empresa_id == "undefined":
         raise HTTPException(status_code=401, detail="Context d'empresa no trobat")
+    emp_uuid = uuid.UUID(str(empresa_id))
+
+    target_vehicle_id = vehicle_id
+    if target_vehicle_id is None and ordre_treball_id is not None:
+        target_vehicle_id = (
+            await db.execute(
+                select(OrdreTreball.vehicle_id).where(
+                    OrdreTreball.id == ordre_treball_id,
+                    OrdreTreball.empresa_id == emp_uuid,
+                )
+            )
+        ).scalar_one_or_none()
 
     stmt = (
         select(EstocMagatzem, Article)
         .join(Article, EstocMagatzem.article_id == Article.id)
         .join(Magatzem, EstocMagatzem.magatzem_id == Magatzem.id)
         .where(
-            EstocMagatzem.empresa_id == uuid.UUID(empresa_id),
+            EstocMagatzem.empresa_id == emp_uuid,
             Magatzem.tipus == "FURGONETA",
         )
     )
+    if target_vehicle_id is not None:
+        veh_mag_id = (
+            await db.execute(
+                select(Vehicle.magatzem_id).where(
+                    Vehicle.id == target_vehicle_id,
+                    Vehicle.empresa_id == emp_uuid,
+                )
+            )
+        ).scalar_one_or_none()
+        if veh_mag_id is not None:
+            stmt = stmt.where(
+                or_(
+                    Magatzem.vehicle_id == target_vehicle_id,
+                    Magatzem.id == veh_mag_id,
+                )
+            )
+        else:
+            stmt = stmt.where(Magatzem.vehicle_id == target_vehicle_id)
+
     res = await db.execute(stmt)
     items = []
     for estoc, art in res.all():

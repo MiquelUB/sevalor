@@ -7,7 +7,7 @@ from typing import Any, List, Optional
 import filetype  # type: ignore[import-untyped]
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import or_, select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db_with_tenant_context
@@ -52,6 +52,7 @@ class ClientResponse(BaseModel):
 class VehicleResponse(BaseModel):
     id: uuid.UUID
     matricula: str
+    marca: Optional[str] = None
     model: str
     model_config = ConfigDict(from_attributes=True)
 
@@ -61,7 +62,11 @@ class EinaCustodiaResponse(BaseModel):
     nom: str
     model: Optional[str] = None
     numero_serie: str
+    referencia_fabricant: Optional[str] = None
     estat: str
+    ordre_treball_id: Optional[uuid.UUID] = None
+    custodiat_per_operari_id: Optional[uuid.UUID] = None
+    incidencies: Optional[str] = None
     model_config = ConfigDict(from_attributes=True)
 
 
@@ -71,6 +76,10 @@ class LiniaPickingDetailResponse(BaseModel):
     article_nom: str
     quantitat_prevista: float
     quantitat_carregada_pick_in: float
+    quantitat_retornada_pick_out: float = 0.0
+    quantitat_mermada: float = 0.0
+    unitat_mesura: str = "UNITAT"
+    origen_estoc: str = "NAU"
     model_config = ConfigDict(from_attributes=True)
 
 
@@ -118,6 +127,11 @@ class FeinaOperariDetailResponse(BaseModel):
     planol_titol: Optional[str] = None
     planol_codi: Optional[str] = None
     planol_tipus_fitxer: Optional[str] = None
+    signatura_client_path: Optional[str] = None
+    nom_receptor: Optional[str] = None
+    dni_receptor: Optional[str] = None
+    observacions_tancament: Optional[str] = None
+    data_signatura: Optional[datetime] = None
     linies_picking: List[LiniaPickingDetailResponse] = []
     eines_assignades: List[EinaCustodiaResponse] = []
     model_config = ConfigDict(from_attributes=True)
@@ -244,16 +258,30 @@ async def obtenir_detall_feina(
                         id=lin.id,
                         article_id=lin.article_id,
                         article_nom=a.nom,
-                        quantitat_prevista=lin.quantitat_prevista,
-                        quantitat_carregada_pick_in=lin.quantitat_carregada_pick_in,
+                        quantitat_prevista=float(lin.quantitat_prevista or 0.0),
+                        quantitat_carregada_pick_in=float(lin.quantitat_carregada_pick_in or 0.0),
+                        quantitat_retornada_pick_out=float(lin.quantitat_retornada_pick_out or 0.0),
+                        quantitat_mermada=float(lin.quantitat_mermada or 0.0),
+                        unitat_mesura=a.unitat_mesura or "UNITAT",
+                        origen_estoc=str(getattr(lin, "origen_estoc", "NAU") or "NAU").upper(),
                     )
                 )
             resp.linies_picking = linies
 
-        # Eines en custòdia assignades a l'operari
-        stmt_eines = select(EinaCustodia).where(
-            EinaCustodia.empresa_id == uuid.UUID(empresa_id),
-            EinaCustodia.custodiat_per_operari_id == uuid.UUID(usuari_id),
+        # Eines en custòdia assignades a aquesta OT o en custòdia general de l'operari
+        stmt_eines = (
+            select(EinaCustodia)
+            .where(
+                EinaCustodia.empresa_id == uuid.UUID(empresa_id),
+                or_(
+                    EinaCustodia.ordre_treball_id == feina.id,
+                    and_(
+                        EinaCustodia.custodiat_per_operari_id == uuid.UUID(usuari_id),
+                        EinaCustodia.ordre_treball_id.is_(None),
+                    ),
+                ),
+            )
+            .order_by(EinaCustodia.nom.asc())
         )
         result_eines = await db.execute(stmt_eines)
         resp.eines_assignades = [
@@ -331,12 +359,21 @@ async def iniciar_trajecte(
     if not feina:
         raise HTTPException(status_code=404, detail="Feina no trobada")
 
+    if feina.estat in ("PENDENT", "ASSIGNADA", "PROGRAMADA"):
+        feina.estat = "EN_RUTA"
+
     if feina.vehicle_id:
-        veh_res = await db.execute(select(Vehicle).where(Vehicle.id == feina.vehicle_id))
+        veh_res = await db.execute(
+            select(Vehicle).where(
+                Vehicle.id == feina.vehicle_id,
+                Vehicle.empresa_id == uuid.UUID(empresa_id),
+            )
+        )
         veh = veh_res.scalars().first()
         if veh:
             veh.estat = "EN_TRANSIT"
-            await db.commit()
+
+    await db.commit()
 
     return IniciarTrajecteResponse(
         feina_id=feina.id,
@@ -896,6 +933,83 @@ async def consultar_fotos_qualitat(
 
     complet = all(fotos_pujades.values())
     return {"feina_id": str(feina_id), "fotos": fotos_pujades, "protocol_complet": complet}
+
+
+class SignaturaConformitatRequest(BaseModel):
+    signatura_base64: str = Field(..., min_length=10)
+    nom_receptor: Optional[str] = Field(None, max_length=150)
+    dni_receptor: Optional[str] = Field(None, max_length=30)
+    observacions: Optional[str] = Field(None, max_length=2000)
+
+
+@router.put("/feines/{feina_id}/signatura")
+async def desar_signatura_conformitat_client(
+    feina_id: uuid.UUID,
+    payload: SignaturaConformitatRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+):
+    """Desa la signatura de conformitat del client directament des de la Fitxa 360 (Box 6)."""
+    empresa_id = request.state.empresa_id
+    if not empresa_id or empresa_id == "undefined":
+        raise HTTPException(status_code=401)
+    emp_uuid = uuid.UUID(str(empresa_id))
+    usuari_id = uuid.UUID(_get_usuari_id(request))
+
+    ot_res = await db.execute(
+        select(OrdreTreball).where(
+            OrdreTreball.id == feina_id,
+            OrdreTreball.empresa_id == emp_uuid,
+            or_(
+                OrdreTreball.cap_de_colla_id == usuari_id,
+                OrdreTreball.id.in_(
+                    select(OrdreTreballOperari.ordre_treball_id).where(
+                        OrdreTreballOperari.operari_id == usuari_id,
+                        OrdreTreballOperari.empresa_id == emp_uuid,
+                    )
+                ),
+            ),
+        )
+    )
+    feina = ot_res.scalars().first()
+    if not feina:
+        raise HTTPException(status_code=404, detail="Feina no trobada o no assignada")
+
+    now = datetime.now(timezone.utc)
+    sig_path = await desar_signatura_client_ot(
+        db=db,
+        empresa_id=emp_uuid,
+        ordre_treball_id=feina.id,
+        signatura_base64=payload.signatura_base64,
+        exigir_magic_bytes=True,
+    )
+    feina.signatura_client_path = sig_path
+    feina.data_signatura = now
+    if payload.nom_receptor is not None:
+        feina.nom_receptor = payload.nom_receptor.strip() or None
+    if payload.dni_receptor is not None:
+        feina.dni_receptor = payload.dni_receptor.strip().upper() or None
+    if payload.observacions is not None:
+        feina.observacions_tancament = payload.observacions.strip() or None
+
+    nom_rec = feina.nom_receptor
+    dni_rec = feina.dni_receptor
+    obs_tanc = feina.observacions_tancament
+    data_sig_iso = now.isoformat()
+    estat_actual = feina.estat
+
+    await db.commit()
+
+    return {
+        "feina_id": str(feina.id),
+        "estat": estat_actual,
+        "signatura_client_path": sig_path,
+        "nom_receptor": nom_rec,
+        "dni_receptor": dni_rec,
+        "observacions_tancament": obs_tanc,
+        "data_signatura": data_sig_iso,
+        "missatge": "Signatura de conformitat del client desada correctament",
+    }
 
 
 class FinalitzarFeinaRequest(BaseModel):

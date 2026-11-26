@@ -18,6 +18,8 @@ import {
   Search,
   X,
   Loader2,
+  ArrowDownLeft,
+  ArrowUpRight,
 } from "lucide-react";
 import { apiFetch } from "@/lib/api";
 import { BarcodeScanner } from "@/components/operari/BarcodeScanner";
@@ -69,18 +71,70 @@ interface FeinaResum {
   estat: string;
 }
 
+interface EinaPickingItem {
+  id: string;
+  nom: string;
+  model?: string | null;
+  numero_serie: string;
+  referencia_fabricant?: string | null;
+  estat: string;
+  ordre_treball_id?: string | null;
+  ordre_codi?: string | null;
+  custodiat_per_operari_id?: string | null;
+  magatzem_id?: string | null;
+  magatzem_nom?: string | null;
+  observacions?: string | null;
+  incidencies?: string | null;
+}
+
+interface EinesPickingResponse {
+  eines_assignades: EinaPickingItem[];
+  eines_disponibles: EinaPickingItem[];
+}
+
+type FaseMaterial = "PICK_IN" | "OBRA" | "PICK_OUT" | "EINES";
+
+function parseInitialFase(rawFase: string | null, rawTab: string | null): FaseMaterial {
+  const val = (rawFase || rawTab || "").toUpperCase();
+  if (val === "OBRA" || val === "FURGONETA") return "OBRA";
+  if (val === "PICK_OUT" || val === "PICKOUT") return "PICK_OUT";
+  if (val === "EINES" || val === "TOOLS") return "EINES";
+  return "PICK_IN";
+}
+
 function OperariMaterialContent() {
   const searchParams = useSearchParams();
   const paramOrdreId = searchParams.get("ordre_id") || "";
+  const paramFase = searchParams.get("fase");
+  const paramTab = searchParams.get("tab");
 
   const [ordreActivaId, setOrdreActivaId] = useState<string>(paramOrdreId);
   const [feinesActives, setFeinesActives] = useState<FeinaResum[]>([]);
-  const [fase, setFase] = useState<"PICK_IN" | "OBRA" | "PICK_OUT">("PICK_IN");
+  const [fase, setFase] = useState<FaseMaterial>(() =>
+    parseInitialFase(paramFase, paramTab)
+  );
+
+  useEffect(() => {
+    if (paramFase || paramTab) {
+      setFase(parseInitialFase(paramFase, paramTab));
+    }
+  }, [paramFase, paramTab]);
 
   const [materials, setMaterials] = useState<MaterialItem[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [desant, setDesant] = useState<boolean>(false);
   const [feedback, setFeedback] = useState<{ tipus: "ok" | "error"; text: string } | null>(null);
+
+  // Eines en custòdia (Pick-In / Pick-Out d'eines)
+  const [einesAssignades, setEinesAssignades] = useState<EinaPickingItem[]>([]);
+  const [einesDisponibles, setEinesDisponibles] = useState<EinaPickingItem[]>([]);
+  const [loadingEines, setLoadingEines] = useState<boolean>(false);
+  const [einaProcessantId, setEinaProcessantId] = useState<string | null>(null);
+  const [showEinesDispModal, setShowEinesDispModal] = useState<boolean>(false);
+  const [cercaEinaDisp, setCercaEinaDisp] = useState<string>("");
+  const [destiPickInEina, setDestiPickInEina] = useState<"CUSTODIADA" | "EN_VEHICLE">("CUSTODIADA");
+  const [einaPickOutAvaria, setEinaPickOutAvaria] = useState<EinaPickingItem | null>(null);
+  const [avariaEinaText, setAvariaEinaText] = useState<string>("");
 
   // Magatzem del vehicle (Furgoneta)
   const [vanStock, setVanStock] = useState<EstocFurgonetaResponse | null>(null);
@@ -157,6 +211,24 @@ function OperariMaterialContent() {
     }
   }, [ordreActivaId]);
 
+  const carregarEines = useCallback(async (targetOrdreId?: string) => {
+    setLoadingEines(true);
+    try {
+      const otParam = targetOrdreId || ordreActivaId;
+      const url = otParam
+        ? `/operari/picking/eines?ordre_treball_id=${encodeURIComponent(otParam)}&incloure_disponibles=true`
+        : "/operari/picking/eines?incloure_disponibles=true";
+      const data = await apiFetch<EinesPickingResponse>(url);
+      setEinesAssignades(Array.isArray(data?.eines_assignades) ? data.eines_assignades : []);
+      setEinesDisponibles(Array.isArray(data?.eines_disponibles) ? data.eines_disponibles : []);
+    } catch {
+      setEinesAssignades([]);
+      setEinesDisponibles([]);
+    } finally {
+      setLoadingEines(false);
+    }
+  }, [ordreActivaId]);
+
   useEffect(() => {
     carregarFeines();
   }, [carregarFeines]);
@@ -164,7 +236,89 @@ function OperariMaterialContent() {
   useEffect(() => {
     carregarMaterials(ordreActivaId);
     carregarEstocFurgoneta(ordreActivaId);
-  }, [ordreActivaId, carregarMaterials, carregarEstocFurgoneta]);
+    carregarEines(ordreActivaId);
+  }, [ordreActivaId, carregarMaterials, carregarEstocFurgoneta, carregarEines]);
+
+  const handlePickInEina = async (
+    eina: EinaPickingItem,
+    desti: "CUSTODIADA" | "EN_VEHICLE" = destiPickInEina
+  ) => {
+    setEinaProcessantId(eina.id);
+    setFeedback(null);
+    try {
+      await apiFetch(`/operari/picking/eines/${eina.id}/pick-in`, {
+        method: "POST",
+        body: JSON.stringify({
+          ordre_treball_id: ordreActivaId || null,
+          desti,
+        }),
+      });
+      setFeedback({
+        tipus: "ok",
+        text:
+          desti === "EN_VEHICLE"
+            ? `Pick-In confirmat: ${eina.nom} carregada a la furgoneta.`
+            : `Pick-In confirmat: ${eina.nom} assignada en custòdia.`,
+      });
+      setShowEinesDispModal(false);
+      await carregarEines(ordreActivaId);
+    } catch (err: unknown) {
+      setFeedback({
+        tipus: "error",
+        text: err instanceof Error ? err.message : "Error en fer Pick-In de l'eina.",
+      });
+    } finally {
+      setEinaProcessantId(null);
+    }
+  };
+
+  const handlePickOutEina = async (
+    eina: EinaPickingItem,
+    estatRetorn: "DISPONIBLE" | "AVARIADA",
+    incidencia?: string
+  ) => {
+    setEinaProcessantId(eina.id);
+    setFeedback(null);
+    try {
+      await apiFetch(`/operari/picking/eines/${eina.id}/pick-out`, {
+        method: "POST",
+        body: JSON.stringify({
+          ordre_treball_id: ordreActivaId || eina.ordre_treball_id || null,
+          estat_retorn: estatRetorn,
+          incidencia: incidencia?.trim() || undefined,
+        }),
+      });
+      setFeedback({
+        tipus: "ok",
+        text:
+          estatRetorn === "AVARIADA"
+            ? `Pick-Out amb avaria registrat per a ${eina.nom}. Oficina avisada.`
+            : `Pick-Out completat: ${eina.nom} retornada disponible al magatzem.`,
+      });
+      setEinaPickOutAvaria(null);
+      setAvariaEinaText("");
+      await carregarEines(ordreActivaId);
+    } catch (err: unknown) {
+      setFeedback({
+        tipus: "error",
+        text: err instanceof Error ? err.message : "Error en fer Pick-Out de l'eina.",
+      });
+    } finally {
+      setEinaProcessantId(null);
+    }
+  };
+
+  const einesDispFiltrades = useMemo(() => {
+    const q = cercaEinaDisp.trim().toLowerCase();
+    if (!q) return einesDisponibles;
+    return einesDisponibles.filter(
+      (e) =>
+        e.nom.toLowerCase().includes(q) ||
+        e.numero_serie.toLowerCase().includes(q) ||
+        (e.model || "").toLowerCase().includes(q) ||
+        (e.referencia_fabricant || "").toLowerCase().includes(q)
+    );
+  }, [einesDisponibles, cercaEinaDisp]);
 
   const materialsNau = useMemo(
     () => materials.filter((m) => m.origen_estoc !== "FURGONETA"),
@@ -436,7 +590,9 @@ function OperariMaterialContent() {
                 ? "Càrrega matinal (Nau)"
                 : fase === "OBRA"
                 ? "Execució a camp i furgoneta"
-                : "Retorn a nau, mermes i balanç"}
+                : fase === "PICK_OUT"
+                ? "Retorn a nau, mermes i balanç"
+                : "Custòdia d'eines: Pick-In i Pick-Out"}
             </p>
           </div>
         </div>
@@ -473,17 +629,19 @@ function OperariMaterialContent() {
       )}
 
       {/* Pestanyes de Fase */}
-      <div className="bg-surface-container-lowest dark:bg-slate-900 border-b border-outline-variant/25 dark:border-slate-800 flex text-xs font-bold">
+      <div className="bg-surface-container-lowest dark:bg-slate-900 border-b border-outline-variant/25 dark:border-slate-800 grid grid-cols-4 text-[11px] font-bold">
         {[
           { id: "PICK_IN" as const, label: "1. Pick In" },
-          { id: "OBRA" as const, label: "2. Camp i Furgoneta" },
+          { id: "OBRA" as const, label: "2. Furgoneta" },
           { id: "PICK_OUT" as const, label: "3. Pick Out" },
+          { id: "EINES" as const, label: `4. Eines (${einesAssignades.length})` },
         ].map((tab) => (
           <button
             key={tab.id}
             type="button"
+            data-testid={`tab-material-${tab.id.toLowerCase()}`}
             onClick={() => setFase(tab.id)}
-            className={`flex-1 py-3 text-center border-b-2 transition-colors cursor-pointer ${
+            className={`py-3 px-1 text-center border-b-2 transition-colors cursor-pointer truncate ${
               fase === tab.id
                 ? "border-secondary-container text-secondary dark:text-emerald-400 bg-secondary-container/5"
                 : "border-transparent text-on-surface-variant hover:text-primary dark:text-slate-400"
@@ -523,7 +681,7 @@ function OperariMaterialContent() {
         )}
 
         {/* Estat buit real + accés directe al magatzem de la furgoneta */}
-        {!loading && materials.length === 0 && fase !== "OBRA" && (
+        {!loading && materials.length === 0 && fase !== "OBRA" && fase !== "EINES" && (
           <div className="flex-1 flex flex-col items-center justify-center p-7 text-center bg-surface-container-lowest dark:bg-slate-900 rounded-2xl border-2 border-dashed border-outline-variant/40 dark:border-slate-800 my-auto shadow-sm space-y-3">
             <div className="w-14 h-14 rounded-2xl bg-secondary-container/10 text-secondary flex items-center justify-center">
               <Package className="w-7 h-7" />
@@ -877,7 +1035,342 @@ function OperariMaterialContent() {
             </button>
           </div>
         )}
+
+        {/* FASE 4: BOX EINES (PICK-IN I PICK-OUT D'EINES EN CUSTÒDIA) */}
+        {fase === "EINES" && (
+          <div data-testid="box-eines-picking" className="space-y-4">
+            <div className="p-4 rounded-xl bg-surface-container-lowest dark:bg-slate-900 border border-outline-variant/25 dark:border-slate-800 shadow-sm space-y-3">
+              <div className="flex items-center justify-between gap-2">
+                <div>
+                  <h3 className="text-sm font-extrabold text-primary dark:text-white flex items-center gap-1.5">
+                    <Wrench className="w-4 h-4 text-amber-500" />
+                    <span>Eines en custòdia (Pick-In / Pick-Out)</span>
+                  </h3>
+                  <p className="text-xs text-on-surface-variant">
+                    {einesAssignades.length} eina(es) activa(es) · {einesDisponibles.length} disponible(s) a nau
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => carregarEines(ordreActivaId)}
+                  disabled={loadingEines}
+                  className="p-2 rounded-lg bg-surface-container-low text-primary hover:bg-surface-container cursor-pointer"
+                  title="Actualitzar eines"
+                >
+                  <RefreshCw className={`w-4 h-4 ${loadingEines ? "animate-spin" : ""}`} />
+                </button>
+              </div>
+
+              <button
+                type="button"
+                data-testid="btn-obrir-eines-disponibles"
+                onClick={() => setShowEinesDispModal(true)}
+                className="w-full py-3 px-3.5 rounded-xl bg-primary hover:bg-primary-container text-white text-xs font-bold flex items-center justify-between shadow-sm transition-colors cursor-pointer"
+              >
+                <span className="flex items-center gap-2">
+                  <ArrowDownLeft className="w-4 h-4 text-secondary-container" />
+                  <span>Fer Pick-In d&apos;una eina disponible de nau</span>
+                </span>
+                <Plus className="w-4 h-4" />
+              </button>
+            </div>
+
+            <BarcodeScanner
+              onScan={(codi) => {
+                const codiLower = codi.trim().toLowerCase();
+                const enCustodia = einesAssignades.find(
+                  (e) =>
+                    e.numero_serie.toLowerCase() === codiLower ||
+                    (e.referencia_fabricant || "").toLowerCase() === codiLower ||
+                    e.id === codi
+                );
+                if (enCustodia) {
+                  setFeedback({
+                    tipus: "ok",
+                    text: `Eina localitzada en custòdia: ${enCustodia.nom} (${enCustodia.numero_serie}). Pots confirmar-la a furgoneta o fer Pick-Out.`,
+                  });
+                  return;
+                }
+                const disp = einesDisponibles.find(
+                  (e) =>
+                    e.numero_serie.toLowerCase() === codiLower ||
+                    (e.referencia_fabricant || "").toLowerCase() === codiLower ||
+                    e.id === codi
+                );
+                if (disp) {
+                  handlePickInEina(disp, destiPickInEina);
+                  return;
+                }
+                setFeedback({
+                  tipus: "error",
+                  text: `Cap eina trobada amb el codi o número de sèrie "${codi}".`,
+                });
+              }}
+            />
+
+            {loadingEines && einesAssignades.length === 0 ? (
+              <div className="p-6 text-center text-xs text-on-surface-variant">
+                Carregant eines assignades...
+              </div>
+            ) : einesAssignades.length === 0 ? (
+              <div className="p-7 text-center bg-surface-container-lowest dark:bg-slate-900 rounded-2xl border-2 border-dashed border-outline-variant/40 dark:border-slate-800 space-y-2.5">
+                <div className="w-12 h-12 rounded-2xl bg-amber-500/10 text-amber-600 flex items-center justify-center mx-auto">
+                  <Wrench className="w-6 h-6" />
+                </div>
+                <h4 className="text-sm font-extrabold text-primary dark:text-white">
+                  Cap eina en custòdia per a aquesta ordre
+                </h4>
+                <p className="text-xs text-on-surface-variant dark:text-slate-400">
+                  Escaneja el número de sèrie o selecciona una eina disponible a nau per registrar el seu Pick-In.
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-2.5">
+                {einesAssignades.map((eina) => {
+                  const busy = einaProcessantId === eina.id;
+                  const enFurgoneta = eina.estat === "EN_VEHICLE";
+                  return (
+                    <div
+                      key={eina.id}
+                      data-testid={`eina-card-${eina.id}`}
+                      className="p-3.5 rounded-xl bg-surface-container-lowest dark:bg-slate-900 border border-outline-variant/30 dark:border-slate-800 shadow-sm space-y-3"
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <span className="text-[11px] font-mono font-bold px-1.5 py-0.5 rounded bg-surface-container-low dark:bg-slate-800 text-primary dark:text-slate-200">
+                              SN: {eina.numero_serie}
+                            </span>
+                            {eina.ordre_codi && (
+                              <span className="text-[10px] font-mono font-bold text-secondary">
+                                {eina.ordre_codi}
+                              </span>
+                            )}
+                          </div>
+                          <h4 className="text-sm font-bold text-primary dark:text-white mt-1">
+                            {eina.nom}
+                          </h4>
+                          <p className="text-xs text-on-surface-variant dark:text-slate-400">
+                            {eina.model || "Model estàndard"}
+                            {eina.magatzem_nom ? ` · ${eina.magatzem_nom}` : ""}
+                          </p>
+                        </div>
+
+                        <span
+                          className={`text-[10px] font-extrabold px-2.5 py-1 rounded-full border shrink-0 ${
+                            enFurgoneta
+                              ? "bg-primary/10 text-primary dark:text-sky-300 border-primary/25"
+                              : "bg-secondary-container/15 text-secondary border-secondary-container/30"
+                          }`}
+                        >
+                          {enFurgoneta ? "En Furgoneta" : eina.estat}
+                        </span>
+                      </div>
+
+                      <div className="grid grid-cols-3 gap-1.5 pt-2 border-t border-outline-variant/20">
+                        <button
+                          type="button"
+                          disabled={busy}
+                          data-testid={`btn-eina-pickin-${eina.id}`}
+                          onClick={() =>
+                            handlePickInEina(eina, enFurgoneta ? "CUSTODIADA" : "EN_VEHICLE")
+                          }
+                          className="py-2 px-2 rounded-lg bg-surface-container-low dark:bg-slate-800 hover:bg-surface-container text-primary dark:text-slate-200 text-[11px] font-bold flex items-center justify-center gap-1 disabled:opacity-50 cursor-pointer"
+                        >
+                          <Truck className="w-3.5 h-3.5 text-secondary shrink-0" />
+                          <span>{enFurgoneta ? "A Operari" : "A Furgoneta"}</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          disabled={busy}
+                          data-testid={`btn-eina-pickout-${eina.id}`}
+                          onClick={() => handlePickOutEina(eina, "DISPONIBLE")}
+                          className="py-2 px-2 rounded-lg bg-secondary-container hover:brightness-110 text-white text-[11px] font-bold flex items-center justify-center gap-1 disabled:opacity-50 cursor-pointer"
+                        >
+                          {busy ? (
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                          ) : (
+                            <ArrowUpRight className="w-3.5 h-3.5 shrink-0" />
+                          )}
+                          <span>Pick-Out OK</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          disabled={busy}
+                          data-testid={`btn-eina-avaria-${eina.id}`}
+                          onClick={() => {
+                            setEinaPickOutAvaria(eina);
+                            setAvariaEinaText("");
+                          }}
+                          className="py-2 px-2 rounded-lg bg-error-container/30 hover:bg-error-container/50 text-error border border-error/30 text-[11px] font-bold flex items-center justify-center gap-1 disabled:opacity-50 cursor-pointer"
+                        >
+                          <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                          <span>Avaria</span>
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
       </div>
+
+      {/* Modal Real: Pick-In d'Eines Disponibles de Nau */}
+      {showEinesDispModal && (
+        <div className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-xs flex items-end sm:items-center justify-center p-3">
+          <div className="w-full max-w-md bg-surface-container-lowest dark:bg-slate-900 rounded-2xl border border-outline-variant/30 shadow-2xl overflow-hidden flex flex-col max-h-[85vh]">
+            <div className="p-4 border-b border-outline-variant/20 flex items-center justify-between">
+              <div>
+                <h3 className="text-sm font-extrabold text-primary dark:text-white flex items-center gap-2">
+                  <Wrench className="w-4 h-4 text-amber-500" />
+                  <span>Pick-In d&apos;eina disponible</span>
+                </h3>
+                <p className="text-xs text-on-surface-variant">
+                  Selecciona el destí i l&apos;eina a retirar del magatzem
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowEinesDispModal(false)}
+                className="p-1.5 rounded-lg hover:bg-surface-container text-on-surface-variant cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-4 space-y-3 overflow-y-auto flex-1">
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setDestiPickInEina("CUSTODIADA")}
+                  className={`py-2 px-3 rounded-xl text-xs font-bold border transition-colors cursor-pointer ${
+                    destiPickInEina === "CUSTODIADA"
+                      ? "bg-secondary-container text-white border-secondary-container"
+                      : "bg-surface-container-low dark:bg-slate-800 text-on-surface border-outline-variant/40"
+                  }`}
+                >
+                  Custòdia operari
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDestiPickInEina("EN_VEHICLE")}
+                  className={`py-2 px-3 rounded-xl text-xs font-bold border transition-colors cursor-pointer ${
+                    destiPickInEina === "EN_VEHICLE"
+                      ? "bg-secondary-container text-white border-secondary-container"
+                      : "bg-surface-container-low dark:bg-slate-800 text-on-surface border-outline-variant/40"
+                  }`}
+                >
+                  Carregar a furgoneta
+                </button>
+              </div>
+
+              <div className="relative">
+                <Search className="w-4 h-4 text-on-surface-variant absolute left-3 top-1/2 -translate-y-1/2" />
+                <input
+                  type="text"
+                  value={cercaEinaDisp}
+                  onChange={(e) => setCercaEinaDisp(e.target.value)}
+                  placeholder="Cerca per nom, model o número de sèrie..."
+                  className="w-full pl-9 pr-3 py-2 rounded-xl bg-surface-container-low dark:bg-slate-800 border border-outline-variant/40 text-xs"
+                />
+              </div>
+
+              {einesDispFiltrades.length === 0 ? (
+                <div className="p-6 text-center rounded-xl border border-dashed border-outline-variant/40 text-xs text-on-surface-variant">
+                  No hi ha eines disponibles al magatzem que coincideixin amb la cerca.
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {einesDispFiltrades.map((eina) => (
+                    <button
+                      key={eina.id}
+                      type="button"
+                      disabled={einaProcessantId === eina.id}
+                      onClick={() => handlePickInEina(eina, destiPickInEina)}
+                      className="w-full text-left p-3 rounded-xl bg-surface-container-low dark:bg-slate-800/70 hover:border-primary border border-outline-variant/30 flex items-center justify-between gap-2 cursor-pointer disabled:opacity-50"
+                    >
+                      <div className="min-w-0">
+                        <span className="text-[11px] font-mono text-secondary font-bold">
+                          SN: {eina.numero_serie}
+                        </span>
+                        <p className="text-xs font-bold text-primary dark:text-white truncate">
+                          {eina.nom}
+                        </p>
+                        {eina.model && (
+                          <p className="text-[11px] text-on-surface-variant truncate">
+                            {eina.model}
+                          </p>
+                        )}
+                      </div>
+                      <span className="px-2.5 py-1 rounded-lg bg-primary text-white text-[11px] font-bold shrink-0">
+                        Pick-In
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Real: Pick-Out d'Eina amb Avaria */}
+      {einaPickOutAvaria && (
+        <div className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-xs flex items-end sm:items-center justify-center p-3">
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              handlePickOutEina(einaPickOutAvaria, "AVARIADA", avariaEinaText);
+            }}
+            className="w-full max-w-md bg-surface-container-lowest dark:bg-slate-900 rounded-2xl border border-outline-variant/30 shadow-2xl p-4 space-y-3"
+          >
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-extrabold text-error flex items-center gap-1.5">
+                <AlertTriangle className="w-4 h-4" />
+                <span>Pick-Out amb avaria d&apos;eina</span>
+              </h3>
+              <button
+                type="button"
+                onClick={() => setEinaPickOutAvaria(null)}
+                className="p-1 text-on-surface-variant cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <p className="text-xs text-on-surface-variant">
+              <strong>{einaPickOutAvaria.nom}</strong> (SN: {einaPickOutAvaria.numero_serie}) quedarà bloquejada com a <strong>AVARIADA</strong> i s&apos;obrirà una incidència a oficina.
+            </p>
+            <textarea
+              required
+              rows={3}
+              value={avariaEinaText}
+              onChange={(e) => setAvariaEinaText(e.target.value)}
+              placeholder="Descriu l'avaria o desperfecte detectat..."
+              className="w-full p-2.5 rounded-xl bg-surface-container-low dark:bg-slate-800 border border-outline-variant/50 text-xs"
+            />
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => setEinaPickOutAvaria(null)}
+                className="flex-1 py-2.5 rounded-xl bg-surface-container text-on-surface text-xs font-bold cursor-pointer"
+              >
+                Cancel·lar
+              </button>
+              <button
+                type="submit"
+                disabled={einaProcessantId === einaPickOutAvaria.id || !avariaEinaText.trim()}
+                className="flex-1 py-2.5 rounded-xl bg-error text-white text-xs font-bold disabled:opacity-50 cursor-pointer"
+              >
+                {einaProcessantId === einaPickOutAvaria.id ? "Registrant..." : "Confirmar avaria"}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
 
       {/* Modal Real: Agafar Material de la Furgoneta */}
       {showVanModal && (

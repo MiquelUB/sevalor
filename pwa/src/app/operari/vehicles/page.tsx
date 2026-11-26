@@ -1,7 +1,8 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { Suspense, useState, useEffect, useCallback } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import {
   Truck,
   Fuel,
@@ -14,6 +15,7 @@ import {
   RotateCcw,
   Check,
   RefreshCw,
+  Package,
 } from "lucide-react";
 import CameraInput from "@/components/CameraInput";
 import { apiFetch } from "@/lib/api";
@@ -55,8 +57,19 @@ interface ItemEstocFurgoneta {
   unitat: string;
 }
 
-export default function OperariVehiclesPage() {
-  const [tabActiva, setTabActiva] = useState<"CONTROL" | "ESTOC" | "REPOSTATGE">("CONTROL");
+function OperariVehiclesContent() {
+  const searchParams = useSearchParams();
+  const paramVehicleId = searchParams.get("vehicle_id") || "";
+  const paramOrdreId = searchParams.get("ordre_id") || "";
+  const paramTab = (searchParams.get("tab") || "").toUpperCase();
+
+  const [tabActiva, setTabActiva] = useState<"CONTROL" | "ESTOC" | "REPOSTATGE">(
+    paramTab === "ESTOC"
+      ? "ESTOC"
+      : paramTab === "REPOSTATGE"
+      ? "REPOSTATGE"
+      : "CONTROL"
+  );
 
   // Spec 015 RF-01 & RF-02: Zero Mock Data Empty State
   const [vehicle, setVehicle] = useState<ActiuVehicle | null>(null);
@@ -119,26 +132,39 @@ export default function OperariVehiclesPage() {
   const [alertaIncidencia, setAlertaIncidencia] = useState<string | null>(null);
 
   // ---- CARREGAR DADES REALS DES DEL BACKEND ----
-  const carregarActius = async () => {
+  const carregarActius = useCallback(async () => {
     setLoadingActius(true);
     try {
-      const data = await apiFetch("/operari/vehicles");
+      const qs = new URLSearchParams();
+      if (paramVehicleId) qs.set("vehicle_id", paramVehicleId);
+      if (paramOrdreId) qs.set("ordre_treball_id", paramOrdreId);
+      const url = qs.toString() ? `/operari/vehicles?${qs.toString()}` : "/operari/vehicles";
+      const data = await apiFetch(url);
       if (Array.isArray(data) && data.length > 0) {
-        setVehicle(data[0]);
+        const matched = paramVehicleId
+          ? data.find((v: ActiuVehicle) => String(v.id) === paramVehicleId)
+          : null;
+        setVehicle(matched || data[0]);
       }
     } catch {
       // Sense actius assignats — estat buit real
     } finally {
       setLoadingActius(false);
     }
-  };
+  }, [paramVehicleId, paramOrdreId]);
 
-  const carregarEstoc = async () => {
+  const carregarEstoc = useCallback(async () => {
     setLoadingEstoc(true);
     try {
       let dades: ItemEstocFurgoneta[] = [];
       if (navigator.onLine) {
-        const res = await apiFetch("/operari/vehicles/stock");
+        const qs = new URLSearchParams();
+        if (paramVehicleId) qs.set("vehicle_id", paramVehicleId);
+        if (paramOrdreId) qs.set("ordre_treball_id", paramOrdreId);
+        const url = qs.toString()
+          ? `/operari/vehicles/stock?${qs.toString()}`
+          : "/operari/vehicles/stock";
+        const res = await apiFetch(url);
         dades = Array.isArray(res) ? res : [];
 
         if (typeof window !== "undefined") {
@@ -160,12 +186,12 @@ export default function OperariVehiclesPage() {
     } finally {
       setLoadingEstoc(false);
     }
-  };
+  }, [paramVehicleId, paramOrdreId]);
 
   useEffect(() => {
     carregarActius();
     carregarEstoc();
-  }, []);
+  }, [carregarActius, carregarEstoc]);
 
   // Check-in Submit (Spec 015 RF-03, RF-04, RF-05)
   const handleCheckInSubmit = () => {
@@ -294,7 +320,7 @@ export default function OperariVehiclesPage() {
       <header className="bg-surface-container-lowest dark:bg-slate-900 text-primary dark:text-white p-4 border-b border-outline-variant/25 dark:border-slate-800 flex items-center justify-between">
         <div className="flex items-center gap-3">
           <Link
-            href="/operari/feines"
+            href={paramOrdreId ? `/operari/feines/${paramOrdreId}` : "/operari/feines"}
             className="w-9 h-9 rounded-lg bg-surface-container-low dark:bg-slate-800 hover:bg-surface-container flex items-center justify-center text-primary dark:text-white transition-colors"
           >
             <RotateCcw className="w-4 h-4" />
@@ -740,9 +766,21 @@ export default function OperariVehiclesPage() {
           </div>
         )}
 
-        {/* PESTANYA 2: ESTOC DE FURGONETA (Spec 015 RF-11, RF-12, RF-13) */}
+        {/* PESTANYA 2: ESTOC / PICKING DE FURGONETA (Spec 015 RF-11, RF-12, RF-13) */}
         {vehicle && tabActiva === "ESTOC" && (
           <div className="space-y-4">
+            {paramOrdreId && (
+              <Link
+                href={`/operari/material?ordre_id=${paramOrdreId}&fase=OBRA`}
+                className="w-full py-3 px-3.5 rounded-xl bg-primary hover:bg-primary-container text-white text-xs font-bold flex items-center justify-between shadow-sm transition-colors"
+              >
+                <span className="flex items-center gap-2">
+                  <Package className="w-4 h-4 text-secondary-container" />
+                  <span>Imputar material de la furgoneta a l&apos;ordre activa</span>
+                </span>
+                <span className="text-[11px] opacity-90">Picking →</span>
+              </Link>
+            )}
             <div className="relative">
               <Search className="w-4 h-4 text-outline absolute left-3.5 top-3" />
               <input
@@ -938,5 +976,19 @@ export default function OperariVehiclesPage() {
         )}
       </div>
     </div>
+  );
+}
+
+export default function OperariVehiclesPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="flex-1 flex items-center justify-center text-xs text-on-surface-variant">
+          Carregant flota i picking de furgoneta...
+        </div>
+      }
+    >
+      <OperariVehiclesContent />
+    </Suspense>
   );
 }
