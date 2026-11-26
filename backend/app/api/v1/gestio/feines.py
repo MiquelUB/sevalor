@@ -30,7 +30,6 @@ from app.models.models import (
     OrdreTreballTramTemps,
     PlanolBase,
     SlotJornada,
-    TiquetDespesa,
     Usuari,
     Vehicle,
 )
@@ -2021,6 +2020,7 @@ class AjustPickingValidacioItem(BaseModel):
 
 class ValidarConciliacioRequest(BaseModel):
     hores_imputades_facturables: Optional[float] = Field(None, ge=0)
+    km_imputats: Optional[int] = Field(None, ge=0)
     ajustos_picking: Optional[List[AjustPickingValidacioItem]] = None
     checklist_conciliacio: Dict[str, bool] = Field(default_factory=dict)
     notes_validacio_tecnica: Optional[str] = Field(None, max_length=3000)
@@ -2240,6 +2240,13 @@ async def validar_conciliacio_ot(
             db, emp_uuid, ordre, trams_finals, hores_noves
         )
 
+    # 2b. Aplicar ajust de km facturables si s'ha especificat
+    if payload.km_imputats is not None:
+        ordre.km_imputats = int(payload.km_imputats)
+        ordre.cost_flota_real = await _calcular_cost_flota_km(
+            db, emp_uuid, ordre.vehicle_id, int(payload.km_imputats)
+        )
+
     # 3. Persistir checklist, notes i segell de validació tècnica
     now_utc = datetime.now(timezone.utc)
     ordre.checklist_conciliacio = dict(payload.checklist_conciliacio or {})
@@ -2334,129 +2341,24 @@ async def passar_ot_a_prefacturacio(
     if not ordre.client_id:
         raise HTTPException(status_code=400, detail="L'OT no té cap client associat.")
 
-    # Construir les línies comercials reals de la pre-factura a partir de les dades conciliades
-    linies_json: List[Dict[str, Any]] = []
-
-    hores = Decimal(str(ordre.hores_imputades_facturables or 0))
-    preu_hora_real = Decimal(str(await resoldre_preu_hora_control_panel(db, emp_uuid, ordre)))
-    if hores > 0:
-        linies_json.append(
-            {
-                "concepte": f"Mà d'obra tècnica OT {ordre.codi} ({ordre.titol})"[:200],
-                "quantitat": float(hores),
-                "preu_venda_unitari": float(preu_hora_real),
-                "tipus_iva": 21.0,
-                "article_id": None,
-            }
-        )
-
-    # Materials reals consumits (Nau + Furgoneta) des de linies_picking
-    pk_rows = (
-        await db.execute(
-            select(LiniaPicking, Article)
-            .join(FullaPicking, LiniaPicking.picking_id == FullaPicking.id)
-            .join(Article, LiniaPicking.article_id == Article.id)
-            .where(
-                FullaPicking.ordre_treball_id == ordre.id,
-                FullaPicking.empresa_id == emp_uuid,
-                LiniaPicking.empresa_id == emp_uuid,
-            )
-            .order_by(LiniaPicking.created_at.asc())
-        )
-    ).all()
-
-    afegit_material_picking = False
-    for lp, art in pk_rows:
-        consum = max(
-            0.0,
-            round(
-                float(lp.quantitat_carregada_pick_in or 0.0)
-                - float(lp.quantitat_retornada_pick_out or 0.0),
-                3,
-            ),
-        )
-        if consum <= 0:
-            continue
-        afegit_material_picking = True
-        origen_lbl = (
-            " [Furgoneta]"
-            if str(getattr(lp, "origen_estoc", "NAU") or "NAU").upper() == "FURGONETA"
-            else ""
-        )
-        linies_json.append(
-            {
-                "concepte": f"Material {art.nom}{origen_lbl} (OT {ordre.codi})"[:200],
-                "quantitat": consum,
-                "preu_venda_unitari": float(art.preu_venda or 0.0),
-                "tipus_iva": 21.0,
-                "article_id": str(art.id),
-            }
-        )
-
-    if not afegit_material_picking and pk_rows:
-        for lp, art in pk_rows:
-            q_prev_f = max(0.0, round(float(lp.quantitat_prevista or 0.0), 3))
-            if q_prev_f <= 0:
-                continue
-            afegit_material_picking = True
-            linies_json.append(
-                {
-                    "concepte": f"Material {art.nom} (OT {ordre.codi})"[:200],
-                    "quantitat": q_prev_f,
-                    "preu_venda_unitari": float(art.preu_venda or 0.0),
-                    "tipus_iva": 21.0,
-                    "article_id": str(art.id),
-                }
-            )
-
-    pvp_mat_ot = Decimal(str(ordre.pvp_materials_aplicat or 0))
-    if not afegit_material_picking and pvp_mat_ot > 0:
-        linies_json.append(
-            {
-                "concepte": f"Subministrament i materials OT {ordre.codi}"[:200],
-                "quantitat": 1.0,
-                "preu_venda_unitari": float(pvp_mat_ot),
-                "tipus_iva": 21.0,
-                "article_id": None,
-            }
-        )
-
-    # Tiquets de despesa vinculats a l'OT (excloent rebutjats)
+    # Construir les línies comercials reals de la pre-factura a partir del motor canònic unificat
     incloure_tiq = True if payload is None else bool(payload.incloure_tiquets_camp)
-    if incloure_tiq:
-        tiq_rows = (
-            await db.execute(
-                select(TiquetDespesa).where(
-                    TiquetDespesa.empresa_id == emp_uuid,
-                    TiquetDespesa.ordre_treball_id == ordre.id,
-                    TiquetDespesa.estat_aprovacio != "REBUTJAT",
-                )
-            )
-        ).scalars().all()
-        for tiq in tiq_rows:
-            imp_tiq = float(tiq.base_imposable or tiq.import_total or 0.0)
-            if imp_tiq > 0:
-                linies_json.append(
-                    {
-                        "concepte": f"Despesa camp ({tiq.categoria}) OT {ordre.codi}"[:200],
-                        "quantitat": 1.0,
-                        "preu_venda_unitari": round(imp_tiq, 2),
-                        "tipus_iva": 21.0,
-                        "article_id": None,
-                    }
-                )
-
-    if not linies_json:
-        pressup = float(ordre.import_pressupostat_net or ordre.import_pressupostat or 0.0)
-        linies_json.append(
-            {
-                "concepte": f"Treballs tècnics executats OT {ordre.codi} ({ordre.titol})"[:200],
-                "quantitat": 1.0,
-                "preu_venda_unitari": round(pressup, 2),
-                "tipus_iva": 21.0,
-                "article_id": None,
-            }
-        )
+    proposta = await ReconciliacioOTService.construir_proposta_prefactura_ot(
+        db=db,
+        empresa_id=emp_uuid,
+        ot=ordre,
+        incloure_tiquets_camp=incloure_tiq,
+    )
+    linies_json: List[Dict[str, Any]] = [
+        {
+            "concepte": str(item["concepte"])[:200],
+            "quantitat": float(item["quantitat"]),
+            "preu_venda_unitari": float(item["preu_venda_unitari"]),
+            "tipus_iva": float(item.get("tipus_iva", 21.0)),
+            "article_id": item.get("article_id"),
+        }
+        for item in proposta["linies"]
+    ]
 
     data_em = payload.data_emissio if payload and payload.data_emissio else date.today()
     data_venc = payload.data_venciment if payload and payload.data_venciment else data_em

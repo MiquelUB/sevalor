@@ -84,6 +84,173 @@ _DATA_URI_IMG_RE = re.compile(
 )
 _ALLOWED_IMG_EXTS = {"png": "image/png", "webp": "image/webp", "jpg": "image/jpeg", "jpeg": "image/jpeg"}
 
+_RE_REF_PREFIX = re.compile(r"^\[([^\]]+)\]\s*")
+_SECCIONS_MA_OBRA_KW = (
+    "mà d'obra",
+    "ma d'obra",
+    "mà dobra",
+    "instal·lació",
+    "instal.lacio",
+    "instal·lacio",
+    "instalacio",
+    "treball",
+    "hores",
+    "tècnic",
+    "tecnic",
+)
+_SECCIONS_MATERIAL_KW = (
+    "material",
+    "subministrament",
+    "recanvi",
+    "article",
+    "producte",
+    "equipament",
+    "canonad",
+    "tub",
+)
+
+
+def _es_linia_pressupost_ma_obra(lin: Dict[str, Any]) -> bool:
+    tipus = str(lin.get("tipus_linia") or "").strip().upper()
+    if tipus == "MA_OBRA":
+        return True
+    if lin.get("operari_id"):
+        return True
+    if tipus in ("MATERIAL", "EINA", "DESPLACAMENT", "MAQUINARIA"):
+        return False
+    if lin.get("article_id") or lin.get("eina_id") or lin.get("vehicle_id"):
+        return False
+    seccio_l = str(lin.get("seccio") or "").strip().lower()
+    return any(kw in seccio_l for kw in _SECCIONS_MA_OBRA_KW)
+
+
+def _es_linia_pressupost_material(lin: Dict[str, Any]) -> bool:
+    if lin.get("article_id"):
+        return True
+    tipus = str(lin.get("tipus_linia") or "").strip().upper()
+    if tipus == "MATERIAL":
+        return True
+    if tipus in ("MA_OBRA", "EINA", "DESPLACAMENT", "MAQUINARIA"):
+        return False
+    if lin.get("eina_id") or lin.get("vehicle_id") or lin.get("operari_id"):
+        return False
+    seccio_l = str(lin.get("seccio") or "").strip().lower()
+    return any(kw in seccio_l for kw in _SECCIONS_MATERIAL_KW)
+
+
+def _normalitzar_concepte_material(concepte: str) -> Tuple[Optional[str], str]:
+    raw = str(concepte or "").strip()
+    m = _RE_REF_PREFIX.match(raw)
+    if m:
+        ref = m.group(1).strip().lower()
+        nom = raw[m.end() :].strip().lower()
+        return (ref or None), nom
+    return None, raw.lower()
+
+
+def _preu_unitari_net_linia_pressupost(lin: Dict[str, Any]) -> Decimal:
+    """Retorna el preu unitari net (després del descompte de línia) d'una línia de pressupost."""
+    preu = Decimal(str(lin.get("preu_unitari") or 0))
+    dto = min(Decimal("100.00"), max(Decimal("0.00"), Decimal(str(lin.get("descompte_pct") or 0))))
+    factor = Decimal("1.00") - (dto / Decimal("100.00"))
+    if preu > 0:
+        return _q2(preu * factor)
+    sub = Decimal(str(lin.get("subtotal") or 0))
+    qt = Decimal(str(lin.get("quantitat") or 0))
+    if sub > 0 and qt > 0:
+        return _q2(sub / qt)
+    return Decimal("0.00")
+
+
+def _tipus_iva_linia_pressupost(lin: Dict[str, Any]) -> Decimal:
+    raw = lin.get("tipus_iva")
+    if raw is None:
+        return Decimal("21.00")
+    return _q2(max(Decimal("0.00"), Decimal(str(raw))))
+
+
+def _indexar_materials_pressupost(
+    pressupost_linies: List[Dict[str, Any]],
+) -> Tuple[Dict[str, List[int]], Dict[str, List[int]], Dict[str, List[int]]]:
+    """Indexa les línies MATERIAL del pressupost per article_id, [REF] i nom normalitzat."""
+    by_art_id: Dict[str, List[int]] = {}
+    by_ref: Dict[str, List[int]] = {}
+    by_nom: Dict[str, List[int]] = {}
+    for idx, pl in enumerate(pressupost_linies):
+        if not isinstance(pl, dict) or not _es_linia_pressupost_material(pl):
+            continue
+        art_id_s = str(pl.get("article_id") or "").strip()
+        if art_id_s:
+            by_art_id.setdefault(art_id_s, []).append(idx)
+        ref_k, nom_k = _normalitzar_concepte_material(str(pl.get("concepte") or ""))
+        if ref_k:
+            by_ref.setdefault(ref_k, []).append(idx)
+        if nom_k:
+            by_nom.setdefault(nom_k, []).append(idx)
+    return by_art_id, by_ref, by_nom
+
+
+def _trobar_linia_pressupost_article(
+    art: Article,
+    pressupost_linies: List[Dict[str, Any]],
+    by_art_id: Dict[str, List[int]],
+    by_ref: Dict[str, List[int]],
+    by_nom: Dict[str, List[int]],
+    matched_indices: set[int],
+) -> Optional[Dict[str, Any]]:
+    """Troba i marca com a conciliada la línia de pressupost corresponent a un Article de picking."""
+    candidates: List[int] = []
+    art_id_s = str(art.id)
+    if art_id_s in by_art_id:
+        candidates.extend(by_art_id[art_id_s])
+    ref_l = str(art.referencia_inventari or "").strip().lower()
+    if ref_l and ref_l in by_ref:
+        candidates.extend(by_ref[ref_l])
+    nom_l = str(art.nom or "").strip().lower()
+    if nom_l and nom_l in by_nom:
+        candidates.extend(by_nom[nom_l])
+
+    first_match: Optional[Dict[str, Any]] = None
+    for idx in candidates:
+        matched_indices.add(idx)
+        if first_match is None:
+            first_match = pressupost_linies[idx]
+    return first_match
+
+
+async def _carregar_pressupost_vinculat_ot(
+    db: AsyncSession,
+    empresa_id: uuid.UUID,
+    ordre_treball_id: uuid.UUID,
+) -> Tuple[Optional[Pressupost], Optional[Dict[str, Any]]]:
+    """Localitza el pressupost oficial vinculat a l'OT al disc sobirà i el valida contra BD (RLS)."""
+    try:
+        pres_json_items = await SovereignStorageGateway.llegir_entitats_json(
+            db, empresa_id, "pressupostos"
+        )
+        for item in pres_json_items:
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("origen", "")).startswith("COPILOT_IA"):
+                continue
+            if str(item.get("ordre_treball_id") or "") == str(ordre_treball_id):
+                raw_pid = item.get("id")
+                if not raw_pid:
+                    continue
+                pres_db = (
+                    await db.execute(
+                        select(Pressupost).where(
+                            Pressupost.id == uuid.UUID(str(raw_pid)),
+                            Pressupost.empresa_id == empresa_id,
+                        )
+                    )
+                ).scalars().first()
+                if pres_db:
+                    return pres_db, item
+    except Exception:
+        return None, None
+    return None, None
+
 
 def _q2(val: Decimal | float | int | None) -> Decimal:
     return Decimal(str(val if val is not None else 0)).quantize(
@@ -341,13 +508,61 @@ class ReconciliacioOTService:
             if val_u:
                 validador_nom = f"{val_u.nom} {val_u.cognoms or ''}".strip()
 
+        # 1b. Pressupost vinculat (carregat d'entrada per aplicar preus pactats, IVA i partides addicionals)
+        pres_db_obj, pres_detalls_dict = await _carregar_pressupost_vinculat_ot(
+            db, empresa_id, ot.id
+        )
+        pressupost_linies_raw: List[Dict[str, Any]] = (
+            [lin for lin in (pres_detalls_dict.get("linies") or []) if isinstance(lin, dict)]
+            if isinstance(pres_detalls_dict, dict)
+            else []
+        )
+        pressupost_info: Optional[Dict[str, Any]] = (
+            {
+                "id": str(pres_db_obj.id),
+                "numero": pres_db_obj.numero,
+                "estat": pres_db_obj.estat,
+                "total": float(_q2(pres_db_obj.total or 0)),
+                "base_imposable": float(
+                    _q2(
+                        pres_detalls_dict.get("base_imposable")
+                        if pres_detalls_dict and pres_detalls_dict.get("base_imposable") is not None
+                        else (pres_db_obj.total or 0)
+                    )
+                ),
+                "descompte_global_pct": float(
+                    _q2(pres_detalls_dict.get("descompte_global_pct") or 0)
+                    if pres_detalls_dict
+                    else 0
+                ),
+                "created_at": pres_db_obj.created_at.isoformat() if pres_db_obj.created_at else None,
+                "total_linies": len(pressupost_linies_raw),
+            }
+            if pres_db_obj
+            else None
+        )
+
+        # Preu km pactat al pressupost (si existeix)
+        pres_preu_km = Decimal("0.00")
+        if isinstance(pres_detalls_dict, dict):
+            raw_pkm = pres_detalls_dict.get("desplacament_preu_km")
+            if raw_pkm is not None and Decimal(str(raw_pkm)) > 0:
+                pres_preu_km = Decimal(str(raw_pkm))
+            else:
+                for sl in pres_detalls_dict.get("vehicles_desplacaments") or []:
+                    if isinstance(sl, dict) and sl.get("preu_km") is not None and Decimal(str(sl["preu_km"])) > 0:
+                        pres_preu_km = Decimal(str(sl["preu_km"]))
+                        break
+
         vehicle_info: Optional[Dict[str, Any]] = None
         veh_cost_per_km = Decimal("0.32")
-        veh_preu_km_facturable = Decimal("0.45")
+        veh_preu_km_facturable = pres_preu_km if pres_preu_km > 0 else Decimal("0.45")
         km_imputats_val = int(ot.km_imputats or 0)
+        valor_desplacament_pvp = _q2(Decimal(km_imputats_val) * veh_preu_km_facturable) if km_imputats_val > 0 else Decimal("0.00")
         odometre_inici_reg: Optional[int] = None
         odometre_fi_reg: Optional[int] = None
         vehicle_pickout_estat: str = "PENDENT"
+        veh_obj_loaded: Optional[Vehicle] = None
 
         if ot.vehicle_id:
             veh = (
@@ -359,12 +574,14 @@ class ReconciliacioOTService:
                 )
             ).scalars().first()
             if veh:
+                veh_obj_loaded = veh
                 c_km_raw = getattr(veh, "cost_per_km_eur", None)
                 if c_km_raw is not None and Decimal(str(c_km_raw)) > 0:
                     veh_cost_per_km = Decimal(str(c_km_raw))
-                p_km_raw = getattr(veh, "preu_km_exces_eur", None)
-                if p_km_raw is not None and Decimal(str(p_km_raw)) > 0:
-                    veh_preu_km_facturable = Decimal(str(p_km_raw))
+                if pres_preu_km <= 0:
+                    p_km_raw = getattr(veh, "preu_km_exces_eur", None)
+                    if p_km_raw is not None and Decimal(str(p_km_raw)) > 0:
+                        veh_preu_km_facturable = Decimal(str(p_km_raw))
 
                 # Comprovar si hi ha odòmetre registrat o moviment d'assignació
                 odo_actual = getattr(veh, "odometre_acumulat", None)
@@ -415,6 +632,8 @@ class ReconciliacioOTService:
                     "estat_pickout": vehicle_pickout_estat,
                     "valor_desplacament_pvp": float(valor_desplacament_pvp),
                 }
+        else:
+            valor_desplacament_pvp = _q2(Decimal(km_imputats_val) * veh_preu_km_facturable) if km_imputats_val > 0 else Decimal("0.00")
 
         # Quadrilla assignada (Cap de colla + Operaris)
         ops_rows = (
@@ -567,6 +786,11 @@ class ReconciliacioOTService:
         alerta_consum_excessiu = False
         detall_merma_msgs: List[str] = []
 
+        pres_by_art_id, pres_by_ref, pres_by_nom = _indexar_materials_pressupost(
+            pressupost_linies_raw
+        )
+        matched_pres_mat_indices: set[int] = set()
+
         for fp, lp, art, mag in pk_rows:
             estat_picking_global = fp.estat_picking
             q_prev = _q3(lp.quantitat_prevista or 0)
@@ -579,7 +803,28 @@ class ReconciliacioOTService:
             q_base_factura = q_consum if q_in > 0 else q_prev
             desviacio_q = _q3(q_consum - q_prev) if q_in > 0 else Decimal("0.000")
 
-            pvp_u = _q2(art.preu_venda or 0)
+            # Prioritza el preu net i IVA pactats al pressupost vinculat (si existeix i > 0)
+            pres_lin_match = _trobar_linia_pressupost_article(
+                art,
+                pressupost_linies_raw,
+                pres_by_art_id,
+                pres_by_ref,
+                pres_by_nom,
+                matched_pres_mat_indices,
+            )
+            pvp_cat = _q2(art.preu_venda or 0)
+            pvp_pres_net = (
+                _preu_unitari_net_linia_pressupost(pres_lin_match)
+                if pres_lin_match is not None
+                else Decimal("0.00")
+            )
+            pvp_u = pvp_pres_net if pvp_pres_net > 0 else pvp_cat
+            tipus_iva_mat = (
+                _tipus_iva_linia_pressupost(pres_lin_match)
+                if pres_lin_match is not None
+                else Decimal("21.00")
+            )
+
             pmp_raw = art.preu_cost_mitja if float(art.preu_cost_mitja or 0) > 0 else art.preu_cost
             pmp_u = Decimal(str(pmp_raw or 0))
 
@@ -617,9 +862,11 @@ class ReconciliacioOTService:
                 "quantitat_retornada_pick_out": float(q_out),
                 "quantitat_mermada": float(q_merma),
                 "consum_real": float(q_consum),
+                "quantitat_facturable": float(q_base_factura),
                 "desviacio_quantitat": float(desviacio_q),
                 "consum_aplicat_magatzem": float(_q3(getattr(lp, "consum_aplicat_magatzem", 0) or 0)),
                 "preu_venda_unitari": float(pvp_u),
+                "tipus_iva": float(tipus_iva_mat),
                 "subtotal_pvp": float(sub_pvp),
             }
             if mostrar_costos_interns:
@@ -800,55 +1047,49 @@ class ReconciliacioOTService:
             for c in capes_anot
         ]
 
-        # 9. Pressupost vinculat (si n'hi ha al client / disc sobirà)
-        pressupost_info: Optional[Dict[str, Any]] = None
-        pressupost_linies_raw: List[Dict[str, Any]] = []
-        try:
-            pres_json_items = await SovereignStorageGateway.llegir_entitats_json(
-                db, empresa_id, "pressupostos"
-            )
-            for item in pres_json_items:
-                if isinstance(item, dict) and str(item.get("ordre_treball_id") or "") == str(ot.id):
-                    pres_db = (
-                        await db.execute(
-                            select(Pressupost).where(
-                                Pressupost.id == uuid.UUID(str(item["id"])),
-                                Pressupost.empresa_id == empresa_id,
-                            )
-                        )
-                    ).scalars().first()
-                    if pres_db:
-                        pressupost_linies_raw = list(item.get("linies") or [])
-                        pressupost_info = {
-                            "id": str(pres_db.id),
-                            "numero": pres_db.numero,
-                            "estat": pres_db.estat,
-                            "total": float(_q2(pres_db.total or 0)),
-                            "created_at": pres_db.created_at.isoformat() if pres_db.created_at else None,
-                            "total_linies": len(pressupost_linies_raw),
-                        }
-                        break
-        except Exception:
-            pressupost_info = None
-
-        # Detectar ítems de material del pressupost pendents de facturar o no inclosos al picking
+        # 9. Partides del Pressupost vinculat pendents de facturar o addicionals (materials no inclosos al picking, desplaçament, maquinària, eines facturables, altres)
         linies_pendents_facturar: List[Dict[str, Any]] = []
+        partides_pressupost_addicionals: List[Dict[str, Any]] = []
+        valor_partides_pressupost_pvp = Decimal("0.00")
         if pressupost_linies_raw:
-            picked_art_ids = {str(m["article_id"]) for m in materials_list if m.get("article_id")}
-            picked_noms = {str(m["article_nom"]).strip().lower() for m in materials_list if m.get("article_nom")}
-            for pl in pressupost_linies_raw:
-                c_nom = str(pl.get("concepte") or "").strip()
-                art_id_pl = str(pl.get("article_id") or "") if pl.get("article_id") else None
-                es_mat = str(pl.get("tipus_linia") or "").upper() == "MATERIAL" or bool(art_id_pl) or "material" in str(pl.get("seccio") or "").lower()
-                if es_mat:
-                    coincideix = (art_id_pl and art_id_pl in picked_art_ids) or (c_nom.lower() in picked_noms)
-                    if not coincideix:
-                        linies_pendents_facturar.append({
+            for idx_pl, pl_item in enumerate(pressupost_linies_raw):
+                if _es_linia_pressupost_ma_obra(pl_item):
+                    continue
+                c_nom = str(pl_item.get("concepte") or "").strip()
+                if not c_nom:
+                    continue
+                qt_pl = _q3(pl_item.get("quantitat") or 1)
+                pvp_net_pl = _preu_unitari_net_linia_pressupost(pl_item)
+                iva_pl = _tipus_iva_linia_pressupost(pl_item)
+                sub_pl = _q2(qt_pl * pvp_net_pl)
+                tipus_pl = str(pl_item.get("tipus_linia") or "ALTRE").strip().upper()
+
+                if _es_linia_pressupost_material(pl_item):
+                    if idx_pl not in matched_pres_mat_indices:
+                        item_p = {
+                            "tipus_linia": "MATERIAL",
                             "concepte": c_nom,
-                            "quantitat": float(pl.get("quantitat") or 1.0),
-                            "preu_unitari": float(pl.get("preu_unitari") or 0.0),
-                            "subtotal": float(pl.get("subtotal") or 0.0),
-                        })
+                            "quantitat": float(qt_pl),
+                            "preu_unitari": float(pvp_net_pl),
+                            "tipus_iva": float(iva_pl),
+                            "subtotal": float(sub_pl),
+                        }
+                        linies_pendents_facturar.append(item_p)
+                        if sub_pl > 0:
+                            partides_pressupost_addicionals.append(item_p)
+                            valor_partides_pressupost_pvp += sub_pl
+                elif pvp_net_pl > 0 and qt_pl > 0:
+                    partides_pressupost_addicionals.append(
+                        {
+                            "tipus_linia": tipus_pl,
+                            "concepte": c_nom,
+                            "quantitat": float(qt_pl),
+                            "preu_unitari": float(pvp_net_pl),
+                            "tipus_iva": float(iva_pl),
+                            "subtotal": float(sub_pl),
+                        }
+                    )
+                    valor_partides_pressupost_pvp += sub_pl
 
         # 10. Pre-factura o Factura final vinculada a l'OT (via funció SECURITY DEFINER acotada a l'OT,
         # preservant intactes les polítiques RLS `economics_boss_only` sobre consultes globals)
@@ -894,6 +1135,19 @@ class ReconciliacioOTService:
                 barema_fetched=True,
             )
         )
+        if preu_hora_pvp <= 0 and pressupost_linies_raw:
+            h_mo = Decimal("0.00")
+            imp_mo = Decimal("0.00")
+            for pl_item in pressupost_linies_raw:
+                if _es_linia_pressupost_ma_obra(pl_item):
+                    q_l = max(Decimal("0.00"), Decimal(str(pl_item.get("quantitat") or 0)))
+                    p_l = _preu_unitari_net_linia_pressupost(pl_item)
+                    if q_l > 0 and p_l > 0:
+                        h_mo += q_l
+                        imp_mo += _q2(q_l * p_l)
+            if h_mo > 0 and imp_mo > 0:
+                preu_hora_pvp = _q2(imp_mo / h_mo)
+
         valor_ma_obra_previst_pvp = _q2(hores_previstes * preu_hora_pvp)
         valor_ma_obra_pvp = _q2(hores_reals * preu_hora_pvp)
         pvp_materials_ot = _q2(ot.pvp_materials_aplicat or 0)
@@ -914,6 +1168,25 @@ class ReconciliacioOTService:
                 if import_pressupostat > 0
                 else (total_valorat_pvp if total_valorat_pvp > 0 else total_previst_pvp)
             )
+        )
+
+        # 11b. Proposta canònica de Pre-factura (font única de veritat per a la Fulla 360° i els endpoints de pre-facturació)
+        proposta_prefactura = await cls.construir_proposta_prefactura_ot(
+            db=db,
+            empresa_id=empresa_id,
+            ot=ot,
+            incloure_tiquets_camp=True,
+            preloaded={
+                "trams": trams,
+                "pk_rows": [(lp, art) for _, lp, art, _ in pk_rows],
+                "tiquets_rows": tiquets_rows,
+                "pressupost_detalls": pres_detalls_dict,
+                "barema_empresa": barema_empresa,
+                "preu_hora_pvp": preu_hora_pvp,
+                "veh": veh_obj_loaded,
+                "km_imputats_val": km_imputats_val,
+                "veh_preu_km_facturable": veh_preu_km_facturable,
+            },
         )
 
         # Costos reals interns
@@ -998,14 +1271,19 @@ class ReconciliacioOTService:
             "hores_previstes": float(hores_previstes),
             "hores_reals": float(hores_reals),
             "desviacio_hores": float(desviacio_hores),
-            "km_imputats": int(ot.km_imputats or 0),
+            "km_imputats": km_imputats_val,
             "preu_venda_hora_aplicat": float(preu_hora_pvp),
             "valor_ma_obra_previst_pvp": float(valor_ma_obra_previst_pvp),
             "valor_ma_obra_pvp": float(valor_ma_obra_pvp),
             "valor_materials_pvp": float(valor_materials_pvp),
+            "valor_desplacament_pvp": float(valor_desplacament_pvp),
+            "valor_partides_pressupost_pvp": float(_q2(valor_partides_pressupost_pvp)),
             "total_tiquets_camp": float(total_tiquets_camp),
             "total_previst_pvp": float(total_previst_pvp),
             "total_valorat_pvp": float(total_valorat_pvp),
+            "total_prefactura_base": float(proposta_prefactura["base_imposable"]),
+            "total_prefactura_iva": float(proposta_prefactura["quota_iva"]),
+            "total_prefactura_liquid": float(proposta_prefactura["liquid_exigible"]),
         }
 
         resum_intern: Dict[str, Any] = {
@@ -1087,6 +1365,7 @@ class ReconciliacioOTService:
                 "detall_merma": " ".join(detall_merma_msgs) if detall_merma_msgs else None,
                 "linies": materials_list,
                 "linies_pendents_facturar": linies_pendents_facturar,
+                "partides_pressupost_addicionals": partides_pressupost_addicionals,
             },
             "eines": eines_list,
             "incidencies": {
@@ -1102,6 +1381,7 @@ class ReconciliacioOTService:
             "capes_gis": capes_gis_list,
             "pressupost": pressupost_info,
             "factura": factura_info,
+            "proposta_prefactura": proposta_prefactura,
             "resum_comercial": resum_comercial,
             "resum_intern": resum_intern,
             "auditoria_post_obra": {
@@ -1118,6 +1398,488 @@ class ReconciliacioOTService:
             else None,
             "preparada_per_prefacturar": bool(disclaimer["pot_prefacturar"] and not motius_bloqueig),
             "motius_bloqueig_prefacturacio": motius_bloqueig,
+        }
+
+    @classmethod
+    async def construir_proposta_prefactura_ot(
+        cls,
+        db: AsyncSession,
+        empresa_id: uuid.UUID,
+        ot: OrdreTreball,
+        *,
+        incloure_tiquets_camp: bool = True,
+        preloaded: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Construeix de manera canònica i unificada totes les línies facturables d'una OT conciliada.
+
+        Importa sense pèrdues:
+        1. Mà d'obra conciliada (hores imputades -> trams de temps -> hores previstes; tarifa control panel -> pressupost)
+        2. Materials de picking línia a línia (consum real si hi ha pick-in; quantitat prevista si no s'ha fet pick-in; preu net i IVA del pressupost si existeix)
+        3. Materials del pressupost sense picking vinculat
+        4. Partides de desplaçament / km (del pressupost o dels km imputats / odòmetre del vehicle)
+        5. Maquinària, eines facturables i altres partides del pressupost vinculat
+        6. Tiquets de despesa de camp aprovats/pendents (excloent rebutjats)
+        7. Descompte comercial global del pressupost (si n'hi ha)
+        """
+        pl_data = preloaded or {}
+
+        # 1. Pressupost vinculat
+        if "pressupost_detalls" in pl_data:
+            pres_detalls: Optional[Dict[str, Any]] = pl_data["pressupost_detalls"]
+        else:
+            _, pres_detalls = await _carregar_pressupost_vinculat_ot(db, empresa_id, ot.id)
+
+        pres_linies: List[Dict[str, Any]] = (
+            [lin for lin in (pres_detalls.get("linies") or []) if isinstance(lin, dict)]
+            if isinstance(pres_detalls, dict)
+            else []
+        )
+
+        # 2. Trams de temps i hores
+        if "trams" in pl_data:
+            trams: List[OrdreTreballTramTemps] = list(pl_data["trams"])
+        else:
+            trams = list(
+                (
+                    await db.execute(
+                        select(OrdreTreballTramTemps).where(
+                            OrdreTreballTramTemps.empresa_id == empresa_id,
+                            OrdreTreballTramTemps.ordre_treball_id == ot.id,
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+        temps_segons = sum(int(t.durada_segons or 0) for t in trams if t.hora_fi is not None)
+        hores_previstes = Decimal("0.00")
+        if ot.hora_inici_prevista and ot.hora_fi_prevista and ot.hora_fi_prevista > ot.hora_inici_prevista:
+            diff_sec = (ot.hora_fi_prevista - ot.hora_inici_prevista).total_seconds()
+            hores_previstes = _q2(Decimal(str(diff_sec)) / Decimal("3600"))
+
+        pres_ma_obra_lines = [p for p in pres_linies if _es_linia_pressupost_ma_obra(p)]
+        pres_maq_lines = [
+            p for p in pres_linies if str(p.get("tipus_linia") or "").strip().upper() == "MAQUINARIA"
+        ]
+
+        hores_fact = _q2(ot.hores_imputades_facturables or 0)
+        if hores_fact <= Decimal("0.00") and temps_segons > 0:
+            hores_fact = _q2(Decimal(temps_segons) / Decimal("3600"))
+        if (
+            hores_fact <= Decimal("0.00")
+            and hores_previstes > Decimal("0.00")
+            and not (not pres_ma_obra_lines and pres_maq_lines)
+        ):
+            hores_fact = hores_previstes
+
+        if "preu_hora_pvp" in pl_data:
+            preu_hora = _q2(pl_data["preu_hora_pvp"])
+        else:
+            barema_emp = (
+                pl_data["barema_empresa"]
+                if "barema_empresa" in pl_data
+                else await obtenir_barema_empresa(db, empresa_id)
+            )
+            preu_hora = _q2(
+                await resoldre_preu_hora_control_panel(
+                    db,
+                    empresa_id,
+                    ot,
+                    barema_cache=barema_emp,
+                    barema_fetched=True,
+                )
+            )
+        if preu_hora <= Decimal("0.00") and pres_ma_obra_lines:
+            h_mo = Decimal("0.00")
+            imp_mo = Decimal("0.00")
+            for p_mo in pres_ma_obra_lines:
+                q_mo = max(Decimal("0.00"), Decimal(str(p_mo.get("quantitat") or 0)))
+                u_mo = _preu_unitari_net_linia_pressupost(p_mo)
+                if q_mo > 0 and u_mo > 0:
+                    h_mo += q_mo
+                    imp_mo += _q2(q_mo * u_mo)
+            if h_mo > 0 and imp_mo > 0:
+                preu_hora = _q2(imp_mo / h_mo)
+
+        iva_ma_obra = (
+            _tipus_iva_linia_pressupost(pres_ma_obra_lines[0])
+            if pres_ma_obra_lines
+            else Decimal("21.00")
+        )
+
+        # 3. Vehicle i km reals (imputats o derivats d'odòmetre)
+        veh_obj: Optional[Vehicle] = pl_data.get("veh")
+        if "km_imputats_val" in pl_data and "veh_preu_km_facturable" in pl_data:
+            km_imputats_val = int(pl_data["km_imputats_val"] or 0)
+            veh_preu_km = Decimal(str(pl_data["veh_preu_km_facturable"] or "0.45"))
+        else:
+            km_imputats_val = int(ot.km_imputats or 0)
+            pres_pkm = Decimal("0.00")
+            if isinstance(pres_detalls, dict):
+                raw_pkm = pres_detalls.get("desplacament_preu_km")
+                if raw_pkm is not None and Decimal(str(raw_pkm)) > 0:
+                    pres_pkm = Decimal(str(raw_pkm))
+                else:
+                    for sl in pres_detalls.get("vehicles_desplacaments") or []:
+                        if isinstance(sl, dict) and sl.get("preu_km") is not None and Decimal(str(sl["preu_km"])) > 0:
+                            pres_pkm = Decimal(str(sl["preu_km"]))
+                            break
+            veh_preu_km = pres_pkm if pres_pkm > 0 else Decimal("0.45")
+
+            if ot.vehicle_id:
+                if veh_obj is None:
+                    veh_obj = (
+                        await db.execute(
+                            select(Vehicle).where(
+                                Vehicle.id == ot.vehicle_id,
+                                Vehicle.empresa_id == empresa_id,
+                            )
+                        )
+                    ).scalars().first()
+                if veh_obj is not None:
+                    if pres_pkm <= 0:
+                        p_km_raw = getattr(veh_obj, "preu_km_exces_eur", None)
+                        if p_km_raw is not None and Decimal(str(p_km_raw)) > 0:
+                            veh_preu_km = Decimal(str(p_km_raw))
+                    if km_imputats_val <= 0:
+                        hist_row = (
+                            await db.execute(
+                                select(HistorialAssignacioVehicle)
+                                .where(
+                                    HistorialAssignacioVehicle.empresa_id == empresa_id,
+                                    HistorialAssignacioVehicle.vehicle_id == veh_obj.id,
+                                )
+                                .order_by(HistorialAssignacioVehicle.data_inici.desc())
+                            )
+                        ).scalars().first()
+                        odo_ini = hist_row.odometre_inici if hist_row else None
+                        odo_fi = (
+                            hist_row.odometre_fi
+                            if (hist_row and hist_row.odometre_fi is not None)
+                            else getattr(veh_obj, "odometre_acumulat", None)
+                        )
+                        if odo_ini is not None and odo_fi is not None and int(odo_fi) > int(odo_ini):
+                            km_imputats_val = int(odo_fi) - int(odo_ini)
+
+        # 4. Materials de picking
+        if "pk_rows" in pl_data:
+            pk_pairs: List[Tuple[LiniaPicking, Article]] = list(pl_data["pk_rows"])
+        else:
+            pk_pairs = [
+                (lp, art)
+                for lp, art in (
+                    await db.execute(
+                        select(LiniaPicking, Article)
+                        .join(FullaPicking, LiniaPicking.picking_id == FullaPicking.id)
+                        .join(Article, LiniaPicking.article_id == Article.id)
+                        .where(
+                            FullaPicking.ordre_treball_id == ot.id,
+                            FullaPicking.empresa_id == empresa_id,
+                            LiniaPicking.empresa_id == empresa_id,
+                        )
+                        .order_by(LiniaPicking.created_at.asc())
+                    )
+                ).all()
+            ]
+
+        linies: List[Dict[str, Any]] = []
+
+        def _afegir_linia(
+            *,
+            concepte: str,
+            quantitat: Decimal,
+            preu_unitari: Decimal,
+            tipus_iva: Decimal,
+            origen: str,
+            article_id: Optional[str] = None,
+        ) -> None:
+            q_norm = _q3(quantitat)
+            p_norm = _q2(preu_unitari)
+            iva_norm = _q2(tipus_iva)
+            sub_norm = _q2(q_norm * p_norm)
+            linies.append(
+                {
+                    "concepte": concepte[:200],
+                    "quantitat": float(q_norm),
+                    "preu_venda_unitari": float(p_norm),
+                    "tipus_iva": float(iva_norm),
+                    "article_id": article_id,
+                    "subtotal": float(sub_norm),
+                    "origen": origen,
+                }
+            )
+
+        # SECCIÓ A: Mà d'obra conciliada
+        if hores_fact > Decimal("0.00"):
+            _afegir_linia(
+                concepte=f"Mà d'obra tècnica OT {ot.codi} ({ot.titol})",
+                quantitat=hores_fact,
+                preu_unitari=preu_hora,
+                tipus_iva=iva_ma_obra,
+                origen="MA_OBRA",
+            )
+
+        # SECCIÓ B: Materials del Picking (línia per línia, sense descartar línies sense pick-in!)
+        pres_by_art_id, pres_by_ref, pres_by_nom = _indexar_materials_pressupost(pres_linies)
+        matched_pres_mat_indices: set[int] = set()
+        afegit_material = False
+
+        for lp, art in pk_pairs:
+            q_prev = _q3(lp.quantitat_prevista or 0)
+            q_in = _q3(lp.quantitat_carregada_pick_in or 0)
+            q_out = _q3(lp.quantitat_retornada_pick_out or 0)
+
+            pres_match = _trobar_linia_pressupost_article(
+                art,
+                pres_linies,
+                pres_by_art_id,
+                pres_by_ref,
+                pres_by_nom,
+                matched_pres_mat_indices,
+            )
+
+            # Si hi ha pick_in > 0, facturem el consum net real (pick_in - pick_out).
+            # Si no s'ha fet pick_in ni pick_out en aquesta línia, mantenim quantitat_prevista
+            # perquè un picking parcial d'altres articles mai no esborri aquesta línia!
+            if q_in > Decimal("0.000"):
+                q_fact = max(Decimal("0.000"), _q3(q_in - q_out))
+            elif q_out > Decimal("0.000"):
+                q_fact = Decimal("0.000")
+            else:
+                q_fact = q_prev
+
+            if q_fact <= Decimal("0.000"):
+                continue
+
+            pvp_cat = _q2(art.preu_venda or 0)
+            pvp_pres = (
+                _preu_unitari_net_linia_pressupost(pres_match)
+                if pres_match is not None
+                else Decimal("0.00")
+            )
+            pvp_eff = pvp_pres if pvp_pres > Decimal("0.00") else pvp_cat
+            iva_eff = (
+                _tipus_iva_linia_pressupost(pres_match)
+                if pres_match is not None
+                else Decimal("21.00")
+            )
+
+            origen_lbl = (
+                " [Furgoneta]"
+                if str(getattr(lp, "origen_estoc", "NAU") or "NAU").upper() == "FURGONETA"
+                else ""
+            )
+            _afegir_linia(
+                concepte=f"Material {art.nom}{origen_lbl} (OT {ot.codi})",
+                quantitat=q_fact,
+                preu_unitari=pvp_eff,
+                tipus_iva=iva_eff,
+                origen="MATERIAL_PICKING",
+                article_id=str(art.id),
+            )
+            afegit_material = True
+
+        # SECCIÓ C: Partides del Pressupost vinculat no representades al picking
+        # (Materials sense article de catàleg, Desplaçament, Maquinària, Eines facturables, Altres)
+        te_desplacament_pressupost = False
+        pres_km_total = Decimal("0.000")
+        if isinstance(pres_detalls, dict):
+            raw_slots = [
+                sl for sl in (pres_detalls.get("vehicles_desplacaments") or []) if isinstance(sl, dict)
+            ]
+            if raw_slots:
+                for sl in raw_slots:
+                    if sl.get("km") is not None:
+                        pres_km_total += max(Decimal("0.000"), _q3(sl["km"]))
+            elif pres_detalls.get("desplacament_km") is not None:
+                pres_km_total = max(Decimal("0.000"), _q3(pres_detalls["desplacament_km"]))
+
+        for idx_pl, pl in enumerate(pres_linies):
+            if _es_linia_pressupost_ma_obra(pl):
+                continue
+            concepte_pl = str(pl.get("concepte") or "").strip()
+            if not concepte_pl:
+                continue
+            qt_pl = _q3(pl.get("quantitat") or 1)
+            pvp_net_pl = _preu_unitari_net_linia_pressupost(pl)
+            iva_pl = _tipus_iva_linia_pressupost(pl)
+            tipus_pl = str(pl.get("tipus_linia") or "ALTRE").strip().upper()
+
+            if _es_linia_pressupost_material(pl):
+                if idx_pl in matched_pres_mat_indices:
+                    continue
+                if qt_pl > 0 and pvp_net_pl > 0:
+                    _afegir_linia(
+                        concepte=f"{concepte_pl} (OT {ot.codi})",
+                        quantitat=qt_pl,
+                        preu_unitari=pvp_net_pl,
+                        tipus_iva=iva_pl,
+                        origen="MATERIAL_PRESSUPOST",
+                        article_id=str(pl["article_id"]) if pl.get("article_id") else None,
+                    )
+                    afegit_material = True
+                continue
+
+            if tipus_pl == "DESPLACAMENT":
+                te_desplacament_pressupost = True
+                if qt_pl > 0 and pvp_net_pl > 0:
+                    qt_desp = qt_pl
+                    # Si la línia era estrictament per km i s'han conciliat km reals diferents, actualitzem km
+                    if (
+                        km_imputats_val > 0
+                        and pres_km_total > Decimal("1.000")
+                        and qt_pl == pres_km_total
+                        and Decimal(km_imputats_val) != pres_km_total
+                    ):
+                        qt_desp = _q3(km_imputats_val)
+                    _afegir_linia(
+                        concepte=f"{concepte_pl} (OT {ot.codi})",
+                        quantitat=qt_desp,
+                        preu_unitari=pvp_net_pl,
+                        tipus_iva=iva_pl,
+                        origen="DESPLACAMENT",
+                    )
+            elif tipus_pl == "MAQUINARIA":
+                if qt_pl > 0 and pvp_net_pl > 0:
+                    _afegir_linia(
+                        concepte=f"{concepte_pl} (OT {ot.codi})",
+                        quantitat=qt_pl,
+                        preu_unitari=pvp_net_pl,
+                        tipus_iva=iva_pl,
+                        origen="MAQUINARIA",
+                    )
+            elif tipus_pl == "EINA":
+                if qt_pl > 0 and pvp_net_pl > 0:
+                    _afegir_linia(
+                        concepte=f"{concepte_pl} (OT {ot.codi})",
+                        quantitat=qt_pl,
+                        preu_unitari=pvp_net_pl,
+                        tipus_iva=iva_pl,
+                        origen="EINA",
+                    )
+            else:
+                if qt_pl > 0 and pvp_net_pl > 0:
+                    _afegir_linia(
+                        concepte=f"{concepte_pl} (OT {ot.codi})",
+                        quantitat=qt_pl,
+                        preu_unitari=pvp_net_pl,
+                        tipus_iva=iva_pl,
+                        origen="PARTIDA_PRESSUPOST",
+                    )
+
+        # SECCIÓ D: Fallback materials OT si no hi havia línies de picking ni de pressupost
+        pvp_mat_ot = _q2(ot.pvp_materials_aplicat or 0)
+        if not afegit_material and pvp_mat_ot > Decimal("0.00"):
+            _afegir_linia(
+                concepte=f"Subministrament i materials OT {ot.codi}",
+                quantitat=Decimal("1.000"),
+                preu_unitari=pvp_mat_ot,
+                tipus_iva=Decimal("21.00"),
+                origen="MATERIAL_PICKING",
+            )
+
+        # SECCIÓ E: Desplaçament / Kilometratge vehicle si no venia ja d'una línia DESPLACAMENT del pressupost
+        if not te_desplacament_pressupost and km_imputats_val > 0 and veh_preu_km > Decimal("0.00"):
+            veh_lbl = f" ({veh_obj.matricula})" if veh_obj and veh_obj.matricula else ""
+            _afegir_linia(
+                concepte=f"Desplaçament vehicle{veh_lbl} — OT {ot.codi}",
+                quantitat=_q3(km_imputats_val),
+                preu_unitari=_q2(veh_preu_km),
+                tipus_iva=Decimal("21.00"),
+                origen="DESPLACAMENT",
+            )
+
+        # SECCIÓ F: Descompte comercial global del pressupost (aplicat abans dels tiquets extra de camp)
+        dto_global_pct = (
+            min(
+                Decimal("100.00"),
+                max(Decimal("0.00"), Decimal(str(pres_detalls.get("descompte_global_pct") or 0))),
+            )
+            if isinstance(pres_detalls, dict)
+            else Decimal("0.00")
+        )
+        if dto_global_pct > Decimal("0.00") and linies:
+            bases_per_iva: Dict[Decimal, Decimal] = {}
+            for l_it in linies:
+                iva_k = _q2(l_it["tipus_iva"])
+                bases_per_iva[iva_k] = bases_per_iva.get(iva_k, Decimal("0.00")) + _q2(l_it["subtotal"])
+            for iva_k in sorted(bases_per_iva.keys()):
+                dto_imp = _q2(bases_per_iva[iva_k] * (dto_global_pct / Decimal("100.00")))
+                if dto_imp > Decimal("0.00"):
+                    _afegir_linia(
+                        concepte=f"Descompte comercial pressupost (-{float(dto_global_pct):g}%) OT {ot.codi}",
+                        quantitat=Decimal("1.000"),
+                        preu_unitari=-dto_imp,
+                        tipus_iva=iva_k,
+                        origen="DESCOMPTE_GLOBAL",
+                    )
+
+        # SECCIÓ G: Tiquets de despesa de camp vinculats a l'OT (excloent rebutjats)
+        if incloure_tiquets_camp:
+            if "tiquets_rows" in pl_data:
+                tiq_rows = [
+                    t
+                    for t in pl_data["tiquets_rows"]
+                    if str(getattr(t, "estat_aprovacio", "") or "").upper() != "REBUTJAT"
+                ]
+            else:
+                tiq_rows = list(
+                    (
+                        await db.execute(
+                            select(TiquetDespesa).where(
+                                TiquetDespesa.empresa_id == empresa_id,
+                                TiquetDespesa.ordre_treball_id == ot.id,
+                                TiquetDespesa.estat_aprovacio != "REBUTJAT",
+                            )
+                        )
+                    )
+                    .scalars()
+                    .all()
+                )
+            for tiq in tiq_rows:
+                imp_tiq = _q2(tiq.base_imposable or tiq.import_total or 0)
+                if imp_tiq > Decimal("0.00"):
+                    iva_tiq_raw = getattr(tiq, "iva_pct", None)
+                    iva_tiq = (
+                        _q2(iva_tiq_raw)
+                        if (iva_tiq_raw is not None and tiq.base_imposable is not None and Decimal(str(tiq.base_imposable)) > 0)
+                        else Decimal("21.00")
+                    )
+                    _afegir_linia(
+                        concepte=f"Despesa camp ({tiq.categoria}) OT {ot.codi}",
+                        quantitat=Decimal("1.000"),
+                        preu_unitari=imp_tiq,
+                        tipus_iva=iva_tiq,
+                        origen="TIQUET_CAMP",
+                    )
+
+        # SECCIÓ H: Fallback absolut si no hi ha cap línia generada
+        if not linies:
+            pressup = _q2(ot.import_pressupostat_net or ot.import_pressupostat or 0)
+            _afegir_linia(
+                concepte=f"Treballs tècnics executats OT {ot.codi} ({ot.titol})",
+                quantitat=Decimal("1.000"),
+                preu_unitari=pressup,
+                tipus_iva=Decimal("21.00"),
+                origen="FALLBACK",
+            )
+
+        # Càlcul exacte de totals (idèntic a public.crear_prefactura_ot_autoritzada)
+        base_total = Decimal("0.00")
+        iva_total = Decimal("0.00")
+        for l_it in linies:
+            sub_l = _q2(Decimal(str(l_it["quantitat"])) * Decimal(str(l_it["preu_venda_unitari"])))
+            iva_l = _q2(sub_l * (Decimal(str(l_it["tipus_iva"])) / Decimal("100.00")))
+            base_total += sub_l
+            iva_total += iva_l
+        liquid_total = _q2(base_total + iva_total)
+
+        return {
+            "linies": linies,
+            "base_imposable": float(_q2(base_total)),
+            "quota_iva": float(_q2(iva_total)),
+            "liquid_exigible": float(liquid_total),
+            "te_pressupost_vinculat": bool(pres_detalls),
         }
 
     @classmethod

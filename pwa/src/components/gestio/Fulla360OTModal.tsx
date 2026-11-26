@@ -86,10 +86,30 @@ interface MaterialConciliacio {
   quantitat_retornada_pick_out: number;
   quantitat_mermada: number;
   consum_real: number;
+  quantitat_facturable?: number;
   preu_venda_unitari: number;
+  tipus_iva?: number;
   subtotal_pvp: number;
   preu_cost_pmp?: number | null;
   cost_real_pmp?: number | null;
+}
+
+interface PropostaPrefacturaLinia {
+  concepte: string;
+  quantitat: number;
+  preu_venda_unitari: number;
+  tipus_iva: number;
+  article_id?: string | null;
+  subtotal: number;
+  origen: string;
+}
+
+interface PropostaPrefactura {
+  linies: PropostaPrefacturaLinia[];
+  base_imposable: number;
+  quota_iva: number;
+  liquid_exigible: number;
+  te_pressupost_vinculat?: boolean;
 }
 
 interface ConciliacioCompleta {
@@ -165,9 +185,19 @@ interface ConciliacioCompleta {
     detall_merma?: string | null;
     linies: MaterialConciliacio[];
     linies_pendents_facturar?: Array<{
+      tipus_linia?: string;
       concepte: string;
       quantitat: number;
       preu_unitari: number;
+      tipus_iva?: number;
+      subtotal: number;
+    }>;
+    partides_pressupost_addicionals?: Array<{
+      tipus_linia: string;
+      concepte: string;
+      quantitat: number;
+      preu_unitari: number;
+      tipus_iva: number;
       subtotal: number;
     }>;
   };
@@ -210,6 +240,8 @@ interface ConciliacioCompleta {
     numero: string;
     estat: string;
     total: number;
+    base_imposable?: number;
+    descompte_global_pct?: number;
   } | null;
   factura?: {
     id: string;
@@ -220,6 +252,7 @@ interface ConciliacioCompleta {
     quota_iva: number;
     liquid_exigible: number;
   } | null;
+  proposta_prefactura?: PropostaPrefactura | null;
   resum_comercial: {
     import_pressupostat: number;
     hores_previstes: number;
@@ -229,9 +262,14 @@ interface ConciliacioCompleta {
     valor_ma_obra_previst_pvp?: number;
     valor_ma_obra_pvp: number;
     valor_materials_pvp: number;
+    valor_desplacament_pvp?: number;
+    valor_partides_pressupost_pvp?: number;
     total_tiquets_camp: number;
     total_previst_pvp?: number;
     total_valorat_pvp: number;
+    total_prefactura_base?: number;
+    total_prefactura_iva?: number;
+    total_prefactura_liquid?: number;
   };
   resum_intern?: {
     cost_materials_previst_pmp?: number | null;
@@ -562,6 +600,7 @@ export function Fulla360OTModal({
   const [lightboxUrl, setLightboxUrl] = useState<{ url: string; titol: string } | null>(null);
   const [checklist, setChecklist] = useState<Record<string, boolean>>({});
   const [horesConcEdit, setHoresConcEdit] = useState<string>("0");
+  const [kmConcEdit, setKmConcEdit] = useState<string>("0");
   const [notesValidacio, setNotesValidacio] = useState<string>("");
   const [ajustosPicking, setAjustosPicking] = useState<Record<string, AjustPickingDraft>>({});
   const [validant, setValidant] = useState(false);
@@ -595,6 +634,7 @@ export function Fulla360OTModal({
       setConc(data);
       setChecklist(data.validacio?.checklist_conciliacio || {});
       setHoresConcEdit(String(data.temps_i_gps?.hores_reals ?? 0));
+      setKmConcEdit(String(data.vehicle?.km_imputats ?? data.resum_comercial?.km_imputats ?? 0));
       setNotesValidacio(data.validacio?.notes_validacio_tecnica || "");
       const drafts: Record<string, AjustPickingDraft> = {};
       for (const lin of data.materials?.linies || []) {
@@ -1723,6 +1763,7 @@ export function Fulla360OTModal({
     setActionSuccess(null);
     try {
       const horesNum = parseFloat(horesConcEdit);
+      const kmNum = parseInt(kmConcEdit, 10);
       const ajustosPayload = (conc?.materials?.linies || [])
         .map((lin) => {
           const d = ajustosPicking[lin.linia_id];
@@ -1750,6 +1791,7 @@ export function Fulla360OTModal({
           method: "PUT",
           body: JSON.stringify({
             hores_imputades_facturables: Number.isNaN(horesNum) ? undefined : horesNum,
+            km_imputats: !Number.isNaN(kmNum) && kmNum >= 0 ? kmNum : undefined,
             ajustos_picking: ajustosPayload.length > 0 ? ajustosPayload : undefined,
             checklist_conciliacio: checklist,
             notes_validacio_tecnica: notesValidacio.trim() || undefined,
@@ -1757,6 +1799,11 @@ export function Fulla360OTModal({
         }
       );
       setConc(updated);
+      setHoresConcEdit(String(updated.temps_i_gps?.hores_reals ?? 0));
+      setKmConcEdit(String(updated.vehicle?.km_imputats ?? updated.resum_comercial?.km_imputats ?? 0));
+      if (updated.resum_comercial?.km_imputats != null) {
+        setKmImputatsInput(String(updated.resum_comercial.km_imputats));
+      }
       setActionSuccess(
         "Conciliació tècnica validada correctament. La tasca ja està llesta per passar a pre-facturació."
       );
@@ -2894,11 +2941,13 @@ export function Fulla360OTModal({
                             <tbody className="divide-y divide-outline-variant/15">
                               {materialsConc.map((lin) => {
                                 const d = ajustosPicking[lin.linia_id];
-                                const qIn = d ? parseFloat(d.carregat) : lin.quantitat_carregada_pick_in;
-                                const qOut = d ? parseFloat(d.retornat) : lin.quantitat_retornada_pick_out;
-                                const qMermaVal = d ? parseFloat(d.merma) : lin.quantitat_mermada;
-                                const cons = Math.max(0, (Number.isNaN(qIn) ? 0 : qIn) - (Number.isNaN(qOut) ? 0 : qOut));
-                                const subtotalPvp = cons * Number(lin.preu_venda_unitari || 0);
+                                const qInRaw = d ? parseFloat(d.carregat) : lin.quantitat_carregada_pick_in;
+                                const qOutRaw = d ? parseFloat(d.retornat) : lin.quantitat_retornada_pick_out;
+                                const qIn = Number.isNaN(qInRaw) ? 0 : qInRaw;
+                                const qOut = Number.isNaN(qOutRaw) ? 0 : qOutRaw;
+                                const cons = Math.max(0, qIn - qOut);
+                                const qBill = qIn > 0 ? cons : qOut > 0 ? 0 : Number(lin.quantitat_prevista || 0);
+                                const subtotalPvp = qBill * Number(lin.preu_venda_unitari || 0);
 
                                 return (
                                   <tr key={lin.linia_id}>
@@ -2967,7 +3016,12 @@ export function Fulla360OTModal({
                                       )}
                                     </td>
                                     <td className="py-1.5 px-2 text-right font-mono font-bold text-primary">
-                                      {cons.toFixed(2)}
+                                      <span>{qBill.toFixed(2)}</span>
+                                      {qIn === 0 && qBill > 0 && (
+                                        <span className="block text-[9px] font-normal text-on-surface-variant">
+                                          (prev.)
+                                        </span>
+                                      )}
                                     </td>
                                     <td className="py-1.5 px-2 text-right font-mono text-on-surface-variant">
                                       {Number(lin.preu_venda_unitari || 0).toFixed(2)} €
@@ -3091,7 +3145,7 @@ export function Fulla360OTModal({
                             })}
                           </div>
 
-                          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                          <div className="grid grid-cols-1 sm:grid-cols-4 gap-2.5">
                             <div>
                               <label className="block text-[10px] font-semibold text-on-surface-variant mb-1">
                                 Hores Facturables Conciliades
@@ -3105,6 +3159,55 @@ export function Fulla360OTModal({
                                 onChange={(e) => setHoresConcEdit(e.target.value)}
                                 className="w-full px-2.5 py-1.5 text-xs font-mono font-bold rounded-lg border border-outline-variant bg-surface-container-lowest disabled:opacity-50"
                               />
+                              {disclaimer.pot_validar && (
+                                <div className="flex flex-wrap gap-1 mt-1">
+                                  {Number(conc?.temps_i_gps?.hores_previstes || 0) > 0 && (
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        setHoresConcEdit(
+                                          String(Number(conc?.temps_i_gps?.hores_previstes || 0))
+                                        )
+                                      }
+                                      className="text-[10px] px-1.5 py-0.5 rounded bg-primary/10 text-primary font-semibold hover:bg-primary/20 cursor-pointer"
+                                    >
+                                      Pressup. ({Number(conc?.temps_i_gps?.hores_previstes || 0).toFixed(2)} h)
+                                    </button>
+                                  )}
+                                  {Number(conc?.temps_i_gps?.hores_reals || 0) > 0 && (
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        setHoresConcEdit(
+                                          String(Number(conc?.temps_i_gps?.hores_reals || 0))
+                                        )
+                                      }
+                                      className="text-[10px] px-1.5 py-0.5 rounded bg-surface-container-high text-on-surface-variant font-semibold hover:bg-surface-container cursor-pointer"
+                                    >
+                                      Reals ({Number(conc?.temps_i_gps?.hores_reals || 0).toFixed(2)} h)
+                                    </button>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                            <div>
+                              <label className="block text-[10px] font-semibold text-on-surface-variant mb-1">
+                                Km Facturables (Vehicle)
+                              </label>
+                              <input
+                                type="number"
+                                step="1"
+                                min="0"
+                                disabled={!disclaimer.pot_validar}
+                                value={kmConcEdit}
+                                onChange={(e) => setKmConcEdit(e.target.value)}
+                                className="w-full px-2.5 py-1.5 text-xs font-mono font-bold rounded-lg border border-outline-variant bg-surface-container-lowest disabled:opacity-50"
+                              />
+                              {conc?.vehicle?.preu_km_facturable != null && (
+                                <span className="block text-[10px] text-on-surface-variant mt-1 font-mono">
+                                  {Number(conc.vehicle.preu_km_facturable).toFixed(2)} €/km
+                                </span>
+                              )}
                             </div>
                             <div className="sm:col-span-2">
                               <label className="block text-[10px] font-semibold text-on-surface-variant mb-1">
@@ -3120,6 +3223,74 @@ export function Fulla360OTModal({
                               />
                             </div>
                           </div>
+
+                          {/* Previsualització exacta de les línies que importarà la Pre-factura */}
+                          {conc?.proposta_prefactura && conc.proposta_prefactura.linies.length > 0 && (
+                            <div className="rounded-xl border border-outline-variant/35 bg-surface-container-lowest overflow-hidden">
+                              <div className="px-3 py-2 bg-surface-container-low/80 border-b border-outline-variant/25 flex items-center justify-between text-xs">
+                                <span className="font-bold text-primary flex items-center gap-1.5">
+                                  <Receipt className="w-3.5 h-3.5 text-primary" />
+                                  <span>
+                                    Desglossament de la Pre-factura a Generar ({conc.proposta_prefactura.linies.length} partides)
+                                  </span>
+                                </span>
+                                <span className="font-mono font-extrabold text-primary">
+                                  {Number(conc.proposta_prefactura.liquid_exigible).toFixed(2)} € (IVA incl.)
+                                </span>
+                              </div>
+                              <div className="overflow-x-auto">
+                                <table className="w-full text-left text-[11px]">
+                                  <thead className="bg-surface-container-low/40 text-on-surface-variant border-b border-outline-variant/20">
+                                    <tr>
+                                      <th className="py-1.5 px-3 font-semibold">Partida</th>
+                                      <th className="py-1.5 px-2 font-semibold">Origen</th>
+                                      <th className="py-1.5 px-2 text-right font-semibold">Quant.</th>
+                                      <th className="py-1.5 px-2 text-right font-semibold">Preu u.</th>
+                                      <th className="py-1.5 px-2 text-right font-semibold">IVA</th>
+                                      <th className="py-1.5 px-3 text-right font-semibold">Subtotal</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody className="divide-y divide-outline-variant/15">
+                                    {conc.proposta_prefactura.linies.map((pl, idx) => (
+                                      <tr key={`${pl.origen}-${idx}`}>
+                                        <td className="py-1.5 px-3 font-medium text-on-surface">
+                                          {pl.concepte}
+                                        </td>
+                                        <td className="py-1.5 px-2">
+                                          <span className="text-[9px] font-mono font-bold px-1.5 py-0.5 rounded bg-surface-container-high text-on-surface-variant">
+                                            {pl.origen.replace(/_/g, " ")}
+                                          </span>
+                                        </td>
+                                        <td className="py-1.5 px-2 text-right font-mono">
+                                          {Number(pl.quantitat).toFixed(2)}
+                                        </td>
+                                        <td className="py-1.5 px-2 text-right font-mono">
+                                          {Number(pl.preu_venda_unitari).toFixed(2)} €
+                                        </td>
+                                        <td className="py-1.5 px-2 text-right font-mono text-on-surface-variant">
+                                          {Number(pl.tipus_iva).toFixed(0)}%
+                                        </td>
+                                        <td className="py-1.5 px-3 text-right font-mono font-bold text-primary">
+                                          {Number(pl.subtotal).toFixed(2)} €
+                                        </td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                  <tfoot className="bg-surface-container-low/60 border-t border-outline-variant/30 font-mono text-[11px]">
+                                    <tr>
+                                      <td colSpan={5} className="py-1.5 px-3 text-right text-on-surface-variant">
+                                        Base imposable: {Number(conc.proposta_prefactura.base_imposable).toFixed(2)} € · IVA:{" "}
+                                        {Number(conc.proposta_prefactura.quota_iva).toFixed(2)} €
+                                      </td>
+                                      <td className="py-1.5 px-3 text-right font-black text-primary">
+                                        {Number(conc.proposta_prefactura.liquid_exigible).toFixed(2)} €
+                                      </td>
+                                    </tr>
+                                  </tfoot>
+                                </table>
+                              </div>
+                            </div>
+                          )}
 
                           {actionError && (
                             <div className="p-2.5 rounded-lg bg-error-container/25 border border-error text-error text-xs font-semibold">
@@ -3533,21 +3704,41 @@ export function Fulla360OTModal({
                       <div className="p-2.5 rounded-lg bg-white/10">
                         <span className="text-[10px] opacity-80 block">Vehicle i Desplaçament</span>
                         <span className="font-mono font-bold text-xs truncate block">
-                          {selectedVehicleObj?.matricula || "Sense vehicle"} · {economiaLive.km} km
+                          {selectedVehicleObj?.matricula || "Sense vehicle"} · {conc?.resum_comercial?.km_imputats ?? economiaLive.km} km
                         </span>
+                        {isExistingOT && Number(conc?.resum_comercial?.valor_desplacament_pvp || 0) > 0 && (
+                          <span className="block text-[10px] font-mono opacity-85">
+                            Desplaç.: {Number(conc?.resum_comercial?.valor_desplacament_pvp).toFixed(2)} €
+                          </span>
+                        )}
                       </div>
 
                       <div className="p-2.5 rounded-lg bg-white/20">
                         <span className="text-[10px] opacity-90 block font-semibold">
-                          {importPressupostatNet > 0 ? "Base Pressupostada" : "Total Valorat (Base)"}
+                          {isExistingOT && conc?.proposta_prefactura
+                            ? "Pre-factura Conciliada (IVA incl.)"
+                            : importPressupostatNet > 0
+                              ? "Base Pressupostada"
+                              : "Total Valorat (Base)"}
                         </span>
                         <span className="font-mono font-black text-base">
-                          {economiaLive.baseIngressos.toFixed(2)} €
+                          {isExistingOT && conc?.proposta_prefactura
+                            ? `${Number(conc.proposta_prefactura.liquid_exigible).toFixed(2)} €`
+                            : `${economiaLive.baseIngressos.toFixed(2)} €`}
                         </span>
-                        {importPressupostatBrut > 0 && (
+                        {isExistingOT && conc?.proposta_prefactura ? (
                           <span className="block text-[10px] font-mono opacity-85">
-                            IVA incl.: {importPressupostatBrut.toFixed(2)} €
+                            Base: {Number(conc.proposta_prefactura.base_imposable).toFixed(2)} €
+                            {importPressupostatBrut > 0
+                              ? ` · Pressup.: ${importPressupostatBrut.toFixed(2)} €`
+                              : ""}
                           </span>
+                        ) : (
+                          importPressupostatBrut > 0 && (
+                            <span className="block text-[10px] font-mono opacity-85">
+                              IVA incl.: {importPressupostatBrut.toFixed(2)} €
+                            </span>
+                          )
                         )}
                       </div>
                     </div>

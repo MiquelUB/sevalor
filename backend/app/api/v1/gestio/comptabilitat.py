@@ -13,14 +13,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.db import get_db_with_tenant_context, set_tenant_context
 from app.core.security import get_current_user_claims, require_financial_access, require_roles
 from app.models.models import (
-    Article,
     Client,
     DespesaComptable,
     Empresa,
     FacturaCapcalera,
     FacturaLinia,
-    FullaPicking,
-    LiniaPicking,
     OrdreTreball,
     OrdreTreballTramTemps,
 )
@@ -51,13 +48,13 @@ from app.schemas.comptabilitat import (
     TiquetDespesaResponseDTO,
     WIPControlResponseDTO,
 )
-from app.services.barema_service import resoldre_preu_hora_control_panel
 from app.services.economic_suite_service import (
     ESTATS_OT_PENDENTS_PREFACTURACIO,
     EconomicSuiteService,
 )
 from app.services.magatzem_comptabilitat_service import calcular_cost_i_marge_analitic_ot
 from app.services.outbox_aeat import despatxar_outbox_empresa, registrar_enviament_outbox
+from app.services.reconciliacio_ot_service import ReconciliacioOTService
 from app.services.sovereign_storage import SovereignStorageGateway
 from app.services.verifactu import (
     format_num_serie,
@@ -870,89 +867,23 @@ async def convertir_wip_a_prefactura(
     if not ot.client_id:
         raise HTTPException(status_code=400, detail="L'OT no té un client associat.")
 
-    hores = Decimal(str(ot.hores_imputades_facturables or 0))
-    preu_hora_real = await resoldre_preu_hora_control_panel(db, empresa_id, ot)
-    pvp_h = Decimal(str(preu_hora_real))
-    pvp_mat = Decimal(str(ot.pvp_materials_aplicat or 0))
-    pressup = Decimal(str(ot.import_pressupostat_net or ot.import_pressupostat or 0))
-
-    linies: List[FacturaLiniaCreateDTO] = []
-    if hores > 0:
-        linies.append(
-            FacturaLiniaCreateDTO(
-                concepte=f"Mà d'obra tècnica OT {ot.codi} ({ot.titol})",
-                obra_id=ot.id,
-                quantitat=hores,
-                preu_venda_unitari=pvp_h,
-                tipus_iva_pct=Decimal("21.00"),
-            )
-        )
-
-    picking_mats = await EconomicSuiteService.obtenir_materials_consumits_ots(
-        db, empresa_id, [ot.id]
+    proposta = await ReconciliacioOTService.construir_proposta_prefactura_ot(
+        db=db,
+        empresa_id=empresa_id,
+        ot=ot,
+        incloure_tiquets_camp=True,
     )
-    ot_picking_mats = picking_mats.get(ot.id, [])
-    if ot_picking_mats:
-        for mat in ot_picking_mats:
-            linies.append(
-                FacturaLiniaCreateDTO(
-                    concepte=f"Material {mat['nom']} (OT {ot.codi})",
-                    obra_id=ot.id,
-                    article_id=mat["article_id"],
-                    quantitat=mat["quantitat"],
-                    preu_venda_unitari=mat["preu_venda"],
-                    tipus_iva_pct=Decimal("21.00"),
-                )
-            )
-    else:
-        pk_prev_rows = (
-            await db.execute(
-                select(LiniaPicking, Article)
-                .join(FullaPicking, LiniaPicking.picking_id == FullaPicking.id)
-                .join(Article, LiniaPicking.article_id == Article.id)
-                .where(
-                    FullaPicking.empresa_id == empresa_id,
-                    FullaPicking.ordre_treball_id == ot.id,
-                    LiniaPicking.empresa_id == empresa_id,
-                )
-            )
-        ).all()
-        if pk_prev_rows:
-            for lp, art in pk_prev_rows:
-                q_prev = Decimal(str(lp.quantitat_prevista or 0))
-                if q_prev <= 0:
-                    continue
-                linies.append(
-                    FacturaLiniaCreateDTO(
-                        concepte=f"Material {art.nom} (OT {ot.codi})",
-                        obra_id=ot.id,
-                        article_id=art.id,
-                        quantitat=q_prev,
-                        preu_venda_unitari=Decimal(str(art.preu_venda or 0)),
-                        tipus_iva_pct=Decimal("21.00"),
-                    )
-                )
-        elif pvp_mat > 0:
-            linies.append(
-                FacturaLiniaCreateDTO(
-                    concepte=f"Subministrament i materials OT {ot.codi}",
-                    obra_id=ot.id,
-                    quantitat=Decimal("1.00"),
-                    preu_venda_unitari=pvp_mat,
-                    tipus_iva_pct=Decimal("21.00"),
-                )
-            )
-
-    if not linies:
-        linies.append(
-            FacturaLiniaCreateDTO(
-                concepte=f"Treballs tècnics executats OT {ot.codi} ({ot.titol})",
-                obra_id=ot.id,
-                quantitat=Decimal("1.00"),
-                preu_venda_unitari=pressup if pressup > 0 else Decimal("0.00"),
-                tipus_iva_pct=Decimal("21.00"),
-            )
+    linies: List[FacturaLiniaCreateDTO] = [
+        FacturaLiniaCreateDTO(
+            concepte=str(item["concepte"])[:200],
+            obra_id=ot.id,
+            article_id=uuid.UUID(str(item["article_id"])) if item.get("article_id") else None,
+            quantitat=Decimal(str(item["quantitat"])),
+            preu_venda_unitari=Decimal(str(item["preu_venda_unitari"])),
+            tipus_iva_pct=Decimal(str(item.get("tipus_iva", 21.0))),
         )
+        for item in proposta["linies"]
+    ]
 
     avui = date.today()
     dto_pre = FacturaEmissioCreateDTO(
