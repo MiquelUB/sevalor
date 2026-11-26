@@ -2,9 +2,11 @@ import collections
 import json
 import logging
 import uuid
-from datetime import date, datetime, timezone
-from decimal import Decimal
+from datetime import date, datetime, timedelta, timezone
+from datetime import time as dt_time
+from decimal import ROUND_HALF_UP, Decimal
 from typing import Any, Dict, List, Optional
+from zoneinfo import ZoneInfo
 
 import filetype  # type: ignore[import-untyped]
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -27,6 +29,7 @@ from app.models.models import (
     OrdreTreballOperari,
     OrdreTreballTramTemps,
     PlanolBase,
+    SlotJornada,
     TiquetDespesa,
     Usuari,
     Vehicle,
@@ -38,7 +41,10 @@ from app.services.barema_service import (
 )
 from app.services.flota_service import validar_permis_conduir
 from app.services.geocoding_service import geocodificar_adreca
-from app.services.picking_stock_service import actualitzar_linia_picking_amb_estoc
+from app.services.picking_stock_service import (
+    actualitzar_linia_picking_amb_estoc,
+    recalcular_totals_materials_ot,
+)
 from app.services.reconciliacio_ot_service import (
     ESTATS_OT_CONCLOSES,
     ReconciliacioOTService,
@@ -68,6 +74,7 @@ class LiniaPickingItem(BaseModel):
     consum_real: float = 0.0
     origen_estoc: str = "NAU"
     unitat_mesura: Optional[str] = "UNITAT"
+    preu_venda_unitari: float = 0.0
     estoc_disponible: Optional[float] = 0.0
     magatzem_id: Optional[uuid.UUID] = None
     model_config = ConfigDict(from_attributes=True)
@@ -103,8 +110,13 @@ class FeinaCreate(BaseModel):
     descripcio: Optional[str] = None
     estat: str = Field("PENDENT", max_length=30)
     data_planificacio: date
+    hores_previstes: Optional[float] = Field(None, ge=0.0)
     hora_inici_prevista: Optional[datetime] = None
     hora_fi_prevista: Optional[datetime] = None
+    preu_venda_hora_aplicat: Optional[float] = Field(None, ge=0.0)
+    km_imputats: Optional[int] = Field(0, ge=0)
+    import_pressupostat: Optional[float] = Field(None, ge=0.0)
+    import_pressupostat_net: Optional[float] = Field(None, ge=0.0)
     cap_de_colla_id: Optional[uuid.UUID] = None
     operaris_ids: Optional[List[uuid.UUID]] = None
     vehicle_id: Optional[uuid.UUID] = None
@@ -145,6 +157,8 @@ class FeinaResponse(FeinaCreate):
     longitud: Optional[float] = None
     client_nom: Optional[str] = None
     cap_de_colla_nom: Optional[str] = None
+    vehicle_matricula: Optional[str] = None
+    vehicle_nom: Optional[str] = None
     planol_titol: Optional[str] = None
     planol_codi: Optional[str] = None
     hora_inici_real: Optional[datetime] = None
@@ -152,6 +166,10 @@ class FeinaResponse(FeinaCreate):
     hores_previstes: float = 0.0
     hores_imputades_facturables: Optional[float] = 0.0
     preu_venda_hora_aplicat: Optional[float] = None
+    km_imputats: int = 0
+    import_pressupostat: float = 0.0
+    import_pressupostat_net: float = 0.0
+    pvp_materials_aplicat: float = 0.0
     factura_id: Optional[uuid.UUID] = None
     factura_serie: Optional[str] = None
     factura_numero: Optional[int] = None
@@ -185,8 +203,13 @@ class FeinaUpdate(BaseModel):
     adreca: Optional[str] = Field(None, max_length=255)
     estat: Optional[str] = Field(None, max_length=30)
     data_planificacio: Optional[date] = None
+    hores_previstes: Optional[float] = Field(None, ge=0.0)
     hora_inici_prevista: Optional[datetime] = None
     hora_fi_prevista: Optional[datetime] = None
+    preu_venda_hora_aplicat: Optional[float] = Field(None, ge=0.0)
+    km_imputats: Optional[int] = Field(None, ge=0)
+    import_pressupostat: Optional[float] = Field(None, ge=0.0)
+    import_pressupostat_net: Optional[float] = Field(None, ge=0.0)
     cap_de_colla_id: Optional[uuid.UUID] = None
     operaris_ids: Optional[List[uuid.UUID]] = None
     vehicle_id: Optional[uuid.UUID] = None
@@ -208,6 +231,9 @@ class FeinaUpdate(BaseModel):
         return v_clean
 
 
+_TZ_LOCAL_OBRA = ZoneInfo("Europe/Madrid")
+
+
 def _calcular_hores_previstes(ordre: OrdreTreball) -> float:
     """Calcula les hores previstes a partir de hora_inici_prevista i hora_fi_prevista."""
     if (
@@ -218,6 +244,70 @@ def _calcular_hores_previstes(ordre: OrdreTreball) -> float:
         diff_sec = (ordre.hora_fi_prevista - ordre.hora_inici_prevista).total_seconds()
         return round(diff_sec / 3600.0, 2)
     return 0.0
+
+
+async def _resoldre_franja_hores_previstes(
+    db: AsyncSession,
+    emp_uuid: uuid.UUID,
+    data_plan: date,
+    hores_previstes: Optional[float],
+    hora_inici: Optional[datetime],
+    hora_fi: Optional[datetime],
+) -> tuple[Optional[datetime], Optional[datetime]]:
+    """Deriva hora_inici_prevista i hora_fi_prevista si s'ha informat hores_previstes sense franja completa."""
+    if hora_inici is not None and hora_fi is not None and hora_fi > hora_inici:
+        return hora_inici, hora_fi
+    if hores_previstes is not None and hores_previstes > 0:
+        inici_eff = hora_inici
+        if inici_eff is None:
+            slot = (
+                await db.execute(
+                    select(SlotJornada)
+                    .where(SlotJornada.empresa_id == emp_uuid)
+                    .order_by(SlotJornada.created_at.asc())
+                )
+            ).scalars().first()
+            h_base = (
+                slot.hora_entrada_teorica
+                if slot and slot.hora_entrada_teorica
+                else dt_time(8, 0)
+            )
+            inici_eff = datetime.combine(data_plan, h_base, tzinfo=_TZ_LOCAL_OBRA)
+        fi_eff = inici_eff + timedelta(seconds=int(round(float(hores_previstes) * 3600.0)))
+        return inici_eff, fi_eff
+    return hora_inici, hora_fi
+
+
+async def _calcular_cost_flota_km(
+    db: AsyncSession,
+    emp_uuid: uuid.UUID,
+    vehicle_id: Optional[uuid.UUID],
+    km_imputats: int,
+) -> float:
+    """Calcula el cost de flota real per km a partir del vehicle assignat o tarifa estàndard 0,32 €/km."""
+    if km_imputats <= 0:
+        return 0.0
+    cost_km = Decimal("0.32")
+    if vehicle_id is not None:
+        veh = (
+            await db.execute(
+                select(Vehicle).where(Vehicle.id == vehicle_id, Vehicle.empresa_id == emp_uuid)
+            )
+        ).scalars().first()
+        if veh is not None:
+            c_km_raw = getattr(veh, "cost_per_km_eur", None)
+            if c_km_raw is not None:
+                c_v = Decimal(str(c_km_raw))
+                if c_v > Decimal("0"):
+                    cost_km = c_v
+    return float((Decimal(km_imputats) * cost_km).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+
+
+def _format_vehicle_nom(veh: Optional[Vehicle]) -> tuple[Optional[str], Optional[str]]:
+    if not veh:
+        return None, None
+    parts = [p for p in [veh.matricula, veh.marca, veh.model] if p and str(p).strip()]
+    return veh.matricula, " · ".join(parts) if parts else veh.matricula
 
 
 def _aplicar_veto_rol_feina(f_resp: FeinaResponse, claims: Optional[Dict[str, Any]]) -> FeinaResponse:
@@ -473,10 +563,11 @@ async def llistar_feines(
         raise HTTPException(status_code=401, detail="No identificat")
 
     stmt = (
-        select(OrdreTreball, Client, Usuari, PlanolBase)
+        select(OrdreTreball, Client, Usuari, PlanolBase, Vehicle)
         .outerjoin(Client, OrdreTreball.client_id == Client.id)
         .outerjoin(Usuari, OrdreTreball.cap_de_colla_id == Usuari.id)
         .outerjoin(PlanolBase, OrdreTreball.planol_id == PlanolBase.id)
+        .outerjoin(Vehicle, OrdreTreball.vehicle_id == Vehicle.id)
         .where(OrdreTreball.empresa_id == uuid.UUID(empresa_id))
     )
 
@@ -492,7 +583,7 @@ async def llistar_feines(
     rows = result.all()
 
     # Precarregar Fulles de picking, Eines i Operaris de Colla en batch per a totes les OTs retornades
-    ot_ids = [ordre.id for ordre, _, _, _ in rows]
+    ot_ids = [ordre.id for ordre, _, _, _, _ in rows]
     picking_by_ot: Dict[uuid.UUID, List[LiniaPickingItem]] = collections.defaultdict(list)
     eines_by_ot: Dict[uuid.UUID, List[EinaItem]] = collections.defaultdict(list)
     operaris_by_ot: Dict[uuid.UUID, List[OperariAssignatItem]] = collections.defaultdict(list)
@@ -527,6 +618,7 @@ async def llistar_feines(
                     consum_real=max(0.0, round(q_in - q_out, 3)),
                     origen_estoc=str(getattr(lp, "origen_estoc", "NAU") or "NAU"),
                     unitat_mesura=art.unitat_mesura or "UNITAT",
+                    preu_venda_unitari=float(art.preu_venda or 0.0),
                     estoc_disponible=0.0,
                     magatzem_id=getattr(lp, "magatzem_id", None),
                 )
@@ -592,7 +684,9 @@ async def llistar_feines(
     emp_uuid = uuid.UUID(empresa_id)
     factures_by_ot = await _carregar_resum_factures_ots(db, emp_uuid, ot_ids)
 
-    val_ids = list({ordre.validada_per_id for ordre, _, _, _ in rows if ordre.validada_per_id is not None})
+    val_ids = list(
+        {ordre.validada_per_id for ordre, _, _, _, _ in rows if ordre.validada_per_id is not None}
+    )
     validadors_map: Dict[uuid.UUID, str] = {}
     if val_ids:
         v_rows = (
@@ -607,7 +701,7 @@ async def llistar_feines(
 
     barema_empresa = await obtenir_barema_empresa(db, emp_uuid)
     feines = []
-    for ordre, client, operari, planol in rows:
+    for ordre, client, operari, planol, vehicle in rows:
         f_resp = FeinaResponse.model_validate(ordre)
         if ordre.id in factures_by_ot:
             f_ser, f_num, f_edoc = factures_by_ot[ordre.id]
@@ -619,6 +713,10 @@ async def llistar_feines(
         f_resp.signatura_present = bool(ordre.signatura_client_path)
         f_resp.desviacio_geovalla = bool(ordre.desviacio_geovalla)
         f_resp.hores_previstes = _calcular_hores_previstes(ordre)
+        f_resp.km_imputats = int(ordre.km_imputats or 0)
+        f_resp.import_pressupostat = float(ordre.import_pressupostat or 0.0)
+        f_resp.import_pressupostat_net = float(ordre.import_pressupostat_net or 0.0)
+        f_resp.pvp_materials_aplicat = float(ordre.pvp_materials_aplicat or 0.0)
         f_resp.preu_venda_hora_aplicat = await resoldre_preu_hora_control_panel(
             db,
             emp_uuid,
@@ -636,6 +734,8 @@ async def llistar_feines(
             f_resp.client_nom = client.rao_social
         if operari:
             f_resp.cap_de_colla_nom = f"{operari.nom} {operari.cognoms or ''}".strip()
+        if vehicle:
+            f_resp.vehicle_matricula, f_resp.vehicle_nom = _format_vehicle_nom(vehicle)
         if planol:
             f_resp.planol_titol = planol.titol
             f_resp.planol_codi = planol.codi_referencia
@@ -738,10 +838,24 @@ async def alta_feina(
 
     barema_empresa = await obtenir_barema_empresa(db, emp_uuid)
     preu_hora_inicial = (
-        float(barema_empresa["preu_hora_standard_eur"])
-        if barema_empresa is not None and barema_empresa.get("preu_hora_standard_eur") is not None
-        else 0.0
+        float(feina.preu_venda_hora_aplicat)
+        if feina.preu_venda_hora_aplicat is not None
+        else (
+            float(barema_empresa["preu_hora_standard_eur"])
+            if barema_empresa is not None and barema_empresa.get("preu_hora_standard_eur") is not None
+            else 0.0
+        )
     )
+    hora_inici_res, hora_fi_res = await _resoldre_franja_hores_previstes(
+        db=db,
+        emp_uuid=emp_uuid,
+        data_plan=feina.data_planificacio,
+        hores_previstes=feina.hores_previstes,
+        hora_inici=feina.hora_inici_prevista,
+        hora_fi=feina.hora_fi_prevista,
+    )
+    km_inicial = int(feina.km_imputats or 0)
+    cost_flota_inicial = await _calcular_cost_flota_km(db, emp_uuid, feina.vehicle_id, km_inicial)
 
     nova_feina = OrdreTreball(
         empresa_id=emp_uuid,
@@ -756,13 +870,21 @@ async def alta_feina(
         if (feina.cap_de_colla_id or feina.operaris_ids) and feina.estat == "PENDENT"
         else feina.estat,
         data_planificacio=feina.data_planificacio,
-        hora_inici_prevista=feina.hora_inici_prevista,
-        hora_fi_prevista=feina.hora_fi_prevista,
+        hora_inici_prevista=hora_inici_res,
+        hora_fi_prevista=hora_fi_res,
         cap_de_colla_id=feina.cap_de_colla_id,
         vehicle_id=feina.vehicle_id,
+        km_imputats=km_inicial,
+        cost_flota_real=cost_flota_inicial,
         latitud=lat,
         longitud=lng,
         preu_venda_hora_aplicat=preu_hora_inicial,
+        import_pressupostat=float(feina.import_pressupostat or 0.0),
+        import_pressupostat_net=float(
+            feina.import_pressupostat_net
+            if feina.import_pressupostat_net is not None
+            else (feina.import_pressupostat or 0.0)
+        ),
     )
 
     try:
@@ -819,6 +941,8 @@ async def alta_feina(
                 ordre=nova_feina,
                 allocations=picking_allocations,
             )
+            await db.flush()
+            await recalcular_totals_materials_ot(db, emp_uuid, nova_feina.id)
 
         await db.commit()
     except Exception:
@@ -914,6 +1038,10 @@ async def build_feina_response(
     f_resp.signatura_present = bool(ordre.signatura_client_path)
     f_resp.desviacio_geovalla = bool(ordre.desviacio_geovalla)
     f_resp.hores_previstes = _calcular_hores_previstes(ordre)
+    f_resp.km_imputats = int(ordre.km_imputats or 0)
+    f_resp.import_pressupostat = float(ordre.import_pressupostat or 0.0)
+    f_resp.import_pressupostat_net = float(ordre.import_pressupostat_net or 0.0)
+    f_resp.pvp_materials_aplicat = float(ordre.pvp_materials_aplicat or 0.0)
     f_resp.preu_venda_hora_aplicat = await resoldre_preu_hora_control_panel(
         db, empresa_id, ordre
     )
@@ -952,11 +1080,22 @@ async def build_feina_response(
         f_resp.client_nom = (await db.execute(c_stmt)).scalars().first()
 
     # Cap de colla
+    u_obj: Optional[Usuari] = None
     if ordre.cap_de_colla_id:
         u_stmt = select(Usuari).where(Usuari.id == ordre.cap_de_colla_id)
         u_obj = (await db.execute(u_stmt)).scalars().first()
         if u_obj:
             f_resp.cap_de_colla_nom = f"{u_obj.nom} {u_obj.cognoms or ''}".strip()
+
+    # Vehicle assignat
+    if ordre.vehicle_id:
+        v_stmt = select(Vehicle).where(
+            Vehicle.id == ordre.vehicle_id,
+            Vehicle.empresa_id == empresa_id,
+        )
+        v_obj = (await db.execute(v_stmt)).scalars().first()
+        if v_obj:
+            f_resp.vehicle_matricula, f_resp.vehicle_nom = _format_vehicle_nom(v_obj)
 
     # Plànol
     if ordre.planol_id:
@@ -1013,6 +1152,7 @@ async def build_feina_response(
                     consum_real=max(0.0, round(q_in - q_out, 3)),
                     origen_estoc=str(getattr(lp, "origen_estoc", "NAU") or "NAU"),
                     unitat_mesura=art.unitat_mesura or "UNITAT",
+                    preu_venda_unitari=float(art.preu_venda or 0.0),
                     estoc_disponible=max(0.0, disp),
                     magatzem_id=lp_mag_id,
                 )
@@ -1167,10 +1307,37 @@ async def modificar_feina(
         ordre.hora_inici_prevista = update_data["hora_inici_prevista"]
     if "hora_fi_prevista" in update_data:
         ordre.hora_fi_prevista = update_data["hora_fi_prevista"]
+    if "hores_previstes" in update_data and update_data["hores_previstes"] is not None:
+        h_prev_in = float(update_data["hores_previstes"])
+        if h_prev_in > 0 and (
+            "hora_inici_prevista" not in update_data or "hora_fi_prevista" not in update_data
+        ):
+            hi_res, hf_res = await _resoldre_franja_hores_previstes(
+                db=db,
+                emp_uuid=emp_uuid,
+                data_plan=ordre.data_planificacio,
+                hores_previstes=h_prev_in,
+                hora_inici=ordre.hora_inici_prevista if "hora_inici_prevista" in update_data else None,
+                hora_fi=None,
+            )
+            ordre.hora_inici_prevista = hi_res
+            ordre.hora_fi_prevista = hf_res
+    if "preu_venda_hora_aplicat" in update_data and update_data["preu_venda_hora_aplicat"] is not None:
+        ordre.preu_venda_hora_aplicat = float(update_data["preu_venda_hora_aplicat"])
+    if "km_imputats" in update_data and update_data["km_imputats"] is not None:
+        ordre.km_imputats = int(update_data["km_imputats"])
+    if "import_pressupostat" in update_data and update_data["import_pressupostat"] is not None:
+        ordre.import_pressupostat = float(update_data["import_pressupostat"])
+    if "import_pressupostat_net" in update_data and update_data["import_pressupostat_net"] is not None:
+        ordre.import_pressupostat_net = float(update_data["import_pressupostat_net"])
     if "estat" in update_data and update_data["estat"]:
         ordre.estat = update_data["estat"]
     if "vehicle_id" in update_data:
         ordre.vehicle_id = update_data["vehicle_id"]
+    if "km_imputats" in update_data or "vehicle_id" in update_data:
+        ordre.cost_flota_real = await _calcular_cost_flota_km(
+            db, emp_uuid, ordre.vehicle_id, int(ordre.km_imputats or 0)
+        )
 
     # Assignació operativa (cap de colla)
     if "cap_de_colla_id" in update_data:
@@ -1390,6 +1557,9 @@ async def modificar_feina(
                     quantitat_mermada=0.0,
                 )
                 db.add(nova_linia)
+
+        await db.flush()
+        await recalcular_totals_materials_ot(db, emp_uuid, ordre.id)
 
     if (
         str(ordre.estat or "").upper()
@@ -2216,6 +2386,22 @@ async def passar_ot_a_prefacturacio(
                 "article_id": str(art.id),
             }
         )
+
+    if not afegit_material_picking and pk_rows:
+        for lp, art in pk_rows:
+            q_prev_f = max(0.0, round(float(lp.quantitat_prevista or 0.0), 3))
+            if q_prev_f <= 0:
+                continue
+            afegit_material_picking = True
+            linies_json.append(
+                {
+                    "concepte": f"Material {art.nom} (OT {ordre.codi})"[:200],
+                    "quantitat": q_prev_f,
+                    "preu_venda_unitari": float(art.preu_venda or 0.0),
+                    "tipus_iva": 21.0,
+                    "article_id": str(art.id),
+                }
+            )
 
     pvp_mat_ot = Decimal(str(ordre.pvp_materials_aplicat or 0))
     if not afegit_material_picking and pvp_mat_ot > 0:

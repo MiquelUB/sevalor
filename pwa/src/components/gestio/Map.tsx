@@ -44,7 +44,9 @@ export interface LiniaPickingItem {
   consum_real?: number;
   origen_estoc?: "NAU" | "FURGONETA" | string;
   unitat_mesura?: string;
+  preu_venda_unitari?: number;
   estoc_disponible?: number;
+  magatzem_id?: string | null;
 }
 
 export interface EinaItem {
@@ -103,6 +105,13 @@ export interface Feina {
   longitud?: number | null;
   cap_de_colla_id?: string | null;
   cap_de_colla_nom?: string | null;
+  vehicle_id?: string | null;
+  vehicle_matricula?: string | null;
+  vehicle_nom?: string | null;
+  km_imputats?: number | null;
+  import_pressupostat?: number | null;
+  import_pressupostat_net?: number | null;
+  pvp_materials_aplicat?: number | null;
   operaris_assignats?: OperariAssignat[];
   operaris_ids?: string[];
   client_nom?: string | null;

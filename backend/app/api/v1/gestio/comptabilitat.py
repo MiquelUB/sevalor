@@ -13,11 +13,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.db import get_db_with_tenant_context, set_tenant_context
 from app.core.security import get_current_user_claims, require_financial_access, require_roles
 from app.models.models import (
+    Article,
     Client,
     DespesaComptable,
     Empresa,
     FacturaCapcalera,
     FacturaLinia,
+    FullaPicking,
+    LiniaPicking,
     OrdreTreball,
     OrdreTreballTramTemps,
 )
@@ -885,21 +888,12 @@ async def convertir_wip_a_prefactura(
             )
         )
 
-    if pvp_mat > 0:
-        linies.append(
-            FacturaLiniaCreateDTO(
-                concepte=f"Subministrament i materials OT {ot.codi}",
-                obra_id=ot.id,
-                quantitat=Decimal("1.00"),
-                preu_venda_unitari=pvp_mat,
-                tipus_iva_pct=Decimal("21.00"),
-            )
-        )
-    else:
-        picking_mats = await EconomicSuiteService.obtenir_materials_consumits_ots(
-            db, empresa_id, [ot.id]
-        )
-        for mat in picking_mats.get(ot.id, []):
+    picking_mats = await EconomicSuiteService.obtenir_materials_consumits_ots(
+        db, empresa_id, [ot.id]
+    )
+    ot_picking_mats = picking_mats.get(ot.id, [])
+    if ot_picking_mats:
+        for mat in ot_picking_mats:
             linies.append(
                 FacturaLiniaCreateDTO(
                     concepte=f"Material {mat['nom']} (OT {ot.codi})",
@@ -907,6 +901,44 @@ async def convertir_wip_a_prefactura(
                     article_id=mat["article_id"],
                     quantitat=mat["quantitat"],
                     preu_venda_unitari=mat["preu_venda"],
+                    tipus_iva_pct=Decimal("21.00"),
+                )
+            )
+    else:
+        pk_prev_rows = (
+            await db.execute(
+                select(LiniaPicking, Article)
+                .join(FullaPicking, LiniaPicking.picking_id == FullaPicking.id)
+                .join(Article, LiniaPicking.article_id == Article.id)
+                .where(
+                    FullaPicking.empresa_id == empresa_id,
+                    FullaPicking.ordre_treball_id == ot.id,
+                    LiniaPicking.empresa_id == empresa_id,
+                )
+            )
+        ).all()
+        if pk_prev_rows:
+            for lp, art in pk_prev_rows:
+                q_prev = Decimal(str(lp.quantitat_prevista or 0))
+                if q_prev <= 0:
+                    continue
+                linies.append(
+                    FacturaLiniaCreateDTO(
+                        concepte=f"Material {art.nom} (OT {ot.codi})",
+                        obra_id=ot.id,
+                        article_id=art.id,
+                        quantitat=q_prev,
+                        preu_venda_unitari=Decimal(str(art.preu_venda or 0)),
+                        tipus_iva_pct=Decimal("21.00"),
+                    )
+                )
+        elif pvp_mat > 0:
+            linies.append(
+                FacturaLiniaCreateDTO(
+                    concepte=f"Subministrament i materials OT {ot.codi}",
+                    obra_id=ot.id,
+                    quantitat=Decimal("1.00"),
+                    preu_venda_unitari=pvp_mat,
                     tipus_iva_pct=Decimal("21.00"),
                 )
             )

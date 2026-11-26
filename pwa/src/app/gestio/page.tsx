@@ -509,6 +509,15 @@ export default function GestioDashboardPage() {
                                     <p className="text-xs text-on-surface-variant mt-1">
                                       {feina.adreca || "Sense adreça"}
                                     </p>
+                                    {feina.vehicle_nom && (
+                                      <p className="text-[11px] font-mono text-secondary mt-1.5 flex items-center gap-1">
+                                        <span className="material-symbols-outlined text-[14px]">local_shipping</span>
+                                        <span>
+                                          {feina.vehicle_nom}
+                                          {feina.km_imputats ? ` · ${feina.km_imputats} km` : ""}
+                                        </span>
+                                      </p>
+                                    )}
                                   </div>
                                   <div className="bg-surface-container-lowest p-md rounded-xl border border-outline-variant/30 flex flex-col justify-between">
                                     <div>
@@ -518,6 +527,11 @@ export default function GestioDashboardPage() {
                                       <p className="text-sm font-body-strong text-on-surface">
                                         Responsable: {feina.cap_de_colla_nom || "Pendent d'assignar"}
                                       </p>
+                                      {Number(feina.hores_previstes || 0) > 0 && (
+                                        <p className="text-[11px] font-mono text-primary mt-0.5">
+                                          Previstes: {Number(feina.hores_previstes).toFixed(2)} h
+                                        </p>
+                                      )}
                                       {rolActiu !== "ENGINYER" ? (
                                         <p className="text-xs font-mono font-bold text-secondary mt-1">
                                           Hores facturables: {horesFeina.toFixed(2)} h
@@ -1353,6 +1367,15 @@ export default function GestioDashboardPage() {
                                     <p className="text-xs text-on-surface-variant mt-1">
                                       {feina.adreca || "Sense adreça"}
                                     </p>
+                                    {feina.vehicle_nom && (
+                                      <p className="text-[11px] font-mono text-secondary mt-1.5 flex items-center gap-1">
+                                        <span className="material-symbols-outlined text-[14px]">local_shipping</span>
+                                        <span>
+                                          {feina.vehicle_nom}
+                                          {feina.km_imputats ? ` · ${feina.km_imputats} km` : ""}
+                                        </span>
+                                      </p>
+                                    )}
                                   </div>
                                   <div className="bg-surface-container-lowest p-md rounded-xl border border-outline-variant/30 flex flex-col justify-between">
                                     <div>
@@ -1362,6 +1385,11 @@ export default function GestioDashboardPage() {
                                       <p className="text-sm font-body-strong text-on-surface">
                                         Responsable: {feina.cap_de_colla_nom || "Pendent d'assignar"}
                                       </p>
+                                      {Number(feina.hores_previstes || 0) > 0 && (
+                                        <p className="text-[11px] font-mono text-primary mt-0.5">
+                                          Previstes: {Number(feina.hores_previstes).toFixed(2)} h
+                                        </p>
+                                      )}
                                       {rolActiu !== "ENGINYER" ? (
                                         <p className="text-xs font-mono font-bold text-secondary mt-1">
                                           Hores facturables: {horesFeina.toFixed(2)} h

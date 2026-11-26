@@ -28,6 +28,7 @@ import {
   PressupostModal,
   PrevisualitzarPressupostModal,
 } from "@/components/gestio/PressupostModal";
+import { Fulla360OTModal } from "@/components/gestio/Fulla360OTModal";
 
 function badgeEstat(estat: string): string {
   const up = (estat || "").toUpperCase();
@@ -66,6 +67,7 @@ function PressupostosContent() {
   }>({ open: false, item: null });
   const [previewModalItem, setPreviewModalItem] = useState<PressupostItem | null>(null);
   const [sendModalItem, setSendModalItem] = useState<PressupostItem | null>(null);
+  const [convertirOTItem, setConvertirOTItem] = useState<PressupostItem | null>(null);
   const [handledParamId, setHandledParamId] = useState<string | null>(null);
 
   const carregarDades = useCallback(async () => {
@@ -146,37 +148,10 @@ function PressupostosContent() {
     }
   };
 
-  const handleConvertirOT = async (p: PressupostItem) => {
+  const handleConvertirOT = (p: PressupostItem) => {
     setError(null);
     setSuccessMsg(null);
-    try {
-      const res = await apiFetch<{
-        ordre_treball_id: string;
-        codi_ot: string;
-        materials_importats?: number;
-        eines_importades?: number;
-        operaris_importats?: number;
-        hores_previstes?: number;
-        avisos?: string[];
-      }>(
-        `/gestio/pressupostos/${p.id}/convertir-ot`,
-        {
-          method: "POST",
-          body: JSON.stringify({ forcar_si_pendent: p.estat === "PENDENT" }),
-        }
-      );
-      await carregarDades();
-      const parts: string[] = [];
-      if (res.materials_importats) parts.push(`${res.materials_importats} materials`);
-      if (res.eines_importades) parts.push(`${res.eines_importades} eines`);
-      if (res.hores_previstes) parts.push(`${res.hores_previstes} h previstes`);
-      if (res.operaris_importats) parts.push(`${res.operaris_importats} operaris`);
-      const detall = parts.length > 0 ? ` (${parts.join(", ")})` : "";
-      setSuccessMsg(`Ordre de Treball ${res.codi_ot} creada des del pressupost ${p.numero}${detall}.`);
-      router.push(`/gestio/feines?id=${res.ordre_treball_id}`);
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "Error en convertir a Ordre de Treball.");
-    }
+    setConvertirOTItem(p);
   };
 
   const handleCanviarEstat = async (p: PressupostItem, accio: "aprovar" | "rebutjar") => {
@@ -551,6 +526,26 @@ function PressupostosContent() {
           onSent={(msg) => {
             setSuccessMsg(msg);
             carregarDades();
+          }}
+        />
+      )}
+
+      {convertirOTItem && (
+        <Fulla360OTModal
+          mode="FROM_PRESSUPOST"
+          isOpen={true}
+          initialPressupost={convertirOTItem}
+          onClose={() => setConvertirOTItem(null)}
+          onSuccess={(created) => {
+            const numPres = convertirOTItem.numero;
+            setConvertirOTItem(null);
+            carregarDades();
+            setSuccessMsg(
+              `Ordre de Treball ${created?.codi || ""} creada des del pressupost ${numPres} amb equip, vehicle, hores, picking i eines assignats.`
+            );
+            if (created?.id) {
+              router.push(`/gestio/feines?id=${created.id}`);
+            }
           }}
         />
       )}

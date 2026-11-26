@@ -35,8 +35,9 @@ from app.models.models import (
     Vehicle,
 )
 from app.services.barema_service import obtenir_barema_empresa
-from app.services.flota_service import JERARQUIA_CARNETS
+from app.services.flota_service import JERARQUIA_CARNETS, validar_permis_conduir
 from app.services.geocoding_service import geocodificar_adreca
+from app.services.picking_stock_service import _resoldre_pmp_article
 from app.services.pressupost_service import (
     DEFAULT_VALIDESA_DIES,
     calcular_totals_pressupost_complet,
@@ -257,10 +258,33 @@ class PressupostRegistrarEnviamentRequest(BaseModel):
     destinatari: Optional[str] = Field(None, max_length=200)
 
 
+class PressupostConvertirPickingLiniaIn(BaseModel):
+    article_id: uuid.UUID
+    quantitat_prevista: float = Field(..., gt=0)
+    magatzem_id: Optional[uuid.UUID] = None
+
+
 class PressupostConvertirOTRequest(BaseModel):
+    codi: Optional[str] = Field(None, max_length=20)
     titol: Optional[str] = Field(None, max_length=200)
+    descripcio: Optional[str] = None
     adreca: Optional[str] = Field(None, max_length=255)
+    finca_id: Optional[uuid.UUID] = None
+    planol_id: Optional[uuid.UUID] = None
     data_planificacio: Optional[date] = None
+    hores_previstes: Optional[float] = Field(None, ge=0.0)
+    hora_inici_prevista: Optional[datetime] = None
+    hora_fi_prevista: Optional[datetime] = None
+    preu_venda_hora_aplicat: Optional[float] = Field(None, ge=0.0)
+    cap_de_colla_id: Optional[uuid.UUID] = None
+    operaris_ids: Optional[List[uuid.UUID]] = None
+    vehicle_id: Optional[uuid.UUID] = None
+    km_imputats: Optional[int] = Field(None, ge=0)
+    eina_ids: Optional[List[uuid.UUID]] = None
+    magatzem_id: Optional[uuid.UUID] = None
+    linies_picking: Optional[List[PressupostConvertirPickingLiniaIn]] = None
+    latitud: Optional[float] = None
+    longitud: Optional[float] = None
     forcar_si_pendent: bool = False
 
 
@@ -1673,15 +1697,32 @@ async def convertir_pressupost_a_ordre_treball(
         lin for lin in (detalls.get("linies") or []) if isinstance(lin, dict)
     ]
 
-    codi_ot = f"OT-{str(uuid.uuid4())[:6].upper()}"
+    fields_set = payload.model_fields_set if payload is not None else set()
+
+    codi_ot = (
+        payload.codi.strip()[:20]
+        if payload and payload.codi and payload.codi.strip()
+        else f"OT-{str(uuid.uuid4())[:6].upper()}"
+    )
+    dup_codi = (
+        await db.execute(
+            select(OrdreTreball.id).where(
+                OrdreTreball.empresa_id == empresa_id,
+                OrdreTreball.codi == codi_ot,
+            )
+        )
+    ).first()
+    if dup_codi:
+        raise HTTPException(status_code=400, detail="El codi de feina ja es troba registrat.")
+
     titol_ot = (
         payload.titol.strip()
-        if payload and payload.titol
+        if payload and payload.titol and payload.titol.strip()
         else str(detalls.get("titol") or f"Execució {pressupost.numero}")[:200]
     )
     adreca_ot = (
         payload.adreca.strip()
-        if payload and payload.adreca
+        if payload and payload.adreca and payload.adreca.strip()
         else (
             detalls.get("adreca_obra")
             or detalls.get("client_adreca")
@@ -1694,10 +1735,15 @@ async def convertir_pressupost_a_ordre_treball(
         else date.today()
     )
 
-    # 1. Finca i georeferenciació (prioritza coordenades exactes de la finca, fallback geocoder d'adreça)
-    finca_uuid = _parse_uuid_safe(detalls.get("finca_id"))
-    lat: Optional[float] = None
-    lng: Optional[float] = None
+    # 1. Finca, plànol i georeferenciació (prioritza coordenades explícites/finca, fallback geocoder)
+    finca_uuid = (
+        payload.finca_id
+        if payload and "finca_id" in fields_set
+        else _parse_uuid_safe(detalls.get("finca_id"))
+    )
+    planol_uuid = payload.planol_id if payload and "planol_id" in fields_set else None
+    lat: Optional[float] = payload.latitud if payload and payload.latitud is not None else None
+    lng: Optional[float] = payload.longitud if payload and payload.longitud is not None else None
     if finca_uuid:
         finca_db = (
             await db.execute(
@@ -1706,29 +1752,32 @@ async def convertir_pressupost_a_ordre_treball(
         ).scalars().first()
         if not finca_db:
             finca_uuid = None
-        elif finca_db.latitud is not None and finca_db.longitud is not None:
+        elif (lat is None or lng is None) and finca_db.latitud is not None and finca_db.longitud is not None:
             lat = float(finca_db.latitud)
             lng = float(finca_db.longitud)
     if lat is None or lng is None:
         lat, lng = geocodificar_adreca(str(adreca_ot))
 
-    # 2. Vehicle principal, slots de desplaçament/maquinària i km previstos
+    # 2. Vehicle principal, km previstos i cost de flota real
     raw_slots = [
         sl for sl in (detalls.get("vehicles_desplacaments") or []) if isinstance(sl, dict)
     ]
-    vehicle_uuid = _parse_uuid_safe(detalls.get("vehicle_id"))
-    if vehicle_uuid is None:
-        for sl in raw_slots:
-            cand = _parse_uuid_safe(sl.get("vehicle_id"))
-            if cand:
-                vehicle_uuid = cand
-                break
-    if vehicle_uuid is None:
-        for lin in linies:
-            cand = _parse_uuid_safe(lin.get("vehicle_id"))
-            if cand:
-                vehicle_uuid = cand
-                break
+    if payload and "vehicle_id" in fields_set:
+        vehicle_uuid = payload.vehicle_id
+    else:
+        vehicle_uuid = _parse_uuid_safe(detalls.get("vehicle_id"))
+        if vehicle_uuid is None:
+            for sl in raw_slots:
+                cand = _parse_uuid_safe(sl.get("vehicle_id"))
+                if cand:
+                    vehicle_uuid = cand
+                    break
+        if vehicle_uuid is None:
+            for lin in linies:
+                cand = _parse_uuid_safe(lin.get("vehicle_id"))
+                if cand:
+                    vehicle_uuid = cand
+                    break
 
     veh_obj: Optional[Vehicle] = None
     if vehicle_uuid:
@@ -1742,30 +1791,35 @@ async def convertir_pressupost_a_ordre_treball(
 
     km_total = Decimal("0.00")
     hores_maquinaria_slots = Decimal("0.00")
-    vehicles_extra_desc: List[str] = []
     if raw_slots:
         for sl in raw_slots:
             if sl.get("km") is not None:
                 km_total += max(Decimal("0"), Decimal(str(sl["km"])))
             if sl.get("hores") is not None:
                 hores_maquinaria_slots += max(Decimal("0"), Decimal(str(sl["hores"])))
-            v_nom_sl = str(sl.get("vehicle_nom") or "").strip()
-            sl_id = _parse_uuid_safe(sl.get("vehicle_id"))
-            if v_nom_sl and (sl_id != vehicle_uuid or (sl.get("hores") and float(sl["hores"]) > 0)):
-                det_sl_parts: List[str] = []
-                if sl.get("km") and float(sl["km"]) > 0:
-                    det_sl_parts.append(f"{float(sl['km']):g} km")
-                if sl.get("hores") and float(sl["hores"]) > 0:
-                    det_sl_parts.append(f"{float(sl['hores']):g} h")
-                vehicles_extra_desc.append(
-                    f"{v_nom_sl} ({' · '.join(det_sl_parts)})" if det_sl_parts else v_nom_sl
-                )
     else:
         if detalls.get("desplacament_km") is not None:
             km_total = max(Decimal("0"), Decimal(str(detalls["desplacament_km"])))
         if detalls.get("desplacament_hores") is not None:
             hores_maquinaria_slots = max(Decimal("0"), Decimal(str(detalls["desplacament_hores"])))
-    km_previstos_int = int(km_total.quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+
+    if payload and "km_imputats" in fields_set and payload.km_imputats is not None:
+        km_previstos_int = int(payload.km_imputats)
+    else:
+        km_previstos_int = int(km_total.quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+
+    cost_km_ref = Decimal("0.32")
+    if veh_obj is not None:
+        c_km_raw = getattr(veh_obj, "cost_per_km_eur", None)
+        if c_km_raw is not None:
+            c_veh = Decimal(str(c_km_raw))
+            if c_veh > Decimal("0"):
+                cost_km_ref = c_veh
+    cost_flota_inicial = (
+        float((Decimal(km_previstos_int) * cost_km_ref).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+        if km_previstos_int > 0
+        else 0.0
+    )
 
     # 3. Hores de treball previstes, tarifa horària i operaris/quadrilla
     hores_ma_obra = Decimal("0.00")
@@ -1799,39 +1853,80 @@ async def convertir_pressupost_a_ordre_treball(
         hores_ma_obra if hores_ma_obra > 0 else hores_maquinaria
     ).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
+    if payload and payload.hores_previstes is not None:
+        hores_previstes_total = Decimal(str(payload.hores_previstes)).quantize(
+            Decimal("0.01"), rounding=ROUND_HALF_UP
+        )
+
     hora_inici_prevista: Optional[datetime] = None
     hora_fi_prevista: Optional[datetime] = None
-    if hores_previstes_total > Decimal("0.00"):
-        slot_jornada = (
-            await db.execute(
-                select(SlotJornada)
-                .where(SlotJornada.empresa_id == empresa_id)
-                .order_by(SlotJornada.created_at.asc())
-            )
-        ).scalars().first()
-        hora_base = (
-            slot_jornada.hora_entrada_teorica
-            if slot_jornada and slot_jornada.hora_entrada_teorica
-            else dt_time(8, 0)
+    if (
+        payload
+        and payload.hora_inici_prevista is not None
+        and payload.hora_fi_prevista is not None
+        and payload.hora_fi_prevista > payload.hora_inici_prevista
+    ):
+        hora_inici_prevista = payload.hora_inici_prevista
+        hora_fi_prevista = payload.hora_fi_prevista
+        diff_s = (hora_fi_prevista - hora_inici_prevista).total_seconds()
+        hores_previstes_total = Decimal(str(diff_s / 3600.0)).quantize(
+            Decimal("0.01"), rounding=ROUND_HALF_UP
         )
-        hora_inici_prevista = datetime.combine(data_plan, hora_base, tzinfo=_TZ_LOCAL_OBRA)
+    elif hores_previstes_total > Decimal("0.00"):
+        if payload and payload.hora_inici_prevista is not None:
+            hora_inici_prevista = payload.hora_inici_prevista
+        else:
+            slot_jornada = (
+                await db.execute(
+                    select(SlotJornada)
+                    .where(SlotJornada.empresa_id == empresa_id)
+                    .order_by(SlotJornada.created_at.asc())
+                )
+            ).scalars().first()
+            hora_base = (
+                slot_jornada.hora_entrada_teorica
+                if slot_jornada and slot_jornada.hora_entrada_teorica
+                else dt_time(8, 0)
+            )
+            hora_inici_prevista = datetime.combine(data_plan, hora_base, tzinfo=_TZ_LOCAL_OBRA)
         hora_fi_prevista = hora_inici_prevista + timedelta(
             seconds=int(round(float(hores_previstes_total) * 3600.0))
         )
 
-    preu_hora_final = 0.0
-    if hores_ma_obra_amb_preu > 0 and import_ma_obra_amb_preu > 0:
+    if payload and payload.preu_venda_hora_aplicat is not None:
+        preu_hora_final = float(
+            Decimal(str(payload.preu_venda_hora_aplicat)).quantize(
+                Decimal("0.01"), rounding=ROUND_HALF_UP
+            )
+        )
+    elif hores_ma_obra_amb_preu > 0 and import_ma_obra_amb_preu > 0:
         preu_hora_final = float(
             (import_ma_obra_amb_preu / hores_ma_obra_amb_preu).quantize(
                 Decimal("0.01"), rounding=ROUND_HALF_UP
             )
         )
     else:
+        preu_hora_final = 0.0
         barema_empresa = await obtenir_barema_empresa(db, empresa_id)
         if barema_empresa is not None and barema_empresa.get("preu_hora_standard_eur") is not None:
             preu_hora_final = float(barema_empresa["preu_hora_standard_eur"])
 
     # Resoldre operaris actius del tenant per a la quadrilla de l'OT
+    # (Prioritza la selecció explícita de la Fulla 360°; el pressupost habitualment només porta hores)
+    explicit_ops_mode = bool(
+        payload and ("cap_de_colla_id" in fields_set or "operaris_ids" in fields_set)
+    )
+    if explicit_ops_mode and payload is not None:
+        candidate_operari_uuids = []
+        seen_op_ids = set()
+        if payload.cap_de_colla_id:
+            seen_op_ids.add(payload.cap_de_colla_id)
+            candidate_operari_uuids.append(payload.cap_de_colla_id)
+        for op_u_id in payload.operaris_ids or []:
+            if op_u_id not in seen_op_ids:
+                seen_op_ids.add(op_u_id)
+                candidate_operari_uuids.append(op_u_id)
+
     operaris_valids: List[Usuari] = []
     if candidate_operari_uuids:
         ops_rows = (
@@ -1847,7 +1942,17 @@ async def convertir_pressupost_a_ordre_treball(
         operaris_valids = [ops_by_id[uid] for uid in candidate_operari_uuids if uid in ops_by_id]
 
     cap_de_colla_uuid: Optional[uuid.UUID] = None
-    if operaris_valids:
+    if explicit_ops_mode and payload is not None:
+        if payload.cap_de_colla_id and any(u.id == payload.cap_de_colla_id for u in operaris_valids):
+            cap_de_colla_uuid = payload.cap_de_colla_id
+        elif operaris_valids:
+            cap_de_colla_uuid = operaris_valids[0].id
+        # Validació estricta FR-012 del permís de conduir quan s'assigna explícitament des de la Fulla 360°
+        if cap_de_colla_uuid and veh_obj:
+            cap_obj = next((u for u in operaris_valids if u.id == cap_de_colla_uuid), None)
+            if cap_obj:
+                validar_permis_conduir(veh_obj, cap_obj)
+    elif operaris_valids:
         carnet_req = (
             str(veh_obj.carnet_necessari or "B").strip().upper() if veh_obj else None
         )
@@ -1870,48 +1975,76 @@ async def convertir_pressupost_a_ordre_treball(
                 )
         cap_de_colla_uuid = pool_prioritari[0].id
 
-    # 4. Materials -> agrupar quantitats per article_id (+ resolució per referència [REF] si falta article_id)
+    # 4. Materials -> Fulla de Picking estructurada (article_id, [REF], o coincidència exacta per nom)
     materials_qty_by_article: Dict[uuid.UUID, Decimal] = {}
-    materials_manuals_desc: List[str] = []
-    pvp_materials_total = Decimal("0.00")
+    materials_mag_by_article: Dict[uuid.UUID, Optional[uuid.UUID]] = {}
+    pvp_materials_pressupost = Decimal("0.00")
+    default_mag_id = payload.magatzem_id if payload else None
 
-    refs_sense_id: List[str] = []
-    for lin in linies:
-        if not lin.get("article_id") and _es_linia_material(lin):
-            m_ref = _RE_REF_CONCEPTE.match(str(lin.get("concepte") or ""))
-            if m_ref:
-                refs_sense_id.append(m_ref.group(1).strip())
+    if payload and "linies_picking" in fields_set and payload.linies_picking is not None:
+        for lp_in in payload.linies_picking:
+            q_d = max(Decimal("0.001"), Decimal(str(lp_in.quantitat_prevista)))
+            materials_qty_by_article[lp_in.article_id] = (
+                materials_qty_by_article.get(lp_in.article_id, Decimal("0.000")) + q_d
+            )
+            if lp_in.magatzem_id is not None:
+                materials_mag_by_article[lp_in.article_id] = lp_in.magatzem_id
+    else:
+        refs_sense_id: List[str] = []
+        noms_sense_id: List[str] = []
+        for lin in linies:
+            if not lin.get("article_id") and _es_linia_material(lin):
+                raw_c = str(lin.get("concepte") or "").strip()
+                m_ref = _RE_REF_CONCEPTE.match(raw_c)
+                if m_ref:
+                    refs_sense_id.append(m_ref.group(1).strip())
+                    nom_clean = raw_c[m_ref.end() :].strip().lower()
+                    if nom_clean:
+                        noms_sense_id.append(nom_clean)
+                elif raw_c:
+                    noms_sense_id.append(raw_c.lower())
 
-    articles_by_ref: Dict[str, Article] = {}
-    if refs_sense_id:
-        ref_rows = (
-            await db.execute(
-                select(Article).where(
-                    Article.empresa_id == empresa_id,
-                    Article.referencia_inventari.in_(list(set(refs_sense_id))),
+        articles_by_ref: Dict[str, Article] = {}
+        articles_by_nom: Dict[str, Article] = {}
+        if refs_sense_id or noms_sense_id:
+            all_arts = (
+                await db.execute(select(Article).where(Article.empresa_id == empresa_id))
+            ).scalars().all()
+            for a in all_arts:
+                if a.referencia_inventari:
+                    articles_by_ref[str(a.referencia_inventari).strip().lower()] = a
+                if a.nom:
+                    articles_by_nom[str(a.nom).strip().lower()] = a
+
+        for lin in linies:
+            if not _es_linia_material(lin):
+                continue
+            qt_mat = max(Decimal("0.001"), Decimal(str(lin.get("quantitat") or 1)))
+            pvp_materials_pressupost += _calcular_subtotal_linia_dec(lin)
+            art_uid = _parse_uuid_safe(lin.get("article_id"))
+            if art_uid is None:
+                raw_c = str(lin.get("concepte") or "").strip()
+                m_ref = _RE_REF_CONCEPTE.match(raw_c)
+                if m_ref:
+                    ref_key = m_ref.group(1).strip().lower()
+                    if ref_key in articles_by_ref:
+                        art_uid = articles_by_ref[ref_key].id
+                    else:
+                        nom_key = raw_c[m_ref.end() :].strip().lower()
+                        if nom_key in articles_by_nom:
+                            art_uid = articles_by_nom[nom_key].id
+                elif raw_c.lower() in articles_by_nom:
+                    art_uid = articles_by_nom[raw_c.lower()].id
+            if art_uid is not None:
+                materials_qty_by_article[art_uid] = (
+                    materials_qty_by_article.get(art_uid, Decimal("0.000")) + qt_mat
                 )
-            )
-        ).scalars().all()
-        articles_by_ref = {str(a.referencia_inventari).strip(): a for a in ref_rows}
-
-    for lin in linies:
-        if not _es_linia_material(lin):
-            continue
-        qt_mat = max(Decimal("0.001"), Decimal(str(lin.get("quantitat") or 1)))
-        pvp_materials_total += _calcular_subtotal_linia_dec(lin)
-        art_uid = _parse_uuid_safe(lin.get("article_id"))
-        if art_uid is None:
-            m_ref = _RE_REF_CONCEPTE.match(str(lin.get("concepte") or ""))
-            if m_ref and m_ref.group(1).strip() in articles_by_ref:
-                art_uid = articles_by_ref[m_ref.group(1).strip()].id
-        if art_uid is not None:
-            materials_qty_by_article[art_uid] = (
-                materials_qty_by_article.get(art_uid, Decimal("0.000")) + qt_mat
-            )
-        else:
-            concepte_m = str(lin.get("concepte") or "").strip()
-            if concepte_m:
-                materials_manuals_desc.append(f"{concepte_m} (x{float(qt_mat):g})")
+            else:
+                concepte_m = str(lin.get("concepte") or "").strip()
+                if concepte_m:
+                    avisos_importacio.append(
+                        f"Material '{concepte_m}' sense article de catàleg vinculat: assigna'l al picking si cal reservar estoc."
+                    )
 
     valid_articles_map: Dict[uuid.UUID, Article] = {}
     if materials_qty_by_article:
@@ -1925,27 +2058,90 @@ async def convertir_pressupost_a_ordre_treball(
         ).scalars().all()
         valid_articles_map = {a.id: a for a in art_rows}
 
-    # 5. Eines -> recopilar tots els IDs d'inventari (eines_ids + eines_resum + linies[*].eina_id)
+    # Calcular PVP i Cost PMP reals dels materials del picking per a l'avaluació econòmica real
+    cost_materials_pmp_total = Decimal("0.00")
+    pvp_materials_catalog_total = Decimal("0.00")
+    for art_id, q_dec in materials_qty_by_article.items():
+        art_obj = valid_articles_map.get(art_id)
+        if not art_obj:
+            continue
+        pmp_u = _resoldre_pmp_article(art_obj)
+        pvp_u = Decimal(str(art_obj.preu_venda or 0)).quantize(
+            Decimal("0.01"), rounding=ROUND_HALF_UP
+        )
+        cost_materials_pmp_total += (q_dec * pmp_u).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        pvp_materials_catalog_total += (q_dec * pvp_u).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+    pvp_materials_final = (
+        pvp_materials_pressupost
+        if pvp_materials_pressupost > Decimal("0.00")
+        else pvp_materials_catalog_total
+    )
+
+    # 5. Eines en custòdia -> vincular directament a EinaCustodia (UUID, núm. sèrie o nom exacte)
     eines_resum = [
         e for e in (detalls.get("eines_resum") or []) if isinstance(e, dict)
     ]
     candidate_eina_uuids: List[uuid.UUID] = []
     seen_eina_ids: set[uuid.UUID] = set()
-    for raw_eid in detalls.get("eines_ids") or []:
-        uid_e = _parse_uuid_safe(raw_eid)
-        if uid_e and uid_e not in seen_eina_ids:
-            seen_eina_ids.add(uid_e)
-            candidate_eina_uuids.append(uid_e)
-    for e_item in eines_resum:
-        uid_e = _parse_uuid_safe(e_item.get("id"))
-        if uid_e and uid_e not in seen_eina_ids:
-            seen_eina_ids.add(uid_e)
-            candidate_eina_uuids.append(uid_e)
-    for lin in linies:
-        uid_e = _parse_uuid_safe(lin.get("eina_id"))
-        if uid_e and uid_e not in seen_eina_ids:
-            seen_eina_ids.add(uid_e)
-            candidate_eina_uuids.append(uid_e)
+
+    if payload and "eina_ids" in fields_set and payload.eina_ids is not None:
+        for explicit_eid in payload.eina_ids:
+            if explicit_eid not in seen_eina_ids:
+                seen_eina_ids.add(explicit_eid)
+                candidate_eina_uuids.append(explicit_eid)
+    else:
+        unmatched_eina_refs: List[tuple[Optional[str], str]] = []
+        for raw_eid in detalls.get("eines_ids") or []:
+            parsed_eid = _parse_uuid_safe(raw_eid)
+            if parsed_eid and parsed_eid not in seen_eina_ids:
+                seen_eina_ids.add(parsed_eid)
+                candidate_eina_uuids.append(parsed_eid)
+        for e_item in eines_resum:
+            parsed_eid = _parse_uuid_safe(e_item.get("id"))
+            if parsed_eid and parsed_eid not in seen_eina_ids:
+                seen_eina_ids.add(parsed_eid)
+                candidate_eina_uuids.append(parsed_eid)
+            elif not parsed_eid and str(e_item.get("nom") or "").strip():
+                unmatched_eina_refs.append(
+                    (
+                        str(e_item.get("numero_serie") or "").strip() or None,
+                        str(e_item.get("nom") or "").strip(),
+                    )
+                )
+        for lin in linies:
+            parsed_eid = _parse_uuid_safe(lin.get("eina_id"))
+            if parsed_eid and parsed_eid not in seen_eina_ids:
+                seen_eina_ids.add(parsed_eid)
+                candidate_eina_uuids.append(parsed_eid)
+
+        if unmatched_eina_refs:
+            all_eines_tenant = (
+                await db.execute(
+                    select(EinaCustodia).where(EinaCustodia.empresa_id == empresa_id)
+                )
+            ).scalars().all()
+            by_sn = {
+                str(e.numero_serie).strip().lower(): e.id
+                for e in all_eines_tenant
+                if e.numero_serie
+            }
+            by_nom = {
+                str(e.nom).strip().lower(): e.id
+                for e in all_eines_tenant
+                if e.nom
+            }
+            for sn_ref, nom_ref in unmatched_eina_refs:
+                matched_id = (
+                    by_sn.get(sn_ref.lower()) if sn_ref else None
+                ) or by_nom.get(nom_ref.lower())
+                if matched_id and matched_id not in seen_eina_ids:
+                    seen_eina_ids.add(matched_id)
+                    candidate_eina_uuids.append(matched_id)
+                elif not matched_id:
+                    avisos_importacio.append(
+                        f"Eina '{nom_ref}' no registrada a l'inventari d'eines en custòdia."
+                    )
 
     eines_db_map: Dict[uuid.UUID, EinaCustodia] = {}
     if candidate_eina_uuids:
@@ -1959,44 +2155,18 @@ async def convertir_pressupost_a_ordre_treball(
         ).scalars().all()
         eines_db_map = {e.id: e for e in e_rows}
 
-    # 6. Construir descripció tècnica completa per a l'operari i l'oficina
-    desc_parts = [p for p in [detalls.get("descripcio")] if p and str(p).strip()]
-    eines_desc_items: List[str] = []
-    eines_listed_ids: set[uuid.UUID] = set()
-    for e_item in eines_resum:
-        nom_e = str(e_item.get("nom") or "").strip()
-        if not nom_e:
-            continue
-        uid_e = _parse_uuid_safe(e_item.get("id"))
-        if uid_e:
-            eines_listed_ids.add(uid_e)
-        qt_e = e_item.get("quantitat")
-        ut_e = str(e_item.get("unitat") or "").strip()
-        if qt_e and float(qt_e) > 0 and ut_e:
-            eines_desc_items.append(f"{nom_e} ({float(qt_e):g} {ut_e})")
-        else:
-            eines_desc_items.append(nom_e)
-    for uid_e in candidate_eina_uuids:
-        if uid_e not in eines_listed_ids and uid_e in eines_db_map:
-            eines_desc_items.append(eines_db_map[uid_e].nom)
-    if eines_desc_items:
-        desc_parts.append(f"Eines previstes ({pressupost.numero}): {', '.join(eines_desc_items)}")
-    if hores_previstes_total > Decimal("0.00"):
-        hores_txt = f"Hores de treball previstes ({pressupost.numero}): {float(hores_previstes_total):g} h"
-        if hores_ma_obra > 0 and hores_maquinaria > 0:
-            hores_txt += f" (maquinària addicional: {float(hores_maquinaria):g} h)"
-        desc_parts.append(hores_txt)
-    if vehicles_extra_desc:
-        desc_parts.append(f"Vehicles / Maquinària previstos: {', '.join(vehicles_extra_desc)}")
-    if materials_manuals_desc:
-        desc_parts.append(
-            f"Materials fora de catàleg ({pressupost.numero}): {', '.join(materials_manuals_desc)}"
-        )
-    if detalls.get("termini_execucio"):
-        desc_parts.append(f"Termini d'execució acordat: {str(detalls['termini_execucio']).strip()}")
-    if detalls.get("notes_exclusions"):
-        desc_parts.append(f"Notes i exclusions: {str(detalls['notes_exclusions']).strip()}")
-    descripcio_ot = "\n\n".join(desc_parts) if desc_parts else None
+    # 6. Descripció tècnica neta (MAI bolcar eines, materials, hores ni vehicles com a text pla)
+    if payload and "descripcio" in fields_set:
+        descripcio_ot = payload.descripcio.strip() if payload.descripcio else None
+    else:
+        desc_parts = [p.strip() for p in [detalls.get("descripcio")] if p and str(p).strip()]
+        if detalls.get("termini_execucio"):
+            desc_parts.append(
+                f"Termini d'execució acordat: {str(detalls['termini_execucio']).strip()}"
+            )
+        if detalls.get("notes_exclusions"):
+            desc_parts.append(f"Notes i exclusions: {str(detalls['notes_exclusions']).strip()}")
+        descripcio_ot = "\n\n".join(desc_parts) if desc_parts else None
 
     total_brut = float(pressupost.total) if pressupost.total is not None else 0.0
     raw_base = detalls.get("base_imposable")
@@ -2008,6 +2178,7 @@ async def convertir_pressupost_a_ordre_treball(
         codi=codi_ot,
         client_id=pressupost.client_id,
         finca_id=finca_uuid,
+        planol_id=planol_uuid,
         vehicle_id=vehicle_uuid,
         cap_de_colla_id=cap_de_colla_uuid,
         titol=titol_ot,
@@ -2020,11 +2191,18 @@ async def convertir_pressupost_a_ordre_treball(
         latitud=lat,
         longitud=lng,
         km_imputats=km_previstos_int,
+        cost_flota_real=cost_flota_inicial,
         import_pressupostat=float(pressupost.total or 0.0),
         import_pressupostat_net=base_net,
         preu_venda_hora_aplicat=preu_hora_final,
         pvp_materials_aplicat=float(
-            pvp_materials_total.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+            pvp_materials_final.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        ),
+        cost_materials_picking_pmp=float(
+            cost_materials_pmp_total.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        ),
+        cost_materials_pmp=float(
+            cost_materials_pmp_total.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
         ),
     )
 
@@ -2086,19 +2264,20 @@ async def convertir_pressupost_a_ordre_treball(
             for art_id, q_dec in ordered_valid_materials:
                 q_req = float(q_dec.quantize(Decimal("0.001"), rounding=ROUND_HALF_UP))
                 art_obj = valid_articles_map[art_id]
-                stmt_estoc = (
-                    select(EstocMagatzem)
-                    .where(
-                        EstocMagatzem.article_id == art_id,
-                        EstocMagatzem.empresa_id == empresa_id,
-                    )
-                    .order_by(EstocMagatzem.quantitat_fisica.desc())
-                    .with_for_update()
+                target_mag_id = materials_mag_by_article.get(art_id) or default_mag_id
+                stmt_estoc = select(EstocMagatzem).where(
+                    EstocMagatzem.article_id == art_id,
+                    EstocMagatzem.empresa_id == empresa_id,
                 )
+                if target_mag_id is not None:
+                    stmt_estoc = stmt_estoc.where(EstocMagatzem.magatzem_id == target_mag_id)
+                stmt_estoc = stmt_estoc.order_by(EstocMagatzem.quantitat_fisica.desc()).with_for_update()
                 estocs = list((await db.execute(stmt_estoc)).scalars().all())
 
                 remaining = q_req
-                resolved_mag_id: Optional[uuid.UUID] = estocs[0].magatzem_id if estocs else None
+                resolved_mag_id: Optional[uuid.UUID] = (
+                    estocs[0].magatzem_id if estocs else target_mag_id
+                )
                 for estoc in estocs:
                     if remaining <= 0:
                         break

@@ -369,7 +369,12 @@ async def test_flux_complet_pressupost_autocompletat_edicio_html_pdf_i_ot(
             ).scalar_one()
             assert ot_db.vehicle_id == vehicle_id
             assert ot_db.adreca == "Estació Bombament Nord, Lleida"
-            assert "Trepant Percutor Hilti" in (ot_db.descripcio or "")
+            assert "Trepant Percutor Hilti" not in (ot_db.descripcio or "")
+            eina_linked = (
+                await admin_session.execute(select(EinaCustodia).where(EinaCustodia.id == eina_id))
+            ).scalar_one()
+            assert eina_linked.ordre_treball_id == ot_id
+            assert eina_linked.estat == "CUSTODIADA"
 
 
 def test_parsejar_adreca_fiscal_i_contacte_fallback() -> None:
@@ -1060,15 +1065,24 @@ async def test_convertir_pressupost_a_ot_importacio_completa_materials_eines_hor
             assert float(ot_db.latitud) == pytest.approx(41.670123, rel=1e-4)
             assert float(ot_db.longitud) == pytest.approx(1.271456, rel=1e-4)
             assert ot_db.km_imputats == 48
+            assert float(ot_db.cost_flota_real) > 0.0
+            assert float(ot_db.cost_materials_picking_pmp) > 0.0
+            assert float(ot_db.pvp_materials_aplicat) > 0.0
             assert float(ot_db.hores_imputades_facturables) == 0.0
             assert float(ot_db.preu_venda_hora_aplicat) == 42.0
             assert ot_db.hora_inici_prevista is not None
             assert ot_db.hora_fi_prevista is not None
             dur_h = (ot_db.hora_fi_prevista - ot_db.hora_inici_prevista).total_seconds() / 3600.0
             assert dur_h == pytest.approx(10.0, rel=1e-3)
-            assert "Compactadora lloguer" in (ot_db.descripcio or "")
-            assert "Grava rentada a granel" in (ot_db.descripcio or "")
-            assert "10 h" in (ot_db.descripcio or "")
+            # La descripció ha de ser neta: MAI bolcar eines, materials ni hores com a text pla
+            desc_ot = ot_db.descripcio or ""
+            assert "Rasa, estesa de tub i muntatge de vàlvules." in desc_ot
+            assert "Eines previstes" not in desc_ot
+            assert "Hores de treball previstes" not in desc_ot
+            assert "Materials fora de catàleg" not in desc_ot
+            assert "Vehicles / Maquinària previstos" not in desc_ot
+            assert any("Grava rentada a granel" in av for av in conv_data["avisos"])
+            assert any("Compactadora lloguer" in av for av in conv_data["avisos"])
 
             # Vehicle sincronitzat a ASSIGNAT
             veh_db = (
@@ -1132,7 +1146,12 @@ async def test_convertir_pressupost_a_ot_importacio_completa_materials_eines_hor
             f_json = res_feina.json()
             assert f_json["hores_previstes"] == 10.0
             assert f_json["preu_venda_hora_aplicat"] == 42.0
+            assert f_json["vehicle_id"] == str(veh_furg_id)
+            assert f_json["vehicle_matricula"] == "7788-MNP"
+            assert f_json["km_imputats"] == 48
+            assert f_json["import_pressupostat"] > 0
             assert len(f_json["linies_picking"]) == 3
+            assert all(lp["preu_venda_unitari"] > 0 for lp in f_json["linies_picking"])
             assert len(f_json["eines"]) == 2
             assert len(f_json["operaris_assignats"]) == 2
 
@@ -1142,7 +1161,81 @@ async def test_convertir_pressupost_a_ot_importacio_completa_materials_eines_hor
             assert c_json["temps_i_gps"]["hores_previstes"] == 10.0
             assert c_json["materials"]["total_linies"] == 3
             assert len(c_json["eines"]) == 2
+            assert c_json["vehicle"]["matricula"] == "7788-MNP"
             assert c_json["pressupost"]["numero"] == "P-2026/900"
+            assert c_json["resum_comercial"]["valor_ma_obra_previst_pvp"] == pytest.approx(420.0)
+            assert c_json["resum_intern"]["cost_ma_obra_previst"] == pytest.approx(280.0)
+            assert c_json["resum_intern"]["cost_flota_real"] > 0
+            assert c_json["resum_intern"]["cost_total_previst"] > 0
+            assert c_json["resum_intern"]["marge_previst_eur"] is not None
+
+            # Escenari 2: Pressupost sense operari (només hores) -> Fulla 360° assigna operari, vehicle i picking al convertir
+            res_p2 = await client.post(
+                "/api/v1/gestio/pressupostos",
+                json={
+                    "client_id": str(cli_id),
+                    "numero": "P-2026/901",
+                    "titol": "Manteniment bomba sense operari inicial",
+                    "descripcio": "Revisió de pressió i substitució de vàlvula.",
+                    "vehicle_id": str(veh_furg_id),
+                    "desplacament_km": 30,
+                    "eines_ids": [str(eina_1_id)],
+                    "linies": [
+                        {
+                            "seccio": "Mà d'obra i instal·lació",
+                            "tipus_linia": "MA_OBRA",
+                            "concepte": "Mà d'obra tècnica (sense operari assignat)",
+                            "quantitat": 4.0,
+                            "preu_unitari": 50.0,
+                            "tipus_iva": 21.0,
+                        },
+                        {
+                            "article_id": str(art_ref_only_id),
+                            "seccio": "Materials i subministraments",
+                            "tipus_linia": "MATERIAL",
+                            "concepte": "[COL-50] Colze 90º PE 50mm",
+                            "quantitat": 4.0,
+                            "preu_unitari": 3.80,
+                            "tipus_iva": 21.0,
+                        },
+                    ],
+                },
+                headers=headers,
+            )
+            assert res_p2.status_code == 201, res_p2.text
+            p2_id = res_p2.json()["id"]
+            await client.post(f"/api/v1/gestio/pressupostos/{p2_id}/aprovar", headers=headers)
+
+            res_ot2 = await client.post(
+                f"/api/v1/gestio/pressupostos/{p2_id}/convertir-ot",
+                json={
+                    "cap_de_colla_id": str(cap_id),
+                    "operaris_ids": [str(cap_id), str(op2_id)],
+                    "vehicle_id": str(veh_furg_id),
+                    "km_imputats": 35,
+                    "hores_previstes": 4.5,
+                    "preu_venda_hora_aplicat": 50.0,
+                    "eina_ids": [str(eina_1_id)],
+                    "linies_picking": [
+                        {"article_id": str(art_ref_only_id), "quantitat_prevista": 4.0}
+                    ],
+                },
+                headers=headers,
+            )
+            assert res_ot2.status_code == 201, res_ot2.text
+            ot2_id = res_ot2.json()["ordre_treball_id"]
+            res_f2 = await client.get(f"/api/v1/gestio/feines/{ot2_id}", headers=headers)
+            assert res_f2.status_code == 200
+            f2 = res_f2.json()
+            assert f2["estat"] == "ASSIGNADA"
+            assert f2["cap_de_colla_id"] == str(cap_id)
+            assert set(f2["operaris_ids"]) == {str(cap_id), str(op2_id)}
+            assert f2["vehicle_id"] == str(veh_furg_id)
+            assert f2["km_imputats"] == 35
+            assert f2["hores_previstes"] == 4.5
+            assert len(f2["linies_picking"]) == 1
+            assert len(f2["eines"]) == 1
+            assert f2["descripcio"] == "Revisió de pressió i substitució de vàlvula."
 
             # RLS: Segon tenant no pot llegir l'OT ni la seva conciliació
             res_rls_ot = await client.get(f"/api/v1/gestio/feines/{ot_id}", headers=other_headers)

@@ -28,6 +28,7 @@ from app.models.models import (
     LiniaPicking,
     Magatzem,
     OrdreTreball,
+    OrdreTreballOperari,
     OrdreTreballTramTemps,
     PlanolBase,
     Pressupost,
@@ -340,6 +341,7 @@ class ReconciliacioOTService:
                 validador_nom = f"{val_u.nom} {val_u.cognoms or ''}".strip()
 
         vehicle_info: Optional[Dict[str, Any]] = None
+        veh_cost_per_km = Decimal("0.32")
         if ot.vehicle_id:
             veh = (
                 await db.execute(
@@ -350,11 +352,39 @@ class ReconciliacioOTService:
                 )
             ).scalars().first()
             if veh:
+                c_km_raw = getattr(veh, "cost_per_km_eur", None)
+                if c_km_raw is not None and Decimal(str(c_km_raw)) > 0:
+                    veh_cost_per_km = Decimal(str(c_km_raw))
                 vehicle_info = {
                     "id": str(veh.id),
                     "matricula": veh.matricula,
                     "marca_model": f"{veh.marca} {veh.model}".strip(),
+                    "carnet_necessari": getattr(veh, "carnet_necessari", None),
+                    "cost_per_km_eur": float(_q2(veh_cost_per_km)) if mostrar_costos_interns else None,
                 }
+
+        # Quadrilla assignada (Cap de colla + Operaris)
+        ops_rows = (
+            await db.execute(
+                select(OrdreTreballOperari, Usuari)
+                .join(Usuari, OrdreTreballOperari.operari_id == Usuari.id)
+                .where(
+                    OrdreTreballOperari.empresa_id == empresa_id,
+                    OrdreTreballOperari.ordre_treball_id == ot.id,
+                )
+                .order_by(OrdreTreballOperari.es_cap_de_colla.desc(), Usuari.nom.asc())
+            )
+        ).all()
+        operaris_list: List[Dict[str, Any]] = [
+            {
+                "id": str(u.id),
+                "nom": f"{u.nom} {u.cognoms or ''}".strip(),
+                "rol": u.rol,
+                "es_cap_de_colla": bool(oto.es_cap_de_colla),
+                "telefon": u.telefon,
+            }
+            for oto, u in ops_rows
+        ]
 
         planol_info: Optional[Dict[str, Any]] = None
         if ot.planol_id:
@@ -744,6 +774,7 @@ class ReconciliacioOTService:
                 barema_fetched=True,
             )
         )
+        valor_ma_obra_previst_pvp = _q2(hores_previstes * preu_hora_pvp)
         valor_ma_obra_pvp = _q2(hores_reals * preu_hora_pvp)
         pvp_materials_ot = _q2(ot.pvp_materials_aplicat or 0)
         valor_materials_pvp = (
@@ -753,11 +784,16 @@ class ReconciliacioOTService:
         if import_pressupostat <= 0 and pressupost_info:
             import_pressupostat = _q2(pressupost_info["total"])
 
+        total_previst_pvp = _q2(valor_ma_obra_previst_pvp + valor_materials_pvp)
         total_valorat_pvp = _q2(valor_ma_obra_pvp + valor_materials_pvp)
         base_ingressos = (
             _q2(factura_info["base_imposable"])
             if factura_info and Decimal(str(factura_info["base_imposable"] or 0)) > 0
-            else (import_pressupostat if import_pressupostat > 0 else total_valorat_pvp)
+            else (
+                import_pressupostat
+                if import_pressupostat > 0
+                else (total_valorat_pvp if total_valorat_pvp > 0 else total_previst_pvp)
+            )
         )
 
         # Costos reals interns
@@ -765,6 +801,14 @@ class ReconciliacioOTService:
             cost_materials_real_pmp = _q2(ot.cost_materials_pmp)
         elif cost_materials_real_pmp <= 0 and Decimal(str(ot.cost_materials_picking_pmp or 0)) > 0:
             cost_materials_real_pmp = _q2(ot.cost_materials_picking_pmp)
+        if cost_materials_previst_pmp <= 0 and cost_materials_real_pmp > 0:
+            cost_materials_previst_pmp = cost_materials_real_pmp
+
+        cost_ma_obra_previst = Decimal("0.00")
+        if hores_previstes > 0:
+            cost_ma_obra_previst = _q2(
+                await calcular_cost_ma_obra_real(db, empresa_id, ot, [], float(hores_previstes))
+            )
 
         cost_ma_obra_real = _q2(ot.cost_ma_obra_real or 0)
         if cost_ma_obra_real <= 0 and hores_reals > 0:
@@ -772,6 +816,17 @@ class ReconciliacioOTService:
                 await calcular_cost_ma_obra_real(db, empresa_id, ot, trams, float(hores_reals))
             )
         cost_flota_real = _q2(ot.cost_flota_real or 0)
+
+        cost_total_previst = _q2(
+            cost_materials_previst_pmp + cost_ma_obra_previst + cost_flota_real
+        )
+        marge_previst_eur = _q2(base_ingressos - cost_total_previst)
+        marge_previst_pct = (
+            _q2((marge_previst_eur / base_ingressos) * Decimal("100"))
+            if base_ingressos > 0
+            else Decimal("0.00")
+        )
+
         cost_total_real = _q2(
             cost_materials_real_pmp
             + cost_mermes_real_pmp
@@ -825,9 +880,11 @@ class ReconciliacioOTService:
             "desviacio_hores": float(desviacio_hores),
             "km_imputats": int(ot.km_imputats or 0),
             "preu_venda_hora_aplicat": float(preu_hora_pvp),
+            "valor_ma_obra_previst_pvp": float(valor_ma_obra_previst_pvp),
             "valor_ma_obra_pvp": float(valor_ma_obra_pvp),
             "valor_materials_pvp": float(valor_materials_pvp),
             "total_tiquets_camp": float(total_tiquets_camp),
+            "total_previst_pvp": float(total_previst_pvp),
             "total_valorat_pvp": float(total_valorat_pvp),
         }
 
@@ -839,10 +896,14 @@ class ReconciliacioOTService:
             if mostrar_costos_interns
             else None,
             "cost_mermes_pmp": float(cost_mermes_real_pmp) if mostrar_costos_interns else None,
+            "cost_ma_obra_previst": float(cost_ma_obra_previst) if mostrar_costos_interns else None,
             "cost_ma_obra_real": float(cost_ma_obra_real) if mostrar_costos_interns else None,
             "cost_flota_real": float(cost_flota_real) if mostrar_costos_interns else None,
             "cost_tiquets_camp": float(total_tiquets_camp) if mostrar_costos_interns else None,
+            "cost_total_previst": float(cost_total_previst) if mostrar_costos_interns else None,
             "cost_total_real": float(cost_total_real) if mostrar_costos_interns else None,
+            "marge_previst_eur": float(marge_previst_eur) if mostrar_costos_interns else None,
+            "marge_previst_percentatge": float(marge_previst_pct) if mostrar_costos_interns else None,
             "marge_real_eur": float(marge_real_eur) if mostrar_costos_interns else None,
             "marge_real_percentatge": float(marge_real_pct) if mostrar_costos_interns else None,
             "bloqueig_marge_critic": bloqueig_marge_critic if mostrar_costos_interns else None,
@@ -857,6 +918,7 @@ class ReconciliacioOTService:
             "client_id": str(ot.client_id),
             "client_nom": client_obj.rao_social if client_obj else None,
             "vehicle": vehicle_info,
+            "operaris_assignats": operaris_list,
             "planol": planol_info,
             "disclaimer": disclaimer,
             "validacio": {
