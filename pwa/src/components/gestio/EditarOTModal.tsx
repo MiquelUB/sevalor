@@ -110,6 +110,10 @@ export function EditarOTModal({ feinaId, onClose, onSuccess }: EditarOTModalProp
 
   const [horaInici, setHoraInici] = useState("");
   const [horaFi, setHoraFi] = useState("");
+  const [horesPrevistesLoaded, setHoresPrevistesLoaded] = useState<number>(0);
+  const [originalHoraIniciIso, setOriginalHoraIniciIso] = useState<string | null>(null);
+  const [originalHoraFiIso, setOriginalHoraFiIso] = useState<string | null>(null);
+  const [franjaHorariaModificada, setFranjaHorariaModificada] = useState<boolean>(false);
 
   // Colla operaris state (suport / equip addicional)
   const [collaOperariIds, setCollaOperariIds] = useState<string[]>([]);
@@ -234,6 +238,11 @@ export function EditarOTModal({ feinaId, onClose, onSuccess }: EditarOTModalProp
           longitud: feinaData.longitud ?? null,
           planol_id: feinaData.planol_id || "",
         });
+
+        setOriginalHoraIniciIso(feinaData.hora_inici_prevista || null);
+        setOriginalHoraFiIso(feinaData.hora_fi_prevista || null);
+        setHoresPrevistesLoaded(Number(feinaData.hores_previstes || 0));
+        setFranjaHorariaModificada(false);
 
         if (feinaData.hora_inici_prevista) {
           try {
@@ -464,8 +473,16 @@ export function EditarOTModal({ feinaId, onClose, onSuccess }: EditarOTModalProp
         planol_id: formData.planol_id || null,
         adreca: formData.adreca.trim(),
         data_planificacio: formData.data_planificacio,
-        hora_inici_prevista: horaInici ? `${formData.data_planificacio}T${horaInici}:00` : null,
-        hora_fi_prevista: horaFi ? `${formData.data_planificacio}T${horaFi}:00` : null,
+        hora_inici_prevista: !franjaHorariaModificada && originalHoraIniciIso
+          ? originalHoraIniciIso
+          : horaInici
+          ? `${formData.data_planificacio}T${horaInici}:00`
+          : null,
+        hora_fi_prevista: !franjaHorariaModificada && originalHoraFiIso
+          ? originalHoraFiIso
+          : horaFi
+          ? `${formData.data_planificacio}T${horaFi}:00`
+          : null,
         estat: formData.estat,
         cap_de_colla_id: formData.cap_de_colla_id || null,
         operaris_ids: allOperarisIds,
@@ -892,7 +909,10 @@ export function EditarOTModal({ feinaId, onClose, onSuccess }: EditarOTModalProp
                       type="date"
                       required
                       value={formData.data_planificacio}
-                      onChange={(e) => setFormData({ ...formData, data_planificacio: e.target.value })}
+                      onChange={(e) => {
+                        setFormData({ ...formData, data_planificacio: e.target.value });
+                        setFranjaHorariaModificada(true);
+                      }}
                       className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary font-mono"
                     />
                   </div>
@@ -920,31 +940,48 @@ export function EditarOTModal({ feinaId, onClose, onSuccess }: EditarOTModalProp
                 </div>
 
                 {/* Franja Horària Prevista (Opcional) */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1 flex items-center gap-1.5">
-                      <Clock className="w-3.5 h-3.5 text-slate-400" />
-                      <span>Hora Inici Prevista (Opcional)</span>
-                    </label>
-                    <input
-                      type="time"
-                      value={horaInici}
-                      onChange={(e) => setHoraInici(e.target.value)}
-                      className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary font-mono"
-                    />
-                  </div>
+                <div className="space-y-1.5">
+                  {horesPrevistesLoaded > 0 && !franjaHorariaModificada && (
+                    <div className="flex items-center justify-between text-[11px] px-2.5 py-1.5 rounded-lg bg-primary/10 text-primary font-medium">
+                      <span className="inline-flex items-center gap-1.5">
+                        <Clock className="w-3.5 h-3.5" />
+                        <span>Hores previstes planificades</span>
+                      </span>
+                      <span className="font-mono font-bold">{horesPrevistesLoaded.toFixed(2)} h</span>
+                    </div>
+                  )}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1 flex items-center gap-1.5">
+                        <Clock className="w-3.5 h-3.5 text-slate-400" />
+                        <span>Hora Inici Prevista (Opcional)</span>
+                      </label>
+                      <input
+                        type="time"
+                        value={horaInici}
+                        onChange={(e) => {
+                          setHoraInici(e.target.value);
+                          setFranjaHorariaModificada(true);
+                        }}
+                        className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary font-mono"
+                      />
+                    </div>
 
-                  <div>
-                    <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1 flex items-center gap-1.5">
-                      <Clock className="w-3.5 h-3.5 text-slate-400" />
-                      <span>Hora Fi Prevista (Opcional)</span>
-                    </label>
-                    <input
-                      type="time"
-                      value={horaFi}
-                      onChange={(e) => setHoraFi(e.target.value)}
-                      className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary font-mono"
-                    />
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1 flex items-center gap-1.5">
+                        <Clock className="w-3.5 h-3.5 text-slate-400" />
+                        <span>Hora Fi Prevista (Opcional)</span>
+                      </label>
+                      <input
+                        type="time"
+                        value={horaFi}
+                        onChange={(e) => {
+                          setHoraFi(e.target.value);
+                          setFranjaHorariaModificada(true);
+                        }}
+                        className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary font-mono"
+                      />
+                    </div>
                   </div>
                 </div>
               </div>

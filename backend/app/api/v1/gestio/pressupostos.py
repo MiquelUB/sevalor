@@ -4,9 +4,11 @@ import asyncio
 import logging
 import re
 import uuid
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
+from datetime import time as dt_time
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any, Dict, List, Optional
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, status
 from fastapi.responses import HTMLResponse, Response
@@ -21,11 +23,20 @@ from app.models.models import (
     Client,
     EinaCustodia,
     Empresa,
+    EstocMagatzem,
+    Finca,
+    FullaPicking,
+    LiniaPicking,
     OrdreTreball,
+    OrdreTreballOperari,
     Pressupost,
+    SlotJornada,
     Usuari,
     Vehicle,
 )
+from app.services.barema_service import obtenir_barema_empresa
+from app.services.flota_service import JERARQUIA_CARNETS
+from app.services.geocoding_service import geocodificar_adreca
 from app.services.pressupost_service import (
     DEFAULT_VALIDESA_DIES,
     calcular_totals_pressupost_complet,
@@ -1552,6 +1563,78 @@ async def rebutjar_pressupost(
     return _serialitzar_pressupost(pressupost, client, detalls, _resolve_origin(request))
 
 
+_TZ_LOCAL_OBRA = ZoneInfo("Europe/Madrid")
+_SECCIONS_MA_OBRA_KEYWORDS = (
+    "mà d'obra",
+    "ma d'obra",
+    "mà dobra",
+    "ma dobra",
+    "mano de obra",
+    "treballs tècnics",
+    "treballs tecnics",
+    "muntatge",
+    "instal·lació",
+    "instal.lacio",
+    "instal·lacio",
+    "hores",
+)
+_SECCIONS_MATERIAL_KEYWORDS = (
+    "material",
+    "subministr",
+    "suministr",
+    "recanvi",
+    "peces",
+)
+_RE_REF_CONCEPTE = re.compile(r"^\s*\[([^\]]{1,50})\]")
+
+
+def _parse_uuid_safe(raw: Any) -> Optional[uuid.UUID]:
+    if not raw:
+        return None
+    try:
+        return uuid.UUID(str(raw).strip())
+    except (ValueError, TypeError, AttributeError):
+        return None
+
+
+def _es_linia_ma_obra(lin: Dict[str, Any]) -> bool:
+    tipus = str(lin.get("tipus_linia") or "").strip().upper()
+    if tipus == "MA_OBRA":
+        return True
+    if lin.get("operari_id"):
+        return True
+    if tipus in ("MATERIAL", "EINA", "DESPLACAMENT", "MAQUINARIA"):
+        return False
+    if lin.get("article_id") or lin.get("eina_id") or lin.get("vehicle_id"):
+        return False
+    seccio_l = str(lin.get("seccio") or "").strip().lower()
+    return any(kw in seccio_l for kw in _SECCIONS_MA_OBRA_KEYWORDS)
+
+
+def _es_linia_material(lin: Dict[str, Any]) -> bool:
+    if lin.get("article_id"):
+        return True
+    tipus = str(lin.get("tipus_linia") or "").strip().upper()
+    if tipus == "MATERIAL":
+        return True
+    if tipus in ("MA_OBRA", "EINA", "DESPLACAMENT", "MAQUINARIA"):
+        return False
+    if lin.get("eina_id") or lin.get("vehicle_id") or lin.get("operari_id"):
+        return False
+    seccio_l = str(lin.get("seccio") or "").strip().lower()
+    return any(kw in seccio_l for kw in _SECCIONS_MATERIAL_KEYWORDS)
+
+
+def _calcular_subtotal_linia_dec(lin: Dict[str, Any]) -> Decimal:
+    if lin.get("subtotal") is not None:
+        return Decimal(str(lin["subtotal"])).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    qt = Decimal(str(lin.get("quantitat") or 0))
+    preu = Decimal(str(lin.get("preu_unitari") or 0))
+    dto = Decimal(str(lin.get("descompte_pct") or 0))
+    factor = Decimal("1.00") - (dto / Decimal("100.00"))
+    return (qt * preu * factor).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+
 @router.post("/{pressupost_id}/convertir-ot", status_code=status.HTTP_201_CREATED)
 async def convertir_pressupost_a_ordre_treball(
     pressupost_id: uuid.UUID,
@@ -1559,7 +1642,7 @@ async def convertir_pressupost_a_ordre_treball(
     db: AsyncSession = Depends(get_db_with_tenant_context),
     claims: Dict[str, Any] = Depends(get_current_user_claims),
 ):
-    """Converteix un pressupost aprovat en una Ordre de Treball traspassant adreça, vehicle, finca i descripció."""
+    """Converteix un pressupost aprovat en una Ordre de Treball amb traspàs complet de materials (picking + reserva), eines, hores previstes, operaris, vehicle, km i georeferenciació."""
     empresa_id_str = claims.get("empresa_id")
     if not empresa_id_str:
         raise HTTPException(status_code=400, detail="Falta el tenant al token.")
@@ -1585,6 +1668,11 @@ async def convertir_pressupost_a_ordre_treball(
         pressupost.estat = "APROVAT"
         pressupost.token_signatura = f"GESTIO-APROV-{pressupost.id}"
 
+    avisos_importacio: List[str] = []
+    linies: List[Dict[str, Any]] = [
+        lin for lin in (detalls.get("linies") or []) if isinstance(lin, dict)
+    ]
+
     codi_ot = f"OT-{str(uuid.uuid4())[:6].upper()}"
     titol_ot = (
         payload.titol.strip()
@@ -1600,27 +1688,314 @@ async def convertir_pressupost_a_ordre_treball(
             or (client.adreca_fiscal if client and client.adreca_fiscal else "Adreça pendent de confirmar")
         )
     )
+    data_plan = (
+        payload.data_planificacio
+        if payload and payload.data_planificacio
+        else date.today()
+    )
 
-    finca_uuid: Optional[uuid.UUID] = None
-    if detalls.get("finca_id"):
-        try:
-            finca_uuid = uuid.UUID(str(detalls["finca_id"]))
-        except ValueError:
+    # 1. Finca i georeferenciació (prioritza coordenades exactes de la finca, fallback geocoder d'adreça)
+    finca_uuid = _parse_uuid_safe(detalls.get("finca_id"))
+    lat: Optional[float] = None
+    lng: Optional[float] = None
+    if finca_uuid:
+        finca_db = (
+            await db.execute(
+                select(Finca).where(Finca.id == finca_uuid, Finca.empresa_id == empresa_id)
+            )
+        ).scalars().first()
+        if not finca_db:
             finca_uuid = None
+        elif finca_db.latitud is not None and finca_db.longitud is not None:
+            lat = float(finca_db.latitud)
+            lng = float(finca_db.longitud)
+    if lat is None or lng is None:
+        lat, lng = geocodificar_adreca(str(adreca_ot))
 
-    vehicle_uuid: Optional[uuid.UUID] = None
-    if detalls.get("vehicle_id"):
-        try:
-            vehicle_uuid = uuid.UUID(str(detalls["vehicle_id"]))
-        except ValueError:
+    # 2. Vehicle principal, slots de desplaçament/maquinària i km previstos
+    raw_slots = [
+        sl for sl in (detalls.get("vehicles_desplacaments") or []) if isinstance(sl, dict)
+    ]
+    vehicle_uuid = _parse_uuid_safe(detalls.get("vehicle_id"))
+    if vehicle_uuid is None:
+        for sl in raw_slots:
+            cand = _parse_uuid_safe(sl.get("vehicle_id"))
+            if cand:
+                vehicle_uuid = cand
+                break
+    if vehicle_uuid is None:
+        for lin in linies:
+            cand = _parse_uuid_safe(lin.get("vehicle_id"))
+            if cand:
+                vehicle_uuid = cand
+                break
+
+    veh_obj: Optional[Vehicle] = None
+    if vehicle_uuid:
+        veh_obj = (
+            await db.execute(
+                select(Vehicle).where(Vehicle.id == vehicle_uuid, Vehicle.empresa_id == empresa_id)
+            )
+        ).scalars().first()
+        if not veh_obj:
             vehicle_uuid = None
 
+    km_total = Decimal("0.00")
+    hores_maquinaria_slots = Decimal("0.00")
+    vehicles_extra_desc: List[str] = []
+    if raw_slots:
+        for sl in raw_slots:
+            if sl.get("km") is not None:
+                km_total += max(Decimal("0"), Decimal(str(sl["km"])))
+            if sl.get("hores") is not None:
+                hores_maquinaria_slots += max(Decimal("0"), Decimal(str(sl["hores"])))
+            v_nom_sl = str(sl.get("vehicle_nom") or "").strip()
+            sl_id = _parse_uuid_safe(sl.get("vehicle_id"))
+            if v_nom_sl and (sl_id != vehicle_uuid or (sl.get("hores") and float(sl["hores"]) > 0)):
+                det_sl_parts: List[str] = []
+                if sl.get("km") and float(sl["km"]) > 0:
+                    det_sl_parts.append(f"{float(sl['km']):g} km")
+                if sl.get("hores") and float(sl["hores"]) > 0:
+                    det_sl_parts.append(f"{float(sl['hores']):g} h")
+                vehicles_extra_desc.append(
+                    f"{v_nom_sl} ({' · '.join(det_sl_parts)})" if det_sl_parts else v_nom_sl
+                )
+    else:
+        if detalls.get("desplacament_km") is not None:
+            km_total = max(Decimal("0"), Decimal(str(detalls["desplacament_km"])))
+        if detalls.get("desplacament_hores") is not None:
+            hores_maquinaria_slots = max(Decimal("0"), Decimal(str(detalls["desplacament_hores"])))
+    km_previstos_int = int(km_total.quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+
+    # 3. Hores de treball previstes, tarifa horària i operaris/quadrilla
+    hores_ma_obra = Decimal("0.00")
+    hores_ma_obra_amb_preu = Decimal("0.00")
+    import_ma_obra_amb_preu = Decimal("0.00")
+    hores_maquinaria_linies = Decimal("0.00")
+    candidate_operari_uuids: List[uuid.UUID] = []
+    seen_op_ids: set[uuid.UUID] = set()
+
+    for lin in linies:
+        tipus_lin = str(lin.get("tipus_linia") or "").strip().upper()
+        op_uid = _parse_uuid_safe(lin.get("operari_id"))
+        if op_uid and op_uid not in seen_op_ids:
+            seen_op_ids.add(op_uid)
+            candidate_operari_uuids.append(op_uid)
+
+        qt_lin = max(Decimal("0"), Decimal(str(lin.get("quantitat") or 0)))
+        if _es_linia_ma_obra(lin):
+            hores_ma_obra += qt_lin
+            preu_u = Decimal(str(lin.get("preu_unitari") or 0))
+            if qt_lin > 0 and preu_u > 0:
+                hores_ma_obra_amb_preu += qt_lin
+                import_ma_obra_amb_preu += _calcular_subtotal_linia_dec(lin)
+        elif tipus_lin == "MAQUINARIA":
+            hores_maquinaria_linies += qt_lin
+
+    hores_maquinaria = (
+        hores_maquinaria_linies if hores_maquinaria_linies > 0 else hores_maquinaria_slots
+    )
+    hores_previstes_total = (
+        hores_ma_obra if hores_ma_obra > 0 else hores_maquinaria
+    ).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+    hora_inici_prevista: Optional[datetime] = None
+    hora_fi_prevista: Optional[datetime] = None
+    if hores_previstes_total > Decimal("0.00"):
+        slot_jornada = (
+            await db.execute(
+                select(SlotJornada)
+                .where(SlotJornada.empresa_id == empresa_id)
+                .order_by(SlotJornada.created_at.asc())
+            )
+        ).scalars().first()
+        hora_base = (
+            slot_jornada.hora_entrada_teorica
+            if slot_jornada and slot_jornada.hora_entrada_teorica
+            else dt_time(8, 0)
+        )
+        hora_inici_prevista = datetime.combine(data_plan, hora_base, tzinfo=_TZ_LOCAL_OBRA)
+        hora_fi_prevista = hora_inici_prevista + timedelta(
+            seconds=int(round(float(hores_previstes_total) * 3600.0))
+        )
+
+    preu_hora_final = 0.0
+    if hores_ma_obra_amb_preu > 0 and import_ma_obra_amb_preu > 0:
+        preu_hora_final = float(
+            (import_ma_obra_amb_preu / hores_ma_obra_amb_preu).quantize(
+                Decimal("0.01"), rounding=ROUND_HALF_UP
+            )
+        )
+    else:
+        barema_empresa = await obtenir_barema_empresa(db, empresa_id)
+        if barema_empresa is not None and barema_empresa.get("preu_hora_standard_eur") is not None:
+            preu_hora_final = float(barema_empresa["preu_hora_standard_eur"])
+
+    # Resoldre operaris actius del tenant per a la quadrilla de l'OT
+    operaris_valids: List[Usuari] = []
+    if candidate_operari_uuids:
+        ops_rows = (
+            await db.execute(
+                select(Usuari).where(
+                    Usuari.empresa_id == empresa_id,
+                    Usuari.id.in_(candidate_operari_uuids),
+                    Usuari.estat == "ACTIU",
+                )
+            )
+        ).scalars().all()
+        ops_by_id = {u.id: u for u in ops_rows}
+        operaris_valids = [ops_by_id[uid] for uid in candidate_operari_uuids if uid in ops_by_id]
+
+    cap_de_colla_uuid: Optional[uuid.UUID] = None
+    if operaris_valids:
+        carnet_req = (
+            str(veh_obj.carnet_necessari or "B").strip().upper() if veh_obj else None
+        )
+
+        def _pot_conduir(u: Usuari) -> bool:
+            if not carnet_req or carnet_req == "N/A":
+                return True
+            perm_u = str(u.carnet_conduir or "B").strip().upper()
+            return perm_u in JERARQUIA_CARNETS.get(carnet_req, {carnet_req})
+
+        candidats_cap = [u for u in operaris_valids if str(u.rol or "").upper() == "CAP_DE_COLLA"]
+        pool_prioritari = [u for u in candidats_cap if _pot_conduir(u)]
+        if not pool_prioritari:
+            pool_prioritari = [u for u in operaris_valids if _pot_conduir(u)]
+        if not pool_prioritari:
+            pool_prioritari = candidats_cap or operaris_valids
+            if veh_obj:
+                avisos_importacio.append(
+                    f"Cap dels operaris importats té el permís {carnet_req} requerit pel vehicle {veh_obj.matricula}."
+                )
+        cap_de_colla_uuid = pool_prioritari[0].id
+
+    # 4. Materials -> agrupar quantitats per article_id (+ resolució per referència [REF] si falta article_id)
+    materials_qty_by_article: Dict[uuid.UUID, Decimal] = {}
+    materials_manuals_desc: List[str] = []
+    pvp_materials_total = Decimal("0.00")
+
+    refs_sense_id: List[str] = []
+    for lin in linies:
+        if not lin.get("article_id") and _es_linia_material(lin):
+            m_ref = _RE_REF_CONCEPTE.match(str(lin.get("concepte") or ""))
+            if m_ref:
+                refs_sense_id.append(m_ref.group(1).strip())
+
+    articles_by_ref: Dict[str, Article] = {}
+    if refs_sense_id:
+        ref_rows = (
+            await db.execute(
+                select(Article).where(
+                    Article.empresa_id == empresa_id,
+                    Article.referencia_inventari.in_(list(set(refs_sense_id))),
+                )
+            )
+        ).scalars().all()
+        articles_by_ref = {str(a.referencia_inventari).strip(): a for a in ref_rows}
+
+    for lin in linies:
+        if not _es_linia_material(lin):
+            continue
+        qt_mat = max(Decimal("0.001"), Decimal(str(lin.get("quantitat") or 1)))
+        pvp_materials_total += _calcular_subtotal_linia_dec(lin)
+        art_uid = _parse_uuid_safe(lin.get("article_id"))
+        if art_uid is None:
+            m_ref = _RE_REF_CONCEPTE.match(str(lin.get("concepte") or ""))
+            if m_ref and m_ref.group(1).strip() in articles_by_ref:
+                art_uid = articles_by_ref[m_ref.group(1).strip()].id
+        if art_uid is not None:
+            materials_qty_by_article[art_uid] = (
+                materials_qty_by_article.get(art_uid, Decimal("0.000")) + qt_mat
+            )
+        else:
+            concepte_m = str(lin.get("concepte") or "").strip()
+            if concepte_m:
+                materials_manuals_desc.append(f"{concepte_m} (x{float(qt_mat):g})")
+
+    valid_articles_map: Dict[uuid.UUID, Article] = {}
+    if materials_qty_by_article:
+        art_rows = (
+            await db.execute(
+                select(Article).where(
+                    Article.empresa_id == empresa_id,
+                    Article.id.in_(list(materials_qty_by_article.keys())),
+                )
+            )
+        ).scalars().all()
+        valid_articles_map = {a.id: a for a in art_rows}
+
+    # 5. Eines -> recopilar tots els IDs d'inventari (eines_ids + eines_resum + linies[*].eina_id)
+    eines_resum = [
+        e for e in (detalls.get("eines_resum") or []) if isinstance(e, dict)
+    ]
+    candidate_eina_uuids: List[uuid.UUID] = []
+    seen_eina_ids: set[uuid.UUID] = set()
+    for raw_eid in detalls.get("eines_ids") or []:
+        uid_e = _parse_uuid_safe(raw_eid)
+        if uid_e and uid_e not in seen_eina_ids:
+            seen_eina_ids.add(uid_e)
+            candidate_eina_uuids.append(uid_e)
+    for e_item in eines_resum:
+        uid_e = _parse_uuid_safe(e_item.get("id"))
+        if uid_e and uid_e not in seen_eina_ids:
+            seen_eina_ids.add(uid_e)
+            candidate_eina_uuids.append(uid_e)
+    for lin in linies:
+        uid_e = _parse_uuid_safe(lin.get("eina_id"))
+        if uid_e and uid_e not in seen_eina_ids:
+            seen_eina_ids.add(uid_e)
+            candidate_eina_uuids.append(uid_e)
+
+    eines_db_map: Dict[uuid.UUID, EinaCustodia] = {}
+    if candidate_eina_uuids:
+        e_rows = (
+            await db.execute(
+                select(EinaCustodia).where(
+                    EinaCustodia.empresa_id == empresa_id,
+                    EinaCustodia.id.in_(candidate_eina_uuids),
+                )
+            )
+        ).scalars().all()
+        eines_db_map = {e.id: e for e in e_rows}
+
+    # 6. Construir descripció tècnica completa per a l'operari i l'oficina
     desc_parts = [p for p in [detalls.get("descripcio")] if p and str(p).strip()]
-    eines_resum = detalls.get("eines_resum") or []
-    if eines_resum:
-        eines_str = ", ".join(str(e.get("nom") or "") for e in eines_resum if isinstance(e, dict) and e.get("nom"))
-        if eines_str:
-            desc_parts.append(f"Eines previstes ({pressupost.numero}): {eines_str}")
+    eines_desc_items: List[str] = []
+    eines_listed_ids: set[uuid.UUID] = set()
+    for e_item in eines_resum:
+        nom_e = str(e_item.get("nom") or "").strip()
+        if not nom_e:
+            continue
+        uid_e = _parse_uuid_safe(e_item.get("id"))
+        if uid_e:
+            eines_listed_ids.add(uid_e)
+        qt_e = e_item.get("quantitat")
+        ut_e = str(e_item.get("unitat") or "").strip()
+        if qt_e and float(qt_e) > 0 and ut_e:
+            eines_desc_items.append(f"{nom_e} ({float(qt_e):g} {ut_e})")
+        else:
+            eines_desc_items.append(nom_e)
+    for uid_e in candidate_eina_uuids:
+        if uid_e not in eines_listed_ids and uid_e in eines_db_map:
+            eines_desc_items.append(eines_db_map[uid_e].nom)
+    if eines_desc_items:
+        desc_parts.append(f"Eines previstes ({pressupost.numero}): {', '.join(eines_desc_items)}")
+    if hores_previstes_total > Decimal("0.00"):
+        hores_txt = f"Hores de treball previstes ({pressupost.numero}): {float(hores_previstes_total):g} h"
+        if hores_ma_obra > 0 and hores_maquinaria > 0:
+            hores_txt += f" (maquinària addicional: {float(hores_maquinaria):g} h)"
+        desc_parts.append(hores_txt)
+    if vehicles_extra_desc:
+        desc_parts.append(f"Vehicles / Maquinària previstos: {', '.join(vehicles_extra_desc)}")
+    if materials_manuals_desc:
+        desc_parts.append(
+            f"Materials fora de catàleg ({pressupost.numero}): {', '.join(materials_manuals_desc)}"
+        )
+    if detalls.get("termini_execucio"):
+        desc_parts.append(f"Termini d'execució acordat: {str(detalls['termini_execucio']).strip()}")
+    if detalls.get("notes_exclusions"):
+        desc_parts.append(f"Notes i exclusions: {str(detalls['notes_exclusions']).strip()}")
     descripcio_ot = "\n\n".join(desc_parts) if desc_parts else None
 
     total_brut = float(pressupost.total) if pressupost.total is not None else 0.0
@@ -1634,16 +2009,147 @@ async def convertir_pressupost_a_ordre_treball(
         client_id=pressupost.client_id,
         finca_id=finca_uuid,
         vehicle_id=vehicle_uuid,
+        cap_de_colla_id=cap_de_colla_uuid,
         titol=titol_ot,
         adreca=str(adreca_ot)[:255],
         descripcio=descripcio_ot,
-        estat="PENDENT",
-        data_planificacio=(payload.data_planificacio if payload and payload.data_planificacio else date.today()),
+        estat="ASSIGNADA" if operaris_valids else "PENDENT",
+        data_planificacio=data_plan,
+        hora_inici_prevista=hora_inici_prevista,
+        hora_fi_prevista=hora_fi_prevista,
+        latitud=lat,
+        longitud=lng,
+        km_imputats=km_previstos_int,
         import_pressupostat=float(pressupost.total or 0.0),
         import_pressupostat_net=base_net,
+        preu_venda_hora_aplicat=preu_hora_final,
+        pvp_materials_aplicat=float(
+            pvp_materials_total.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        ),
     )
-    db.add(nova_ot)
-    await db.commit()
+
+    materials_importats = 0
+    eines_importades = 0
+    operaris_importats = 0
+
+    try:
+        db.add(nova_ot)
+        await db.flush()
+
+        # 7. Sincronitzar estat del vehicle a ASSIGNAT (coherent amb alta_feina)
+        if veh_obj and veh_obj.estat == "OPERATIU":
+            veh_obj.estat = "ASSIGNAT"
+
+        # 8. Assignar quadrilla d'operaris (OrdreTreballOperari)
+        for op_u in operaris_valids:
+            db.add(
+                OrdreTreballOperari(
+                    empresa_id=empresa_id,
+                    ordre_treball_id=nova_ot.id,
+                    operari_id=op_u.id,
+                    es_cap_de_colla=(op_u.id == cap_de_colla_uuid),
+                )
+            )
+            operaris_importats += 1
+
+        # 9. Vincular eines en custòdia a l'OT
+        for uid_e in candidate_eina_uuids:
+            eina_obj = eines_db_map.get(uid_e)
+            if not eina_obj:
+                continue
+            if eina_obj.ordre_treball_id and eina_obj.ordre_treball_id != nova_ot.id:
+                avisos_importacio.append(
+                    f"L'eina '{eina_obj.nom}' estava vinculada a una altra OT i s'ha assignat a {codi_ot}."
+                )
+            eina_obj.estat = "CUSTODIADA"
+            eina_obj.ordre_treball_id = nova_ot.id
+            if cap_de_colla_uuid:
+                eina_obj.custodiat_per_operari_id = cap_de_colla_uuid
+            eines_importades += 1
+
+        # 10. Crear Fulla de Picking + LiniaPicking i reservar estoc disponible atòmicament (FOR UPDATE)
+        ordered_valid_materials = [
+            (art_id, q_dec)
+            for art_id, q_dec in materials_qty_by_article.items()
+            if art_id in valid_articles_map
+        ]
+        if ordered_valid_materials:
+            fulla_pk = FullaPicking(
+                empresa_id=empresa_id,
+                ordre_treball_id=nova_ot.id,
+                vehicle_id=vehicle_uuid,
+                estat_picking="PENDENT",
+            )
+            db.add(fulla_pk)
+            await db.flush()
+
+            for art_id, q_dec in ordered_valid_materials:
+                q_req = float(q_dec.quantize(Decimal("0.001"), rounding=ROUND_HALF_UP))
+                art_obj = valid_articles_map[art_id]
+                stmt_estoc = (
+                    select(EstocMagatzem)
+                    .where(
+                        EstocMagatzem.article_id == art_id,
+                        EstocMagatzem.empresa_id == empresa_id,
+                    )
+                    .order_by(EstocMagatzem.quantitat_fisica.desc())
+                    .with_for_update()
+                )
+                estocs = list((await db.execute(stmt_estoc)).scalars().all())
+
+                remaining = q_req
+                resolved_mag_id: Optional[uuid.UUID] = estocs[0].magatzem_id if estocs else None
+                for estoc in estocs:
+                    if remaining <= 0:
+                        break
+                    disp = max(
+                        0.0,
+                        float(estoc.quantitat_fisica or 0.0)
+                        - float(estoc.quantitat_virtual_reservada or 0.0),
+                    )
+                    if disp <= 0:
+                        continue
+                    take = min(disp, remaining)
+                    estoc.quantitat_virtual_reservada = (
+                        float(estoc.quantitat_virtual_reservada or 0.0) + take
+                    )
+                    if resolved_mag_id is None:
+                        resolved_mag_id = estoc.magatzem_id
+                    remaining -= take
+
+                if remaining > 0.0005:
+                    reservat = max(0.0, round(q_req - remaining, 3))
+                    avisos_importacio.append(
+                        f"Estoc insuficient per a '{art_obj.nom}': importat al picking ({q_req:g}), reservat {reservat:g} de {q_req:g}."
+                    )
+
+                db.add(
+                    LiniaPicking(
+                        empresa_id=empresa_id,
+                        picking_id=fulla_pk.id,
+                        article_id=art_id,
+                        magatzem_id=resolved_mag_id,
+                        quantitat_prevista=q_req,
+                        quantitat_carregada_pick_in=0.0,
+                        quantitat_retornada_pick_out=0.0,
+                        quantitat_mermada=0.0,
+                    )
+                )
+                materials_importats += 1
+
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        raise
+
+    # Sincronitzar OT i picking al disc sobirà (coherent amb alta_feina)
+    from app.api.v1.gestio.feines import _sincronitzar_feina_disc, build_feina_response
+
+    try:
+        f_resp = await build_feina_response(nova_ot, db, empresa_id)
+        await _sincronitzar_feina_disc(db, empresa_id, f_resp, nova_ot.estat)
+    except Exception as exc:
+        logger.warning("No s'ha pogut sincronitzar la nova OT %s al disc sobirà: %s", nova_ot.id, exc)
 
     detalls["ordre_treball_id"] = str(nova_ot.id)
     await desar_detalls_pressupost_disc(db, empresa_id, pressupost, detalls)
@@ -1653,6 +2159,13 @@ async def convertir_pressupost_a_ordre_treball(
         "pressupost_id": str(pressupost.id),
         "ordre_treball_id": str(nova_ot.id),
         "codi_ot": nova_ot.codi,
+        "materials_importats": materials_importats,
+        "eines_importades": eines_importades,
+        "operaris_importats": operaris_importats,
+        "hores_previstes": float(hores_previstes_total),
+        "preu_venda_hora_aplicat": float(preu_hora_final),
+        "km_previstos": km_previstos_int,
+        "avisos": avisos_importacio,
     }
 
 

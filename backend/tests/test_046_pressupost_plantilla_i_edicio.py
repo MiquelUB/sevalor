@@ -697,3 +697,453 @@ async def test_pressupost_codi_client_excavadora_hores_cost_eines_operaris_i_ia_
             assert upd_data["eines_resum"][1]["nom"] == "Ahoyadora tèrmica lloguer"
             assert upd_data["eines_resum"][1]["quantitat"] == 2.5
             assert upd_data["eines_resum"][1]["cost_eur"] == 18.75
+
+
+@pytest.mark.asyncio
+async def test_convertir_pressupost_a_ot_importacio_completa_materials_eines_hores_i_rls(
+    admin_session, headers, boss_token, tmp_path
+) -> None:
+    """Verifica el traspàs complet de pressupost aprovat a OT: materials (picking + reserva estoc), eines en custòdia, hores previstes, tarifa/h, operaris, vehicle, km, coordenades i aïllament RLS."""
+    from app.core.security import create_access_token
+    from app.models.models import (
+        Article,
+        EstocMagatzem,
+        Finca,
+        FullaPicking,
+        LiniaPicking,
+        Magatzem,
+        OrdreTreballOperari,
+        Usuari,
+    )
+    from tests.wss_test_helpers import live_empresa_wss_context
+
+    _, empresa_id = boss_token
+    emp_uuid = uuid.UUID(empresa_id)
+    vault_token = f"svlt_otimp_{uuid.uuid4().hex[:12]}"
+    disc_root = tmp_path / "disc_pres_ot_complet"
+    inicialitzar_arbre_carpetes_disc(disc_root)
+
+    emp = Empresa(
+        id=emp_uuid,
+        nom="Instal·lacions Totals SL",
+        nif="B" + str(uuid.uuid4())[:8].upper(),
+        subdomini="otimp-" + str(uuid.uuid4())[:6],
+        pla_subscripcio="PRO",
+        estat_pagament="ACTIU",
+        disc_dur_url=f"wss-tunnel://{emp_uuid}",
+        node_ia_url=f"wss-tunnel://{emp_uuid}",
+        vault_token=vault_token,
+    )
+    # Segon tenant per validar aïllament RLS
+    emp2_uuid = uuid.uuid4()
+    emp2 = Empresa(
+        id=emp2_uuid,
+        nom="Altra Empresa RLS SL",
+        nif="B" + str(uuid.uuid4())[:8].upper(),
+        subdomini="rlsother-" + str(uuid.uuid4())[:6],
+        pla_subscripcio="STARTER",
+        estat_pagament="ACTIU",
+    )
+    admin_session.add_all([emp, emp2])
+    await admin_session.flush()
+
+    cli_id = uuid.uuid4()
+    finca_id = uuid.uuid4()
+    mag_id = uuid.uuid4()
+    art_stock_ok_id = uuid.uuid4()
+    art_stock_parcial_id = uuid.uuid4()
+    art_ref_only_id = uuid.uuid4()
+    veh_furg_id = uuid.uuid4()
+    veh_exc_id = uuid.uuid4()
+    eina_1_id = uuid.uuid4()
+    eina_2_id = uuid.uuid4()
+    cap_id = uuid.uuid4()
+    op2_id = uuid.uuid4()
+    other_boss_id = uuid.uuid4()
+
+    admin_session.add_all(
+        [
+            Client(
+                id=cli_id,
+                empresa_id=emp_uuid,
+                codi="CLI-IMP1",
+                rao_social="Agrària Completa SL",
+                nif="B99887766",
+                adreca_fiscal="Camí del Canal, 5, 25200 Cervera",
+            ),
+            Finca(
+                id=finca_id,
+                empresa_id=emp_uuid,
+                client_id=cli_id,
+                nom="Finca Parcel·la Nord",
+                adreca="Polígon 4, Parcel·la 12, Cervera",
+                latitud=41.670123,
+                longitud=1.271456,
+            ),
+            Magatzem(
+                id=mag_id,
+                empresa_id=emp_uuid,
+                nom="Nau Central Cervera",
+                tipus="NAU_CENTRAL",
+            ),
+            Article(
+                id=art_stock_ok_id,
+                empresa_id=emp_uuid,
+                referencia_inventari="TUB-PE-50",
+                nom="Tub PEAD 50mm PN10",
+                unitat_mesura="METRES",
+                preu_cost=2.10,
+                preu_venda=4.50,
+            ),
+            Article(
+                id=art_stock_parcial_id,
+                empresa_id=emp_uuid,
+                referencia_inventari="VALV-EL-2",
+                nom="Electrovàlvula 2 polzades",
+                unitat_mesura="UNITAT",
+                preu_cost=35.00,
+                preu_venda=65.00,
+            ),
+            Article(
+                id=art_ref_only_id,
+                empresa_id=emp_uuid,
+                referencia_inventari="COL-50",
+                nom="Colze 90º PE 50mm",
+                unitat_mesura="UNITAT",
+                preu_cost=1.50,
+                preu_venda=3.80,
+            ),
+            Vehicle(
+                id=veh_furg_id,
+                empresa_id=emp_uuid,
+                matricula="7788-MNP",
+                marca="Ford",
+                model="Transit",
+                estat="OPERATIU",
+                carnet_necessari="B",
+            ),
+            Vehicle(
+                id=veh_exc_id,
+                empresa_id=emp_uuid,
+                matricula="E-1234-KB",
+                marca="Kubota",
+                model="KX019",
+                tipus="MAQUINARIA",
+                estat="OPERATIU",
+            ),
+            EinaCustodia(
+                id=eina_1_id,
+                empresa_id=emp_uuid,
+                nom="Termofusora 20-63mm",
+                model="TF-63",
+                numero_serie="SN-TF63-01",
+                estat="DISPONIBLE",
+            ),
+            EinaCustodia(
+                id=eina_2_id,
+                empresa_id=emp_uuid,
+                nom="Detector de Fuites Acústic",
+                model="DFA-9",
+                numero_serie="SN-DFA9-02",
+                estat="DISPONIBLE",
+            ),
+            Usuari(
+                id=cap_id,
+                empresa_id=emp_uuid,
+                nif="11111111C",
+                nom="Jordi",
+                cognoms="Soler",
+                rol="CAP_DE_COLLA",
+                estat="ACTIU",
+                carnet_conduir="B",
+                cost_hora_eur=28.00,
+            ),
+            Usuari(
+                id=op2_id,
+                empresa_id=emp_uuid,
+                nif="22222222D",
+                nom="Pau",
+                cognoms="Valls",
+                rol="OPERARI",
+                estat="ACTIU",
+                carnet_conduir="B",
+                cost_hora_eur=24.00,
+            ),
+            Usuari(
+                id=other_boss_id,
+                empresa_id=emp2_uuid,
+                nif="33333333E",
+                nom="Anna",
+                cognoms="Altres",
+                rol="BOSS",
+                estat="ACTIU",
+            ),
+        ]
+    )
+    await admin_session.flush()
+
+    admin_session.add_all(
+        [
+            EstocMagatzem(
+                empresa_id=emp_uuid,
+                article_id=art_stock_ok_id,
+                magatzem_id=mag_id,
+                quantitat_fisica=100.0,
+                quantitat_virtual_reservada=0.0,
+            ),
+            EstocMagatzem(
+                empresa_id=emp_uuid,
+                article_id=art_stock_parcial_id,
+                magatzem_id=mag_id,
+                quantitat_fisica=2.0,
+                quantitat_virtual_reservada=0.0,
+            ),
+            EstocMagatzem(
+                empresa_id=emp_uuid,
+                article_id=art_ref_only_id,
+                magatzem_id=mag_id,
+                quantitat_fisica=50.0,
+                quantitat_virtual_reservada=0.0,
+            ),
+        ]
+    )
+    await admin_session.commit()
+
+    other_headers = {
+        "Authorization": f"Bearer {create_access_token({'sub': str(other_boss_id), 'rol': 'BOSS', 'empresa_id': str(emp2_uuid)})}",
+        "X-Empresa-ID": str(emp2_uuid),
+    }
+
+    async with live_empresa_wss_context(emp_uuid, vault_token, disc_root):
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            res_create = await client.post(
+                "/api/v1/gestio/pressupostos",
+                json={
+                    "client_id": str(cli_id),
+                    "numero": "P-2026/900",
+                    "titol": "Instal·lació reg sector Nord",
+                    "descripcio": "Rasa, estesa de tub i muntatge de vàlvules.",
+                    "finca_id": str(finca_id),
+                    "adreca_obra": "Polígon 4, Parcel·la 12, Cervera",
+                    "vehicles_desplacaments": [
+                        {"vehicle_id": str(veh_furg_id), "km": 48, "preu_km": 0.50},
+                        {"vehicle_id": str(veh_exc_id), "hores": 4.0, "preu_hora": 60.0},
+                    ],
+                    "eines_ids": [str(eina_1_id)],
+                    "eines_assignades": [
+                        {"id": str(eina_1_id), "quantitat": 5.0, "unitat": "h", "cost_eur": 15.0},
+                        {"id": None, "nom": "Compactadora lloguer", "quantitat": 1.0, "unitat": "dia", "cost_eur": 85.0},
+                    ],
+                    "termini_execucio": "2 dies laborables",
+                    "notes_exclusions": "Client aporta punt elèctric.",
+                    "linies": [
+                        {
+                            "operari_id": str(op2_id),
+                            "seccio": "Mà d'obra i instal·lació",
+                            "tipus_linia": "MA_OBRA",
+                            "concepte": "Mà d'obra — Pau Valls",
+                            "quantitat": 6.5,
+                            "preu_unitari": 42.0,
+                            "tipus_iva": 21.0,
+                        },
+                        {
+                            "operari_id": str(cap_id),
+                            "seccio": "Mà d'obra i instal·lació",
+                            "tipus_linia": "MA_OBRA",
+                            "concepte": "Mà d'obra — Jordi Soler",
+                            "quantitat": 3.5,
+                            "preu_unitari": 42.0,
+                            "tipus_iva": 21.0,
+                        },
+                        {
+                            "article_id": str(art_stock_ok_id),
+                            "seccio": "Materials i subministraments",
+                            "tipus_linia": "MATERIAL",
+                            "concepte": "[TUB-PE-50] Tub PEAD 50mm PN10",
+                            "quantitat": 20.0,
+                            "preu_unitari": 4.50,
+                            "tipus_iva": 21.0,
+                        },
+                        {
+                            "article_id": str(art_stock_ok_id),
+                            "seccio": "Materials i subministraments",
+                            "tipus_linia": "MATERIAL",
+                            "concepte": "[TUB-PE-50] Tub PEAD 50mm PN10 (ampliació)",
+                            "quantitat": 10.0,
+                            "preu_unitari": 4.50,
+                            "tipus_iva": 21.0,
+                        },
+                        {
+                            "article_id": str(art_stock_parcial_id),
+                            "seccio": "Materials i subministraments",
+                            "tipus_linia": "MATERIAL",
+                            "concepte": "[VALV-EL-2] Electrovàlvula 2 polzades",
+                            "quantitat": 5.0,
+                            "preu_unitari": 65.00,
+                            "tipus_iva": 21.0,
+                        },
+                        {
+                            "seccio": "Materials i subministraments",
+                            "tipus_linia": "MATERIAL",
+                            "concepte": "[COL-50] Colze 90º PE 50mm",
+                            "quantitat": 8.0,
+                            "preu_unitari": 3.80,
+                            "tipus_iva": 21.0,
+                        },
+                        {
+                            "seccio": "Materials i subministraments",
+                            "tipus_linia": "MATERIAL",
+                            "concepte": "Grava rentada a granel (fora de catàleg)",
+                            "quantitat": 2.0,
+                            "preu_unitari": 40.0,
+                            "tipus_iva": 21.0,
+                        },
+                        {
+                            "eina_id": str(eina_2_id),
+                            "seccio": "Eines i maquinària",
+                            "tipus_linia": "EINA",
+                            "concepte": "Ús d'eina: Detector de Fuites Acústic",
+                            "quantitat": 2.0,
+                            "preu_unitari": 20.0,
+                            "tipus_iva": 21.0,
+                        },
+                        {
+                            "vehicle_id": str(veh_exc_id),
+                            "seccio": "Desplaçament i vehicle",
+                            "tipus_linia": "MAQUINARIA",
+                            "concepte": "Ús per hores (E-1234-KB · Kubota KX019)",
+                            "quantitat": 4.0,
+                            "preu_unitari": 60.0,
+                            "tipus_iva": 21.0,
+                        },
+                    ],
+                },
+                headers=headers,
+            )
+            assert res_create.status_code == 201, res_create.text
+            pres_id = res_create.json()["id"]
+
+            # Aprovar i convertir a OT
+            res_aprov = await client.post(
+                f"/api/v1/gestio/pressupostos/{pres_id}/aprovar", headers=headers
+            )
+            assert res_aprov.status_code == 200, res_aprov.text
+
+            # RLS: Un altre tenant no pot convertir el pressupost
+            res_rls_conv = await client.post(
+                f"/api/v1/gestio/pressupostos/{pres_id}/convertir-ot", headers=other_headers
+            )
+            assert res_rls_conv.status_code == 404
+
+            res_ot = await client.post(
+                f"/api/v1/gestio/pressupostos/{pres_id}/convertir-ot", headers=headers
+            )
+            assert res_ot.status_code == 201, res_ot.text
+            conv_data = res_ot.json()
+            ot_id = uuid.UUID(conv_data["ordre_treball_id"])
+            assert conv_data["materials_importats"] == 3
+            assert conv_data["eines_importades"] == 2
+            assert conv_data["operaris_importats"] == 2
+            assert conv_data["hores_previstes"] == 10.0
+            assert conv_data["preu_venda_hora_aplicat"] == 42.0
+            assert conv_data["km_previstos"] == 48
+            assert any("Electrovàlvula" in av for av in conv_data["avisos"])
+
+            # Verificar persistència real a PostgreSQL
+            ot_db = (
+                await admin_session.execute(select(OrdreTreball).where(OrdreTreball.id == ot_id))
+            ).scalar_one()
+            assert ot_db.estat == "ASSIGNADA"
+            assert ot_db.cap_de_colla_id == cap_id
+            assert ot_db.vehicle_id == veh_furg_id
+            assert ot_db.finca_id == finca_id
+            assert float(ot_db.latitud) == pytest.approx(41.670123, rel=1e-4)
+            assert float(ot_db.longitud) == pytest.approx(1.271456, rel=1e-4)
+            assert ot_db.km_imputats == 48
+            assert float(ot_db.hores_imputades_facturables) == 0.0
+            assert float(ot_db.preu_venda_hora_aplicat) == 42.0
+            assert ot_db.hora_inici_prevista is not None
+            assert ot_db.hora_fi_prevista is not None
+            dur_h = (ot_db.hora_fi_prevista - ot_db.hora_inici_prevista).total_seconds() / 3600.0
+            assert dur_h == pytest.approx(10.0, rel=1e-3)
+            assert "Compactadora lloguer" in (ot_db.descripcio or "")
+            assert "Grava rentada a granel" in (ot_db.descripcio or "")
+            assert "10 h" in (ot_db.descripcio or "")
+
+            # Vehicle sincronitzat a ASSIGNAT
+            veh_db = (
+                await admin_session.execute(select(Vehicle).where(Vehicle.id == veh_furg_id))
+            ).scalar_one()
+            assert veh_db.estat == "ASSIGNAT"
+
+            # Quadrilla d'operaris importada
+            ops_db = (
+                await admin_session.execute(
+                    select(OrdreTreballOperari).where(OrdreTreballOperari.ordre_treball_id == ot_id)
+                )
+            ).scalars().all()
+            assert {o.operari_id for o in ops_db} == {cap_id, op2_id}
+            assert any(o.operari_id == cap_id and o.es_cap_de_colla for o in ops_db)
+
+            # Eines en custòdia vinculades a l'OT
+            eines_db = (
+                await admin_session.execute(
+                    select(EinaCustodia).where(EinaCustodia.ordre_treball_id == ot_id)
+                )
+            ).scalars().all()
+            assert {e.id for e in eines_db} == {eina_1_id, eina_2_id}
+            assert all(e.estat == "CUSTODIADA" and e.custodiat_per_operari_id == cap_id for e in eines_db)
+
+            # FullaPicking + LiniaPicking + reserves d'estoc
+            fulla_db = (
+                await admin_session.execute(
+                    select(FullaPicking).where(FullaPicking.ordre_treball_id == ot_id)
+                )
+            ).scalar_one()
+            linies_pk = (
+                await admin_session.execute(
+                    select(LiniaPicking).where(LiniaPicking.picking_id == fulla_db.id)
+                )
+            ).scalars().all()
+            pk_by_art = {lp.article_id: float(lp.quantitat_prevista) for lp in linies_pk}
+            assert pk_by_art == {
+                art_stock_ok_id: 30.0,  # 20 + 10 agregats
+                art_stock_parcial_id: 5.0,  # importat complet encara que estoc era 2
+                art_ref_only_id: 8.0,  # resolt via [COL-50]
+            }
+
+            estoc_ok = (
+                await admin_session.execute(
+                    select(EstocMagatzem).where(EstocMagatzem.article_id == art_stock_ok_id)
+                )
+            ).scalar_one()
+            assert float(estoc_ok.quantitat_virtual_reservada) == 30.0
+
+            estoc_parcial = (
+                await admin_session.execute(
+                    select(EstocMagatzem).where(EstocMagatzem.article_id == art_stock_parcial_id)
+                )
+            ).scalar_one()
+            assert float(estoc_parcial.quantitat_virtual_reservada) == 2.0
+
+            # Verificar GET /gestio/feines/{ot_id} i GET /gestio/feines/{ot_id}/conciliacio
+            res_feina = await client.get(f"/api/v1/gestio/feines/{ot_id}", headers=headers)
+            assert res_feina.status_code == 200, res_feina.text
+            f_json = res_feina.json()
+            assert f_json["hores_previstes"] == 10.0
+            assert f_json["preu_venda_hora_aplicat"] == 42.0
+            assert len(f_json["linies_picking"]) == 3
+            assert len(f_json["eines"]) == 2
+            assert len(f_json["operaris_assignats"]) == 2
+
+            res_conc = await client.get(f"/api/v1/gestio/feines/{ot_id}/conciliacio", headers=headers)
+            assert res_conc.status_code == 200, res_conc.text
+            c_json = res_conc.json()
+            assert c_json["temps_i_gps"]["hores_previstes"] == 10.0
+            assert c_json["materials"]["total_linies"] == 3
+            assert len(c_json["eines"]) == 2
+            assert c_json["pressupost"]["numero"] == "P-2026/900"
+
+            # RLS: Segon tenant no pot llegir l'OT ni la seva conciliació
+            res_rls_ot = await client.get(f"/api/v1/gestio/feines/{ot_id}", headers=other_headers)
+            assert res_rls_ot.status_code == 404

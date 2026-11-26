@@ -150,7 +150,15 @@ function PressupostosContent() {
     setError(null);
     setSuccessMsg(null);
     try {
-      const res = await apiFetch<{ ordre_treball_id: string; codi_ot: string }>(
+      const res = await apiFetch<{
+        ordre_treball_id: string;
+        codi_ot: string;
+        materials_importats?: number;
+        eines_importades?: number;
+        operaris_importats?: number;
+        hores_previstes?: number;
+        avisos?: string[];
+      }>(
         `/gestio/pressupostos/${p.id}/convertir-ot`,
         {
           method: "POST",
@@ -158,7 +166,13 @@ function PressupostosContent() {
         }
       );
       await carregarDades();
-      setSuccessMsg(`Ordre de Treball ${res.codi_ot} creada des del pressupost ${p.numero}.`);
+      const parts: string[] = [];
+      if (res.materials_importats) parts.push(`${res.materials_importats} materials`);
+      if (res.eines_importades) parts.push(`${res.eines_importades} eines`);
+      if (res.hores_previstes) parts.push(`${res.hores_previstes} h previstes`);
+      if (res.operaris_importats) parts.push(`${res.operaris_importats} operaris`);
+      const detall = parts.length > 0 ? ` (${parts.join(", ")})` : "";
+      setSuccessMsg(`Ordre de Treball ${res.codi_ot} creada des del pressupost ${p.numero}${detall}.`);
       router.push(`/gestio/feines?id=${res.ordre_treball_id}`);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Error en convertir a Ordre de Treball.");

@@ -386,6 +386,7 @@ function FeinesContent() {
               <tbody className="divide-y divide-outline-variant/25 text-xs">
                 {feinesFiltrades.map((f) => {
                   const hores = Number(f.hores_imputades_facturables || 0);
+                  const horesPrevistes = Number(f.hores_previstes || 0);
                   const pickingCount = (f.linies_picking || []).length;
                   const einesCount = (f.eines || []).length;
 
@@ -424,8 +425,22 @@ function FeinesContent() {
                       </td>
                       <td className="py-3 px-4 whitespace-nowrap font-data-tabular">
                         <div className="flex items-center gap-2 text-[11px] text-on-surface-variant">
-                          <span className="inline-flex items-center gap-0.5" title="Hores computades">
-                            <Clock className="w-3 h-3" /> {hores.toFixed(2)}h
+                          <span
+                            className="inline-flex items-center gap-0.5"
+                            title={
+                              horesPrevistes > 0
+                                ? `Hores reals: ${hores.toFixed(2)}h · Previstes: ${horesPrevistes.toFixed(2)}h`
+                                : "Hores computades"
+                            }
+                          >
+                            <Clock className="w-3 h-3" />{" "}
+                            {hores > 0 && horesPrevistes > 0
+                              ? `${hores.toFixed(2)}/${horesPrevistes.toFixed(2)}h`
+                              : hores > 0
+                              ? `${hores.toFixed(2)}h`
+                              : horesPrevistes > 0
+                              ? `${horesPrevistes.toFixed(2)}h prev.`
+                              : "0.00h"}
                           </span>
                           <span className="inline-flex items-center gap-0.5" title="Línies picking">
                             <Package className="w-3 h-3" /> {pickingCount}
@@ -441,11 +456,15 @@ function FeinesContent() {
                           f.preu_venda_hora_aplicat !== undefined ? (
                             <div>
                               <span>{Number(f.preu_venda_hora_aplicat).toFixed(2)} €/h</span>
-                              {hores > 0 && (
+                              {hores > 0 ? (
                                 <span className="block text-[10px] font-mono text-primary">
                                   {(hores * Number(f.preu_venda_hora_aplicat)).toFixed(2)} €
                                 </span>
-                              )}
+                              ) : horesPrevistes > 0 ? (
+                                <span className="block text-[10px] font-mono text-on-surface-variant">
+                                  {(horesPrevistes * Number(f.preu_venda_hora_aplicat)).toFixed(2)} € prev.
+                                </span>
+                              ) : null}
                             </div>
                           ) : (
                             "—"

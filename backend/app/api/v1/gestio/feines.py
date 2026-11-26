@@ -149,6 +149,7 @@ class FeinaResponse(FeinaCreate):
     planol_codi: Optional[str] = None
     hora_inici_real: Optional[datetime] = None
     hora_fi_real: Optional[datetime] = None
+    hores_previstes: float = 0.0
     hores_imputades_facturables: Optional[float] = 0.0
     preu_venda_hora_aplicat: Optional[float] = None
     factura_id: Optional[uuid.UUID] = None
@@ -205,6 +206,18 @@ class FeinaUpdate(BaseModel):
         if not v_clean:
             raise ValueError("L'adreça de l'obra no pot estar buida")
         return v_clean
+
+
+def _calcular_hores_previstes(ordre: OrdreTreball) -> float:
+    """Calcula les hores previstes a partir de hora_inici_prevista i hora_fi_prevista."""
+    if (
+        ordre.hora_inici_prevista
+        and ordre.hora_fi_prevista
+        and ordre.hora_fi_prevista > ordre.hora_inici_prevista
+    ):
+        diff_sec = (ordre.hora_fi_prevista - ordre.hora_inici_prevista).total_seconds()
+        return round(diff_sec / 3600.0, 2)
+    return 0.0
 
 
 def _aplicar_veto_rol_feina(f_resp: FeinaResponse, claims: Optional[Dict[str, Any]]) -> FeinaResponse:
@@ -605,6 +618,7 @@ async def llistar_feines(
             f_resp.validada_per_nom = validadors_map[ordre.validada_per_id]
         f_resp.signatura_present = bool(ordre.signatura_client_path)
         f_resp.desviacio_geovalla = bool(ordre.desviacio_geovalla)
+        f_resp.hores_previstes = _calcular_hores_previstes(ordre)
         f_resp.preu_venda_hora_aplicat = await resoldre_preu_hora_control_panel(
             db,
             emp_uuid,
@@ -899,6 +913,7 @@ async def build_feina_response(
             f_resp.validada_per_nom = f"{val_obj[0]} {val_obj[1] or ''}".strip()
     f_resp.signatura_present = bool(ordre.signatura_client_path)
     f_resp.desviacio_geovalla = bool(ordre.desviacio_geovalla)
+    f_resp.hores_previstes = _calcular_hores_previstes(ordre)
     f_resp.preu_venda_hora_aplicat = await resoldre_preu_hora_control_panel(
         db, empresa_id, ordre
     )

@@ -108,8 +108,11 @@ export interface Feina {
   client_nom?: string | null;
   descripcio?: string | null;
   data_planificacio?: string | null;
+  hora_inici_prevista?: string | null;
+  hora_fi_prevista?: string | null;
   hora_inici_real?: string | null;
   hora_fi_real?: string | null;
+  hores_previstes?: number | null;
   hores_imputades_facturables?: number | null;
   preu_venda_hora_aplicat?: number | null;
   factura_id?: string | null;

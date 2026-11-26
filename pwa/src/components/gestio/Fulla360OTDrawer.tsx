@@ -130,6 +130,13 @@ interface ConciliacioCompleta {
     detall_merma?: string | null;
     linies: MaterialConciliacio[];
   };
+  eines?: Array<{
+    id: string;
+    nom: string;
+    model?: string | null;
+    numero_serie: string;
+    estat: string;
+  }>;
   incidencies: {
     total: number;
     obertes: number;
@@ -352,8 +359,9 @@ export function Fulla360OTDrawer({
     };
 
   const materialsConc = conc?.materials?.linies || [];
-  const eines = feina.eines || [];
+  const eines = (conc?.eines && conc.eines.length > 0 ? conc.eines : feina.eines) || [];
   const trams = feina.trams_temps || [];
+  const horesPrev = Number(conc?.temps_i_gps?.hores_previstes ?? feina.hores_previstes ?? 0);
   const horesFact = Number(conc?.temps_i_gps?.hores_reals ?? feina.hores_imputades_facturables ?? 0);
   const preuH = Number(conc?.resum_comercial?.preu_venda_hora_aplicat ?? feina.preu_venda_hora_aplicat ?? 0);
 
@@ -570,6 +578,17 @@ export function Fulla360OTDrawer({
               </div>
             </section>
 
+            {feina.descripcio && (
+              <section className="p-3.5 rounded-xl bg-surface-container-low/60 dark:bg-slate-800/40 border border-outline-variant/30 space-y-1">
+                <span className="font-label-caps text-on-surface-variant uppercase block text-[10px]">
+                  Instruccions i Detall Importat
+                </span>
+                <p className="text-xs text-on-surface dark:text-slate-200 whitespace-pre-line leading-relaxed">
+                  {feina.descripcio}
+                </p>
+              </section>
+            )}
+
             {/* Alerta Geovalla GPS */}
             {conc?.temps_i_gps?.desviacio_geovalla && (
               <section className="p-3.5 rounded-xl bg-amber-50 dark:bg-amber-950/35 border border-amber-300 dark:border-amber-700 flex items-start justify-between gap-3">
@@ -630,6 +649,11 @@ export function Fulla360OTDrawer({
                   <span className="text-base font-mono font-black text-primary dark:text-white">
                     {horesFact.toFixed(2)} h
                   </span>
+                  {horesPrev > 0 && (
+                    <span className="block text-[10px] font-mono text-on-surface-variant mt-0.5">
+                      Previstes: {horesPrev.toFixed(2)} h
+                    </span>
+                  )}
                 </div>
                 <div className="p-2.5 rounded-lg bg-surface-container-low dark:bg-slate-800/60 border border-outline-variant/20">
                   <span className="text-[10px] font-label-caps text-on-surface-variant uppercase block">
@@ -638,6 +662,11 @@ export function Fulla360OTDrawer({
                   <span className="text-base font-mono font-black text-secondary">
                     {Number(conc?.resum_comercial?.valor_ma_obra_pvp ?? horesFact * preuH).toFixed(2)} €
                   </span>
+                  {horesFact === 0 && horesPrev > 0 && preuH > 0 && (
+                    <span className="block text-[10px] font-mono text-on-surface-variant mt-0.5">
+                      Previst: {(horesPrev * preuH).toFixed(2)} €
+                    </span>
+                  )}
                 </div>
                 <div className="p-2.5 rounded-lg bg-surface-container-low dark:bg-slate-800/60 border border-outline-variant/20">
                   <span className="text-[10px] font-label-caps text-on-surface-variant uppercase block">
