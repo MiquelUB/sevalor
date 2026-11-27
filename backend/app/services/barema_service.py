@@ -23,7 +23,7 @@ async def obtenir_barema_empresa(
     """Llegeix el Barema de Preus configurat al Panell de Control (/gestio/configuracio)."""
     try:
         items = await SovereignStorageGateway.llegir_entitats_json(
-            db, empresa_id, "configuracio"
+            db, empresa_id, "configuracio", timeout=3.0
         )
     except HTTPException as exc:
         logger.warning(

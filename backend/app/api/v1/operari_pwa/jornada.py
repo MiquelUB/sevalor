@@ -1,3 +1,4 @@
+import math
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Optional
@@ -10,13 +11,126 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db_with_tenant_context
 from app.core.security import get_current_user_id, require_roles
-from app.models.models import RegistreJornadaLaboral
+from app.models.models import RegistreJornadaLaboral, Usuari
 
 router = APIRouter(
     prefix="/operari",
     tags=["Operari Jornada"],
     dependencies=[Depends(require_roles(["OPERARI", "CAPATAZ", "CAP_DE_COLLA"]))],
 )
+
+
+def es_coord_gps_valida(lat: Optional[float], lng: Optional[float]) -> bool:
+    """Valida que les coordenades GPS siguin reals (finites, dins WGS84 i diferents de 0,0)."""
+    if lat is None or lng is None:
+        return False
+    try:
+        lat_f = float(lat)
+        lng_f = float(lng)
+    except (TypeError, ValueError):
+        return False
+    if not (math.isfinite(lat_f) and math.isfinite(lng_f)):
+        return False
+    if not (-90.0 <= lat_f <= 90.0 and -180.0 <= lng_f <= 180.0):
+        return False
+    if abs(lat_f) < 1e-6 and abs(lng_f) < 1e-6:
+        return False
+    return True
+
+
+async def actualitzar_posicio_usuari(
+    db: AsyncSession,
+    emp_uuid: uuid.UUID,
+    usuari_id: uuid.UUID,
+    lat: Optional[float],
+    lng: Optional[float],
+    when: Optional[datetime] = None,
+) -> Optional[datetime]:
+    """Persisteix l'última posició GPS real d'un operari a `usuaris` si les coordenades són vàlides."""
+    if not es_coord_gps_valida(lat, lng):
+        return None
+    u_res = await db.execute(
+        select(Usuari).where(Usuari.id == usuari_id, Usuari.empresa_id == emp_uuid)
+    )
+    usuari = u_res.scalars().first()
+    if not usuari:
+        return None
+    ts = when or datetime.now(timezone.utc)
+    usuari.ultima_latitud = round(float(lat), 6)  # type: ignore[arg-type]
+    usuari.ultima_longitud = round(float(lng), 6)  # type: ignore[arg-type]
+    usuari.ultima_posicio_at = ts
+    return ts
+
+
+class PosicioOperariRequest(BaseModel):
+    latitud: Optional[float] = None
+    longitud: Optional[float] = None
+    lat: Optional[float] = None
+    lng: Optional[float] = None
+    lon: Optional[float] = None
+
+    def model_post_init(self, __context: Any) -> None:
+        if self.latitud is None and self.lat is not None:
+            self.latitud = self.lat
+        if self.longitud is None and self.lng is not None:
+            self.longitud = self.lng
+        if self.longitud is None and self.lon is not None:
+            self.longitud = self.lon
+
+
+@router.post("/posicio")
+@router.post("/jornada/posicio")
+async def actualitzar_posicio_gps(
+    request: Request,
+    payload: PosicioOperariRequest,
+    db: AsyncSession = Depends(get_db_with_tenant_context),
+):
+    """Rep la posició GPS real en temps real de l'operari i la difon al mapa de Gestió."""
+    empresa_id = request.state.empresa_id
+    if not empresa_id or empresa_id == "undefined":
+        raise HTTPException(status_code=401, detail="No identificat")
+    if not es_coord_gps_valida(payload.latitud, payload.longitud):
+        raise HTTPException(
+            status_code=422,
+            detail="Coordenades GPS invàlides o nules (cal ubicació real WGS84).",
+        )
+
+    emp_uuid = uuid.UUID(str(empresa_id))
+    usuari_uuid = uuid.UUID(str(get_current_user_id(request)))
+    ts = await actualitzar_posicio_usuari(
+        db, emp_uuid, usuari_uuid, payload.latitud, payload.longitud
+    )
+    if ts is None:
+        raise HTTPException(status_code=404, detail="Operari no trobat")
+
+    await db.commit()
+
+    lat_r = round(float(payload.latitud), 6)  # type: ignore[arg-type]
+    lng_r = round(float(payload.longitud), 6)  # type: ignore[arg-type]
+    try:
+        from app.api.v1.gestio.ws import manager as ws_manager
+
+        await ws_manager.broadcast(
+            str(emp_uuid),
+            {
+                "type": "OPERARI_GPS",
+                "operari_id": str(usuari_uuid),
+                "latitud": lat_r,
+                "longitud": lng_r,
+                "posicio_actualitzada_at": ts.isoformat(),
+                "posicio_origen": "GPS_TEMPS_REAL",
+            },
+        )
+    except Exception:
+        pass
+
+    return {
+        "status": "OK",
+        "operari_id": str(usuari_uuid),
+        "latitud": lat_r,
+        "longitud": lng_r,
+        "posicio_actualitzada_at": ts.isoformat(),
+    }
 
 
 class JornadaInici(BaseModel):
@@ -71,6 +185,9 @@ async def iniciar_jornada(
     )
 
     db.add(jornada)
+    await actualitzar_posicio_usuari(
+        db, uuid.UUID(empresa_id), uuid.UUID(usuari_id), payload.latitud, payload.longitud
+    )
     await db.flush()
 
     from app.services.sovereign_storage import SovereignStorageGateway
@@ -146,6 +263,9 @@ async def finalitzar_jornada(
     jornada.hora_fi = datetime.now(timezone.utc)
     jornada.geolocalitzacio_fi = f"{payload.latitud},{payload.longitud}"
     jornada.estat = "COMPLERT"
+    await actualitzar_posicio_usuari(
+        db, uuid.UUID(empresa_id), jornada.usuari_id, payload.latitud, payload.longitud, jornada.hora_fi
+    )
     await db.flush()
 
     from app.services.sovereign_storage import SovereignStorageGateway

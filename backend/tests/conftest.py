@@ -67,6 +67,16 @@ async def setup_test_database():
     async with engine.begin() as conn:
         await conn.execute(text("CREATE SCHEMA IF NOT EXISTS superadmin_telemetry;"))
         await conn.run_sync(Base.metadata.create_all)
+        await conn.execute(
+            text(
+                """
+                ALTER TABLE public.usuaris
+                    ADD COLUMN IF NOT EXISTS ultima_latitud NUMERIC(9, 6),
+                    ADD COLUMN IF NOT EXISTS ultima_longitud NUMERIC(9, 6),
+                    ADD COLUMN IF NOT EXISTS ultima_posicio_at TIMESTAMPTZ;
+                """
+            )
+        )
         import os
 
         try:

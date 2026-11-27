@@ -31,6 +31,7 @@ import { PressupostModal } from "@/components/gestio/PressupostModal";
 
 const ESTAT_CHIPS = [
   { id: "TOTES", label: "Totes" },
+  { id: "ACTIVES", label: "Actives / Pendents" },
   { id: "PENDENT", label: "Pendents" },
   { id: "ASSIGNADA", label: "Assignades" },
   { id: "EN_CURS", label: "En Curs / Obra" },
@@ -40,6 +41,8 @@ const ESTAT_CHIPS = [
 ] as const;
 
 type EstatFilter = (typeof ESTAT_CHIPS)[number]["id"];
+
+const VALID_ESTAT_FILTERS = new Set<string>(ESTAT_CHIPS.map((c) => c.id));
 
 const ESTATS_ACABADES = [
   "COMPLERT",
@@ -90,13 +93,17 @@ function FeinesContent() {
 
   const paramC = searchParams.get("c") || "";
   const paramId = searchParams.get("id") || "";
+  const paramEstatRaw = (searchParams.get("estat") || "").toUpperCase();
+  const initialEstat: EstatFilter = VALID_ESTAT_FILTERS.has(paramEstatRaw)
+    ? (paramEstatRaw as EstatFilter)
+    : "TOTES";
 
   const [feines, setFeines] = useState<Feina[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   const [cerca, setCerca] = useState<string>(paramC);
-  const [filtreEstat, setFiltreEstat] = useState<EstatFilter>("TOTES");
+  const [filtreEstat, setFiltreEstat] = useState<EstatFilter>(initialEstat);
 
   const [showCrearModal, setShowCrearModal] = useState<boolean>(false);
   const [showPressupostModal, setShowPressupostModal] = useState<boolean>(false);
@@ -123,6 +130,12 @@ function FeinesContent() {
   useEffect(() => {
     if (paramC) setCerca(paramC);
   }, [paramC]);
+
+  useEffect(() => {
+    if (paramEstatRaw && VALID_ESTAT_FILTERS.has(paramEstatRaw)) {
+      setFiltreEstat(paramEstatRaw as EstatFilter);
+    }
+  }, [paramEstatRaw]);
 
   const carregarFeines = useCallback(async () => {
     setLoading(true);
@@ -161,7 +174,11 @@ function FeinesContent() {
       if (filtreEstat !== "TOTES") {
         const up = (f.estat || "").toUpperCase();
         const discCodi = f.disclaimer?.codi || "";
-        if (filtreEstat === "EN_CURS") {
+        if (filtreEstat === "ACTIVES") {
+          if (ESTATS_ACABADES.includes(up) || up === "CANCEL·LADA" || up === "CANCELLADA") {
+            return false;
+          }
+        } else if (filtreEstat === "EN_CURS") {
           if (!["EN_CURS", "EN_OBRA", "EN_RUTA"].includes(up)) return false;
         } else if (filtreEstat === "PENDENT_VALIDAR") {
           if (discCodi !== "CONCLOSA_PENDENT_VALIDACIO") return false;

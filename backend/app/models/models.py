@@ -268,6 +268,11 @@ class Usuari(Base):
         Boolean, default=False, server_default=text("false")
     )
     data_ultim_acces: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    ultima_latitud: Mapped[Optional[float]] = mapped_column(Numeric(9, 6), nullable=True)
+    ultima_longitud: Mapped[Optional[float]] = mapped_column(Numeric(9, 6), nullable=True)
+    ultima_posicio_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),

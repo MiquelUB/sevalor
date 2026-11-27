@@ -1,6 +1,7 @@
 import collections
 import json
 import logging
+import os
 import uuid
 from datetime import date, datetime, timedelta, timezone
 from datetime import time as dt_time
@@ -527,6 +528,7 @@ async def _sincronitzar_feina_disc(
             categoria=categoria,
             item_id=str(f_resp.id),
             dades=payload,
+            timeout=4.0,
         )
         if f_resp.linies_picking:
             await SovereignStorageGateway.desar_entitat_json(
@@ -541,9 +543,19 @@ async def _sincronitzar_feina_disc(
                     "linies_picking": payload.get("linies_picking", []),
                     "synced_at": payload["synced_at"],
                 },
+                timeout=4.0,
             )
-        if not str(ruta).startswith("transit://"):
-            await SovereignStorageGateway.drenar_cua_transit_empresa(db, emp_uuid)
+        if (
+            not str(ruta).startswith("transit://")
+            and os.getenv("TESTING") != "1"
+            and SovereignStorageGateway.comptar_cua_transit_empresa(emp_uuid) > 0
+        ):
+            try:
+                from app.workers.tasks import drenar_cua_transit_task
+
+                drenar_cua_transit_task.delay(str(emp_uuid))
+            except Exception:
+                pass
     except Exception as exc:
         logger.warning("No s'ha pogut sincronitzar la feina %s al disc sobirà: %s", f_resp.id, exc)
 
@@ -835,16 +847,15 @@ async def alta_feina(
             lat = float(finca_db.latitud)
             lng = float(finca_db.longitud)
 
-    barema_empresa = await obtenir_barema_empresa(db, emp_uuid)
-    preu_hora_inicial = (
-        float(feina.preu_venda_hora_aplicat)
-        if feina.preu_venda_hora_aplicat is not None
-        else (
+    if feina.preu_venda_hora_aplicat is not None:
+        preu_hora_inicial = float(feina.preu_venda_hora_aplicat)
+    else:
+        barema_empresa = await obtenir_barema_empresa(db, emp_uuid)
+        preu_hora_inicial = (
             float(barema_empresa["preu_hora_standard_eur"])
             if barema_empresa is not None and barema_empresa.get("preu_hora_standard_eur") is not None
             else 0.0
         )
-    )
     hora_inici_res, hora_fi_res = await _resoldre_franja_hores_previstes(
         db=db,
         emp_uuid=emp_uuid,
@@ -948,6 +959,12 @@ async def alta_feina(
         await db.rollback()
         raise
 
+    await set_tenant_context(
+        db,
+        str(emp_uuid),
+        bool(getattr(request.state, "is_superadmin", False)),
+        role=str(claims.get("rol") or getattr(request.state, "user_role", "") or ""),
+    )
     f_resp = await build_feina_response(nova_feina, db, emp_uuid)
     await _sincronitzar_feina_disc(db, emp_uuid, f_resp, nova_feina.estat)
     return _aplicar_veto_rol_feina(f_resp, claims)
@@ -1628,6 +1645,12 @@ async def modificar_feina(
     ordre.versio = (ordre.versio or 1) + 1
     await db.commit()
 
+    await set_tenant_context(
+        db,
+        str(emp_uuid),
+        bool(getattr(request.state, "is_superadmin", False)),
+        role=str(claims.get("rol") or getattr(request.state, "user_role", "") or ""),
+    )
     f_resp = await build_feina_response(ordre, db, emp_uuid)
     await _sincronitzar_feina_disc(db, emp_uuid, f_resp, ordre.estat)
     return _aplicar_veto_rol_feina(f_resp, claims)
@@ -1842,6 +1865,12 @@ async def drop_and_go(
 
     await db.commit()
 
+    await set_tenant_context(
+        db,
+        str(emp_uuid),
+        bool(getattr(request.state, "is_superadmin", False)),
+        role=str(getattr(request.state, "user_role", "") or ""),
+    )
     f_resp = await build_feina_response(ordre, db, emp_uuid)
     await _sincronitzar_feina_disc(db, emp_uuid, f_resp, ordre.estat)
 
@@ -1937,6 +1966,12 @@ async def tancar_obra(
 
     await db.commit()
 
+    await set_tenant_context(
+        db,
+        str(emp_uuid),
+        bool(getattr(request.state, "is_superadmin", False)),
+        role=str(getattr(request.state, "user_role", "") or ""),
+    )
     f_resp = await build_feina_response(ordre, db, emp_uuid)
     await _sincronitzar_feina_disc(db, emp_uuid, f_resp, ordre.estat)
 

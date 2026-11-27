@@ -26,12 +26,10 @@ function GestioLayoutContent({ children }: { children: React.ReactNode }) {
   const { rolActiu, setRolActiu, spotlightObert, setSpotlightObert, isDark, toggleTheme } = useGestio();
   const [cercaSpotlight, setCercaSpotlight] = useState("");
   const [isEmbed, setIsEmbed] = useState(false);
-  const [vistaResultats, setVistaResultats] = useState(false);
 
   useEffect(() => {
     if (typeof window !== "undefined") {
       setIsEmbed(window.location.search.includes("embed=true") || window.self !== window.top);
-      setVistaResultats(window.location.search.includes("vista=resultats"));
     }
   }, [pathname]);
 
@@ -306,15 +304,14 @@ function GestioLayoutContent({ children }: { children: React.ReactNode }) {
         </div>
       </aside>
 
-      {/* ÀREA DRETA (Header doble + Main) */}
+      {/* ÀREA DRETA (Header compacte + Main) */}
       <div className="pl-[240px] flex flex-col min-h-screen">
-        {/* CAPÇALERA DOBLE STITCH */}
-        <header className="fixed top-0 left-[240px] right-0 h-32 bg-surface/85 backdrop-blur-md z-40 flex flex-col shadow-[0_1px_8px_rgba(0,0,0,0.04)]">
-          {/* Barra Superior (Cerca global + Accions) */}
-          <div className="h-16 px-xl flex items-center justify-between border-b border-surface-container-highest">
+        {/* CAPÇALERA COMPACTA (sense menú duplicat — navegació única a la barra lateral esquerra) */}
+        <header className="fixed top-0 left-[240px] right-0 h-16 bg-surface/90 backdrop-blur-md z-40 flex items-center justify-between px-xl border-b border-surface-container-highest shadow-[0_1px_8px_rgba(0,0,0,0.04)]">
+          <div className="flex items-center gap-lg min-w-0">
             <div
               onClick={() => setSpotlightObert(true)}
-              className="flex items-center bg-surface-container-low px-md py-xs rounded-lg w-96 border border-outline-variant cursor-pointer hover:border-primary transition-colors"
+              className="flex items-center bg-surface-container-low px-md py-xs rounded-lg w-80 lg:w-96 border border-outline-variant cursor-pointer hover:border-primary transition-colors shrink-0"
             >
               <span className="material-symbols-outlined text-outline text-[20px]">search</span>
               <input
@@ -329,144 +326,90 @@ function GestioLayoutContent({ children }: { children: React.ReactNode }) {
               </span>
             </div>
 
-            <div className="flex items-center gap-md">
-              {/* Banner compacte si és sessió d'impersonació Superadmin */}
-              {usuari?.is_impersonation && (
-                <div className="bg-secondary-container text-on-secondary-container px-3 py-1 rounded-full text-xs font-bold flex items-center gap-2 shadow-sm">
-                  <Shield className="w-3.5 h-3.5 shrink-0" />
-                  <span>Impersonació: {empresa?.nom || (usuari as any)?.empresa_nom || "Tenant Actiu"}</span>
-                  <button
-                    onClick={() => {
-                      // Impersonació al domini propi de l'empresa: netejar aquí i tornar al host d'admin
-                      const returnUrl = localStorage.getItem(IMPERSONATION_RETURN_KEY);
-                      if (returnUrl && /^https:\/\/[^/]+\/superadmin\//.test(returnUrl)) {
-                        clearAuthToken();
-                        localStorage.removeItem(IMPERSONATION_RETURN_KEY);
-                        window.location.href = returnUrl;
-                        return;
-                      }
-                      const superToken = localStorage.getItem("sevalor_superadmin_token");
-                      if (superToken) {
-                        setAuthToken(superToken);
-                        localStorage.removeItem("sevalor_superadmin_token");
-                        localStorage.setItem(
-                          "sevalor_user",
-                          JSON.stringify({ rol: "SUPERADMIN" })
-                        );
-                        window.location.href = "/superadmin/empreses";
-                      } else {
-                        clearAuthToken();
-                        window.location.href = "/superadmin/login";
-                      }
-                    }}
-                    className="ml-1 px-2 py-0.5 bg-primary text-white rounded-full text-[10px] hover:opacity-90"
-                    title="Tancar sessió d'impersonació i tornar al panell Superadmin"
-                  >
-                    Sortir
-                  </button>
-                </div>
-              )}
-
-              <button
-                onClick={toggleTheme}
-                className="p-2 rounded-lg hover:bg-surface-container-high text-on-surface-variant hover:text-primary transition-colors"
-                title="Commutar Tema"
-              >
-                {isDark ? (
-                  <Sun className="w-4 h-4 text-secondary-container" />
-                ) : (
-                  <Moon className="w-4 h-4" />
-                )}
-              </button>
-
-              {Boolean(usuari) && empresa?.feature_copilot_ia !== false && (
-                <Link
-                  href="/gestio/copilot"
-                  className="p-2 rounded-lg hover:bg-surface-container-high text-on-surface-variant hover:text-primary transition-colors"
-                  title="Copilot IA & Ajuda Tècnica"
-                >
-                  <span className="material-symbols-outlined text-[22px]">help</span>
-                </Link>
-              )}
-
-              <Link
-                href="/gestio/notificacions"
-                className="relative p-2 rounded-lg hover:bg-surface-container-high text-on-surface-variant hover:text-primary transition-colors"
-                title="Notificacions i Alertes"
-              >
-                <span className="material-symbols-outlined text-[22px]">notifications</span>
-                <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-error rounded-full"></span>
-              </Link>
-            </div>
-          </div>
-
-          {/* Sub-barra de pestanyes (FEINA / RESULTATS) i Breadcrumb */}
-          <div className="h-16 px-xl flex items-center justify-between">
-            <nav className="flex h-full gap-lg">
-              <Link
-                href="/gestio"
-                onClick={() => {
-                  setVistaResultats(false);
-                  setTimeout(() => window.dispatchEvent(new Event("sevalor-vista-change")), 10);
-                }}
-                className={`flex items-center h-full px-sm font-label-caps text-label-caps uppercase tracking-wider transition-all ${
-                  pathname === "/gestio" && !vistaResultats
-                    ? "text-secondary-container border-b-2 border-secondary-container font-bold"
-                    : "text-on-surface-variant hover:text-primary"
-                }`}
-              >
-                FEINA
-              </Link>
-              <Link
-                href="/gestio?vista=resultats"
-                onClick={() => {
-                  setVistaResultats(true);
-                  setTimeout(() => window.dispatchEvent(new Event("sevalor-vista-change")), 10);
-                }}
-                className={`flex items-center h-full px-sm font-label-caps text-label-caps uppercase tracking-wider transition-all ${
-                  pathname === "/gestio" && vistaResultats
-                    ? "text-secondary-container border-b-2 border-secondary-container font-bold"
-                    : "text-on-surface-variant hover:text-primary"
-                }`}
-              >
-                RESULTATS
-              </Link>
-              <Link
-                href="/gestio/mapa"
-                className={`flex items-center h-full px-sm font-label-caps text-label-caps uppercase tracking-wider transition-all ${
-                  pathname === "/gestio/mapa"
-                    ? "text-secondary-container border-b-2 border-secondary-container font-bold"
-                    : "text-on-surface-variant hover:text-primary"
-                }`}
-              >
-                MAPA EN TEMPS REAL
-              </Link>
-              <Link
-                href="/gestio/planols"
-                className={`flex items-center h-full px-sm font-label-caps text-label-caps uppercase tracking-wider transition-all ${
-                  pathname === "/gestio/planols"
-                    ? "text-secondary-container border-b-2 border-secondary-container font-bold"
-                    : "text-on-surface-variant hover:text-primary"
-                }`}
-              >
-                BIBLIOTECA DE PLÀNOLS
-              </Link>
-            </nav>
-
-            <nav className="hidden md:flex items-center text-xs text-on-surface-variant gap-xs">
+            <nav className="hidden xl:flex items-center text-xs text-on-surface-variant gap-xs truncate">
               <span className="material-symbols-outlined text-[14px]">home</span>
               <span>/</span>
               <Link href="/gestio" className="hover:text-primary">
                 Sevalor
               </Link>
               <span>/</span>
-              <span className="font-body-strong text-primary">{currentSectionLabel}</span>
+              <span className="font-body-strong text-primary truncate">{currentSectionLabel}</span>
             </nav>
+          </div>
+
+          <div className="flex items-center gap-md">
+            {/* Banner compacte si és sessió d'impersonació Superadmin */}
+            {usuari?.is_impersonation && (
+              <div className="bg-secondary-container text-on-secondary-container px-3 py-1 rounded-full text-xs font-bold flex items-center gap-2 shadow-sm">
+                <Shield className="w-3.5 h-3.5 shrink-0" />
+                <span>Impersonació: {empresa?.nom || (usuari as any)?.empresa_nom || "Tenant Actiu"}</span>
+                <button
+                  onClick={() => {
+                    // Impersonació al domini propi de l'empresa: netejar aquí i tornar al host d'admin
+                    const returnUrl = localStorage.getItem(IMPERSONATION_RETURN_KEY);
+                    if (returnUrl && /^https:\/\/[^/]+\/superadmin\//.test(returnUrl)) {
+                      clearAuthToken();
+                      localStorage.removeItem(IMPERSONATION_RETURN_KEY);
+                      window.location.href = returnUrl;
+                      return;
+                    }
+                    const superToken = localStorage.getItem("sevalor_superadmin_token");
+                    if (superToken) {
+                      setAuthToken(superToken);
+                      localStorage.removeItem("sevalor_superadmin_token");
+                      localStorage.setItem(
+                        "sevalor_user",
+                        JSON.stringify({ rol: "SUPERADMIN" })
+                      );
+                      window.location.href = "/superadmin/empreses";
+                    } else {
+                      clearAuthToken();
+                      window.location.href = "/superadmin/login";
+                    }
+                  }}
+                  className="ml-1 px-2 py-0.5 bg-primary text-white rounded-full text-[10px] hover:opacity-90"
+                  title="Tancar sessió d'impersonació i tornar al panell Superadmin"
+                >
+                  Sortir
+                </button>
+              </div>
+            )}
+
+            <button
+              onClick={toggleTheme}
+              className="p-2 rounded-lg hover:bg-surface-container-high text-on-surface-variant hover:text-primary transition-colors"
+              title="Commutar Tema"
+            >
+              {isDark ? (
+                <Sun className="w-4 h-4 text-secondary-container" />
+              ) : (
+                <Moon className="w-4 h-4" />
+              )}
+            </button>
+
+            {Boolean(usuari) && empresa?.feature_copilot_ia !== false && (
+              <Link
+                href="/gestio/copilot"
+                className="p-2 rounded-lg hover:bg-surface-container-high text-on-surface-variant hover:text-primary transition-colors"
+                title="Copilot IA & Ajuda Tècnica"
+              >
+                <span className="material-symbols-outlined text-[22px]">help</span>
+              </Link>
+            )}
+
+            <Link
+              href="/gestio/notificacions"
+              className="relative p-2 rounded-lg hover:bg-surface-container-high text-on-surface-variant hover:text-primary transition-colors"
+              title="Notificacions i Alertes"
+            >
+              <span className="material-symbols-outlined text-[22px]">notifications</span>
+              <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-error rounded-full"></span>
+            </Link>
           </div>
         </header>
 
         {/* CONTINGUT PRINCIPAL */}
-        <main className="relative pt-32 p-xl bg-surface min-h-screen flex-1 flex flex-col">
+        <main className="relative pt-24 px-xl pb-xl bg-surface min-h-screen flex-1 flex flex-col">
           {children}
         </main>
       </div>

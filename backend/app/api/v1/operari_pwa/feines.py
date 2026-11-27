@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.v1.operari_pwa.jornada import actualitzar_posicio_usuari
 from app.core.db import get_db_with_tenant_context
 from app.core.security import get_current_user_id, require_roles
 from app.models.models import (
@@ -670,6 +671,7 @@ async def comencar_feina(
             feina.foto_evidencia_desviacio = payload.foto_evidencia_desviacio
 
     feina.estat = "EN_CURS"
+    await actualitzar_posicio_usuari(db, emp_uuid, usuari_id, payload.lat, payload.lng, now)
     try:
         await db.commit()
     except Exception as e:
@@ -772,6 +774,10 @@ async def finalitzar_temps_feina(
 
     feina.estat = "PAUSADA"
     feina.data_finalitzacio_camp = now.date()
+    op_uid_raw = get_current_user_id(request)
+    op_uid = uuid.UUID(str(op_uid_raw)) if op_uid_raw else feina.cap_de_colla_id
+    if op_uid is not None:
+        await actualitzar_posicio_usuari(db, emp_uuid, op_uid, payload.lat, payload.lng, now)
 
     if payload.desviacio_justificada or payload.justificacio_gps:
         feina.desviacio_geovalla = True

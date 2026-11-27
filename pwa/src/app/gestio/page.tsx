@@ -12,7 +12,7 @@ import {
   Eye,
 } from "lucide-react";
 import Link from "next/link";
-import { apiFetch } from "@/lib/api";
+import { apiFetch, extractTenantId, getApiBaseUrl } from "@/lib/api";
 import { CrearOTModal } from "@/components/gestio/CrearOTModal";
 import { EditarOTModal } from "@/components/gestio/EditarOTModal";
 import { PressupostModal } from "@/components/gestio/PressupostModal";
@@ -86,9 +86,10 @@ export default function GestioDashboardPage() {
   const [expandedRowId, setExpandedRowId] = useState<string | null>(null);
   const [expandedSistemaRowId, setExpandedSistemaRowId] = useState<string | null>(null);
   const [selectedOTFulla360, setSelectedOTFulla360] = useState<Feina | null>(null);
+  const [otCreatedNotice, setOtCreatedNotice] = useState<string | null>(null);
 
-  const carregarDades = () => {
-    setLoading(true);
+  const carregarDades = (silent = false) => {
+    if (!silent) setLoading(true);
     Promise.all([
       apiFetch<any>("/gestio/dashboard/hud").catch(() => null),
       apiFetch<any>("/gestio/feines?limit=100").catch(() => []),
@@ -127,11 +128,74 @@ export default function GestioDashboardPage() {
           }));
         }
       })
-      .finally(() => setLoading(false));
+      .finally(() => {
+        if (!silent) setLoading(false);
+      });
   };
 
   useEffect(() => {
     carregarDades();
+    // Actualització periòdica silenciosa de posicions GPS reals dels operaris (cada 30s)
+    const interval = window.setInterval(() => {
+      if (document.visibilityState === "visible") {
+        apiFetch<any>("/gestio/operaris")
+          .then((operarisData) => {
+            const oList = Array.isArray(operarisData)
+              ? operarisData
+              : operarisData?.operaris || [];
+            setOperaris(oList.filter((o: any) => o.estat === "ACTIU"));
+          })
+          .catch(() => {});
+      }
+    }, 30000);
+
+    // Subscripció WebSocket en temps real per a coordenades GPS d'operaris
+    let ws: WebSocket | null = null;
+    try {
+      const tenantId = extractTenantId();
+      if (tenantId && typeof window !== "undefined") {
+        const apiBase = getApiBaseUrl();
+        const wsOrigin = apiBase.startsWith("http")
+          ? apiBase.replace(/^http/, "ws")
+          : `${window.location.protocol === "https:" ? "wss:" : "ws:"}//${window.location.host}${apiBase}`;
+        ws = new WebSocket(`${wsOrigin}/gestio/ws?empresa_id=${encodeURIComponent(tenantId)}`);
+        ws.onmessage = (event) => {
+          try {
+            const msg = JSON.parse(event.data);
+            if (msg?.type === "OPERARI_GPS" && msg.operari_id && msg.latitud != null && msg.longitud != null) {
+              setOperaris((prev) =>
+                prev.map((op) =>
+                  op.id === msg.operari_id
+                    ? {
+                        ...op,
+                        latitud: Number(msg.latitud),
+                        longitud: Number(msg.longitud),
+                        posicio_actualitzada_at: msg.posicio_actualitzada_at || new Date().toISOString(),
+                        posicio_origen: msg.posicio_origen || "GPS_TEMPS_REAL",
+                      }
+                    : op
+                )
+              );
+            }
+          } catch {
+            // Ignorar missatges no JSON
+          }
+        };
+      }
+    } catch {
+      // Fallback silenciós al polling de 30s
+    }
+
+    return () => {
+      window.clearInterval(interval);
+      if (ws) {
+        try {
+          ws.close();
+        } catch {
+          // ignore
+        }
+      }
+    };
   }, []);
 
   const handleDropAssignment = async (feinaId: string, versio: number, operariId: string) => {
@@ -178,22 +242,63 @@ export default function GestioDashboardPage() {
   };
 
   // Càlcul reactiu i coherent dels KPIs operatius en temps real (Zero Mock Data)
-  const feinesActives = feines.filter((f) =>
-    ["PENDENT", "ASSIGNADA", "PROGRAMADA", "EN_CURS", "EN_OBRA", "EN_RUTA", "PAUSADA"].includes(f.estat)
-  );
-  const feinesPendents = feines.filter((f) => f.estat === "PENDENT");
+  const ESTATS_CONCLOSOS = [
+    "COMPLERT",
+    "COMPLETADA",
+    "FINALITZADA",
+    "TANCADA",
+    "EXECUTADA_PENDENT_VALIDACIO",
+    "ALBARA_SIGNAT",
+    "VALIDADA_PER_FACTURAR",
+    "PREFACTURADA",
+    "FACTURADA",
+    "CANCEL·LADA",
+    "CANCELLADA",
+  ];
+  const ESTATS_EN_CURS = ["EN_CURS", "EN_OBRA", "EN_RUTA", "PAUSADA"];
+
+  const feinesActives = feines.filter((f) => {
+    const up = (f.estat || "").toUpperCase();
+    return !ESTATS_CONCLOSOS.includes(up);
+  });
+  const feinesPendents = feines.filter((f) => (f.estat || "").toUpperCase() === "PENDENT");
   const feinesCompletades = feines.filter((f) =>
-    [
-      "COMPLERT",
-      "COMPLETADA",
-      "FINALITZADA",
-      "TANCADA",
-      "PREFACTURADA",
-      "FACTURADA",
-      "EXECUTADA_PENDENT_VALIDACIO",
-      "ALBARA_SIGNAT",
-    ].includes(f.estat)
+    ESTATS_CONCLOSOS.includes((f.estat || "").toUpperCase())
   );
+
+  // Properes Feines: NOMÉS feines en curs i futures programades (mai les ja concloses)
+  const avuiIso = new Date().toISOString().split("T")[0];
+  const feinesProperes = feines
+    .filter((f) => {
+      const up = (f.estat || "").toUpperCase();
+      if (ESTATS_CONCLOSOS.includes(up)) return false;
+      if (ESTATS_EN_CURS.includes(up) || Boolean(f.te_tram_obert)) return true;
+      const dataPlan = (f.data_planificacio || "").slice(0, 10);
+      return !dataPlan || dataPlan >= avuiIso;
+    })
+    .sort((a, b) => {
+      const aInProg =
+        ESTATS_EN_CURS.includes((a.estat || "").toUpperCase()) || Boolean(a.te_tram_obert);
+      const bInProg =
+        ESTATS_EN_CURS.includes((b.estat || "").toUpperCase()) || Boolean(b.te_tram_obert);
+      if (aInProg && !bInProg) return -1;
+      if (!aInProg && bInProg) return 1;
+      const da = (a.data_planificacio || "9999-12-31").slice(0, 10);
+      const db = (b.data_planificacio || "9999-12-31").slice(0, 10);
+      return da.localeCompare(db);
+    });
+
+  // Enllaç directe de la targeta "Feines d'avui" a la feina pendent (mai a la llista total)
+  const feinesAvuiHref =
+    feinesPendents.length === 1
+      ? `/gestio/feines?estat=PENDENT&id=${feinesPendents[0].id}`
+      : feinesPendents.length > 1
+        ? "/gestio/feines?estat=PENDENT"
+        : feinesActives.length === 1
+          ? `/gestio/feines?estat=ACTIVES&id=${feinesActives[0].id}`
+          : feinesActives.length > 1
+            ? "/gestio/feines?estat=ACTIVES"
+            : "/gestio/feines?estat=PENDENT";
 
   const feinesActivesAmbColla = new Set(
     feines
@@ -710,15 +815,30 @@ export default function GestioDashboardPage() {
          * VISTA 1: DASHBOARD PRINCIPAL / TORRE DE CONTROL (Stitch screen_c3390d6c13d8430ab549f29c1e18ac8d)
          * ============================================================================ */
         <>
+          {otCreatedNotice && (
+            <div className="p-md rounded-xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-300 dark:border-emerald-700 text-emerald-900 dark:text-emerald-200 text-xs font-body-strong flex items-center justify-between gap-md">
+              <div className="flex items-center gap-sm">
+                <span className="material-symbols-outlined text-[18px] text-emerald-600">
+                  check_circle
+                </span>
+                <span>{otCreatedNotice}</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setOtCreatedNotice(null)}
+                className="text-emerald-700 dark:text-emerald-300 hover:underline text-[11px]"
+              >
+                Tancar
+              </button>
+            </div>
+          )}
+
           {/* 1. KPI ROW (4 + 1 Stitch Cards, 100% Real Data) */}
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-lg">
-            {/* Feines d'avui */}
-            <div
-              onClick={() => {
-                const el = document.getElementById("taula-ordres-sistema");
-                el?.scrollIntoView({ behavior: "smooth" });
-              }}
-              className="bg-surface-container-lowest p-lg rounded-xl shadow-sm border-b-2 border-primary flex flex-col justify-between cursor-pointer hover:shadow-md transition-all"
+            {/* Feines d'avui -> enllaça directament a la feina pendent / actives, mai a la llista total */}
+            <Link
+              href={feinesAvuiHref}
+              className="bg-surface-container-lowest p-lg rounded-xl shadow-sm border-b-2 border-primary flex flex-col justify-between cursor-pointer hover:shadow-md transition-all group"
             >
               <div className="flex justify-between items-start">
                 <span className="font-label-caps text-on-surface-variant uppercase">
@@ -729,8 +849,15 @@ export default function GestioDashboardPage() {
                 </span>
               </div>
               <div className="mt-md">
-                <div className="font-display-lg text-display-lg text-on-surface">
-                  {feinesActivesReals}
+                <div className="font-display-lg text-display-lg text-on-surface flex items-baseline justify-between">
+                  <span>{feinesActivesReals}</span>
+                  <span className="text-xs font-body-strong text-primary group-hover:underline">
+                    {feinesPendents.length === 1
+                      ? "Obrir pendent →"
+                      : feinesPendents.length > 1
+                        ? "Veure pendents →"
+                        : "Veure actives →"}
+                  </span>
                 </div>
                 <div className="flex gap-sm mt-xs text-xs">
                   <span className="text-green-600 font-body-strong">
@@ -742,7 +869,7 @@ export default function GestioDashboardPage() {
                   </span>
                 </div>
               </div>
-            </div>
+            </Link>
 
             {/* Operaris en ruta / Quadrilles Actives */}
             <Link
@@ -946,31 +1073,38 @@ export default function GestioDashboardPage() {
               </div>
             </div>
 
-            {/* Upcoming Jobs List (5 cols - Stitch style) */}
+            {/* Upcoming Jobs List (5 cols - Només en curs i futures programades, mai concloses) */}
             <div className="lg:col-span-5 bg-surface-container-lowest rounded-xl shadow-sm flex flex-col h-[540px] border border-outline-variant/30">
               <div className="p-md border-b border-surface-container flex justify-between items-center">
-                <h2 className="font-section-title text-lg text-on-surface">Properes Feines</h2>
+                <div className="flex items-center gap-sm">
+                  <h2 className="font-section-title text-lg text-on-surface">Properes Feines</h2>
+                  <span className="font-mono text-[11px] font-bold px-2 py-0.5 rounded-full bg-primary/10 text-primary">
+                    {feinesProperes.length}
+                  </span>
+                </div>
                 <button
                   onClick={() => setShowModalOT(true)}
-                  className="bg-secondary-container text-on-secondary-container hover:opacity-90 px-md py-xs rounded-lg font-body-strong text-xs flex items-center gap-xs transition-all shadow-sm"
+                  className="bg-secondary-container text-on-secondary-container hover:opacity-90 px-md py-xs rounded-lg font-body-strong text-xs flex items-center gap-xs transition-all shadow-sm cursor-pointer"
                 >
                   <span className="material-symbols-outlined text-sm">add</span>
                   Nova Feina
                 </button>
               </div>
               <div className="flex-1 overflow-y-auto p-md space-y-sm custom-scrollbar">
-                {feines.length === 0 ? (
+                {feinesProperes.length === 0 ? (
                   <div className="h-full flex flex-col items-center justify-center text-center p-lg text-on-surface-variant">
                     <span className="material-symbols-outlined text-4xl text-outline mb-sm">
                       event_busy
                     </span>
-                    <p className="font-body-strong text-sm">Cap ordre de treball programada</p>
+                    <p className="font-body-strong text-sm">
+                      Cap feina en curs ni futura programada
+                    </p>
                     <p className="text-xs text-outline mt-xs">
-                      Crea una nova intervenció per assignar-la a les quadrilles de camp.
+                      Crea una nova ordre de treball per assignar-la a les quadrilles de camp.
                     </p>
                   </div>
                 ) : (
-                  feines.slice(0, 8).map((feina) => {
+                  feinesProperes.slice(0, 12).map((feina) => {
                     const statusColor =
                       feina.estat === "PENDENT"
                         ? "bg-secondary-container"
@@ -1049,12 +1183,12 @@ export default function GestioDashboardPage() {
                 )}
               </div>
               <div className="p-sm border-t border-surface-container text-center">
-                <button
-                  onClick={() => setVistaActiva("RESULTATS")}
+                <Link
+                  href="/gestio/feines"
                   className="text-xs font-body-strong text-primary hover:underline"
                 >
                   Veure tot l&apos;historial d&apos;ordres ({feines.length}) &rarr;
-                </button>
+                </Link>
               </div>
             </div>
           </div>
@@ -1552,7 +1686,15 @@ export default function GestioDashboardPage() {
       {showModalOT && (
         <CrearOTModal
           onClose={() => setShowModalOT(false)}
-          onSuccess={() => carregarDades()}
+          onSuccess={(created) => {
+            setShowModalOT(false);
+            setOtCreatedNotice(
+              created?.codi
+                ? `Ordre de treball ${created.codi} creada correctament.`
+                : "Ordre de treball creada correctament."
+            );
+            carregarDades(true);
+          }}
         />
       )}
 

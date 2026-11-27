@@ -652,32 +652,61 @@ export function Fulla360OTModal({
     }
   }, []);
 
+  const formScrollRef = useRef<HTMLFormElement>(null);
+
+  const fetchWithTimeout = useCallback(
+    async <T,>(path: string, options: RequestInit = {}, timeoutMs = 15000): Promise<T> => {
+      const controller = new AbortController();
+      const timer = window.setTimeout(() => controller.abort(), timeoutMs);
+      try {
+        return await apiFetch<T>(path, { ...options, signal: controller.signal });
+      } catch (err: any) {
+        if (err?.name === "AbortError") {
+          throw new Error(
+            "La petició ha superat el temps d'espera del servidor. Comprova la connexió i torna-ho a provar.",
+            { cause: err }
+          );
+        }
+        throw err;
+      } finally {
+        window.clearTimeout(timer);
+      }
+    },
+    []
+  );
+
   // Boot: load catalogs + existing OT or source Pressupost
   useEffect(() => {
     if (!isOpen) return;
     let cancelled = false;
-    setBootLoading(true);
+    if (isExistingOT || isFromPressupost) {
+      setBootLoading(true);
+    } else {
+      setBootLoading(false);
+    }
     setModalFeedback(null);
     setActionError(null);
     setActionSuccess(null);
 
     Promise.all([
-      apiFetch<any>("/gestio/clients?limit=250").catch(() => []),
-      apiFetch<any>("/gestio/operaris").catch(() => []),
-      apiFetch<any>("/gestio/flota").catch(() => []),
-      apiFetch<any>("/gestio/planols").catch(() => []),
-      apiFetch<any>("/gestio/magatzem/articles?limit=300").catch(() => []),
-      apiFetch<any>("/gestio/magatzem/eines").catch(() => []),
-      apiFetch<any>("/gestio/magatzem/magatzems").catch(() => []),
-      apiFetch<any>("/gestio/configuracio/empresa").catch(() => null),
-      apiFetch<any>("/gestio/configuracio/barema").catch(() => null),
+      fetchWithTimeout<any>("/gestio/clients?limit=250", {}, 10000).catch(() => []),
+      fetchWithTimeout<any>("/gestio/operaris", {}, 10000).catch(() => []),
+      fetchWithTimeout<any>("/gestio/flota", {}, 10000).catch(() => []),
+      fetchWithTimeout<any>("/gestio/planols", {}, 10000).catch(() => []),
+      fetchWithTimeout<any>("/gestio/magatzem/articles?limit=300", {}, 10000).catch(() => []),
+      fetchWithTimeout<any>("/gestio/magatzem/eines", {}, 10000).catch(() => []),
+      fetchWithTimeout<any>("/gestio/magatzem/magatzems", {}, 10000).catch(() => []),
+      fetchWithTimeout<any>("/gestio/configuracio/empresa", {}, 8000).catch(() => null),
+      fetchWithTimeout<any>("/gestio/configuracio/barema", {}, 8000).catch(() => null),
       isExistingOT && resolvedFeinaId
-        ? apiFetch<any>(`/gestio/feines/${resolvedFeinaId}`).catch(() => null)
+        ? fetchWithTimeout<any>(`/gestio/feines/${resolvedFeinaId}`, {}, 12000).catch(() => null)
         : Promise.resolve(null),
       isFromPressupost && initialPressupost?.id
-        ? apiFetch<PressupostItem>(`/gestio/pressupostos/${initialPressupost.id}`).catch(
-            () => initialPressupost
-          )
+        ? fetchWithTimeout<PressupostItem>(
+            `/gestio/pressupostos/${initialPressupost.id}`,
+            {},
+            12000
+          ).catch(() => initialPressupost)
         : Promise.resolve(null),
     ])
       .then(
@@ -1067,7 +1096,16 @@ export function Fulla360OTModal({
     return () => {
       cancelled = true;
     };
-  }, [isOpen, isExistingOT, isFromPressupost, resolvedFeinaId, initialPressupost, initialClientId, carregarConciliacio]);
+  }, [
+    isOpen,
+    isExistingOT,
+    isFromPressupost,
+    resolvedFeinaId,
+    initialPressupost,
+    initialClientId,
+    carregarConciliacio,
+    fetchWithTimeout,
+  ]);
 
   // Load authenticated evidence images (fotos QA + signatura + geovalla)
   useEffect(() => {
@@ -1126,9 +1164,15 @@ export function Fulla360OTModal({
     conc?.temps_i_gps?.te_foto_geovalla,
   ]);
 
-  // Client change handler -> load finques
+  // Client change handler -> load finques and prefill adreca from client if empty
   const handleClientChange = (clientId: string) => {
-    setFormData((prev) => ({ ...prev, client_id: clientId, finca_id: "" }));
+    const cli = clients.find((c) => c.id === clientId);
+    setFormData((prev) => ({
+      ...prev,
+      client_id: clientId,
+      finca_id: "",
+      adreca: prev.adreca.trim() ? prev.adreca : cli?.adreca_fiscal || "",
+    }));
     if (clientId) {
       apiFetch<any>(`/gestio/clients/${clientId}/fitxa360`)
         .then((data) => setFinques(data?.finques || []))
@@ -1411,31 +1455,41 @@ export function Fulla360OTModal({
     e.preventDefault();
     setModalFeedback(null);
 
+    const failValidation = (text: string) => {
+      setModalFeedback({ type: "err", text });
+      formScrollRef.current?.scrollTo({ top: 0, behavior: "smooth" });
+    };
+
+    const codiNet = formData.codi.trim();
     const adrecaNet = formData.adreca.trim();
+    if (!codiNet) {
+      failValidation("El codi de referència de l'Ordre de Treball és obligatori.");
+      return;
+    }
+    if (!formData.data_planificacio) {
+      failValidation("La data de planificació és obligatòria.");
+      return;
+    }
     if (!formData.titol.trim()) {
-      setModalFeedback({ type: "err", text: "El títol de la intervenció és obligatori." });
+      failValidation("El títol de la intervenció és obligatori.");
       return;
     }
     if (!formData.client_id) {
-      setModalFeedback({ type: "err", text: "Selecciona un client titular." });
+      failValidation("Selecciona un client titular.");
       return;
     }
     if (!adrecaNet) {
-      setModalFeedback({
-        type: "err",
-        text: "L'adreça o coordenades GPS de l'obra són obligatòries.",
-      });
+      failValidation("L'adreça o coordenades GPS de l'obra són obligatòries.");
       return;
     }
     if (isFromPressupost && !formData.cap_de_colla_id) {
-      setModalFeedback({
-        type: "err",
-        text: "Assigna un Cap de Colla / Operari responsable abans de crear l'Ordre de Treball des del pressupost.",
-      });
+      failValidation(
+        "Assigna un Cap de Colla / Operari responsable abans de crear l'Ordre de Treball des del pressupost."
+      );
       return;
     }
     if (avísCarnet) {
-      setModalFeedback({ type: "err", text: avísCarnet });
+      failValidation(avísCarnet);
       return;
     }
 
@@ -1587,10 +1641,14 @@ export function Fulla360OTModal({
               }))
             : null,
       };
-      const created = await apiFetch<Feina>("/gestio/feines", {
-        method: "POST",
-        body: JSON.stringify(createPayload),
-      });
+      const created = await fetchWithTimeout<Feina>(
+        "/gestio/feines",
+        {
+          method: "POST",
+          body: JSON.stringify(createPayload),
+        },
+        20000
+      );
       onSuccess?.({ id: created.id, codi: created.codi });
       onClose();
     } catch (err: any) {
@@ -1598,6 +1656,7 @@ export function Fulla360OTModal({
         type: "err",
         text: err?.message || "No s'ha pogut desar l'ordre de treball.",
       });
+      formScrollRef.current?.scrollTo({ top: 0, behavior: "smooth" });
     } finally {
       setSaving(false);
     }
@@ -1872,7 +1931,7 @@ export function Fulla360OTModal({
 
   return (
     <>
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 backdrop-blur-sm p-3 sm:p-4">
+      <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/60 backdrop-blur-sm p-3 sm:p-4">
         <div className="bg-surface dark:bg-slate-950 rounded-2xl shadow-2xl w-full max-w-6xl overflow-hidden flex flex-col max-h-[94vh] border border-outline-variant/40">
           {/* Top Unified Header */}
           <div className="flex items-center justify-between px-5 sm:px-6 py-4 bg-surface-container-lowest dark:bg-slate-900 border-b border-outline-variant/30 gap-3">
@@ -1995,10 +2054,38 @@ export function Fulla360OTModal({
             </div>
           ) : (
             <form
+              ref={formScrollRef}
               id="form-fulla-360-ot"
               onSubmit={handleSubmit}
+              noValidate
               className="flex-1 overflow-y-auto p-5 sm:p-6 space-y-6"
             >
+              {modalFeedback && (
+                <div
+                  role="alert"
+                  className={`p-3.5 rounded-xl text-xs font-semibold border flex items-center justify-between gap-2 ${
+                    modalFeedback.type === "ok"
+                      ? "bg-emerald-50 dark:bg-emerald-950/40 border-emerald-300 dark:border-emerald-700 text-emerald-900 dark:text-emerald-200"
+                      : "bg-error-container/30 border-error text-error"
+                  }`}
+                >
+                  <div className="flex items-center gap-2">
+                    {modalFeedback.type === "ok" ? (
+                      <CheckCircle2 className="w-4 h-4 shrink-0" />
+                    ) : (
+                      <AlertCircle className="w-4 h-4 shrink-0" />
+                    )}
+                    <span>{modalFeedback.text}</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setModalFeedback(null)}
+                    className="p-0.5 rounded hover:bg-black/5 cursor-pointer"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              )}
               <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
                 {/* LEFT COLUMN (7 Cols): Dades Bàsiques & Hores + Materials Picking + Eines + Camp/Conciliació */}
                 <div className="lg:col-span-7 space-y-5">
@@ -2054,7 +2141,7 @@ export function Fulla360OTModal({
                           </label>
                           <input
                             type="number"
-                            step="0.25"
+                            step="any"
                             min="0"
                             disabled={isLockedByInvoice}
                             placeholder="Ex: 8"
@@ -2070,7 +2157,7 @@ export function Fulla360OTModal({
                           </label>
                           <input
                             type="number"
-                            step="0.01"
+                            step="any"
                             min="0"
                             disabled={isLockedByInvoice}
                             placeholder="0.00"
@@ -3403,7 +3490,14 @@ export function Fulla360OTModal({
                         type="text"
                         placeholder="Ex: Polígon 4, Parcel·la 12 o 41.6176, 0.6200"
                         value={formData.adreca}
-                        onChange={(e) => setFormData({ ...formData, adreca: e.target.value })}
+                        onChange={(e) =>
+                          setFormData({
+                            ...formData,
+                            adreca: e.target.value,
+                            latitud: null,
+                            longitud: null,
+                          })
+                        }
                         className="w-full px-3 py-2 bg-surface-container-low rounded-lg border border-outline-variant focus:border-primary outline-none text-xs disabled:opacity-60"
                       />
                     </div>

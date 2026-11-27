@@ -20,7 +20,7 @@ import {
 import CopilotWidget from "@/components/CopilotWidget";
 import NotificationCenter from "@/components/operari/NotificationCenter";
 import ControlHorariBar from "@/components/operari/ControlHorariBar";
-import { setAuthToken } from "@/lib/api";
+import { apiFetch, setAuthToken } from "@/lib/api";
 
 export default function OperariLayout({
   children,
@@ -100,6 +100,41 @@ export default function OperariLayout({
       document.removeEventListener("visibilitychange", handleVisibility);
     };
   }, [isLoginPage, router]);
+
+  // Telemetria GPS real en temps real de l'operari cap al Mapa de Gestió (Zero Mock Data)
+  useEffect(() => {
+    if (isLoginPage || typeof window === "undefined" || !navigator.geolocation) return;
+
+    const enviarPosicioReal = () => {
+      if (document.visibilityState !== "visible" || !navigator.onLine) return;
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          const lat = pos.coords.latitude;
+          const lng = pos.coords.longitude;
+          if (
+            Number.isFinite(lat) &&
+            Number.isFinite(lng) &&
+            !(Math.abs(lat) < 1e-6 && Math.abs(lng) < 1e-6)
+          ) {
+            apiFetch("/operari/posicio", {
+              method: "POST",
+              body: JSON.stringify({ latitud: lat, longitud: lng }),
+            }).catch(() => {
+              // Ignorar errors puntuals de xarxa
+            });
+          }
+        },
+        () => {
+          // Sense permís o senyal GPS: no inventar mai coordenades
+        },
+        { enableHighAccuracy: true, timeout: 10000, maximumAge: 30000 }
+      );
+    };
+
+    enviarPosicioReal();
+    const gpsInterval = window.setInterval(enviarPosicioReal, 45000);
+    return () => window.clearInterval(gpsInterval);
+  }, [isLoginPage]);
 
   // Evitar que arrossegar fitxers al navegador provoqui navegació a file:/// (Error de seguretat navegador)
   useEffect(() => {

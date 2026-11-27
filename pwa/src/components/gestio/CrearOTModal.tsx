@@ -5,7 +5,7 @@ import { Fulla360OTModal } from "@/components/gestio/Fulla360OTModal";
 
 interface CrearOTModalProps {
   onClose: () => void;
-  onSuccess?: () => void;
+  onSuccess?: (result?: { id: string; codi?: string }) => void;
   initialClientId?: string;
 }
 
@@ -19,7 +19,7 @@ export function CrearOTModal({ onClose, onSuccess, initialClientId }: CrearOTMod
       isOpen={true}
       initialClientId={initialClientId}
       onClose={onClose}
-      onSuccess={() => onSuccess?.()}
+      onSuccess={(res) => onSuccess?.(res)}
     />
   );
 }

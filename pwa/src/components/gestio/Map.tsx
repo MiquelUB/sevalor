@@ -156,7 +156,32 @@ export interface Operari {
   telefon?: string | null;
   latitud?: number | null;
   longitud?: number | null;
+  posicio_actualitzada_at?: string | null;
+  posicio_origen?: string | null;
   vehicle_nom?: string | null;
+}
+
+function hasValidGps(lat?: number | null, lng?: number | null): boolean {
+  if (lat === null || lat === undefined || lng === null || lng === undefined) return false;
+  const latN = Number(lat);
+  const lngN = Number(lng);
+  if (!Number.isFinite(latN) || !Number.isFinite(lngN)) return false;
+  if (latN < -90 || latN > 90 || lngN < -180 || lngN > 180) return false;
+  if (Math.abs(latN) < 1e-6 && Math.abs(lngN) < 1e-6) return false;
+  return true;
+}
+
+function formatOrigenGps(origen?: string | null): string {
+  switch ((origen || "").toUpperCase()) {
+    case "GPS_TEMPS_REAL":
+      return "GPS en directe";
+    case "TRAM_FEINA":
+      return "GPS activitat obra";
+    case "FITXATGE_JORNADA":
+      return "GPS fitxatge jornada";
+    default:
+      return "GPS real";
+  }
 }
 
 interface MapProps {
@@ -294,10 +319,24 @@ export default function GestioMap({
     return { lat, lng };
   };
 
-  // Auto-centrat inicial automàtic a la primera feina de la llista
+  // Auto-centrat inicial automàtic en les posicions GPS reals dels operaris o la primera feina activa
   useEffect(() => {
     if (hasAutoCentered) return;
     if (initialOperariId || externalSelectedOperariId || externalSelectedFeinaId) {
+      setHasAutoCentered(true);
+      return;
+    }
+    const opsAmbGps = operaris.filter(
+      (o) => o.estat === "ACTIU" && hasValidGps(o.latitud, o.longitud)
+    );
+    if (opsAmbGps.length > 0) {
+      const avgLat =
+        opsAmbGps.reduce((sum, o) => sum + Number(o.latitud), 0) / opsAmbGps.length;
+      const avgLng =
+        opsAmbGps.reduce((sum, o) => sum + Number(o.longitud), 0) / opsAmbGps.length;
+      setCenterCoord({ lat: avgLat, lng: avgLng });
+      setPanX(0);
+      setPanY(0);
       setHasAutoCentered(true);
       return;
     }
@@ -308,7 +347,7 @@ export default function GestioMap({
       setPanY(0);
       setHasAutoCentered(true);
     }
-  }, [feines, initialOperariId, externalSelectedOperariId, externalSelectedFeinaId, hasAutoCentered]);
+  }, [operaris, feines, initialOperariId, externalSelectedOperariId, externalSelectedFeinaId, hasAutoCentered]);
 
   const getStatusColor = (estat: string) => {
     switch (estat) {
@@ -358,29 +397,15 @@ export default function GestioMap({
     };
   });
 
-  // Pins de les quadrilles d'operaris actius amb posició garantida
+  // Pins de les quadrilles d'operaris actius NOMÉS amb posició GPS REAL (Zero Mock Data)
   const pinsQuadrilles = operaris
-    .filter((o) => o.estat === "ACTIU")
-    .map((op, idx) => {
+    .filter((o) => o.estat === "ACTIU" && hasValidGps(o.latitud, o.longitud))
+    .map((op) => {
       const assignedJobs = feines.filter(
         (f) => f.cap_de_colla_id === op.id || f.operaris_ids?.includes(op.id)
       );
-      let lat = op.latitud ?? null;
-      let lng = op.longitud ?? null;
-
-      if (lat === null || lng === null) {
-        if (assignedJobs.length > 0) {
-          const c = getFeinaCoords(assignedJobs[0], idx);
-          lat = c.lat + 0.0025;
-          lng = c.lng + 0.0025;
-        } else {
-          const baseLat = centerCoord?.lat || 41.3879;
-          const baseLng = centerCoord?.lng || 2.1699;
-          lat = baseLat + ((idx % 7) - 3) * 0.003;
-          lng = baseLng + ((idx % 7) - 3) * 0.003;
-        }
-      }
-
+      const lat = Number(op.latitud);
+      const lng = Number(op.longitud);
       const pos = projectCoords(lat, lng);
       const isSelected = selectedOperariId === op.id;
 
@@ -392,6 +417,8 @@ export default function GestioMap({
         assignedJobs,
         lat,
         lng,
+        posicioActualitzadaAt: op.posicio_actualitzada_at || null,
+        posicioOrigen: op.posicio_origen || null,
         pos,
         isSelected,
       };
@@ -471,15 +498,21 @@ export default function GestioMap({
   };
 
   const handleZoomIn = () => {
-    if (zoom < 14) setZoom((z) => z + 1);
+    if (zoom < 17) setZoom((z) => z + 1);
   };
 
   const handleZoomOut = () => {
-    if (zoom > 12) setZoom((z) => z - 1);
+    if (zoom > 7) setZoom((z) => z - 1);
   };
 
   const handleRecenter = () => {
-    if (feines && feines.length > 0) {
+    if (pinsQuadrilles.length > 0) {
+      const avgLat =
+        pinsQuadrilles.reduce((sum, p) => sum + p.lat, 0) / pinsQuadrilles.length;
+      const avgLng =
+        pinsQuadrilles.reduce((sum, p) => sum + p.lng, 0) / pinsQuadrilles.length;
+      setCenterCoord({ lat: avgLat, lng: avgLng });
+    } else if (feines && feines.length > 0) {
       const coords = getFeinaCoords(feines[0], 0);
       setCenterCoord({ lat: coords.lat, lng: coords.lng });
     } else {
@@ -590,17 +623,26 @@ export default function GestioMap({
                   </div>
 
                   <div className="flex items-center justify-between pt-1 border-t border-slate-200 dark:border-slate-700/60 text-[10px]">
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        focusOperari(op.id);
-                      }}
-                      className="text-blue-600 dark:text-blue-400 font-bold hover:underline flex items-center gap-1"
-                    >
-                      <Navigation className="w-3 h-3" />
-                      <span>Centrar al mapa</span>
-                    </button>
+                    {hasValidGps(op.latitud, op.longitud) ? (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          focusOperari(op.id);
+                        }}
+                        className="text-blue-600 dark:text-blue-400 font-bold hover:underline flex items-center gap-1"
+                      >
+                        <Navigation className="w-3 h-3" />
+                        <span>
+                          {Number(op.latitud).toFixed(4)}, {Number(op.longitud).toFixed(4)}
+                        </span>
+                      </button>
+                    ) : (
+                      <span className="text-slate-400 italic flex items-center gap-1">
+                        <MapPin className="w-3 h-3 opacity-60" />
+                        <span>Sense senyal GPS</span>
+                      </span>
+                    )}
 
                     {op.telefon && (
                       <a
@@ -894,10 +936,17 @@ export default function GestioMap({
 
         {/* Barra superior dreta: HUD Coordenades, Recentrar i Zoom */}
         <div className="absolute top-3 right-3 z-30 flex items-center gap-2">
-          {/* Indicador de Coordenades Reals */}
-          <div className="bg-slate-900/90 text-white px-2.5 py-1.5 rounded-lg border border-slate-700 text-[11px] font-mono shadow-md backdrop-blur flex items-center gap-1.5">
-            <Crosshair className="w-3.5 h-3.5 text-emerald-400" />
-            <span>{currentCenterLat.toFixed(4)}°N, {currentCenterLng.toFixed(4)}°E</span>
+          {/* Indicador de Coordenades Reals i Operaris GPS */}
+          <div className="bg-slate-900/90 text-white px-2.5 py-1.5 rounded-lg border border-slate-700 text-[11px] font-mono shadow-md backdrop-blur flex items-center gap-2">
+            <span className="flex items-center gap-1">
+              <Users className="w-3.5 h-3.5 text-blue-400" />
+              <span>{pinsQuadrilles.length}/{operaris.length} GPS</span>
+            </span>
+            <span className="text-slate-600">|</span>
+            <span className="flex items-center gap-1">
+              <Crosshair className="w-3.5 h-3.5 text-emerald-400" />
+              <span>{currentCenterLat.toFixed(4)}°N, {currentCenterLng.toFixed(4)}°E</span>
+            </span>
           </div>
 
           {/* Botó de Recentrar a la Seu Central */}
@@ -905,7 +954,7 @@ export default function GestioMap({
             type="button"
             onClick={handleRecenter}
             className="p-1.5 bg-white/95 dark:bg-slate-900/95 rounded-lg border border-slate-200 dark:border-slate-800 shadow-md backdrop-blur text-slate-700 dark:text-slate-300 hover:text-emerald-500 transition-colors"
-            title="Recentrar a la Seu Central (Lleida)"
+            title="Recentrar mapa"
           >
             <RotateCcw className="w-4 h-4" />
           </button>
@@ -915,7 +964,7 @@ export default function GestioMap({
             <button
               type="button"
               onClick={handleZoomIn}
-              disabled={zoom >= 14}
+              disabled={zoom >= 17}
               className="p-1.5 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 disabled:opacity-30 border-b border-slate-200 dark:border-slate-800"
               title="Apropar mapa"
             >
@@ -924,7 +973,7 @@ export default function GestioMap({
             <button
               type="button"
               onClick={handleZoomOut}
-              disabled={zoom <= 12}
+              disabled={zoom <= 7}
               className="p-1.5 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 disabled:opacity-30"
               title="Allunyar mapa"
             >
@@ -1403,6 +1452,35 @@ export default function GestioMap({
             </div>
 
             <div className="space-y-2 text-xs">
+              <div className="p-2 rounded-lg bg-slate-800/80 border border-slate-700">
+                <div className="text-[10px] text-slate-400 uppercase font-bold mb-0.5">
+                  Posició GPS Real
+                </div>
+                {hasValidGps(selectedOperari.latitud, selectedOperari.longitud) ? (
+                  <div className="space-y-0.5">
+                    <div className="font-mono text-[11px] text-emerald-400 font-bold">
+                      {Number(selectedOperari.latitud).toFixed(5)}°N,{" "}
+                      {Number(selectedOperari.longitud).toFixed(5)}°E
+                    </div>
+                    <div className="text-[10px] text-slate-400">
+                      {formatOrigenGps(selectedOperari.posicio_origen)}
+                      {selectedOperari.posicio_actualitzada_at
+                        ? ` · ${new Date(selectedOperari.posicio_actualitzada_at).toLocaleString("ca-ES", {
+                            day: "2-digit",
+                            month: "2-digit",
+                            hour: "2-digit",
+                            minute: "2-digit",
+                          })}`
+                        : ""}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="text-[11px] text-amber-400">
+                    Sense ubicació GPS registrada encara (pendent de fitxatge o connexió PWA).
+                  </div>
+                )}
+              </div>
+
               {selectedOperari.telefon && (
                 <div className="flex items-center gap-2 text-slate-300">
                   <Phone className="w-3.5 h-3.5 text-emerald-400" />

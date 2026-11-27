@@ -12,7 +12,11 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.v1.operari_pwa.jornada import JornadaInici
+from app.api.v1.operari_pwa.jornada import (
+    JornadaInici,
+    actualitzar_posicio_usuari,
+    es_coord_gps_valida,
+)
 from app.core.db import get_db_with_tenant_context
 from app.core.security import require_roles, veto_enginyer_finances
 from app.models.models import (
@@ -22,6 +26,7 @@ from app.models.models import (
     Incidencia,
     OrdreTreball,
     OrdreTreballOperari,
+    OrdreTreballTramTemps,
     RegistreJornadaLaboral,
     TiquetCombustible,
     Usuari,
@@ -170,6 +175,8 @@ class OperariResponse(BaseModel):
     total_eines_assignades: int = 0
     latitud: Optional[float] = None
     longitud: Optional[float] = None
+    posicio_actualitzada_at: Optional[datetime] = None
+    posicio_origen: Optional[str] = None
     pin_generat: Optional[str] = None
     login_url: Optional[str] = None
     telegram_chat_id: Optional[int] = None
@@ -444,34 +451,117 @@ async def _build_operari_response(
         if not op_resp.vehicle_assignat_id:
             op_resp.vehicle_assignat_id = veh.id
 
-    # 3. Coordenades segons feines actives
-    stmt_ot = select(OrdreTreball).where(
-        OrdreTreball.empresa_id == emp_uuid,
-        or_(
-            OrdreTreball.cap_de_colla_id == op.id,
-            OrdreTreball.id.in_(
-                select(OrdreTreballOperari.ordre_treball_id).where(
-                    OrdreTreballOperari.operari_id == op.id,
-                    OrdreTreballOperari.empresa_id == emp_uuid,
+    # 3. Posició GPS REAL de l'operari (Zero Mock Data — mai coordenades inventades)
+    # Prioritza el registre GPS vàlid més recent entre:
+    #   a) Telemetria en directe / última ubicació real a `usuaris` (ultima_latitud/longitud)
+    #   b) Últim tram de feina amb coordenades GPS reals (`ordres_treball_trams_temps`)
+    #   c) Últim fitxatge de control horari amb GPS real (`registres_jornada_laboral`)
+    def _parse_geo_str(raw: Optional[str]) -> Optional[tuple[float, float]]:
+        if not raw or "," not in raw:
+            return None
+        try:
+            parts = [float(p.strip()) for p in raw.split(",")]
+            if len(parts) >= 2 and es_coord_gps_valida(parts[0], parts[1]):
+                return (round(parts[0], 6), round(parts[1], 6))
+        except (ValueError, TypeError):
+            return None
+        return None
+
+    candidats_gps: List[tuple[datetime, float, float, str]] = []
+    epoch_min = datetime(1970, 1, 1, tzinfo=timezone.utc)
+
+    # 3a) Última posició GPS en directe desada a `usuaris`
+    if es_coord_gps_valida(
+        getattr(op, "ultima_latitud", None), getattr(op, "ultima_longitud", None)
+    ):
+        ts_usr = getattr(op, "ultima_posicio_at", None) or op.updated_at or epoch_min
+        if ts_usr.tzinfo is None:
+            ts_usr = ts_usr.replace(tzinfo=timezone.utc)
+        candidats_gps.append(
+            (
+                ts_usr,
+                round(float(op.ultima_latitud), 6),  # type: ignore[arg-type]
+                round(float(op.ultima_longitud), 6),  # type: ignore[arg-type]
+                "GPS_TEMPS_REAL",
+            )
+        )
+
+    # 3b) Últim tram de feina amb coordenades GPS reals
+    stmt_tram = (
+        select(OrdreTreballTramTemps)
+        .where(
+            OrdreTreballTramTemps.empresa_id == emp_uuid,
+            OrdreTreballTramTemps.operari_id == op.id,
+        )
+        .order_by(OrdreTreballTramTemps.hora_inici.desc())
+        .limit(5)
+    )
+    for tr in (await db.execute(stmt_tram)).scalars().all():
+        if es_coord_gps_valida(tr.gps_fi_lat, tr.gps_fi_lng):
+            ts_tr = tr.hora_fi or tr.hora_inici or epoch_min
+            if ts_tr.tzinfo is None:
+                ts_tr = ts_tr.replace(tzinfo=timezone.utc)
+            candidats_gps.append(
+                (
+                    ts_tr,
+                    round(float(tr.gps_fi_lat), 6),  # type: ignore[arg-type]
+                    round(float(tr.gps_fi_lng), 6),  # type: ignore[arg-type]
+                    "TRAM_FEINA",
                 )
-            ),
-        ),
-        OrdreTreball.estat.in_(["EN_CURS", "EN_RUTA", "EN_OBRA", "ASSIGNADA", "PROGRAMADA"]),
-    ).order_by(OrdreTreball.created_at.desc())
-    ot_res = await db.execute(stmt_ot)
-    ot_activa = ot_res.scalars().first()
-    if ot_activa:
-        if ot_activa.latitud is not None and ot_activa.longitud is not None:
-            op_resp.latitud = float(ot_activa.latitud) + 0.002
-            op_resp.longitud = float(ot_activa.longitud) + 0.002
-        elif ot_activa.adreca and "," in ot_activa.adreca:
-            try:
-                parts = [float(p.strip()) for p in ot_activa.adreca.split(",")]
-                if len(parts) >= 2:
-                    op_resp.latitud = parts[0] + 0.002
-                    op_resp.longitud = parts[1] + 0.002
-            except (ValueError, TypeError):
-                pass
+            )
+            break
+        if es_coord_gps_valida(tr.gps_inici_lat, tr.gps_inici_lng):
+            ts_tr = tr.hora_inici or epoch_min
+            if ts_tr.tzinfo is None:
+                ts_tr = ts_tr.replace(tzinfo=timezone.utc)
+            candidats_gps.append(
+                (
+                    ts_tr,
+                    round(float(tr.gps_inici_lat), 6),  # type: ignore[arg-type]
+                    round(float(tr.gps_inici_lng), 6),  # type: ignore[arg-type]
+                    "TRAM_FEINA",
+                )
+            )
+            break
+
+    # 3c) Últim fitxatge de jornada laboral amb coordenades GPS reals
+    stmt_jor = (
+        select(RegistreJornadaLaboral)
+        .where(
+            RegistreJornadaLaboral.empresa_id == emp_uuid,
+            RegistreJornadaLaboral.usuari_id == op.id,
+        )
+        .order_by(RegistreJornadaLaboral.hora_inici.desc())
+        .limit(5)
+    )
+    for jor in (await db.execute(stmt_jor)).scalars().all():
+        coords_fi = _parse_geo_str(jor.geolocalitzacio_fi)
+        if coords_fi is not None:
+            ts_j = jor.hora_fi or jor.hora_inici or epoch_min
+            if ts_j.tzinfo is None:
+                ts_j = ts_j.replace(tzinfo=timezone.utc)
+            candidats_gps.append((ts_j, coords_fi[0], coords_fi[1], "FITXATGE_JORNADA"))
+            break
+        coords_ini = _parse_geo_str(jor.geolocalitzacio_inici)
+        if coords_ini is not None:
+            ts_j = jor.hora_inici or epoch_min
+            if ts_j.tzinfo is None:
+                ts_j = ts_j.replace(tzinfo=timezone.utc)
+            candidats_gps.append((ts_j, coords_ini[0], coords_ini[1], "FITXATGE_JORNADA"))
+            break
+
+    if candidats_gps:
+        candidats_gps.sort(key=lambda item: item[0], reverse=True)
+        ts_best, lat_best, lng_best, origen_best = candidats_gps[0]
+        op_resp.latitud = lat_best
+        op_resp.longitud = lng_best
+        op_resp.posicio_actualitzada_at = ts_best if ts_best != epoch_min else None
+        op_resp.posicio_origen = origen_best
+    else:
+        op_resp.latitud = None
+        op_resp.longitud = None
+        op_resp.posicio_actualitzada_at = None
+        op_resp.posicio_origen = None
 
     return op_resp
 
@@ -1266,6 +1356,9 @@ async def fitxar_operari_gestio(
         jornada.hora_fi = datetime.now(timezone.utc)
         jornada.geolocalitzacio_fi = f"{payload.latitud},{payload.longitud}"
         jornada.estat = "COMPLERT"
+        await actualitzar_posicio_usuari(
+            db, uuid.UUID(empresa_id), operari_id, payload.latitud, payload.longitud, jornada.hora_fi
+        )
         await db.flush()
         await SovereignStorageGateway.desar_entitat_json(
             db=db,
@@ -1292,6 +1385,9 @@ async def fitxar_operari_gestio(
             estat="EN_CURS",
         )
         db.add(nova_jornada)
+        await actualitzar_posicio_usuari(
+            db, uuid.UUID(empresa_id), operari_id, payload.latitud, payload.longitud
+        )
         await db.flush()
         await SovereignStorageGateway.desar_entitat_json(
             db=db,

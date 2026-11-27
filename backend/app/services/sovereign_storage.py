@@ -692,6 +692,7 @@ class SovereignStorageGateway:
         categoria: str,
         item_id: str | uuid.UUID,
         dades: Dict[str, Any],
+        timeout: float = 12.0,
     ) -> str:
         """
         Escriu el registre estructurat JSON directament dins la carpeta corresponent
@@ -743,7 +744,7 @@ class SovereignStorageGateway:
                 subcarpeta=subcarpeta,
                 item_id=id_net,
                 content=payload_complet,
-                timeout=12.0,
+                timeout=timeout,
             )
             return f"vault://{subcarpeta}/{id_net}.json"
         except (VaultTunnelOfflineError, VaultTunnelTimeoutError) as exc:
@@ -807,6 +808,7 @@ class SovereignStorageGateway:
         db: AsyncSession,
         empresa_id: str | uuid.UUID,
         categoria: str,
+        timeout: float = 12.0,
     ) -> List[Dict[str, Any]]:
         """Llegeix totes les fitxes JSON verificades (HMAC + tenant) d'una carpeta del disc dur del client."""
         subcarpeta = MAPA_CARPETES_CLIENT.get(categoria, categoria)
@@ -851,7 +853,7 @@ class SovereignStorageGateway:
         # Mode WSS_TUNNEL
         try:
             raw_data = await vault_tunnel_broker.json_get_list(
-                base_target, subcarpeta=subcarpeta, timeout=12.0
+                base_target, subcarpeta=subcarpeta, timeout=timeout
             )
             return cls._filtrar_entitats_verificades(empresa_id, categoria, subcarpeta, raw_data)
         except (VaultTunnelOfflineError, VaultTunnelTimeoutError) as exc:

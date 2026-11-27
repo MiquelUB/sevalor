@@ -263,6 +263,24 @@ async def _ensure_schema_columns() -> None:
                     )
                 )
 
+            res_usr_gps = await session.execute(
+                text(
+                    "SELECT 1 FROM information_schema.columns "
+                    "WHERE table_schema = 'public' AND table_name = 'usuaris' AND column_name = 'ultima_latitud'"
+                )
+            )
+            if not res_usr_gps.scalar():
+                await session.execute(
+                    text(
+                        """
+                        ALTER TABLE public.usuaris
+                            ADD COLUMN IF NOT EXISTS ultima_latitud NUMERIC(9, 6),
+                            ADD COLUMN IF NOT EXISTS ultima_longitud NUMERIC(9, 6),
+                            ADD COLUMN IF NOT EXISTS ultima_posicio_at TIMESTAMPTZ;
+                        """
+                    )
+                )
+
             await session.commit()
     except Exception:
         pass
